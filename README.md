@@ -8,78 +8,64 @@ Inspired by the "lead-miner" philosophy, Dispatch requires **zero manual interve
 
 ---
 
-## 1. System Philosophy & User Experience
+## 1. System Philosophy: The 5-Step Human Loop
 
-### The 5 Human Steps
 The system is built so the user only touches 5 high-value, tactile actions:
-1. **Start Record**: Press record on your phone (POCO C65) when starting work or a speaking session.
-2. **Stop Record**: Press stop when you finish your session.
-3. **Review Clips**: Open the Dispatch local dashboard (on PC or phone browser over LAN) to preview ready clips.
-4. **Review/Update Tags**: Check or adjust the auto-generated title, description, and hashtags if desired.
-5. **Approve**: Tap **Approve** (or **Reject**). 
+1. **Open Dispatch**: Open the app on your phone (POCO C65 or browser).
+2. **Record**: Tap record when starting work or a speaking session.
+3. **Stop**: Tap stop when you finish your session.
+4. **Review Clips**: Open the Dispatch local dashboard on your PC at `http://localhost:8000`.
+5. **Approve / Reject**: Tap **Approve** (or **Reject**). 
    - If set to **Auto-Publish**, the clip is automatically scheduled and posted publicly.
    - If set to **Private/Draft**, Dispatch uploads the clip as a draft or private post so you have total peace of mind and can inspect it on-platform before making it public.
 
-**Everything else happens 100% autonomously in the background.**
+**Everything between Stop and Review happens 100% autonomously in the background.**
 
 ---
 
-## 2. Hardware & Operating Environment
+## 2. Core Architecture: YouTube as Cloud Inbox
 
-- **Host Machine**: Windows 11 Home (Ryzen 5 5600H 6-core/12-thread, 23.3 GB RAM, AMD Radeon RX 5500M 4GB VRAM).
+```text
+📱 Phone (You)
+   └── Record video → Stop → Auto-uploads to YouTube as Private
+       (Tagged with durable dispatch_id in description/tags)
+          │
+          ▼
+☁️ YouTube (Cloud Inbox)
+   └── Stores raw video & generates automatic speech captions
+          │
+          ▼
+💻 Laptop (Dispatch Catcher Daemon)
+   └── Starts immediately on boot + polls every 10 min
+       └── Discovers [DISPATCH] uploads matching dispatch_id
+       └── Downloads highest quality 1080p MP4 via yt-dlp
+       └── Extracts timestamped transcript (YouTube VTT captions -> local Whisper fallback)
+       └── Gemini Flash analyzes hooks, complete thoughts & retention
+       └── FFmpeg cuts clips, formats 9:16 vertical video & burns ASS captions
+          │
+          ▼
+🖥️ Review Dashboard (http://localhost:8000)
+   └── Live clip preview → 1-click Approve → Dispatches across platforms
+```
+
+### Why this architecture?
+- **Zero Network Setup**: You don't need port-forwarding, static IPs, or to ensure your laptop is awake when recording.
+- **Phone = Durable Thrower**: Records, queues upload, sends to YouTube, done.
+- **YouTube = Cloud Buffer**: Holds recordings safely until laptop wakes up.
+- **Laptop = Opportunistic Worker**: Catches videos whenever powered on, processes in background with low CPU priority.
+- **Offline / Local Fallback**: Also retains peer-to-peer Wi-Fi TUS sync if recording without internet.
+
+---
+
+## 3. Hardware & Operating Environment
+
+- **Host Machine**: Windows 11 (AMD Ryzen / Intel CPU, 16GB+ RAM).
 - **Compute Strategy**: 
-  - Zero reliance on NVIDIA CUDA (which would fail on AMD hardware).
-  - High-performance CPU multithreading (`faster-whisper` CPU-int8 / `whisper.cpp`).
+  - Zero reliance on NVIDIA CUDA (optimized for AMD CPU multithreading via `faster-whisper` CPU-int8).
   - FFmpeg hardware acceleration where available, with fast CPU software fallback.
-  - No heavyweight Docker/WSL2 containers to safeguard the 43.6 GB free SSD space.
+  - No heavyweight Docker/WSL2 containers to safeguard SSD space.
 - **Mobile Hardware**: POCO C65 (Android 14+), recording 1080p @ 30 fps.
-- **Transfer**: Resumable local Wi-Fi & Tailscale peer-to-peer sync (via TUS-style chunked background upload with SHA-256 cryptographic verification). Zero manual cables, zero cloud storage.
-- **Budget & Cost**: 100% free local infrastructure; optional pennies spent strictly on Google Gemini Flash API for high-level semantic highlight extraction.
-
----
-
-## 3. Core Architectural Pillars
-
-Dispatch is structured into seven decoupled, fault-tolerant pillars:
-
-```
-[POCO C65 Mobile Phone]
-  │ (Records rolling 10-minute segments into .tmp files with CameraX hardware pipeline)
-  │ Automatic Background Resumable TUS Sync (LAN Wi-Fi or Tailscale WireGuard)
-  ▼
-[Pillar 1: Ingestion & Session Watcher] (dispatch/ingestion)
-  │ Watches incoming/ directory, validates file completion, verifies ffprobe integrity
-  │ Detects aspect ratio (16:9 Landscape vs 9:16 Portrait) & creates SQLite session record
-  ▼
-[Pillar 2: Audio Extraction & Speech Engine] (dispatch/transcription)
-  │ Fast 16kHz mono audio extraction
-  │ Faster-Whisper VAD speech detection -> Word-level timestamps & Roman Hinglish text
-  ▼
-[Pillar 3: AI Semantic Highlight & Packaging Engine] (dispatch/ai_clips)
-  │ Passes structured transcript to Gemini Flash
-  │ Identifies complete thoughts (20-90s) with clear Hook -> Body -> Conclusion
-  │ Generates catchy Roman Hinglish titles, descriptions, hashtags & virality scores
-  │ Negative Preference Learning: Filters topics user previously rejected
-  ▼
-[Pillar 4: Video Assembly & Subtitle Rendering] (dispatch/video_engine)
-  │ Adaptive Framing:
-  │   - 9:16 Portrait: Full-res native passthrough
-  │   - 16:9 Landscape: Smart face-crop or Fit with blurred background
-  │ Generates styled .ass (Advanced SubStation Alpha) Roman Hinglish captions
-  │ Single-pass FFmpeg burn-in + audio normalization (loudnorm) + preview thumbnail
-  ▼
-[Pillar 5: Review & Control Web Dashboard] (dispatch/web)
-  │ Modern dark-canvas dashboard (FastAPI + Tailwind UI) accessible via PC & phone
-  │ Live clip preview, 4-platform checkboxes, Public vs Private toggle, 1-click Approve/Reject
-  ▼
-[Pillar 6: Publishing & Scheduling Engine] (dispatch/publisher)
-  │ Idempotent publishing outbox for YouTube Shorts, Instagram Reels, LinkedIn, and X (Twitter)
-  │ Handles Private/Draft uploads vs Public scheduled drops
-  │ Auto-cleans exported video files upon verified upload
-  ▼
-[Pillar 7: Master Dispatch Daemon & CLI] (dispatch/main.py)
-  │ Single command boots entire pipeline: Ingestion Watcher + Worker Queue + Web Dashboard
-```
+- **Budget & Cost**: 100% free local infrastructure; optional pennies spent strictly on Google Gemini Flash API for semantic highlight extraction.
 
 ---
 
@@ -87,204 +73,133 @@ Dispatch is structured into seven decoupled, fault-tolerant pillars:
 
 ```
 Dispatch/
-├── 1.txt, 2.txt, 3.txt, 4.txt    # Project research & transcript context
 ├── README.md                     # Master project documentation
-├── PROGRESS.md                   # Real-time state and change log
+├── requirements.txt              # Standard Python dependencies
+├── pyproject.toml                # Modern package configuration
 ├── dispatch/
-│   ├── __init__.py
 │   ├── config.py                 # Central configurations & directory paths
 │   ├── db.py                     # SQLite database schema, migrations & CRUD operations
-│   ├── ingestion/                # Pillar 1: File watcher, validation & session manager
-│   │   ├── __init__.py
-│   │   ├── watcher.py
-│   │   └── validator.py
-│   ├── transcription/            # Pillar 2: Speech extraction & Hinglish word alignment
-│   │   ├── __init__.py
-│   │   ├── audio.py
-│   │   └── transcriber.py
-│   ├── ai_clips/                 # Pillar 3: Semantic highlight finder & packaging
-│   │   ├── __init__.py
-│   │   ├── highlight_finder.py
-│   │   ├── prompt_templates.py
-│   │   └── preference_learner.py
-│   ├── video_engine/             # Pillar 4: FFmpeg reframing, .ass subtitles & rendering
-│   │   ├── __init__.py
-│   │   ├── reframer.py
-│   │   ├── subtitle_generator.py
-│   │   └── renderer.py
-│   ├── web/                      # Pillar 5: FastAPI review dashboard
-│   │   ├── __init__.py
+│   ├── youtube_inbox/            # YouTube Cloud Inbox & Catcher
+│   │   ├── catcher.py            # Catcher core: download -> captions -> clips
+│   │   ├── vtt_parser.py         # WebVTT subtitle parser & word boundary estimator
+│   │   ├── oauth.py              # YouTube Data API OAuth client
+│   │   └── poller.py             # Background daemon polling for new uploads
+│   ├── ingestion/                # File watcher & validator for incoming drops
+│   ├── transcription/            # Speech extraction & Hinglish word alignment (faster-whisper)
+│   ├── ai_clips/                 # Semantic highlight finder & preference learner (Gemini Flash)
+│   ├── video_engine/             # FFmpeg 9:16 reframing, .ass subtitles & rendering
+│   ├── web/                      # FastAPI review dashboard (PC & mobile)
 │   │   ├── app.py
-│   │   ├── static/
 │   │   └── templates/
-│   ├── publisher/                # Pillar 6: Multi-platform publishing adapters
-│   │   ├── __init__.py
-│   │   ├── youtube.py
-│   │   ├── instagram.py
-│   │   ├── linkedin.py
-│   │   ├── twitter.py
-│   │   └── outbox.py
-│   └── main.py                   # Pillar 7: Unified daemon entry point
+│   ├── publisher/                # Multi-platform publishing (YouTube, Instagram, LinkedIn, X)
+│   ├── governor/                 # Hardware resource governor (CPU priority, battery, disk floor)
+│   ├── orchestrator/             # Checkpointed pipeline runner & crash recovery
+│   └── main.py                   # Master daemon entry point
 ├── android/                      # Native Android Studio Project (POCO C65)
-│   ├── app/                      # CameraX recorder, Room DB, WorkManager sync
+│   ├── app/                      # CameraX recorder, Room DB, YouTubeDirectUploadWorker
 │   ├── gradlew, gradlew.bat      # Self-contained Gradle wrapper scripts
 │   └── build.gradle.kts
 ├── storage/
-│   ├── incoming/                 # Phone drops raw video chunks here via Wi-Fi sync
+│   ├── incoming/                 # Raw video chunks
+│   ├── youtube_inbox/            # Downloaded YouTube Inbox media
 │   ├── processing/               # Active workspace during transcription/cutting
 │   ├── clips/                    # Finished candidate clips ready for review
 │   └── database/
-│       └── dispatch.db           # SQLite state, idempotency keys, & preference logs
-├── requirements.txt              # Standard Python dependencies
-├── pyproject.toml                # Modern package configuration
-└── tests/                        # Comprehensive unit, chaos & destructive tests
+│       └── dispatch.db           # SQLite state, checkpoints, & preference logs
+└── tests/                        # Comprehensive unit, chaos, destructive & inbox tests (29 tests)
 ```
 
 ---
 
-## 5. Storage Lifecycle (Rolling & Ephemeral)
+## 5. Quickstart & How to Run
 
-To fit comfortably within the 43.6 GB disk space constraint:
-1. **Raw Sessions**: Once all candidate clips are extracted, rendered, and verified on disk, the raw multi-hour source chunks are automatically purged from `incoming/` and `processing/`.
-2. **Finished Clips**: Stored in `storage/clips/` (~1.5 GB for 50 clips). Once an approved clip is uploaded to YouTube, Instagram, LinkedIn, or X (Twitter) and verified, the local clip file is automatically purged to safeguard disk space.
-3. **Database Records**: Transcripts, timestamps, review decisions, and publication audit logs are permanently retained in SQLite (a few megabytes total).
+### Step 1: Install Dependencies
+```powershell
+# Clone repo
+git clone https://github.com/Resolviaai/Dispatch.git
+cd Dispatch
 
----
+# Install Python requirements
+pip install -r requirements.txt
+```
 
-## 6. How to Run
+### Step 2: Configure Environment (.env)
+Create a `.env` file in the project root:
+```ini
+GEMINI_API_KEY=your_gemini_api_key_here
+DISPATCH_WEB_PORT=8000
+DISPATCH_PUBLISH_MODE=private
+DISPATCH_YOUTUBE_POLL_INTERVAL=600
+```
 
-1. **Install Prerequisites**: Python 3.11+ and FFmpeg (with `libass` support).
-2. **Install Dependencies**:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-3. **Set API Key (Optional)**: Set `GEMINI_API_KEY` in environment variables or `.env` for AI highlight extraction (automatic local heuristic fallback kicks in if unavailable).
-4. **Start Dispatch Master Daemon**:
-   ```powershell
-   python -m dispatch.main
-   ```
-5. **Access Control Dashboard**: Open `http://localhost:8765` on your PC (or `http://<your-pc-ip>:8765` from your POCO C65 phone browser).
-6. **One-Time Phone Pairing**:
-   - Tap the **Pairing** button on the web dashboard to see your unique connection string (e.g., `dispatch://pair?lan=...&token=...`).
-   - In the Android app or mobile web recorder, paste the string to securely pair phone with laptop with zero hardcoded credentials.
-7. **Windows Silent Background Auto-Start**:
-   ```cmd
-   scripts\install_windows_startup.bat
-   ```
-   Registers Dispatch in Windows Task Scheduler to start silently on login with below-normal CPU priority and zero terminal popups. To remove at any time, run `scripts\uninstall_windows_startup.bat`.
+### Step 3: Start Dispatch Daemon
+```powershell
+python -m dispatch.main
+```
+You will see:
+```text
+BOOTING DISPATCH: AUTONOMOUS PERSONAL CONTENT ENGINE
+Database & Job Queue initialized
+Autonomous pipeline worker thread running in background
+Autonomous YouTube Cloud Inbox poller active
+Launching Web Dashboard on http://0.0.0.0:8000
+```
 
----
-
-## 7. Phone Recording & Resumable Sync (Zero Cloud Storage, Zero Cables)
-
-Dispatch does **not** rely on third-party cloud storage (S3, R2, Supabase) or fragile sync folders. It features a custom **TUS-style chunked, byte-resumable synchronization engine**:
-
-### Architecture:
-- **Phone = Durable Source of Truth & Outbox**: Uses Room SQLite in Write-Ahead Logging (WAL) mode or IndexedDB.
-- **Laptop = Opportunistic Worker**: Safe for laptop to be OFF, sleeping, or disconnected; phone keeps records safely queued.
-- **Rolling Segments (10 mins)**: Records into `.tmp` files and atomically commits to `.mp4` with SHA-256 checksums. Battery death or crashes only lose the active segment, never the session.
-- **Confirmed Byte Resuming**: If network drops at 5%, 50%, or 99%, the upload resumes from the exact remote byte offset without restarting from 0%.
-- **Conservative Retention**: Phone **never** deletes a local recording until the laptop explicitly confirms SHA-256 verification via `/api/sync/reconcile` and `/api/sync/verify-chunk`.
-
-### How to Record on Your POCO C65:
-
-#### Option A: Zero-Install Mobile Web PWA Recorder (Instant)
-1. Open your POCO C65 mobile browser and navigate to:
-   ```
-   http://<your-laptop-ip>:8765/mobile
-   ```
-2. Tap the large circular Record button. The camera streams to viewfinder while slicing rolling segments into browser IndexedDB.
-3. Chunks automatically upload in the background to your laptop whenever reachable.
-
-#### Option B: Native Android Studio App (`android/`)
-1. Build the APK locally using the included Gradle wrapper:
-   ```bash
-   cd android
-   ./gradlew assembleDebug      # Linux / macOS
-   .\gradlew.bat assembleDebug  # Windows
-   ```
-   Or open the `android/` directory directly in Android Studio.
-2. Features CameraX FHD video recording, Room SQLite WAL storage, persistent Foreground Service with sticky notification, WorkManager background upload with Wi-Fi constraints, and `BootReceiver` for automatic recovery on phone reboot.
-
-#### Option C: Python Mobile Engine (`dispatch_mobile/`)
-- Run inside Termux on Android:
-  ```bash
-  python -m dispatch_mobile.main
-  ```
+### Step 4: Access Dashboard
+Open **http://localhost:8000** in your browser.
 
 ---
 
-## 8. Remote Connectivity & Outside-the-Home Sync (Tailscale Quickstart)
+## 6. Phone Recording Setup (POCO C65)
 
-To record while away from home (coffee shops, commuting, travel, outdoors) without paying for cloud storage or opening fragile router ports, Dispatch integrates with **Tailscale**: a free, zero-configuration WireGuard encrypted peer-to-peer mesh.
+### Option A: Native Android App (Recommended)
+1. Download `Dispatch-POCO-C65-v1.apk` from the dashboard at `http://<your-pc-ip>:8000/download/dispatch.apk`.
+2. Install on your phone.
+3. Features:
+   - CameraX FHD 1080p video recording.
+   - Pro Camera controls: Front/Back lens toggle, LED torch, AE/AF locking, tap-to-focus.
+   - Background `RecordingForegroundService` keeps recording even when screen is locked.
+   - `YouTubeDirectUploadWorker` automatically uploads recordings to YouTube as Private upon tapping Stop.
 
-### 2-Minute Setup:
-1. **On your Windows Laptop**:
-   - Download and install [Tailscale for Windows](https://tailscale.com/download/windows).
-   - Sign in with your Google or Microsoft account.
-   - Note your laptop's Tailscale IP (e.g. `100.85.12.34`) or MagicDNS name (e.g. `http://rohit-laptop:8765`).
-2. **On your POCO C65 Phone**:
-   - Install **Tailscale** from the Google Play Store.
-   - Sign in with the **same** account.
-   - Toggle Tailscale **ON**.
-3. **Record Anywhere**:
-   - Open your mobile browser and navigate to:
-     ```
-     http://<laptop-tailscale-ip>:8765/mobile
-     ```
-   - Chunks stream directly to your home laptop in the background over encrypted peer-to-peer WireGuard.
-4. **Intelligent Multi-Route Failover**:
-   - When home on the same Wi-Fi, `dispatch/transport/transport_manager.py` automatically routes sync over high-speed local LAN.
-   - When outside, it seamlessly falls back to Tailscale with zero manual switching.
-   - If your laptop is asleep or off, the phone keeps all chunks safely stored in its local outbox and automatically syncs when the laptop connects.
+### Option B: Zero-Install Mobile Web PWA Recorder
+1. Open your phone's browser and navigate to:
+   ```
+   http://<your-laptop-ip>:8000/mobile
+   ```
+2. Tap the large Record button.
+3. Automatically syncs recordings to your laptop over local Wi-Fi.
 
 ---
 
-## 9. Resource Governor & Laptop Performance Manager
+## 7. Windows Silent Auto-Start on Boot
 
-Dispatch includes a hardware-aware **Resource Governor** (`dispatch/governor/`) preventing laptop lag, overheating, or battery drain:
-- **Windows Process Priority**: Runs worker threads with `BELOW_NORMAL_PRIORITY_CLASS` so foreground games, IDEs, and browsers remain smooth.
-- **Power Awareness**: Prefers AC power and defers heavy FFmpeg rendering when running on low battery (< 30%).
-- **Idle Detection**: Detects user typing/mouse activity via Windows `GetLastInputInfo` and yields resources.
-- **Disk Safety Floor**: Halts heavy transcode operations if SSD free space drops below 5.0 GB to avoid disk full crashes.
-
----
-
-## 10. Platform Publishing Credentials
-
-### YouTube Shorts
-- Save your OAuth 2.0 client secrets in Google Cloud Console.
-- When `publish_mode` is set to `private`, uploads will be created as private drafts in YouTube Studio for inspection.
-
-### Instagram Reels
-- Set `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_USER_ID` in your `.env` file.
-- Resumable container video streaming with automatic status polling.
-
-### LinkedIn Video
-- Set `LINKEDIN_ACCESS_TOKEN` and `LINKEDIN_AUTHOR_URN` in your `.env` file.
-- Supports LinkedIn UGC API registered video uploads with custom commentary.
-
-### X (formerly Twitter)
-- Set `X_BEARER_TOKEN` or `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` in `.env`.
-- Supports chunked media uploads and status tweets with hashtags.
-
-*Note: In absence of credentials, adapters run in transparent simulation mode, logging actions and recording state in SQLite without pipeline disruption.*
+To run Dispatch silently in the background whenever Windows boots:
+```cmd
+scripts\install_windows_startup.bat
+```
+Registers Dispatch in Windows Task Scheduler to run hidden with below-normal CPU priority.
+To uninstall at any time, run:
+```cmd
+scripts\uninstall_windows_startup.bat
+```
 
 ---
 
-## 11. Automated Verification & Destructive Chaos Tests
+## 8. Verification & Test Suite
 
-Run the full suite validating all 25 mission-critical failure scenarios and destructive edge cases (abrupt SIGKILL, corrupt chunk quarantine, multi-worker CAS collision, lease fencing tokens, 4-platform idempotency, database hot backups):
+Run the full automated test suite covering all 29 unit, integration, chaos, destructive, and YouTube inbox scenarios:
 
 ```powershell
-# Run entire test suite (23 unit, integration, and chaos tests)
+# Run all 29 tests
 python -m unittest discover tests
 
-# Run destructive high-concurrency and crash recovery tests
+# Run YouTube Inbox tests
+python -m unittest tests/test_youtube_inbox.py
+
+# Run crash recovery & destructive tests
 python -m unittest tests/test_destructive.py
 
-# Run network, battery, and AI failover chaos tests
+# Run chaos engineering tests
 python -m unittest tests/test_chaos.py
 ```
-
-
+All 29 tests pass with 100% green exit code.
