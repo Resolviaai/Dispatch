@@ -25,7 +25,7 @@ def get_whisper_model(model_size: str = "base", device: str = "cpu", compute_typ
                 model_size,
                 device=device,
                 compute_type=compute_type,
-                cpu_threads=6
+                cpu_threads=4
             )
         except Exception as e:
             logger.error("Failed to load faster-whisper model: %s", e)
@@ -64,7 +64,7 @@ def transcribe_video(
     logger.info("Starting speech transcription with word-level timestamps and VAD on %s", audio_path.name)
     segments_raw, info = model.transcribe(
         str(audio_path),
-        beam_size=5,
+        beam_size=1,
         word_timestamps=True,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=500),
