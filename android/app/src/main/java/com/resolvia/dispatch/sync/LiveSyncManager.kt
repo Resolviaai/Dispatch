@@ -114,10 +114,16 @@ class LiveSyncManager(private val context: Context) {
                 return@withContext false
             }
 
-            // Cleanup local file after confirmed verification
-            file.delete()
-            dao.updateSegmentStatus(item.segmentId, "UPLOADED_TO_PC")
-            dao.deleteOutboxItem(item.segmentId)
+            // Cleanup local file only after confirmed cryptographic verification
+            val sha256 = calculateSha256(file)
+            val isVerified = verifyWithServer(activeUrl, item.segmentId, sha256, totalBytes)
+            if (isVerified) {
+                file.delete()
+                dao.updateSegmentStatus(item.segmentId, "UPLOADED_TO_PC")
+                dao.deleteOutboxItem(item.segmentId)
+            } else {
+                android.util.Log.w("LiveSyncManager", "Server verification check failed for ${item.segmentId}. Retaining local file.")
+            }
 
             _syncState.value = _syncState.value.copy(
                 lastSuccessSegmentId = segmentName,
@@ -262,6 +268,24 @@ class LiveSyncManager(private val context: Context) {
         }
 
         return true
+    }
+
+    private fun verifyWithServer(baseUrl: String, segmentId: String, sha256: String, fileSize: Long): Boolean {
+        val url = "$baseUrl/api/sync/verify-chunk?segment_id=$segmentId&sha256=$sha256&file_size=$fileSize"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("x-auth-token", pairingManager.authToken)
+            .get()
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return false
+                val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
+                body?.get("verified")?.asBoolean == true
+            }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun calculateSha256(file: File): String {

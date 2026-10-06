@@ -44,6 +44,12 @@ interface RecordingDao {
     @Query("UPDATE segments SET status = :status WHERE segmentId = :segmentId")
     suspend fun updateSegmentStatus(segmentId: String, status: String)
 
+    @Query("UPDATE outbox SET remoteOffset = :offset, updatedAt = :updatedAt WHERE segmentId = :segmentId")
+    suspend fun updateOutboxOffset(segmentId: String, offset: Long, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("SELECT remoteOffset FROM outbox WHERE segmentId = :segmentId")
+    suspend fun getOutboxOffset(segmentId: String): Long?
+
     @Query("DELETE FROM outbox WHERE segmentId = :segmentId")
     suspend fun deleteOutboxItem(segmentId: String)
 }

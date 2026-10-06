@@ -656,7 +656,10 @@ fun DispatchApp(
                     pairingManager = pairingManager,
                     syncState = syncState,
                     onSyncNow = {
-                        activity.lifecycleScope.launch {
+                        segmenterEngine.triggerBackgroundSync()
+                        (activity.application as? DispatchApplication)?.applicationScope?.launch {
+                            liveSyncManager.syncNow()
+                        } ?: activity.lifecycleScope.launch {
                             liveSyncManager.syncNow()
                         }
                     },

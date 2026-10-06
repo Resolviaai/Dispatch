@@ -88,16 +88,25 @@ class SegmenterEngine(
         }
 
         // Start hardware CameraX recording
-        cameraManager.startSegmentRecording(tmpFile) { finalizedFile, durationMs ->
-            scope.launch(Dispatchers.IO) {
-                onSegmentHardwareFinalized(segId, sessionId, finalizedFile, durationMs)
-                if (isSessionActive) {
-                    withContext(Dispatchers.Main) {
-                        startNextSegment(cameraManager)
+        cameraManager.startSegmentRecording(
+            targetTmpFile = tmpFile,
+            onError = { errorCode, cause ->
+                android.util.Log.e("SegmenterEngine", "Hardware recording error on $segId: code $errorCode", cause)
+                scope.launch(Dispatchers.IO) {
+                    dao.updateSegmentStatus(segId, "ERROR_$errorCode")
+                }
+            },
+            onFinalized = { finalizedFile, durationMs ->
+                scope.launch(Dispatchers.IO) {
+                    onSegmentHardwareFinalized(segId, sessionId, finalizedFile, durationMs)
+                    if (isSessionActive) {
+                        withContext(Dispatchers.Main) {
+                            startNextSegment(cameraManager)
+                        }
                     }
                 }
             }
-        }
+        )
 
         // Schedule timer to roll into next segment
         segmentRollJob?.cancel()
@@ -189,7 +198,7 @@ class SegmenterEngine(
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             "DispatchResumableSyncWorker",
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.KEEP,
             lanWork
         )
 
@@ -200,7 +209,7 @@ class SegmenterEngine(
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             "DispatchYouTubeDirectUploadWorker",
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.KEEP,
             ytSyncWork
         )
     }

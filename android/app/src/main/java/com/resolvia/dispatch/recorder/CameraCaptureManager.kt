@@ -275,10 +275,12 @@ class CameraCaptureManager(private val context: Context) {
      */
     fun startSegmentRecording(
         targetTmpFile: File,
+        onError: ((errorCode: Int, cause: Throwable?) -> Unit)? = null,
         onFinalized: (file: File, durationMs: Long) -> Unit
     ) {
         val vc = videoCapture ?: run {
             Log.e(TAG, "VideoCapture not initialized")
+            onError?.invoke(-1, IllegalStateException("VideoCapture not initialized"))
             return
         }
 
@@ -303,6 +305,8 @@ class CameraCaptureManager(private val context: Context) {
                         onFinalized(targetTmpFile, durationMs)
                     } else {
                         Log.e(TAG, "Segment recording failed with error code: ${recordEvent.error}", recordEvent.cause)
+                        targetTmpFile.delete()
+                        onError?.invoke(recordEvent.error, recordEvent.cause)
                     }
                 }
             }

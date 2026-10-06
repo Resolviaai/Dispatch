@@ -77,7 +77,7 @@ class ResumableSyncWorker(
         return null
     }
 
-    private fun uploadSegmentResumable(baseUrl: String, segmentId: String, sessionId: String, file: File): Boolean {
+    private suspend fun uploadSegmentResumable(baseUrl: String, segmentId: String, sessionId: String, file: File): Boolean {
         val totalBytes = file.length()
         val sha256 = calculateSha256(file)
 
@@ -102,7 +102,7 @@ class ResumableSyncWorker(
                 if (!resp.isSuccessful) return false
                 val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
                 if (body.get("status")?.asString == "already_completed") {
-                    cleanupVerifiedFile(segmentId, file)
+                    cleanupVerifiedFile(baseUrl, segmentId, file, sha256, totalBytes)
                     return true
                 }
                 remoteOffset = body.get("remote_offset")?.asLong ?: 0L
@@ -111,9 +111,12 @@ class ResumableSyncWorker(
             return false
         }
 
+        dao.updateOutboxOffset(segmentId, remoteOffset)
+
         // 2. Stream chunked bytes starting strictly from remoteOffset
         val chunkSize = 256 * 1024 // 256 KB slices
         val buffer = ByteArray(chunkSize)
+        var bytesSinceSave = 0L
 
         RandomAccessFile(file, "r").use { raf ->
             raf.seek(remoteOffset)
@@ -139,8 +142,14 @@ class ResumableSyncWorker(
                         val chunkBody = gson.fromJson(chunkResp.body?.string(), JsonObject::class.java)
                         remoteOffset = chunkBody.get("remote_offset")?.asLong ?: (remoteOffset + bytesToRead)
 
+                        bytesSinceSave += bytesToRead
+                        if (bytesSinceSave >= 2 * 1024 * 1024) {
+                            dao.updateOutboxOffset(segmentId, remoteOffset)
+                            bytesSinceSave = 0L
+                        }
+
                         if (chunkBody.get("status")?.asString == "completed" && chunkBody.get("verified")?.asBoolean == true) {
-                            cleanupVerifiedFile(segmentId, file)
+                            cleanupVerifiedFile(baseUrl, segmentId, file, sha256, totalBytes)
                             return true
                         }
                     }
@@ -153,12 +162,33 @@ class ResumableSyncWorker(
         return true
     }
 
-    private fun cleanupVerifiedFile(segmentId: String, file: File) {
-        // Safe retention: Only purge file after laptop has confirmed valid SHA-256
-        file.delete()
-        kotlinx.coroutines.runBlocking {
+    private suspend fun cleanupVerifiedFile(baseUrl: String, segmentId: String, file: File, sha256: String, totalBytes: Long) {
+        val verified = verifyWithServer(baseUrl, segmentId, sha256, totalBytes)
+        if (verified) {
+            file.delete()
             dao.updateSegmentStatus(segmentId, "UPLOADED_TO_PC")
             dao.deleteOutboxItem(segmentId)
+            android.util.Log.i("ResumableSyncWorker", "Segment $segmentId verified by server and deleted locally.")
+        } else {
+            android.util.Log.w("ResumableSyncWorker", "Server verification check failed for $segmentId. Retaining local file.")
+        }
+    }
+
+    private fun verifyWithServer(baseUrl: String, segmentId: String, sha256: String, fileSize: Long): Boolean {
+        val url = "$baseUrl/api/sync/verify-chunk?segment_id=$segmentId&sha256=$sha256&file_size=$fileSize"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("x-auth-token", pairingManager.authToken)
+            .get()
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return false
+                val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
+                body?.get("verified")?.asBoolean == true
+            }
+        } catch (e: Exception) {
+            false
         }
     }
 
