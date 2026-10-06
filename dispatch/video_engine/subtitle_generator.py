@@ -71,7 +71,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         words = seg.get("words", [])
 
         if words:
-            # Group words into 3-5 word chunks for high-retention rapid subtitle cards
+            # Group words into 3-4 word cards for high-retention rapid subtitle reading
             CHUNK_SIZE = 4
             for i in range(0, len(words), CHUNK_SIZE):
                 chunk_words = words[i:i + CHUNK_SIZE]
@@ -81,13 +81,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if chunk_end <= chunk_start or chunk_end <= clip_start_time or chunk_start >= clip_end_time:
                     continue
 
-                # Relative to clip start
-                rel_start = format_ass_timestamp(max(0.0, chunk_start - clip_start_time))
-                rel_end = format_ass_timestamp(max(0.0, chunk_end - clip_start_time))
+                # Generate dynamic active-word karaoke illumination for each word in the chunk
+                for j, target_word in enumerate(chunk_words):
+                    w_start = max(clip_start_time, target_word["start"])
+                    # Smooth interval: bridge gap to next word to prevent flicker
+                    if j < len(chunk_words) - 1:
+                        w_end = min(clip_end_time, max(w_start + 0.12, chunk_words[j + 1]["start"]))
+                    else:
+                        w_end = min(clip_end_time, max(w_start + 0.12, target_word["end"]))
 
-                # Display the chunk text
-                text_display = " ".join(w["word"] for w in chunk_words).upper()
-                events.append(f"Dialogue: 0,{rel_start},{rel_end},Default,,0,0,0,,{text_display}")
+                    if w_end <= w_start:
+                        continue
+
+                    rel_start = format_ass_timestamp(max(0.0, w_start - clip_start_time))
+                    rel_end = format_ass_timestamp(max(0.0, w_end - clip_start_time))
+
+                    # Format chunk with active word highlighted
+                    card_words = []
+                    for k, w in enumerate(chunk_words):
+                        cleaned_word = w["word"].strip().upper()
+                        if not cleaned_word:
+                            continue
+                        if k == j:
+                            # Highlighted active word
+                            card_words.append(f"{{\\c{SUBTITLE_HIGHLIGHT_COLOR}&}}{cleaned_word}{{\\c{SUBTITLE_PRIMARY_COLOR}&}}")
+                        else:
+                            card_words.append(cleaned_word)
+
+                    text_display = " ".join(card_words)
+                    events.append(f"Dialogue: 0,{rel_start},{rel_end},Default,,0,0,0,,{text_display}")
 
         else:
             # Fallback to segment-level dialogue

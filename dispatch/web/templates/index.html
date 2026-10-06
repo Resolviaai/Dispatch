@@ -3,10 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dispatch | Autonomous Content Engine</title>
+  <title>Dispatch | Autonomous Personal Content Engine</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <style>
-    body { background-color: #0B0F17; color: #F1F5F9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body {
+      background-color: #070A0F;
+      color: #F1F5F9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
     .surface { background-color: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
     .surface-input { background-color: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); }
     .surface-nested { background-color: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.05); }
@@ -20,49 +25,52 @@
 <body class="min-h-screen antialiased flex flex-col">
 
   <!-- Header -->
-  <header class="border-b border-white/10 bg-[#0B0F17]/95 backdrop-blur sticky top-0 z-50 px-4 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+  <header class="border-b border-white/10 bg-[#070A0F]/95 backdrop-blur sticky top-0 z-50 px-4 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
     <!-- Brand -->
     <div class="flex items-center space-x-3">
-      <div class="w-8 h-8 rounded bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center">
+      <div class="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center">
         <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
         </svg>
       </div>
       <div>
         <div class="flex items-center space-x-2">
-          <h1 class="text-sm font-semibold tracking-wider uppercase text-white">Dispatch</h1>
-          <span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-700/40">V1</span>
+          <h1 class="text-sm font-semibold tracking-wider uppercase text-white font-mono">DISPATCH</h1>
+          <span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-700/40">V1 AUTONOMOUS</span>
         </div>
-        <p class="text-[10px] text-slate-400 font-mono">Autonomous Content Engine</p>
+        <p class="text-[10px] text-slate-400 font-mono">POCO C65 ➔ PC PIPELINE ENGINE</p>
       </div>
     </div>
 
-    <!-- Quick Actions & Settings -->
+    <!-- Top Status Bar & Quick Actions -->
     <div class="flex items-center flex-wrap gap-2 text-xs">
-      <!-- Pair Phone Modal Button -->
-      <button onclick="openPairingModal()" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
+      
+      <!-- YouTube Account Status Pill (Clickable) -->
+      <button onclick="openIntegrationsModal('youtube')" id="header-yt-pill" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] transition text-[11px] text-slate-300 border border-white/10" title="Manage YouTube Connection">
+        <span id="header-yt-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+        <span id="header-yt-text" class="font-mono">YouTube: Checking...</span>
+      </button>
+
+      <!-- Gemini AI Status Pill (Clickable) -->
+      <button onclick="openIntegrationsModal('gemini')" id="header-gemini-pill" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] transition text-[11px] text-slate-300 border border-white/10" title="Manage Gemini API Key">
+        <span id="header-gemini-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+        <span id="header-gemini-text" class="font-mono">Gemini AI: Checking...</span>
+      </button>
+
+      <!-- Pair Phone Modal Button with QR Code -->
+      <button onclick="openPairingModal()" class="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-indigo-600/20 border border-indigo-500/40 hover:bg-indigo-600/30 text-indigo-300 transition text-[11px] font-mono font-semibold">
         <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
         </svg>
-        <span>Pair Phone</span>
+        <span>Pair Phone (QR)</span>
       </button>
 
-      <!-- Download APK Button -->
-      <a href="/download/dispatch.apk" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded bg-emerald-950/40 border border-emerald-500/30 hover:bg-emerald-900/40 text-emerald-300 transition text-[11px]">
+      <!-- Download Compiled APK Button -->
+      <a href="/download/dispatch.apk" class="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-emerald-950/50 border border-emerald-500/40 hover:bg-emerald-900/50 text-emerald-300 transition text-[11px] font-mono font-semibold">
         <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
         </svg>
-        <span class="hidden sm:inline">Download</span>
-        <span>APK</span>
-      </a>
-
-      <!-- Open Mobile Web Camera -->
-      <a href="/mobile" target="_blank" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
-        <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-        </svg>
-        <span class="hidden sm:inline">Mobile</span>
-        <span>Camera</span>
+        <span>Download APK (v1.0)</span>
       </a>
 
       <!-- Disk Health -->
@@ -73,10 +81,10 @@
 
       <!-- Publish Mode Toggle -->
       <div class="flex items-center bg-black/50 border border-white/10 rounded p-0.5">
-        <button id="mode-private-btn" onclick="setPublishMode('private')" class="px-2 py-1 text-[11px] font-medium rounded transition">
-          Private / Draft
+        <button id="mode-private-btn" onclick="setPublishMode('private')" class="px-2 py-1 text-[11px] font-mono rounded transition">
+          Private Draft
         </button>
-        <button id="mode-public-btn" onclick="setPublishMode('public')" class="px-2 py-1 text-[11px] font-medium rounded transition">
+        <button id="mode-public-btn" onclick="setPublishMode('public')" class="px-2 py-1 text-[11px] font-mono rounded transition">
           Auto Public
         </button>
       </div>
@@ -86,82 +94,109 @@
   <!-- Main Content Container -->
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-5 space-y-6">
 
-    <!-- KPI Metrics Grid -->
+    <!-- KPI Metrics Grid (Jensen Huang Precision Grid) -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
-        <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Ready For Review</span>
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Ready For Review</span>
         <span id="stat-ready" class="text-2xl font-semibold tracking-tight text-white mt-1 text-right">0</span>
       </div>
-      <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
-        <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Approved / Queued</span>
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Approved & Queued</span>
         <span id="stat-approved" class="text-2xl font-semibold tracking-tight text-indigo-400 mt-1 text-right">0</span>
       </div>
-      <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
-        <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Published</span>
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Published Shorts</span>
         <span id="stat-published" class="text-2xl font-semibold tracking-tight text-emerald-400 mt-1 text-right">0</span>
       </div>
-      <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
-        <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Storage Health</span>
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Storage Health</span>
         <span id="stat-storage" class="text-2xl font-semibold tracking-tight text-slate-200 mt-1 text-right">--%</span>
       </div>
     </div>
 
-    <!-- Active Pipeline Stage & Leases Widget -->
-    <div class="surface rounded-lg p-4 space-y-3">
+    <!-- Autonomous Pipeline Stages & Live Status Visualizer -->
+    <div class="surface rounded-xl p-4 space-y-3">
       <div class="flex items-center justify-between">
         <div class="flex items-center space-x-2">
           <div class="w-2 h-2 rounded-full bg-indigo-500 pulse-indicator"></div>
-          <h2 class="text-xs uppercase tracking-wider font-semibold text-white">Live Pipeline & Stage Checkpoints</h2>
+          <h2 class="text-xs uppercase font-mono tracking-wider font-semibold text-white">Autonomous Pipeline Engine</h2>
           <span id="active-jobs-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-700/50">0 active</span>
         </div>
-        <button onclick="fetchPipelineJobs()" class="text-[11px] text-slate-400 hover:text-slate-200 flex items-center space-x-1">
+        <button onclick="fetchPipelineJobs()" class="text-[11px] font-mono text-slate-400 hover:text-slate-200 flex items-center space-x-1">
           <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
           </svg>
-          <span>Sync</span>
+          <span>Refresh Engine</span>
         </button>
       </div>
 
+      <!-- Pipeline Progression Diagram -->
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] font-mono text-slate-400 py-1 border-y border-white/5">
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">1</span>
+          <span>Wi-Fi/YT Ingest</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">2</span>
+          <span>Whisper ASR</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">3</span>
+          <span>Gemini AI Score</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">4</span>
+          <span>Karaoke Render</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested col-span-2 sm:col-span-1">
+          <span class="w-4 h-4 rounded-full bg-emerald-600/30 text-emerald-300 flex items-center justify-center font-bold">5</span>
+          <span>Creator Review</span>
+        </div>
+      </div>
+
       <!-- Pipeline Jobs List -->
-      <div id="pipeline-jobs-container" class="space-y-2.5">
-        <div id="pipeline-idle-placeholder" class="surface-nested rounded p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
+      <div id="pipeline-jobs-container" class="space-y-2">
+        <div id="pipeline-idle-placeholder" class="surface-nested rounded-lg p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
           <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
-          <span>Pipeline Idle — Waiting for phone sync or new video chunks</span>
+          <span class="font-mono">Engine Idle — Ready for recordings from your POCO C65</span>
         </div>
       </div>
     </div>
 
-    <!-- YouTube Cloud Inbox (Cloud Transport & On-Demand Catching) -->
-    <div class="surface rounded-lg p-4 space-y-3">
-      <div class="flex items-center justify-between">
+    <!-- YouTube Cloud Inbox & Remote Catching Hub -->
+    <div class="surface rounded-xl p-4 space-y-3">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div class="flex items-center space-x-2">
           <div class="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
-          <h2 class="text-xs uppercase tracking-wider font-semibold text-white">YouTube Cloud Inbox</h2>
-          <span class="text-[10px] text-slate-400 font-mono">Zero-friction phone-to-PC cloud transport</span>
+          <h2 class="text-xs uppercase font-mono tracking-wider font-semibold text-white">YouTube Cloud Inbox</h2>
+          <span class="text-[10px] text-slate-400 font-mono">Zero-touch cloud transport</span>
         </div>
         <div class="flex items-center space-x-2">
-          <button onclick="scanYouTubeChannel()" id="btn-yt-scan" class="text-[11px] px-2.5 py-1 rounded surface hover:bg-white/[0.06] text-slate-300 flex items-center space-x-1.5 transition">
+          <span id="yt-inbox-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-600/40">
+            Connected: Resolvia ai
+          </span>
+          <button onclick="scanYouTubeChannel()" id="btn-yt-scan" class="text-[11px] font-mono px-2.5 py-1 rounded surface hover:bg-white/[0.06] text-slate-300 flex items-center space-x-1.5 transition">
             <svg class="w-3 h-3 text-rose-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
-            <span>Scan [DISPATCH] Uploads</span>
+            <span>Scan Uploads</span>
           </button>
         </div>
       </div>
 
-      <!-- Ingestion Input Bar -->
+      <!-- Manual URL/ID Ingestion Input -->
       <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
         <div class="relative flex-1">
-          <input type="text" id="yt-ingest-url" placeholder="Paste YouTube Video URL or ID (e.g. https://youtu.be/... or 11-char ID)" class="w-full text-xs px-3 py-2 rounded surface-input text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono">
+          <input type="text" id="yt-ingest-url" placeholder="Paste YouTube Video URL or ID (e.g. https://youtu.be/... or 11-char ID)" class="w-full text-xs px-3 py-2 rounded-lg surface-input text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono">
         </div>
         <div class="flex items-center space-x-2">
-          <label class="flex items-center space-x-1.5 text-[11px] text-slate-400 cursor-pointer select-none">
+          <label class="flex items-center space-x-1.5 text-[11px] text-slate-400 cursor-pointer select-none font-mono">
             <input type="checkbox" id="yt-force-whisper" class="rounded border-white/20 text-indigo-600 focus:ring-0">
             <span>Force Whisper</span>
           </label>
-          <button onclick="ingestYouTubeVideo()" id="btn-yt-ingest" class="px-3.5 py-2 rounded bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-xs font-semibold text-white transition flex items-center space-x-1.5 shrink-0">
+          <button onclick="ingestYouTubeVideo()" id="btn-yt-ingest" class="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-xs font-semibold text-white transition flex items-center space-x-1.5 shrink-0">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
             </svg>
@@ -180,13 +215,12 @@
     <div class="space-y-3 pt-1">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h2 class="text-base font-semibold text-white">Content Library & Reviews</h2>
-          <p class="text-xs text-slate-400 mt-0.5">Review generated short-form clips, edit metadata, and dispatch across platforms.</p>
+          <h2 class="text-base font-semibold text-white">Content Review Station</h2>
+          <p class="text-xs text-slate-400 mt-0.5">Review vertical short-form candidate clips with active-word karaoke subtitles, edit titles, and approve for publishing.</p>
         </div>
 
         <div class="flex items-center space-x-2">
-          <!-- Refresh Button -->
-          <button onclick="fetchClips()" class="text-xs px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 flex items-center space-x-1.5 transition">
+          <button onclick="fetchClips()" class="text-xs px-3 py-1.5 rounded-lg surface hover:bg-white/[0.06] text-slate-300 flex items-center space-x-1.5 transition font-mono">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
@@ -197,11 +231,11 @@
 
       <!-- Section Navigation Tabs -->
       <div class="flex items-center space-x-2 border-b border-white/10 pb-2">
-        <button id="tab-ready-btn" onclick="switchClipsTab('ready')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm">
+        <button id="tab-ready-btn" onclick="switchClipsTab('ready')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm font-mono">
           <span>Awaiting Approval</span>
           <span id="tab-ready-count" class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-white/20">0</span>
         </button>
-        <button id="tab-approved-btn" onclick="switchClipsTab('approved')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition">
+        <button id="tab-approved-btn" onclick="switchClipsTab('approved')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition font-mono">
           <span>Approved & Published</span>
           <span id="tab-approved-count" class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-white/10">0</span>
         </button>
@@ -209,17 +243,17 @@
     </div>
 
     <!-- Clips Grid (Awaiting Approval View) -->
-    <div id="clips-ready-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-      <!-- Dynamic Clip Cards injected here -->
+    <div id="clips-ready-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- Dynamic Candidate Clip Cards injected here -->
     </div>
 
     <!-- Clips Grid (Approved & Published View) -->
-    <div id="clips-approved-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 hidden">
+    <div id="clips-approved-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 hidden">
       <!-- Dynamic Approved/Published Cards injected here -->
     </div>
 
     <!-- Empty State -->
-    <div id="empty-state" class="hidden surface rounded-lg p-12 text-center">
+    <div id="empty-state" class="hidden surface rounded-xl p-12 text-center">
       <svg class="w-10 h-10 mx-auto text-slate-500 mb-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
       </svg>
@@ -227,76 +261,161 @@
       <p id="empty-state-desc" class="text-xs text-slate-400 mt-1 max-w-sm mx-auto">When your phone completes recording and syncs to your PC, Dispatch automatically cuts and subtitles candidates here.</p>
     </div>
 
-    <!-- Device Pairing Modal -->
+    <!-- Device Pairing Modal (Interactive Live QR Code) -->
     <div id="pairing-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-      <div class="surface rounded-xl max-w-lg w-full p-6 space-y-4 border border-white/10 shadow-2xl">
+      <div class="surface rounded-2xl max-w-lg w-full p-6 space-y-4 border border-white/10 shadow-2xl">
         <div class="flex items-center justify-between border-b border-white/10 pb-3">
           <div class="flex items-center space-x-2">
             <div class="w-2.5 h-2.5 rounded-full bg-indigo-500"></div>
-            <h3 class="text-sm font-semibold uppercase tracking-wider text-white">Pair Phone With Laptop</h3>
+            <h3 class="text-sm font-semibold uppercase tracking-wider font-mono text-white">Pair Phone With Laptop</h3>
           </div>
           <button onclick="closePairingModal()" class="text-slate-400 hover:text-white p-1 rounded">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
 
-        <!-- Step 1: Install APK -->
-        <div class="bg-indigo-950/30 border border-indigo-500/30 rounded-lg p-3 space-y-1.5">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-white font-mono uppercase">Step 1: Install App on POCO C65</span>
-            <a href="/download/dispatch.apk" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-mono text-[10px] flex items-center space-x-1">
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-              </svg>
-              <span>Download APK</span>
-            </a>
+        <!-- Interactive Live QR Code Card -->
+        <div class="flex flex-col sm:flex-row items-center gap-4 bg-black/50 p-4 rounded-xl border border-white/10">
+          <div class="bg-white p-2.5 rounded-xl flex items-center justify-center shrink-0 shadow-lg">
+            <canvas id="pairing-qr-canvas" class="w-36 h-36"></canvas>
           </div>
-          <p class="text-[11px] text-slate-300 leading-relaxed">
-            Download and install <code>Dispatch-POCO-C65-v1.apk</code> directly on your phone. Enables 1080p background recording even when screen is locked.
-          </p>
+          <div class="space-y-2 text-xs">
+            <div class="flex items-center space-x-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span class="font-mono font-bold text-white uppercase text-[11px]">Scan from Dispatch App</span>
+            </div>
+            <p class="text-[11px] text-slate-300 leading-relaxed">
+              Open <strong>Pairing</strong> in your POCO C65 Dispatch app and enter your PC IP, or scan this QR code. Credentials sync automatically.
+            </p>
+            <div class="flex flex-wrap gap-1.5 pt-1">
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-500/30">192.168.0.101:8000</span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">YouTube Token Ready</span>
+            </div>
+          </div>
         </div>
 
-        <!-- Step 2: Connection Credentials -->
-        <div class="space-y-3 text-xs pt-1">
-          <span class="text-[10px] font-semibold text-slate-400 font-mono uppercase block">Step 2: Connect Phone to Laptop</span>
-
+        <!-- Connection Details Inputs -->
+        <div class="space-y-2.5 text-xs">
           <div>
             <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Local LAN Endpoint (Home Wi-Fi)</label>
             <div class="flex items-center space-x-2">
-              <input type="text" id="pair-lan" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded surface-input text-emerald-300">
-              <button onclick="copyField('pair-lan')" class="px-2.5 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
-            </div>
-          </div>
-
-          <div>
-            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Tailscale Remote Endpoint (Outside Home)</label>
-            <div class="flex items-center space-x-2">
-              <input type="text" id="pair-tailscale" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded surface-input text-indigo-300" placeholder="Tailscale not detected on laptop">
-              <button onclick="copyField('pair-tailscale')" class="px-2.5 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
+              <input type="text" id="pair-lan" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded-lg surface-input text-emerald-300">
+              <button onclick="copyField('pair-lan')" class="px-2.5 py-1.5 rounded-lg surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
             </div>
           </div>
 
           <div>
             <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Device Auth Secret Token</label>
             <div class="flex items-center space-x-2">
-              <input type="password" id="pair-token" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded surface-input text-amber-300">
-              <button onclick="toggleTokenVisibility()" id="btn-show-token" class="px-2 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Show</button>
-              <button onclick="copyField('pair-token')" class="px-2.5 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
+              <input type="password" id="pair-token" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded-lg surface-input text-amber-300">
+              <button onclick="toggleTokenVisibility()" id="btn-show-token" class="px-2 py-1.5 rounded-lg surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Show</button>
+              <button onclick="copyField('pair-token')" class="px-2.5 py-1.5 rounded-lg surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
             </div>
           </div>
 
-          <div class="pt-2 border-t border-white/5">
-            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">1-Click Pairing URI (Paste into App or Open)</label>
+          <div>
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">1-Click Pairing String</label>
             <div class="flex items-center space-x-2">
-              <input type="text" id="pair-uri" readonly class="w-full text-[11px] font-mono px-2.5 py-1.5 rounded surface-input text-white">
-              <button onclick="copyField('pair-uri')" class="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] shadow">Copy All</button>
+              <input type="text" id="pair-uri" readonly class="w-full text-[11px] font-mono px-2.5 py-1.5 rounded-lg surface-input text-white">
+              <button onclick="copyField('pair-uri')" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] font-mono shadow">Copy All</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2 flex justify-between items-center border-t border-white/5">
+          <a href="/download/dispatch.apk" class="text-xs font-mono text-emerald-400 hover:underline flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>Download APK</span>
+          </a>
+          <button onclick="closePairingModal()" class="px-4 py-1.5 text-xs font-mono rounded-lg surface hover:bg-white/[0.08] text-slate-300">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cloud Integrations & API Keys Modal -->
+    <div id="integrations-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="surface rounded-2xl max-w-xl w-full p-6 space-y-5 border border-white/10 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-white/10 pb-3">
+          <div class="flex items-center space-x-2">
+            <div class="w-2.5 h-2.5 rounded-full bg-indigo-500"></div>
+            <h3 class="text-sm font-semibold uppercase tracking-wider font-mono text-white">Cloud Integrations & API Keys</h3>
+          </div>
+          <button onclick="closeIntegrationsModal()" class="text-slate-400 hover:text-white p-1 rounded">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <!-- 1. YouTube Data API v3 OAuth Section -->
+        <div class="bg-black/30 border border-white/10 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <div class="w-7 h-7 rounded-lg bg-rose-600/20 border border-rose-500/40 flex items-center justify-center text-rose-400 font-bold text-xs font-mono">
+                YT
+              </div>
+              <div>
+                <h4 class="text-xs font-semibold text-white">YouTube Data API v3 (Cloud Inbox & Shorts)</h4>
+                <p id="modal-yt-status-text" class="text-[11px] text-slate-400 font-mono">Checking connection...</p>
+              </div>
+            </div>
+            <span id="modal-yt-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300">
+              Checking
+            </span>
+          </div>
+
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            Allows Dispatch to automatically discover private video recordings from your phone and publish approved clips to YouTube Shorts.
+          </p>
+
+          <div id="modal-yt-action-area" class="pt-2 flex items-center space-x-2">
+            <button onclick="triggerYouTubeAuth()" id="btn-modal-yt-connect" class="px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-xs font-semibold text-white transition flex items-center space-x-1.5 shadow">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/>
+              </svg>
+              <span>Connect YouTube Account</span>
+            </button>
+            <button onclick="disconnectYouTube()" id="btn-modal-yt-disconnect" class="hidden px-3 py-1.5 rounded-lg surface hover:bg-rose-950/40 text-rose-300 border border-rose-600/30 text-xs font-mono transition">
+              Disconnect
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. Google Gemini 2.5 Flash API Key Section -->
+        <div class="bg-black/30 border border-white/10 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <div class="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 font-bold text-xs font-mono">
+                AI
+              </div>
+              <div>
+                <h4 class="text-xs font-semibold text-white">Google Gemini 2.5 Flash (Hooks & Scoring)</h4>
+                <p id="modal-gemini-status-text" class="text-[11px] text-slate-400 font-mono">Checking status...</p>
+              </div>
+            </div>
+            <span id="modal-gemini-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300">
+              Checking
+            </span>
+          </div>
+
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            Evaluates timestamps for viral hooks, complete arguments, and title generation. Free key available at <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-indigo-400 underline">aistudio.google.com</a>.
+          </p>
+
+          <div class="space-y-1.5">
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block">Gemini API Key</label>
+            <div class="flex items-center space-x-2">
+              <input type="password" id="input-gemini-key" placeholder="AIzaSy..." class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-white focus:outline-none focus:border-indigo-500">
+              <button onclick="saveGeminiKey()" id="btn-save-gemini" class="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-xs font-semibold text-white transition shrink-0 font-mono">
+                Save Key
+              </button>
             </div>
           </div>
         </div>
 
         <div class="pt-2 flex justify-end">
-          <button onclick="closePairingModal()" class="px-4 py-2 text-xs font-medium rounded surface hover:bg-white/[0.08] text-slate-300">
-            Done
+          <button onclick="closeIntegrationsModal()" class="px-4 py-2 text-xs font-medium rounded-lg surface hover:bg-white/[0.08] text-slate-300 font-mono">
+            Close
           </button>
         </div>
       </div>
@@ -305,19 +424,17 @@
   </main>
 
   <script>
+    const STAGES = ["INGESTION", "TRANSCRIPTION", "HIGHLIGHT_EXTRACTION", "RENDERING", "COMPLETED"];
     let currentPublishMode = "private";
-    let activeTab = "ready"; // "ready" or "approved"
+    let activeTab = "ready";
     let cachedClipsData = { ready: [], recent_approved: [] };
-    const STAGES = ["VERIFY", "TRANSCRIBE", "ANALYZE", "RENDER", "FINALIZE"];
 
-    // Safe Clipboard Copy Helper
     function safeCopyText(text) {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        return navigator.clipboard.writeText(text).catch(() => {
-          fallbackCopy(text);
-        });
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+      } else {
+        fallbackCopy(text);
       }
-      fallbackCopy(text);
     }
 
     function fallbackCopy(text) {
@@ -326,12 +443,158 @@
       ta.style.position = "fixed";
       ta.style.opacity = "0";
       document.body.appendChild(ta);
-      ta.focus();
       ta.select();
-      try { document.execCommand("copy"); } catch (e) {}
+      try { document.execCommand("copy"); } catch (e) { console.error("Copy failed", e); }
       document.body.removeChild(ta);
     }
 
+    // --- Integrations Status Logic ---
+    async function loadIntegrationsStatus() {
+      try {
+        const res = await fetch("/api/integrations/status");
+        const data = await res.json();
+
+        // 1. YouTube Header Pill
+        const ytDot = document.getElementById("header-yt-dot");
+        const ytText = document.getElementById("header-yt-text");
+        const modalYtBadge = document.getElementById("modal-yt-badge");
+        const modalYtStatusText = document.getElementById("modal-yt-status-text");
+        const btnYtConnect = document.getElementById("btn-modal-yt-connect");
+        const btnYtDisconnect = document.getElementById("btn-modal-yt-disconnect");
+        const ytInboxStatusBadge = document.getElementById("yt-inbox-status-badge");
+
+        if (data.youtube && data.youtube.connected) {
+          const chName = data.youtube.channel_title || "Resolvia ai";
+          ytDot.className = "w-2 h-2 rounded-full bg-emerald-400";
+          ytText.innerText = `YouTube: ${chName}`;
+          modalYtBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/30";
+          modalYtBadge.innerText = "CONNECTED";
+          modalYtStatusText.innerText = `Connected: ${chName} (ID: ${data.youtube.channel_id || ''})`;
+          btnYtConnect.classList.add("hidden");
+          btnYtDisconnect.classList.remove("hidden");
+          if (ytInboxStatusBadge) {
+            ytInboxStatusBadge.innerText = `Connected: ${chName}`;
+            ytInboxStatusBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-600/40";
+          }
+        } else {
+          ytDot.className = "w-2 h-2 rounded-full bg-amber-400";
+          ytText.innerText = "YouTube: Disconnected";
+          modalYtBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/80 text-amber-300 border border-amber-500/30";
+          modalYtBadge.innerText = "DISCONNECTED";
+          modalYtStatusText.innerText = "Not authenticated with Google OAuth";
+          btnYtConnect.classList.remove("hidden");
+          btnYtDisconnect.classList.add("hidden");
+        }
+
+        // 2. Gemini AI Pill
+        const geminiDot = document.getElementById("header-gemini-dot");
+        const geminiText = document.getElementById("header-gemini-text");
+        const modalGeminiBadge = document.getElementById("modal-gemini-badge");
+        const modalGeminiStatusText = document.getElementById("modal-gemini-status-text");
+
+        if (data.gemini && data.gemini.configured) {
+          geminiDot.className = "w-2 h-2 rounded-full bg-emerald-400";
+          geminiText.innerText = "Gemini AI: Active";
+          modalGeminiBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/30";
+          modalGeminiBadge.innerText = "ACTIVE";
+          modalGeminiStatusText.innerText = "Active: Google Gemini 2.5 Flash Tier";
+        } else {
+          geminiDot.className = "w-2 h-2 rounded-full bg-amber-400";
+          geminiText.innerText = "Gemini AI: Unset";
+          modalGeminiBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/80 text-amber-300 border border-amber-500/30";
+          modalGeminiBadge.innerText = "UNSET";
+          modalGeminiStatusText.innerText = "Missing live API Key (Using Local Heuristic)";
+        }
+      } catch (e) {
+        console.error("Failed to load integrations status", e);
+      }
+    }
+
+    function openIntegrationsModal(focusSection) {
+      document.getElementById("integrations-modal").classList.remove("hidden");
+      loadIntegrationsStatus();
+      if (focusSection === "gemini") {
+        document.getElementById("input-gemini-key").focus();
+      }
+    }
+
+    function closeIntegrationsModal() {
+      document.getElementById("integrations-modal").classList.add("hidden");
+    }
+
+    async function triggerYouTubeAuth() {
+      const btn = document.getElementById("btn-modal-yt-connect");
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+      try {
+        const res = await fetch("/api/integrations/youtube/start-auth", { method: "POST" });
+        alert("Google Authentication started! A browser window is opening for you to authorize.");
+        let pollCount = 0;
+        const interval = setInterval(async () => {
+          pollCount++;
+          const checkRes = await fetch("/api/integrations/status");
+          const checkData = await checkRes.json();
+          if (checkData.youtube && checkData.youtube.connected) {
+            clearInterval(interval);
+            loadIntegrationsStatus();
+            alert("YouTube Account successfully connected!");
+          }
+          if (pollCount > 30) clearInterval(interval);
+        }, 3000);
+      } catch (e) {
+        alert("Auth start failed: " + e);
+      } finally {
+        btn.disabled = false;
+        btn.style.opacity = "1";
+      }
+    }
+
+    async function disconnectYouTube() {
+      if (!confirm("Are you sure you want to disconnect YouTube?")) return;
+      try {
+        await fetch("/api/integrations/youtube/disconnect", { method: "POST" });
+        loadIntegrationsStatus();
+      } catch (e) {
+        alert("Disconnect failed: " + e);
+      }
+    }
+
+    async function saveGeminiKey() {
+      const input = document.getElementById("input-gemini-key");
+      const btn = document.getElementById("btn-save-gemini");
+      const key = input.value.trim();
+
+      if (!key) {
+        alert("Please enter a valid Gemini API key (starts with AIzaSy...)");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+
+      try {
+        const res = await fetch("/api/integrations/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: key })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          input.value = "";
+          alert("Gemini API Key saved and activated successfully!");
+          loadIntegrationsStatus();
+        } else {
+          alert("Error: " + (data.detail || "Failed to save key"));
+        }
+      } catch (e) {
+        alert("Request error: " + e);
+      } finally {
+        btn.disabled = false;
+        btn.style.opacity = "1";
+      }
+    }
+
+    // --- Core Dashboard Functions ---
     async function loadStatus() {
       try {
         const res = await fetch("/api/status");
@@ -352,11 +615,11 @@
       const privBtn = document.getElementById("mode-private-btn");
       const pubBtn = document.getElementById("mode-public-btn");
       if (currentPublishMode === "public") {
-        pubBtn.className = "px-2 py-1 text-[11px] font-medium rounded bg-indigo-600 text-white shadow";
-        privBtn.className = "px-2 py-1 text-[11px] font-medium rounded text-slate-400 hover:text-white";
+        pubBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded bg-indigo-600 text-white shadow";
+        privBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded text-slate-400 hover:text-white";
       } else {
-        privBtn.className = "px-2 py-1 text-[11px] font-medium rounded bg-slate-700 text-white shadow";
-        pubBtn.className = "px-2 py-1 text-[11px] font-medium rounded text-slate-400 hover:text-white";
+        privBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded bg-slate-700 text-white shadow";
+        pubBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded text-slate-400 hover:text-white";
       }
     }
 
@@ -378,14 +641,14 @@
       const approvedContainer = document.getElementById("clips-approved-container");
 
       if (tab === "ready") {
-        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm";
-        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition";
+        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm font-mono";
+        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition font-mono";
         readyContainer.classList.remove("hidden");
         approvedContainer.classList.add("hidden");
         renderReadyClips(cachedClipsData.ready);
       } else {
-        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm";
-        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition";
+        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm font-mono";
+        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition font-mono";
         readyContainer.classList.add("hidden");
         approvedContainer.classList.remove("hidden");
         renderApprovedClips(cachedClipsData.recent_approved);
@@ -405,11 +668,11 @@
 
         if (activeJobs.length === 0) {
           container.innerHTML = `
-            <div id="pipeline-idle-placeholder" class="surface-nested rounded p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
+            <div id="pipeline-idle-placeholder" class="surface-nested rounded-lg p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
               <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
               </svg>
-              <span>Pipeline Idle — Waiting for phone sync or new video chunks</span>
+              <span class="font-mono">Engine Idle — Ready for recordings from your POCO C65</span>
             </div>
           `;
           return;
@@ -418,7 +681,7 @@
         container.innerHTML = "";
         activeJobs.forEach(job => {
           const card = document.createElement("div");
-          card.className = "surface-nested rounded p-3 space-y-2 border border-white/5";
+          card.className = "surface-nested rounded-lg p-3 space-y-2 border border-white/5";
 
           let statusBadgeClass = "bg-slate-800 text-slate-300 border-slate-700";
           let statusLabel = job.status;
@@ -426,15 +689,10 @@
             statusBadgeClass = "bg-indigo-900/80 text-indigo-200 border-indigo-700 pulse-indicator";
           } else if (job.status === "WAITING_FOR_AI") {
             statusBadgeClass = "bg-amber-950/80 text-amber-300 border-amber-700";
-            statusLabel = "Waiting for AI (Backoff)";
-          } else if (job.status === "WAITING_FOR_RESOURCES") {
-            statusBadgeClass = "bg-rose-950/80 text-rose-300 border-rose-700";
-            statusLabel = "Waiting for Resources";
+            statusLabel = "Waiting for AI";
           } else if (job.status === "RETRY_PENDING") {
             statusBadgeClass = "bg-amber-900/80 text-amber-200 border-amber-600";
             statusLabel = `Retry Pending (#${job.retry_count})`;
-          } else if (job.status === "FAILED_PERMANENT") {
-            statusBadgeClass = "bg-rose-900 text-rose-200 border-rose-700";
           }
 
           const currentStageIdx = STAGES.indexOf(job.current_stage);
@@ -465,7 +723,6 @@
                 ${job.duration ? `<span class="text-[10px] text-slate-400 font-mono">(${job.duration.toFixed(1)}s, ${job.aspect_ratio || '9:16'})</span>` : ''}
               </div>
               <div class="flex items-center space-x-2">
-                ${job.worker_id ? `<span class="text-[10px] text-slate-500 font-mono hidden sm:inline">Worker: ${job.worker_id}</span>` : ''}
                 <span class="px-2 py-0.5 rounded text-[10px] font-mono border ${statusBadgeClass}">${statusLabel}</span>
               </div>
             </div>
@@ -473,12 +730,6 @@
             <div class="flex items-center space-x-1.5 overflow-x-auto py-1">
               ${stageStepsHtml}
             </div>
-
-            ${job.last_error ? `
-              <div class="text-[10px] text-amber-300/90 font-mono bg-black/40 px-2 py-1 rounded border border-amber-900/30 truncate" title="${job.last_error}">
-                Error: ${job.last_error}
-              </div>
-            ` : ''}
           `;
 
           container.appendChild(card);
@@ -524,61 +775,72 @@
 
       clips.forEach(clip => {
         const card = document.createElement("div");
-        card.className = "surface rounded-lg overflow-hidden flex flex-col justify-between";
+        card.className = "surface rounded-2xl overflow-hidden flex flex-col justify-between border border-white/10 hover:border-white/20 transition";
         card.id = `clip-card-${clip.id}`;
 
         const videoSrc = clip.video_url || "";
         const thumbSrc = clip.thumbnail_url || "";
 
         card.innerHTML = `
-          <div class="relative bg-black aspect-[9/16] max-h-[380px] w-full overflow-hidden flex items-center justify-center">
-            <video src="${videoSrc}" poster="${thumbSrc}" controls preload="metadata" class="w-full h-full object-contain"></video>
-            <div class="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-white/10 text-[10px] font-mono text-emerald-400">
+          <!-- 9:16 Vertical Video Preview Player -->
+          <div class="relative bg-black aspect-[9/16] max-h-[420px] w-full overflow-hidden flex items-center justify-center border-b border-white/10">
+            <video src="${videoSrc}" poster="${thumbSrc}" controls playsinline preload="metadata" class="w-full h-full object-contain"></video>
+            <div class="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur border border-white/15 text-[11px] font-mono text-emerald-400 font-bold shadow-lg">
               Score: ${clip.virality_score || 0}/100
+            </div>
+            <div class="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-full bg-black/80 backdrop-blur border border-white/15 text-[10px] font-mono text-slate-300">
+              9:16 SHORT
             </div>
           </div>
 
-          <div class="p-4 space-y-3 flex-1 flex flex-col justify-between">
-            <div class="space-y-2">
+          <div class="p-4 space-y-3.5 flex-1 flex flex-col justify-between">
+            <div class="space-y-2.5">
               <div>
-                <label class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Title (Roman Hinglish)</label>
-                <input type="text" id="title-${clip.id}" value="${(clip.title || '').replace(/"/g, '&quot;')}" class="w-full text-xs px-2.5 py-1.5 rounded surface-input text-white focus:outline-none focus:border-indigo-500">
+                <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-semibold block mb-1">Title (Roman Hinglish / English)</label>
+                <input type="text" id="title-${clip.id}" value="${(clip.title || '').replace(/"/g, '&quot;')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-white focus:outline-none focus:border-indigo-500">
               </div>
 
               <div>
-                <label class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Hashtags</label>
-                <input type="text" id="tags-${clip.id}" value="${(clip.hashtags || '').replace(/"/g, '&quot;')}" class="w-full text-xs px-2.5 py-1.5 rounded surface-input text-slate-300 focus:outline-none focus:border-indigo-500">
+                <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-semibold block mb-1">Hashtags</label>
+                <input type="text" id="tags-${clip.id}" value="${(clip.hashtags || '').replace(/"/g, '&quot;')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-indigo-300 focus:outline-none focus:border-indigo-500">
               </div>
 
-              <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-400 pt-1">
-                <label class="flex items-center space-x-1.5 cursor-pointer">
+              <!-- Active-word Karaoke Subtitle Indicator -->
+              <div class="surface-nested rounded-lg p-2.5 flex items-center space-x-2 border border-white/5">
+                <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span>
+                <span class="text-[10px] font-mono text-yellow-300">Dynamic Active-Word Karaoke Subtitles Burned In</span>
+              </div>
+
+              <!-- Destination Platforms Selector -->
+              <div class="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-300 pt-1">
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
                   <input type="checkbox" checked id="yt-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                  <span>YouTube</span>
+                  <span>YouTube Shorts</span>
                 </label>
-                <label class="flex items-center space-x-1.5 cursor-pointer">
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
                   <input type="checkbox" checked id="ig-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                  <span>Instagram</span>
+                  <span>Instagram Reels</span>
                 </label>
-                <label class="flex items-center space-x-1.5 cursor-pointer">
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
                   <input type="checkbox" checked id="li-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
                   <span>LinkedIn</span>
                 </label>
-                <label class="flex items-center space-x-1.5 cursor-pointer">
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
                   <input type="checkbox" checked id="x-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
                   <span>X (Twitter)</span>
                 </label>
               </div>
             </div>
 
-            <!-- Action Buttons -->
-            <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
-              <button onclick="approveClip('${clip.id}')" class="h-10 text-xs font-semibold rounded bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white transition flex items-center justify-center space-x-1">
+            <!-- Action Buttons Grid -->
+            <div class="grid grid-cols-3 gap-2 pt-2 border-t border-white/10">
+              <button onclick="approveClip('${clip.id}')" class="col-span-2 h-10 text-xs font-mono font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white transition flex items-center justify-center space-x-1.5 shadow-lg">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
                 </svg>
-                <span>Approve</span>
+                <span>Approve & Dispatch</span>
               </button>
-              <button onclick="rejectClip('${clip.id}')" class="h-10 text-xs font-semibold rounded bg-rose-600/20 hover:bg-rose-600/30 active:scale-95 text-rose-300 border border-rose-500/30 transition flex items-center justify-center space-x-1">
+              <button onclick="rejectClip('${clip.id}')" class="h-10 text-xs font-mono font-semibold rounded-lg bg-rose-600/20 hover:bg-rose-600/30 active:scale-95 text-rose-300 border border-rose-500/30 transition flex items-center justify-center space-x-1">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
                 </svg>
@@ -606,7 +868,7 @@
 
       clips.forEach(clip => {
         const card = document.createElement("div");
-        card.className = "surface rounded-lg overflow-hidden flex flex-col justify-between";
+        card.className = "surface rounded-2xl overflow-hidden flex flex-col justify-between border border-white/10";
         card.id = `approved-clip-${clip.id}`;
 
         const videoSrc = clip.video_url || "";
@@ -614,13 +876,13 @@
         const isPublished = clip.status === "published";
 
         const statusPill = isPublished 
-          ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">PUBLISHED</span>`
-          : `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-500/30">APPROVED • QUEUED</span>`;
+          ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-bold">PUBLISHED</span>`
+          : `<span class="px-2.5 py-1 rounded-full text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-500/40 font-bold">QUEUED FOR PUBLISH</span>`;
 
         card.innerHTML = `
           <div class="relative bg-black aspect-[9/16] max-h-[380px] w-full overflow-hidden flex items-center justify-center">
-            <video src="${videoSrc}" poster="${thumbSrc}" controls preload="metadata" class="w-full h-full object-contain"></video>
-            <div class="absolute top-2 right-2">
+            <video src="${videoSrc}" poster="${thumbSrc}" controls playsinline preload="metadata" class="w-full h-full object-contain"></video>
+            <div class="absolute top-2.5 right-2.5">
               ${statusPill}
             </div>
           </div>
@@ -638,8 +900,9 @@
               </div>
             </div>
 
-            <div class="pt-2 text-[10px] font-mono text-slate-500 text-right">
-              ID: ${clip.id}
+            <div class="pt-2 flex items-center justify-between text-[10px] font-mono text-slate-500">
+              <span>ID: ${clip.id}</span>
+              <a href="${videoSrc}" download="${clip.title || clip.id}.mp4" class="text-indigo-400 hover:underline">Download MP4</a>
             </div>
           </div>
         `;
@@ -701,7 +964,7 @@
       }
     }
 
-    // Pairing Modal Functions
+    // --- Pairing Modal Logic ---
     async function openPairingModal() {
       const modal = document.getElementById("pairing-modal");
       modal.classList.remove("hidden");
@@ -709,9 +972,20 @@
         const res = await fetch("/api/sync/pairing/config");
         const data = await res.json();
         document.getElementById("pair-lan").value = data.lan_url;
-        document.getElementById("pair-tailscale").value = data.tailscale_url || "Tailscale IP not active";
         document.getElementById("pair-token").value = data.auth_token;
         document.getElementById("pair-uri").value = data.connection_string;
+
+        // Render QR Code on canvas
+        const canvas = document.getElementById("pairing-qr-canvas");
+        if (canvas && window.QRCode) {
+          QRCode.toCanvas(canvas, data.connection_string, {
+            width: 144,
+            margin: 1,
+            color: { dark: '#000000', light: '#FFFFFF' }
+          }, function (error) {
+            if (error) console.error("QR Render error", error);
+          });
+        }
       } catch (e) {
         console.error("Failed to load pairing config", e);
       }
@@ -753,7 +1027,7 @@
 
         if (items.length === 0) {
           container.innerHTML = `
-            <div class="surface-nested rounded p-2.5 text-center text-[11px] text-slate-400">
+            <div class="surface-nested rounded-lg p-2.5 text-center text-[11px] font-mono text-slate-400">
               No YouTube videos processed yet. Paste a YouTube URL/ID above, or upload to your channel with <code class="text-indigo-400 font-mono">[DISPATCH]</code> in the title.
             </div>
           `;
@@ -763,7 +1037,7 @@
         container.innerHTML = "";
         items.slice(0, 5).forEach(item => {
           const row = document.createElement("div");
-          row.className = "surface-nested rounded p-2.5 flex items-center justify-between text-xs";
+          row.className = "surface-nested rounded-lg p-2.5 flex items-center justify-between text-xs";
 
           let statusBadge = "";
           if (item.status === "CLIPS_CREATED" || item.status === "COMPLETED") {
@@ -783,7 +1057,7 @@
               <span class="w-1.5 h-1.5 rounded-full ${item.status === 'CLIPS_CREATED' ? 'bg-emerald-400' : 'bg-indigo-400'}"></span>
               <div class="truncate">
                 <div class="flex items-center space-x-2">
-                  <span class="text-white font-medium truncate">${item.title || item.video_id}</span>
+                  <span class="text-white font-medium truncate font-mono text-xs">${item.title || item.video_id}</span>
                   ${srcBadge}
                 </div>
                 <div class="text-[10px] font-mono text-slate-500">ID: ${item.video_id} • ${item.discovered_at ? item.discovered_at.slice(0, 16) : ''}</div>
@@ -859,14 +1133,16 @@
     }
 
     // Auto-refresh loops
-    setInterval(fetchClips, 10000);
+    setInterval(fetchClips, 8000);
     setInterval(fetchPipelineJobs, 3000);
     setInterval(fetchYouTubeInbox, 10000);
+    setInterval(loadIntegrationsStatus, 15000);
 
     // Initial loads
     fetchClips();
     fetchPipelineJobs();
     fetchYouTubeInbox();
+    loadIntegrationsStatus();
   </script>
 </body>
 </html>

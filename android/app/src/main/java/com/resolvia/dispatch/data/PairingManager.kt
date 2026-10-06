@@ -86,12 +86,70 @@ class PairingManager(context: Context) {
     }
 
     /**
-     * Returns candidate endpoints in priority order (LAN first, then Tailscale).
+     * Auto-fetches pairing configuration from a given host URL or IP (e.g. 192.168.0.101 or http://192.168.0.101:8000).
+     * Automatically extracts LAN host, Auth Token, and YouTube credentials.
+     */
+    fun autoPairFromHost(inputUrl: String, onResult: (Boolean, String) -> Unit) {
+        val trimmed = inputUrl.trim().trimEnd('/')
+        val targetBase = when {
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            trimmed.contains(":") -> "http://$trimmed"
+            else -> "http://$trimmed:8000"
+        }
+
+        Thread {
+            try {
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+
+                val req = okhttp3.Request.Builder()
+                    .url("$targetBase/api/sync/pairing/config")
+                    .get()
+                    .build()
+
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        onResult(false, "Server returned HTTP ${resp.code}")
+                        return@use
+                    }
+                    val jsonStr = resp.body?.string() ?: ""
+                    val json = com.google.gson.JsonParser.parseString(jsonStr).asJsonObject
+
+                    val lanUrl = json.get("lan_url")?.asString ?: targetBase
+                    val tailscaleUrl = json.get("tailscale_url")?.asString ?: ""
+                    val token = json.get("auth_token")?.asString ?: ""
+                    val connStr = json.get("connection_string")?.asString ?: ""
+
+                    if (connStr.isNotBlank()) {
+                        saveFromConnectionString(connStr)
+                    } else {
+                        lanHost = lanUrl
+                        if (tailscaleUrl.isNotBlank()) tailscaleHost = tailscaleUrl
+                        if (token.isNotBlank()) authToken = token
+                    }
+
+                    onResult(true, "Successfully paired with $lanUrl")
+                }
+            } catch (e: Exception) {
+                onResult(false, "Connection error: ${e.message}")
+            }
+        }.start()
+    }
+
+    /**
+     * Returns candidate endpoints in priority order (LAN first, then Tailscale, then Wi-Fi default).
      */
     fun getCandidateEndpoints(): List<String> {
         val list = mutableListOf<String>()
         if (lanHost.isNotBlank()) list.add(lanHost)
         if (tailscaleHost.isNotBlank()) list.add(tailscaleHost)
+        // Default home Wi-Fi fallback if not paired yet
+        val defaultLan = "http://192.168.0.101:8000"
+        if (!list.contains(defaultLan)) {
+            list.add(defaultLan)
+        }
         return list
     }
 }

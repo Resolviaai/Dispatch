@@ -177,11 +177,23 @@ class SegmenterEngine(
         }
     }
 
-    private fun triggerBackgroundSync() {
+    fun triggerBackgroundSync() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        // 1. Enqueue LAN / Direct server sync worker
+        val lanWork = OneTimeWorkRequestBuilder<com.resolvia.dispatch.sync.ResumableSyncWorker>()
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "DispatchResumableSyncWorker",
+            ExistingWorkPolicy.REPLACE,
+            lanWork
+        )
+
+        // 2. Enqueue YouTube Direct Cloud Upload worker
         val ytSyncWork = OneTimeWorkRequestBuilder<com.resolvia.dispatch.sync.YouTubeDirectUploadWorker>()
             .setConstraints(constraints)
             .build()

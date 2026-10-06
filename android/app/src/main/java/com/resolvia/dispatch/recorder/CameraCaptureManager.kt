@@ -133,13 +133,47 @@ class CameraCaptureManager(private val context: Context) {
         initializeCamera(lifecycleOwner, previewView, nextLens, onReady)
     }
 
+    private var lastMeteringPoint: MeteringPoint? = null
+
     /**
-     * Focuses and meters on the tapped point on the PreviewView.
+     * Focuses and meters on the tapped (x, y) coordinate on PreviewView.
+     */
+    fun focusOnPoint(
+        x: Float,
+        y: Float,
+        previewView: PreviewView,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        val cam = camera ?: return
+        try {
+            val point = previewView.meteringPointFactory.createPoint(x, y)
+            lastMeteringPoint = point
+            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+                .setAutoCancelDuration(3, TimeUnit.SECONDS)
+                .build()
+            val future = cam.cameraControl.startFocusAndMetering(action)
+            future.addListener({
+                try {
+                    val result = future.get()
+                    onComplete?.invoke(result.isFocusSuccessful)
+                } catch (_: Exception) {
+                    onComplete?.invoke(false)
+                }
+            }, ContextCompat.getMainExecutor(context))
+            Log.i(TAG, "Focus dispatched at ($x, $y).")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to dispatch focus: ${e.message}")
+        }
+    }
+
+    /**
+     * Focuses and meters on the given metering point.
      */
     fun focusOnPoint(meteringPoint: MeteringPoint) {
         val cam = camera ?: return
+        lastMeteringPoint = meteringPoint
         val action = FocusMeteringAction.Builder(meteringPoint, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
-            .setAutoCancelDuration(4, TimeUnit.SECONDS)
+            .setAutoCancelDuration(3, TimeUnit.SECONDS)
             .build()
         cam.cameraControl.startFocusAndMetering(action)
         Log.i(TAG, "Focus and metering point dispatched.")
@@ -148,19 +182,25 @@ class CameraCaptureManager(private val context: Context) {
     /**
      * Locks or unlocks Auto Exposure & Auto Focus (AE/AF Lock).
      */
-    fun toggleAeAfLock(): Boolean {
+    fun toggleAeAfLock(previewView: PreviewView? = null): Boolean {
         val cam = camera ?: return false
         isAeAfLocked = !isAeAfLocked
         if (isAeAfLocked) {
-            // Lock focus by disabling auto-cancel on a center point
-            val factory = androidx.camera.core.SurfaceOrientedMeteringPointFactory(1f, 1f)
-            val centerPoint = factory.createPoint(0.5f, 0.5f)
-            val action = FocusMeteringAction.Builder(centerPoint, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            // Lock focus & exposure permanently on last tapped spot or center
+            val point = lastMeteringPoint ?: if (previewView != null && previewView.width > 0 && previewView.height > 0) {
+                previewView.meteringPointFactory.createPoint(previewView.width / 2f, previewView.height / 2f)
+            } else {
+                val factory = androidx.camera.core.SurfaceOrientedMeteringPointFactory(1f, 1f)
+                factory.createPoint(0.5f, 0.5f)
+            }
+            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
                 .disableAutoCancel()
                 .build()
             cam.cameraControl.startFocusAndMetering(action)
+            Log.i(TAG, "AE/AF permanently locked.")
         } else {
             cam.cameraControl.cancelFocusAndMetering()
+            Log.i(TAG, "AE/AF unlocked.")
         }
         return isAeAfLocked
     }
@@ -186,12 +226,33 @@ class CameraCaptureManager(private val context: Context) {
     }
 
     /**
+     * Toggles zoom between 1.0x and 2.0x.
+     */
+    fun toggleZoom(): Float {
+        val nextZoom = if (currentZoomRatio <= 1.2f) 2.0f else 1.0f
+        setZoom(nextZoom)
+        return currentZoomRatio
+    }
+
+    /**
      * Sets exposure compensation bias index.
      */
     fun setExposureIndex(index: Int) {
         val cam = camera ?: return
-        currentExposureIndex = index
-        cam.cameraControl.setExposureCompensationIndex(index)
+        val range = cam.cameraInfo.exposureState.exposureCompensationRange
+        currentExposureIndex = index.coerceIn(range.lower, range.upper)
+        cam.cameraControl.setExposureCompensationIndex(currentExposureIndex)
+    }
+
+    /**
+     * Steps exposure bias by delta (-1 or +1).
+     */
+    fun stepExposure(delta: Int): Int {
+        val cam = camera ?: return currentExposureIndex
+        val range = cam.cameraInfo.exposureState.exposureCompensationRange
+        val target = (currentExposureIndex + delta).coerceIn(range.lower, range.upper)
+        setExposureIndex(target)
+        return currentExposureIndex
     }
 
     fun getExposureRange(): Range<Int>? {

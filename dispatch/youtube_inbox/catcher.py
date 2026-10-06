@@ -356,24 +356,34 @@ def scan_channel_for_dispatch_uploads(
     """Scan channel uploads using yt-dlp for videos matching marker prefix (e.g. [DISPATCH]).
     Returns list of discovered videos that have not yet been processed.
     """
-    channel_url = f"https://www.youtube.com/channel/{channel_id}/videos" if channel_id else None
-    if not channel_url:
+    if not channel_id:
         return []
 
-    logger.info("Scanning YouTube channel %s for uploads with marker '%s'", channel_id, marker)
+    # Use the YouTube uploads playlist ID: replacing 'UC' prefix with 'UU'
+    if channel_id.startswith("UC"):
+        target_url = f"https://www.youtube.com/playlist?list=UU{channel_id[2:]}"
+    else:
+        target_url = f"https://www.youtube.com/channel/{channel_id}/videos"
+
+    logger.debug("Scanning YouTube uploads playlist %s for marker '%s'", target_url, marker)
     ydl_opts = {
         "extract_flat": "in_playlist",
         "playlistend": limit,
         "quiet": True,
         "no_warnings": True,
+        "ignoreerrors": True,
     }
 
     discovered = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            res = ydl.extract_info(channel_url, download=False)
+            res = ydl.extract_info(target_url, download=False)
+            if not res:
+                return []
             entries = res.get("entries", [])
             for item in entries:
+                if not item:
+                    continue
                 title = item.get("title", "")
                 v_id = item.get("id")
                 if not v_id:
@@ -390,6 +400,6 @@ def scan_channel_for_dispatch_uploads(
                         "duration": float(item.get("duration", 0.0) or 0.0),
                     })
     except Exception as e:
-        logger.warning("Channel scan encounter error: %s", e)
+        logger.debug("Uploads playlist scan encounter note: %s", e)
 
     return discovered

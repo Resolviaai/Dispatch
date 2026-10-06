@@ -27,6 +27,20 @@ class ResumableSyncWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val activeUrl = findReachableServer() ?: return@withContext Result.retry()
+        if (pairingManager.authToken.isBlank()) {
+            try {
+                val configReq = Request.Builder().url("$activeUrl/api/sync/pairing/config").build()
+                client.newCall(configReq).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
+                        val token = body.get("auth_token")?.asString ?: ""
+                        if (token.isNotBlank()) {
+                            pairingManager.authToken = token
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
         val pendingItems = dao.getPendingOutboxItems()
 
         if (pendingItems.isEmpty()) return@withContext Result.success()
@@ -143,6 +157,7 @@ class ResumableSyncWorker(
         // Safe retention: Only purge file after laptop has confirmed valid SHA-256
         file.delete()
         kotlinx.coroutines.runBlocking {
+            dao.updateSegmentStatus(segmentId, "UPLOADED_TO_PC")
             dao.deleteOutboxItem(segmentId)
         }
     }

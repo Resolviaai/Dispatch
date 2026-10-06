@@ -266,6 +266,107 @@ async def scan_youtube_channel():
     return {"discovered": discovered, "queued_count": len(discovered)}
 
 
+# --- Integrations & Authentication APIs ---
+
+class GeminiKeyRequest(BaseModel):
+    api_key: str
+
+
+@app.get("/api/integrations/status")
+async def get_integrations_status():
+    """Return live status of YouTube OAuth and Gemini AI integrations."""
+    from dispatch.youtube_inbox.oauth import get_youtube_service
+    from dispatch.config import GEMINI_API_KEY
+
+    yt_service = get_youtube_service()
+    yt_connected = yt_service is not None
+    channel_title = ""
+    channel_id = ""
+    if yt_connected:
+        try:
+            resp = yt_service.channels().list(mine=True, part="snippet").execute()
+            items = resp.get("items", [])
+            if items:
+                channel_title = items[0]["snippet"].get("title", "")
+                channel_id = items[0].get("id", "")
+        except Exception as e:
+            logger.debug("Could not fetch channel snippet: %s", e)
+
+    client_secrets_exist = (ROOT_DIR / "client_secrets.json").exists()
+    token_exists = (ROOT_DIR / "youtube_token.json").exists()
+
+    gemini_key = GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
+    gemini_configured = bool(gemini_key and len(gemini_key) > 20 and gemini_key.startswith("AIzaSy"))
+
+    return {
+        "youtube": {
+            "connected": yt_connected,
+            "channel_title": channel_title,
+            "channel_id": channel_id,
+            "has_client_secrets": client_secrets_exist,
+            "has_token": token_exists
+        },
+        "gemini": {
+            "configured": gemini_configured,
+            "masked_key": f"{gemini_key[:8]}...{gemini_key[-4:]}" if len(gemini_key) > 12 else ""
+        }
+    }
+
+
+@app.post("/api/integrations/gemini")
+async def update_gemini_key(payload: GeminiKeyRequest):
+    """Save and activate a Gemini API key directly from the dashboard."""
+    new_key = payload.api_key.strip()
+    if not new_key:
+        raise HTTPException(status_code=400, detail="API key cannot be empty")
+
+    env_path = ROOT_DIR / ".env"
+    env_content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    import re
+    if "GEMINI_API_KEY=" in env_content:
+        env_content = re.sub(r"GEMINI_API_KEY=.*", f"GEMINI_API_KEY={new_key}", env_content)
+    else:
+        env_content += f"\nGEMINI_API_KEY={new_key}\n"
+    env_path.write_text(env_content, encoding="utf-8")
+
+    import dispatch.config
+    dispatch.config.GEMINI_API_KEY = new_key
+    import dispatch.ai_clips.highlight_finder
+    dispatch.ai_clips.highlight_finder.GEMINI_API_KEY = new_key
+
+    return {"status": "success", "message": "Gemini API key saved and activated"}
+
+
+@app.post("/api/integrations/youtube/start-auth")
+async def start_youtube_auth():
+    """Trigger the YouTube OAuth login flow."""
+    client_secrets = ROOT_DIR / "client_secrets.json"
+    if not client_secrets.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="client_secrets.json not found. Please ensure Google OAuth Client ID is configured."
+        )
+
+    import subprocess
+    cmd = ["python", str(ROOT_DIR / "scripts" / "auth_youtube.py")]
+    subprocess.Popen(cmd, cwd=str(ROOT_DIR))
+
+    return {
+        "status": "started",
+        "message": "Authentication window started. Authorize in your browser."
+    }
+
+
+@app.post("/api/integrations/youtube/disconnect")
+async def disconnect_youtube():
+    """Disconnect YouTube by removing the cached token."""
+    token_file = ROOT_DIR / "youtube_token.json"
+    if token_file.exists():
+        token_file.unlink()
+    return {"status": "success", "message": "YouTube account disconnected"}
+
+
+
 # --- Embedded HTML Dashboard ---
 
 DASHBOARD_HTML = """<!DOCTYPE html>

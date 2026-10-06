@@ -38,6 +38,12 @@ interface RecordingDao {
     @Query("SELECT COUNT(*) FROM outbox WHERE status = 'QUEUED_FOR_UPLOAD'")
     fun getPendingOutboxCountFlow(): Flow<Int>
 
+    @Query("SELECT * FROM segments ORDER BY createdAt DESC LIMIT 25")
+    fun getAllSegmentsFlow(): Flow<List<SegmentEntity>>
+
+    @Query("UPDATE segments SET status = :status WHERE segmentId = :segmentId")
+    suspend fun updateSegmentStatus(segmentId: String, status: String)
+
     @Query("DELETE FROM outbox WHERE segmentId = :segmentId")
     suspend fun deleteOutboxItem(segmentId: String)
 }

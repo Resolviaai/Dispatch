@@ -83,27 +83,29 @@ class YouTubeInboxPoller:
         with self._lock:
             self.last_poll_time = time.time()
             discovered_videos = []
+            auth_succeeded = False
 
             # 1. Check Authenticated YouTube Data API (Finds Private & Unlisted uploads on user channel)
             try:
                 auth_uploads = list_authenticated_user_uploads(max_results=15)
+                auth_succeeded = True
                 for item in auth_uploads:
                     discovered_videos.append(item)
             except Exception as e:
                 logger.debug("Authenticated YouTube upload check failed/skipped: %s", e)
 
-            # 2. Check channel via Channel ID or yt-dlp (Fallback / Public / Unlisted)
-            channel_id = db.get_setting("youtube_channel_id", os.getenv("DISPATCH_YOUTUBE_CHANNEL_ID", ""))
-            marker = db.get_setting("youtube_inbox_marker", "[DISPATCH]")
-            if channel_id:
-                try:
-                    channel_uploads = scan_channel_for_dispatch_uploads(channel_id=channel_id, marker=marker, limit=10)
-                    for item in channel_uploads:
-                        # Avoid duplicates in discovered_videos
-                        if not any(v["video_id"] == item["video_id"] for v in discovered_videos):
-                            discovered_videos.append(item)
-                except Exception as e:
-                    logger.debug("Channel scanner encountered error: %s", e)
+            # 2. Check channel via Channel ID or yt-dlp only if unauthenticated
+            if not auth_succeeded:
+                channel_id = db.get_setting("youtube_channel_id", os.getenv("DISPATCH_YOUTUBE_CHANNEL_ID", ""))
+                marker = db.get_setting("youtube_inbox_marker", "[DISPATCH]")
+                if channel_id:
+                    try:
+                        channel_uploads = scan_channel_for_dispatch_uploads(channel_id=channel_id, marker=marker, limit=10)
+                        for item in channel_uploads:
+                            if not any(v["video_id"] == item["video_id"] for v in discovered_videos):
+                                discovered_videos.append(item)
+                    except Exception as e:
+                        logger.debug("Channel scanner encountered error: %s", e)
 
             if not discovered_videos:
                 logger.debug("YouTube poll complete: 0 new uploads found.")
