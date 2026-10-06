@@ -16,9 +16,10 @@ logger = logging.getLogger("dispatch_mobile.segmenter")
 class RecordingSessionManager:
     """Manages active mobile recording sessions and rolling segment creation."""
 
-    def __init__(self, storage_dir: Optional[Path] = None):
+    def __init__(self, storage_dir: Optional[Path] = None, segment_duration_seconds: int = 600):
         self.storage_dir = storage_dir or (MOBILE_STORAGE_DIR / "recordings")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.segment_duration_seconds = segment_duration_seconds  # Default 10 minutes (600s)
         self.current_session_id: Optional[str] = None
         self.current_segment_id: Optional[str] = None
         self.current_sequence: int = 0

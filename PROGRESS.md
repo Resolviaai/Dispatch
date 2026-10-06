@@ -200,5 +200,9 @@
 9. **Full Verification**:
    - Ran 18 unit and chaos tests: 100% passed in < 1 second.
    - Ran full autonomous E2E pipeline test (`tests/test_end_to_end.py`): 100% passed with synthesis, Whisper transcription, heuristic highlight packaging, 9:16 FFmpeg render, local storage auto-cleanup, and simulated multi-platform publishing.
+10. **Mobile Recorder Chunk Preference & UI Selector**:
+   - Configured rolling segment duration to default to 10-minute chunks (`600s` / `600,000ms`) in both `dispatch_mobile/segmenter.py` and `dispatch/web/templates/mobile_recorder.html`.
+   - Added a tactile chunk duration selector (`10m`, `15m`, `30m`) directly to the Mobile Web PWA recorder interface.
+   - Verified that the zero-install Mobile Web PWA provides the lowest friction, zero build tooling, and highest reliability on the POCO C65.
 
 

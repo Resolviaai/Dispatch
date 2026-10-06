@@ -76,6 +76,14 @@
             </div>
         </div>
 
+        <!-- Chunk Duration Selector -->
+        <div class="flex items-center justify-center gap-1.5 pt-1">
+            <span class="text-[10px] uppercase font-mono text-slate-500 mr-1">Chunk:</span>
+            <button id="chunk-10m" onclick="setChunkDuration(10)" class="px-2.5 py-1 text-[11px] font-mono rounded bg-indigo-600 text-white font-medium shadow">10m</button>
+            <button id="chunk-15m" onclick="setChunkDuration(15)" class="px-2.5 py-1 text-[11px] font-mono rounded bg-white/5 border border-white/10 text-slate-400 hover:text-white">15m</button>
+            <button id="chunk-30m" onclick="setChunkDuration(30)" class="px-2.5 py-1 text-[11px] font-mono rounded bg-white/5 border border-white/10 text-slate-400 hover:text-white">30m</button>
+        </div>
+
         <!-- Master Trigger Button -->
         <div class="flex items-center justify-center pt-2">
             <button id="btn-toggle" onclick="toggleRecording()" 
@@ -89,7 +97,24 @@
     <!-- IndexedDB Client-Side Resumable Sync Engine -->
     <script>
         const AUTH_TOKEN = "dispatch_paired_secret_default";
-        const SLICE_DURATION_MS = 60000; // 60s segments for fast rolling sync (15m in prod)
+        let sliceDurationMinutes = 10;
+        let sliceDurationMs = 10 * 60 * 1000; // Default 10-minute rolling chunks for POCO C65
+
+        function setChunkDuration(mins) {
+            if (isRecording) return; // locked during recording
+            sliceDurationMinutes = mins;
+            sliceDurationMs = mins * 60 * 1000;
+            [10, 15, 30].forEach(m => {
+                const btn = document.getElementById(`chunk-${m}m`);
+                if (btn) {
+                    if (m === mins) {
+                        btn.className = "px-2.5 py-1 text-[11px] font-mono rounded bg-indigo-600 text-white font-medium shadow";
+                    } else {
+                        btn.className = "px-2.5 py-1 text-[11px] font-mono rounded bg-white/5 border border-white/10 text-slate-400 hover:text-white";
+                    }
+                }
+            });
+        }
         let mediaStream = null;
         let mediaRecorder = null;
         let isRecording = false;
@@ -182,7 +207,7 @@
                 if (isRecording && mediaRecorder && mediaRecorder.state === "recording") {
                     mediaRecorder.stop();
                 }
-            }, SLICE_DURATION_MS);
+            }, sliceDurationMs);
         }
 
         function stopRecording() {
