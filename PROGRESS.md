@@ -294,3 +294,26 @@
    - Updated `watcher.py` to automatically quarantine corrupted or invalid video files after stabilization checks, eliminating infinite re-probe loops.
    - Verified all 23/23 tests pass with 100% success rate.
 
+---
+
+### [2026-10-06] Pro Camera Suite & Hardware Audio Integration (1080p FHD Studio)
+1. **Front & Back Camera Lens Selection**:
+   - Web App (`mobile_recorder.html`): 1-tap quick flip button on viewfinder HUD + explicit camera sensor dropdown in Settings.
+   - Native Android App (`CameraCaptureManager.kt` + `MainActivity.kt`): `switchCamera()` toggles between `CameraSelector.LENS_FACING_BACK` and `LENS_FACING_FRONT` with instant UI update.
+2. **Pro Camera Features (Focus, Exposure, Torch, Zoom, Grid)**:
+   - **Tap-to-Focus**: Interactive touch focus with animated golden/yellow focus reticle ring and crosshairs.
+   - **AE / AF Lock**: Dedicated toggle locking auto-exposure and auto-focus so lighting and focus do not fluctuate while moving or speaking.
+   - **Exposure Bias (EV Slider)**: `-2.0 EV` to `+2.0 EV` exposure compensation adjustment slider for darkening or brightening scenes.
+   - **Torch / Flashlight**: One-tap LED torch toggle on rear camera for low-light recording.
+   - **Digital Zoom (1x / 2x)**: Quick 1x / 2x toggle and smooth digital punch-in.
+   - **Rule-of-Thirds Grid**: Toggleable 3x3 framing grid with vertical portrait safe-zone guides for vertical video formats.
+3. **1080p FHD Studio Recording Profile**:
+   - Configured video recording to 1080p FHD (1920x1080) at 60fps/30fps with 16 Mbps studio bitrate and 256 kbps audio.
+4. **Microphone Management (Internal Phone vs. External Mic)**:
+   - Enumerates internal phone microphone vs. external microphones (USB, 3.5mm, Bluetooth, Wireless lavalier).
+   - Real-time `devicechange` detection when an external mic is plugged in.
+   - Live 3-bar animated VU sound level visualizer on the viewfinder giving real-time feedback that the microphone is picking up sound.
+5. **Native Android APK Recompilation**:
+   - Built with Gradle: **BUILD SUCCESSFUL in 29s**. Updated binary: `android/app/build/outputs/apk/debug/app-debug.apk` (10.89 MB).
+
+

@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,6 +82,11 @@ fun DispatchApp(
     var currentSession by remember { mutableStateOf<String?>(null) }
     var showPairingDialog by remember { mutableStateOf(false) }
     var hasCameraPermission by remember { mutableStateOf(false) }
+    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+    var isTorchOn by remember { mutableStateOf(false) }
+    var isAeAfLocked by remember { mutableStateOf(false) }
+    var currentLens by remember { mutableStateOf(CameraSelector.LENS_FACING_BACK) }
+    var currentZoom by remember { mutableStateOf(1.0f) }
 
     // Required permissions
     val permissionsToRequest = remember {
@@ -204,11 +210,149 @@ fun DispatchApp(
                         AndroidView(
                             factory = { ctx ->
                                 PreviewView(ctx).apply {
+                                    previewViewRef = this
                                     cameraCaptureManager.initializeCamera(activity, this)
+                                    setOnTouchListener { v, event ->
+                                        if (event.action == android.view.MotionEvent.ACTION_UP) {
+                                            val factory = meteringPointFactory
+                                            val point = factory.createPoint(event.x, event.y)
+                                            cameraCaptureManager.focusOnPoint(point)
+                                            v.performClick()
+                                        }
+                                        true
+                                    }
                                 }
                             },
                             modifier = Modifier.fillMaxSize()
                         )
+
+                        // Top-Right Pro Camera Quick Controls
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalAlignment = Alignment.End
+                        ) {
+                            // Flip Camera Lens
+                            Box(
+                                modifier = Modifier
+                                    .background(Color(0xCC131A26), RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        previewViewRef?.let { pv ->
+                                            cameraCaptureManager.switchCamera(activity, pv) {
+                                                currentLens = cameraCaptureManager.currentLensFacing
+                                                isTorchOn = false
+                                                isAeAfLocked = false
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = if (currentLens == CameraSelector.LENS_FACING_BACK) "BACK" else "FRONT",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = Color.White
+                                )
+                            }
+
+                            // Torch (Back Camera Only)
+                            if (currentLens == CameraSelector.LENS_FACING_BACK) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(if (isTorchOn) Color(0xCCF59E0B) else Color(0xCC131A26), RoundedCornerShape(8.dp))
+                                        .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            isTorchOn = cameraCaptureManager.toggleTorch()
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = if (isTorchOn) "TORCH ON" else "TORCH",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = if (isTorchOn) Color.Black else Color.White
+                                    )
+                                }
+                            }
+
+                            // AE / AF Lock Toggle
+                            Box(
+                                modifier = Modifier
+                                    .background(if (isAeAfLocked) Color(0xCCF59E0B) else Color(0xCC131A26), RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        isAeAfLocked = cameraCaptureManager.toggleAeAfLock()
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = if (isAeAfLocked) "AE/AF LOCKED" else "LOCK",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = if (isAeAfLocked) Color.Black else Color.White
+                                )
+                            }
+
+                            // Zoom Toggle (1x / 2x)
+                            Box(
+                                modifier = Modifier
+                                    .background(Color(0xCC131A26), RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        currentZoom = if (currentZoom == 1.0f) 2.0f else 1.0f
+                                        cameraCaptureManager.setZoom(currentZoom)
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = "${currentZoom.toInt()}x",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        // Bottom Viewfinder Info Bar (Quality & Mic Status)
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .background(Color(0xCC070A0F), RoundedCornerShape(6.dp))
+                                    .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "1080p FHD STUDIO",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = Color(0xFF38BDF8)
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .background(Color(0xCC070A0F), RoundedCornerShape(6.dp))
+                                    .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "MIC: AUTO (EXT DETECT)",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = Color(0xFF10B981)
+                                )
+                            }
+                        }
                     } else {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -235,7 +379,7 @@ fun DispatchApp(
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(16.dp)
+                            .padding(12.dp)
                             .background(
                                 if (isRecording) Color(0xCCEF4444) else Color(0x99000000),
                                 RoundedCornerShape(6.dp)
@@ -256,7 +400,7 @@ fun DispatchApp(
                         Box(
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
-                                .padding(16.dp)
+                                .padding(12.dp)
                                 .background(Color(0xCC070A0F), RoundedCornerShape(6.dp))
                                 .padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
