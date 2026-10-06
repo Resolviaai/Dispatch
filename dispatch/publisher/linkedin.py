@@ -33,7 +33,6 @@ def upload_linkedin_video(
 
     if not token or not author:
         logger.info("[MOCK/SIMULATION] LinkedIn video publishing simulated for '%s'", video_path.name)
-        logger.info("LinkedIn credentials (LINKEDIN_ACCESS_TOKEN / LINKEDIN_AUTHOR_URN) not configured.")
         return {
             "status": "published",
             "remote_id": f"li_sim_{video_path.stem}",

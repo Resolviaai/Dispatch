@@ -58,6 +58,8 @@ def get_db_connection():
     conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
     conn.execute("PRAGMA foreign_keys = ON;")
     try:
         yield conn
@@ -107,6 +109,8 @@ def init_db():
                 FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE SET NULL
             );
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_filename ON chunks (filename);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks (session_id);")
 
         # Transcripts Table
         cursor.execute("""
@@ -147,6 +151,8 @@ def init_db():
                 FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE SET NULL
             );
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_chunk ON clips (chunk_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_status ON clips (status);")
 
         # User Rejections Table (for negative feedback learning)
         cursor.execute("""

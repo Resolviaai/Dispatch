@@ -2,10 +2,12 @@
 Supports TUS-style byte-offset resuming, SHA-256 verification, and manifest reconciliation.
 """
 import os
+import re
 import hashlib
 import logging
 import shutil
 import time
+import secrets
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Header, HTTPException, Request, UploadFile, File, Form
@@ -16,11 +18,22 @@ from dispatch import db
 from dispatch.ingestion.validator import probe_video
 from dispatch.orchestrator.job_queue import enqueue_job
 
-import secrets
-
 logger = logging.getLogger("dispatch.sync.receiver")
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
+
+SEGMENT_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def sanitize_segment_id(segment_id: str) -> str:
+    """Validate segment_id to prevent directory traversal or malformed paths."""
+    clean = (segment_id or "").strip()
+    if not clean or not SEGMENT_ID_REGEX.match(clean):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid segment_id: alphanumeric, hyphen, underscore up to 64 chars required"
+        )
+    return clean
 
 
 def get_auth_token() -> str:
@@ -45,6 +58,23 @@ def get_auth_token() -> str:
     return generated_token
 
 
+def verify_token(token: Optional[str] = None):
+    """Enforce token validation for sync endpoints.
+    Rejects missing or invalid tokens with HTTP 401 Unauthorized.
+    """
+    if not token or not token.strip():
+        raise HTTPException(status_code=401, detail="Authentication token missing")
+
+    expected_token = get_auth_token()
+    clean_token = token.strip()
+    if clean_token.startswith("Bearer "):
+        clean_token = clean_token[7:].strip()
+
+    if clean_token != expected_token:
+        logger.warning("Rejected sync request: invalid auth token")
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+
 class InitUploadRequest(BaseModel):
     session_id: str
     segment_id: str
@@ -66,18 +96,9 @@ class ReconcileRequest(BaseModel):
     manifest: List[ReconcileItem]
 
 
-def verify_token(token: Optional[str] = None):
-    expected_token = get_auth_token()
-    if token and token.strip() == expected_token:
-        return
-    # Resilient local network fallback: allow connection if token is blank or initial pairing
-    logger.info("Local network fallback: allowing sync request (token present: %s)", bool(token and token.strip()))
-
-
 @router.get("/ping")
 async def ping_receiver(auth_token: Optional[str] = None):
     """Probing endpoint for LAN and Tailscale transport latency checks."""
-    import time
     return {
         "status": "online",
         "service": "dispatch_receiver",
@@ -88,7 +109,9 @@ async def ping_receiver(auth_token: Optional[str] = None):
 
 @router.get("/pairing/config")
 async def get_pairing_config():
-    """Return discovered laptop network endpoints and pairing token for phone configuration."""
+    """Return discovered laptop network endpoints and pairing token for phone configuration.
+    Crucial: never exposes cloud OAuth secrets (e.g. YouTube client secrets).
+    """
     import socket
     import psutil
     from dispatch.config import WEB_PORT
@@ -111,20 +134,6 @@ async def get_pairing_config():
     token = get_auth_token()
     connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={token}"
 
-    import json
-    yt_token_file = Path("youtube_token.json")
-    if yt_token_file.exists():
-        try:
-            yt_data = json.loads(yt_token_file.read_text(encoding="utf-8"))
-            yt_access = yt_data.get("token", "")
-            yt_refresh = yt_data.get("refresh_token", "")
-            yt_cid = yt_data.get("client_id", "")
-            yt_csec = yt_data.get("client_secret", "")
-            if yt_refresh and yt_cid and yt_csec:
-                connection_string += f"&yt_token={yt_access}&yt_refresh={yt_refresh}&yt_client_id={yt_cid}&yt_client_secret={yt_csec}"
-        except Exception as e:
-            logger.debug("Could not attach YouTube token to pairing URI: %s", e)
-
     return {
         "lan_url": lan_url,
         "tailscale_url": tailscale_url,
@@ -143,10 +152,10 @@ async def verify_chunk_explicit(
     """Explicit cryptographic proof-of-receipt endpoint for phone before deleting local files.
     Returns 200 with {"verified": True} only if the fully assembled file exists and hashes match.
     """
-    if auth_token:
-        verify_token(auth_token)
+    verify_token(auth_token)
+    seg_id = sanitize_segment_id(segment_id)
 
-    final_name = f"{segment_id}.mp4"
+    final_name = f"{seg_id}.mp4"
     final_proc = PROCESSING_DIR / final_name
     final_inc = INCOMING_DIR / final_name
     target_file = final_proc if final_proc.exists() else (final_inc if final_inc.exists() else None)
@@ -162,18 +171,18 @@ async def verify_chunk_explicit(
             while chunk := f.read(1024 * 1024):
                 hasher.update(chunk)
         actual_hash = hasher.hexdigest()
-        if actual_hash == sha256:
-            return {"verified": True, "segment_id": segment_id, "size": actual_size, "status": "VERIFIED"}
+        if actual_hash.lower() == sha256.lower():
+            return {"verified": True, "segment_id": seg_id, "size": actual_size, "status": "VERIFIED"}
         else:
             return {"verified": False, "reason": "sha256_mismatch", "status": "CORRUPT_RETRY_REQUIRED"}
 
-    # 2. Check if already processed by pipeline into clips and safely purged
+    # 2. Check if already processed by pipeline into clips and safely archived/completed
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ?", (final_name,))
         row = cursor.fetchone()
-        if row and row["status"] == "processed" and row["file_hash"] == sha256:
-            return {"verified": True, "segment_id": segment_id, "status": "VERIFIED_PROCESSED"}
+        if row and row["status"] in ("verified", "transcribed", "processed") and (row["file_hash"] or "").lower() == sha256.lower():
+            return {"verified": True, "segment_id": seg_id, "status": "VERIFIED_PROCESSED"}
 
     return {"verified": False, "reason": "file_not_found", "status": "MISSING"}
 
@@ -193,7 +202,7 @@ def verify_file_integrity(filepath: Path, expected_size: int, expected_sha256: s
             while chunk := f.read(1024 * 1024):
                 hasher.update(chunk)
         actual_sha256 = hasher.hexdigest()
-        if actual_sha256 != expected_sha256:
+        if actual_sha256.lower() != expected_sha256.lower():
             logger.warning("SHA-256 mismatch for %s: expected %s, got %s", filepath.name, expected_sha256, actual_sha256)
             return False
         return True
@@ -207,7 +216,7 @@ async def reconcile_manifest(payload: ReconcileRequest):
     """Bidirectional reconciliation: phone sends manifest, laptop returns exact verified states & offsets.
     CRITICAL INVARIANT: NEVER tell phone a segment is VERIFIED unless:
     1. The exact file exists on disk and BOTH file_size and SHA-256 hash match the manifest, OR
-    2. The chunk is recorded in SQLite as 'processed' (raw file was safely transformed to clips and purged to save space) AND the recorded SHA-256 matches.
+    2. The chunk is recorded in SQLite as 'processed'/'verified' and the recorded SHA-256 matches.
     If a file exists but size or hash does NOT match, it is treated as corrupt: quarantined and purged, returning CORRUPT_RETRY_REQUIRED.
     """
     verify_token(payload.auth_token)
@@ -217,7 +226,7 @@ async def reconcile_manifest(payload: ReconcileRequest):
         cursor = conn.cursor()
 
         for item in payload.manifest:
-            seg_id = item.segment_id
+            seg_id = sanitize_segment_id(item.segment_id)
             expected_size = item.file_size_bytes
             expected_sha256 = item.sha256_hash
 
@@ -248,8 +257,7 @@ async def reconcile_manifest(payload: ReconcileRequest):
                         except Exception:
                             pass
 
-            elif db_chunk and db_chunk["status"] == "processed" and db_chunk["file_hash"] == expected_sha256:
-                # Pipeline already processed source chunk into clips and safely purged source video
+            elif db_chunk and db_chunk["status"] in ("verified", "transcribed", "processed") and (db_chunk["file_hash"] or "").lower() == expected_sha256.lower():
                 is_verified = True
 
             if is_verified:
@@ -289,7 +297,7 @@ async def init_upload(payload: InitUploadRequest):
     Strictly verifies existing files against expected file_size_bytes and sha256_hash.
     """
     verify_token(payload.auth_token)
-    seg_id = payload.segment_id
+    seg_id = sanitize_segment_id(payload.segment_id)
     final_name = f"{seg_id}.mp4"
     final_proc = PROCESSING_DIR / final_name
     final_inc = INCOMING_DIR / final_name
@@ -337,8 +345,9 @@ async def upload_chunk(
 ):
     """Receive a byte chunk and append to the partial segment file at the verified offset."""
     verify_token(x_auth_token)
-    part_file = INCOMING_DIR / f"{x_segment_id}.part"
-    final_file = INCOMING_DIR / f"{x_segment_id}.mp4"
+    seg_id = sanitize_segment_id(x_segment_id)
+    part_file = INCOMING_DIR / f"{seg_id}.part"
+    final_file = INCOMING_DIR / f"{seg_id}.mp4"
 
     # Offset consistency check
     current_size = part_file.stat().st_size if part_file.exists() else 0
@@ -360,7 +369,7 @@ async def upload_chunk(
 
     # Check if upload is complete
     if new_offset == x_file_size:
-        logger.info("Upload complete for %s. Verifying SHA-256...", x_segment_id)
+        logger.info("Upload complete for %s. Verifying SHA-256...", seg_id)
         hasher = hashlib.sha256()
         with open(part_file, "rb") as f:
             for b in iter(lambda: f.read(65536), b""):
@@ -369,14 +378,14 @@ async def upload_chunk(
 
         if computed_sha.lower() != x_sha256.lower():
             logger.error("SHA-256 mismatch for %s: expected %s, got %s",
-                         x_segment_id, x_sha256, computed_sha)
+                         seg_id, x_sha256, computed_sha)
             part_file.unlink()
             raise HTTPException(status_code=422, detail="Checksum mismatch; partial file purged")
 
         # Atomic rename from .part to .mp4
         part_file.rename(final_file)
         logger.info("Segment %s verified and finalized to %s (%d bytes)",
-                    x_segment_id, final_file.name, new_offset)
+                    seg_id, final_file.name, new_offset)
 
         # Move immediately to processing to avoid double scan delays
         target_path = PROCESSING_DIR / final_file.name
@@ -432,10 +441,11 @@ async def upload_direct_file(
 ):
     """Direct streaming multipart upload for mobile segments with immediate pipeline execution."""
     verify_token(auth_token)
+    seg_id = sanitize_segment_id(segment_id)
 
-    target_path = PROCESSING_DIR / f"{segment_id}.mp4"
+    target_path = PROCESSING_DIR / f"{seg_id}.mp4"
     if target_path.exists():
-        target_path = PROCESSING_DIR / f"{segment_id}_{int(time.time())}.mp4"
+        target_path = PROCESSING_DIR / f"{seg_id}_{int(time.time())}.mp4"
 
     hasher = hashlib.sha256()
     total_bytes = 0
@@ -446,7 +456,7 @@ async def upload_direct_file(
             total_bytes += len(chunk)
 
     computed_sha = hasher.hexdigest()
-    logger.info("Direct upload complete for %s (%d bytes, SHA: %s)", segment_id, total_bytes, computed_sha[:8])
+    logger.info("Direct upload complete for %s (%d bytes, SHA: %s)", seg_id, total_bytes, computed_sha[:8])
 
     chunk_id = db.register_chunk(
         session_id=session_id,
@@ -471,7 +481,7 @@ async def upload_direct_file(
 
     return {
         "status": "completed",
-        "segment_id": segment_id,
+        "segment_id": seg_id,
         "chunk_id": chunk_id,
         "job_id": job_id,
         "bytes_received": total_bytes,

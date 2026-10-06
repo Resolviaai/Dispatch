@@ -34,7 +34,6 @@ def upload_instagram_reel(
 
     if not token or not user_id:
         logger.info("[MOCK/SIMULATION] Instagram Reel publishing simulated for '%s'", video_path.name)
-        logger.info("Instagram credentials (INSTAGRAM_ACCESS_TOKEN / INSTAGRAM_USER_ID) not configured.")
         return {
             "status": "published",
             "remote_id": f"ig_sim_{video_path.stem}",

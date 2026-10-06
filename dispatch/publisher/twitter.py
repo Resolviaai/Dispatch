@@ -34,7 +34,6 @@ def upload_x_video(
 
     if not token and not key:
         logger.info("[MOCK/SIMULATION] X video publishing simulated for '%s'", video_path.name)
-        logger.info("X/Twitter credentials (X_BEARER_TOKEN or X_API_KEY) not configured.")
         return {
             "status": "published",
             "remote_id": f"x_sim_{video_path.stem}",

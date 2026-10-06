@@ -14,7 +14,7 @@ logger = logging.getLogger("dispatch.orchestrator.queue")
 
 
 def init_job_queue_schema():
-    """Ensure pipeline_jobs table exists in SQLite database."""
+    """Ensure pipeline_jobs table and indexes exist in SQLite database."""
     with get_db_connection() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pipeline_jobs (
@@ -39,19 +39,37 @@ def init_job_queue_schema():
             CREATE INDEX IF NOT EXISTS idx_jobs_claim 
             ON pipeline_jobs (status, next_retry_at, lease_expires_at);
         """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_chunk 
+            ON pipeline_jobs (chunk_id, status);
+        """)
 
 
 def enqueue_job(chunk_id: str, session_id: Optional[str] = None) -> str:
-    """Enqueue a new chunk processing job starting at VERIFY stage."""
+    """Enqueue a new chunk processing job starting at VERIFY stage.
+    Deduplicates active jobs: if an active job already exists for chunk_id, returns it.
+    """
     init_job_queue_schema()
-    job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    now_str = datetime.now().isoformat()
 
     with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT job_id FROM pipeline_jobs
+            WHERE chunk_id = ? AND status NOT IN ('COMPLETED', 'FAILED_PERMANENT')
+            LIMIT 1
+        """, (chunk_id,))
+        existing = cursor.fetchone()
+        if existing:
+            logger.info("Active pipeline job %s already exists for chunk %s, reusing.", existing["job_id"], chunk_id)
+            return existing["job_id"]
+
+        job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         conn.execute("""
             INSERT OR IGNORE INTO pipeline_jobs (
-                job_id, chunk_id, session_id, current_stage, status, next_retry_at
-            ) VALUES (?, ?, ?, 'VERIFY', 'QUEUED', CURRENT_TIMESTAMP)
-        """, (job_id, chunk_id, session_id))
+                job_id, chunk_id, session_id, current_stage, status, next_retry_at, created_at, updated_at
+            ) VALUES (?, ?, ?, 'VERIFY', 'QUEUED', ?, ?, ?)
+        """, (job_id, chunk_id, session_id, now_str, now_str, now_str))
 
     logger.info("Enqueued pipeline job %s for chunk %s", job_id, chunk_id)
     return job_id
@@ -62,34 +80,17 @@ class LeaseLostError(RuntimeError):
     pass
 
 
-def claim_job(worker_id: str, lease_duration_seconds: int = 45) -> Optional[Dict[str, Any]]:
+def claim_job(worker_id: str, lease_duration_seconds: int = 300) -> Optional[Dict[str, Any]]:
     """Atomically claim the next eligible job and grant a timed lease.
-    Uses atomic conditional update to guarantee strict concurrency safety.
+    Uses atomic UPDATE ... RETURNING * to eliminate any race condition.
     """
     init_job_queue_schema()
-    now_str = datetime.now().isoformat()
-    lease_until = (datetime.now() + timedelta(seconds=lease_duration_seconds)).isoformat()
+    now_dt = datetime.now()
+    now_str = now_dt.isoformat()
+    lease_until = (now_dt + timedelta(seconds=lease_duration_seconds)).isoformat()
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-
-        # Find eligible job: status in claimable states and next_retry_at <= now
-        cursor.execute("""
-            SELECT job_id, chunk_id, session_id, current_stage, attempt_count
-            FROM pipeline_jobs
-            WHERE status IN ('QUEUED', 'RETRY_PENDING', 'WAITING_FOR_AI', 'WAITING_FOR_RESOURCES')
-              AND datetime(next_retry_at) <= datetime(?)
-            ORDER BY created_at ASC
-            LIMIT 1
-        """, (now_str,))
-        row = cursor.fetchone()
-
-        if not row:
-            return None
-
-        job_id = row["job_id"]
-
-        # Atomically claim with lease ONLY IF status is still claimable (atomic compare-and-swap)
         cursor.execute("""
             UPDATE pipeline_jobs
             SET status = 'PROCESSING',
@@ -98,25 +99,31 @@ def claim_job(worker_id: str, lease_duration_seconds: int = 45) -> Optional[Dict
                 heartbeat_at = ?,
                 attempt_count = attempt_count + 1,
                 updated_at = ?
-            WHERE job_id = ? 
-              AND status IN ('QUEUED', 'RETRY_PENDING', 'WAITING_FOR_AI', 'WAITING_FOR_RESOURCES')
-        """, (worker_id, lease_until, now_str, now_str, job_id))
+            WHERE job_id = (
+                SELECT job_id FROM pipeline_jobs
+                WHERE status IN ('QUEUED', 'RETRY_PENDING', 'WAITING_FOR_AI', 'WAITING_FOR_RESOURCES')
+                  AND datetime(next_retry_at) <= datetime(?)
+                ORDER BY created_at ASC
+                LIMIT 1
+            )
+            RETURNING *;
+        """, (worker_id, lease_until, now_str, now_str, now_str))
+        claimed = cursor.fetchone()
 
-        if cursor.rowcount == 0:
-            # Another concurrent worker claimed the job between the SELECT and UPDATE
+        if not claimed:
             return None
 
-        cursor.execute("SELECT * FROM pipeline_jobs WHERE job_id = ?", (job_id,))
-        claimed = cursor.fetchone()
+        claimed_dict = dict(claimed)
         logger.info("Worker %s claimed job %s at stage %s (Lease: %ds)",
-                    worker_id, job_id, claimed["current_stage"], lease_duration_seconds)
-        return dict(claimed)
+                    worker_id, claimed_dict["job_id"], claimed_dict["current_stage"], lease_duration_seconds)
+        return claimed_dict
 
 
-def renew_heartbeat(job_id: str, worker_id: str, extend_seconds: int = 45) -> bool:
+def renew_heartbeat(job_id: str, worker_id: str, extend_seconds: int = 300) -> bool:
     """Worker renews lease on active job to signal it is alive."""
-    now_str = datetime.now().isoformat()
-    lease_until = (datetime.now() + timedelta(seconds=extend_seconds)).isoformat()
+    now_dt = datetime.now()
+    now_str = now_dt.isoformat()
+    lease_until = (now_dt + timedelta(seconds=extend_seconds)).isoformat()
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -187,8 +194,9 @@ def fail_stage_job(
     delay_seconds: int = 30
 ):
     """Mark job as failed or waiting (e.g. WAITING_FOR_AI, WAITING_FOR_RESOURCES) with retry delay."""
-    now_str = datetime.now().isoformat()
-    retry_time = (datetime.now() + timedelta(seconds=delay_seconds)).isoformat()
+    now_dt = datetime.now()
+    now_str = now_dt.isoformat()
+    retry_time = (now_dt + timedelta(seconds=delay_seconds)).isoformat()
     status_to_set = wait_state.value if wait_state else JobStatus.RETRY_PENDING.value
 
     with get_db_connection() as conn:

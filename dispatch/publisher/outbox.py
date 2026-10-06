@@ -95,6 +95,16 @@ def process_outbox_queue() -> int:
             # Check if all outbox jobs for this clip have finished
             check_and_finalize_clip(clip_id, video_path)
 
+        except PermissionError as pe:
+            logger.warning("Publishing job %s (%s) blocked: %s", job_id, platform, pe)
+            with db.get_db_connection() as conn:
+                conn.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'blocked_needs_auth',
+                        last_error = ?
+                    WHERE id = ?
+                """, (str(pe), job_id))
+
         except Exception as e:
             logger.error("Publishing error for job %s (%s): %s", job_id, platform, e)
             with db.get_db_connection() as conn:
@@ -110,7 +120,7 @@ def process_outbox_queue() -> int:
 
 
 def check_and_finalize_clip(clip_id: str, video_path: Path):
-    """Check if all platform jobs for this clip are completed, mark clip published, and clean local storage."""
+    """Check if all platform jobs for this clip are completed, and mark clip published in database."""
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT status FROM publishing_outbox WHERE clip_id = ?", (clip_id,))
@@ -123,15 +133,7 @@ def check_and_finalize_clip(clip_id: str, video_path: Path):
                 WHERE id = ?
             """, (clip_id,))
             conn.commit()
-
-            logger.info("All platform uploads confirmed for clip %s. Executing automatic local storage cleanup.", clip_id)
-            # Automatic post-publish cleanup of local video file
-            if video_path.exists():
-                try:
-                    video_path.unlink()
-                    logger.info("Deleted local published video %s to preserve disk space", video_path.name)
-                except Exception as e:
-                    logger.warning("Could not delete local clip file: %s", e)
+            logger.info("All platform uploads confirmed for clip %s. Clip marked published (media preserved).", clip_id)
 
 
 def watch_outbox_loop(poll_interval: float = 10.0):

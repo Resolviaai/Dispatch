@@ -24,6 +24,7 @@ from dispatch.orchestrator.job_queue import (
     renew_heartbeat,
     LeaseLostError
 )
+from dispatch.orchestrator.heartbeat import HeartbeatThread
 from dispatch.orchestrator.retry_engine import RetryEngine
 from dispatch.governor.resource_governor import ResourceGovernor
 
@@ -141,13 +142,13 @@ class PipelineStageRunner:
             logger.info("Transcribe checkpoint: Reusing existing transcript for chunk %s", chunk_id)
             return
 
-        # Perform transcription
-        renew_heartbeat(job["job_id"], worker_id, extend_seconds=120)
-        transcript_data = transcribe_video(
-            video_path=filepath,
-            chunk_id=chunk_id,
-            session_id=chunk.get("session_id")
-        )
+        # Perform transcription with active background heartbeat
+        with HeartbeatThread(job_id=job["job_id"], worker_id=worker_id, interval_seconds=15, lease_seconds=300):
+            transcript_data = transcribe_video(
+                video_path=filepath,
+                chunk_id=chunk_id,
+                session_id=chunk.get("session_id")
+            )
 
         if not transcript_data or not transcript_data.get("segments"):
             logger.warning("Empty transcription segments for chunk %s (audio may be silent)", chunk_id)
@@ -210,29 +211,28 @@ class PipelineStageRunner:
             logger.warning("No clips found to render for chunk %s", chunk_id)
             return
 
-        for clip in clips:
-            cid = clip["id"]
-            rendered_path = Path(clip["video_path"]) if clip["video_path"] else None
+        with HeartbeatThread(job_id=job["job_id"], worker_id=worker_id, interval_seconds=15, lease_seconds=300):
+            for clip in clips:
+                cid = clip["id"]
+                rendered_path = Path(clip["video_path"]) if clip["video_path"] else None
 
-            # Skip if already rendered and file is valid
-            if rendered_path and rendered_path.exists() and rendered_path.stat().st_size > 0:
-                logger.info("Render checkpoint: Clip %s already rendered at %s", cid, rendered_path.name)
-                continue
+                # Skip if already rendered and file is valid
+                if rendered_path and rendered_path.exists() and rendered_path.stat().st_size > 0:
+                    logger.info("Render checkpoint: Clip %s already rendered at %s", cid, rendered_path.name)
+                    continue
 
-            # Render with heartbeat renewal
-            renew_heartbeat(job["job_id"], worker_id, extend_seconds=120)
-            render_clip(
-                source_video=filepath,
-                clip_id=cid,
-                start_time=clip["start_time"],
-                end_time=clip["end_time"],
-                aspect_ratio=aspect_ratio,
-                layout_mode=clip["layout_mode"],
-                segments=segments
-            )
+                render_clip(
+                    source_video=filepath,
+                    clip_id=cid,
+                    start_time=clip["start_time"],
+                    end_time=clip["end_time"],
+                    aspect_ratio=aspect_ratio,
+                    layout_mode=clip["layout_mode"],
+                    segments=segments
+                )
 
     def _run_finalize_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path):
-        """Stage 5: Delete raw video chunk to preserve disk space and mark chunk processed."""
+        """Stage 5: Finalize chunk and mark processed. Cleans up raw incoming video chunk to preserve disk space."""
         chunk_id = chunk["id"]
 
         if filepath.exists():

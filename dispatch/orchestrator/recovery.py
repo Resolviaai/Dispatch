@@ -42,10 +42,10 @@ def recover_laptop_orchestrator() -> Dict[str, Any]:
                     worker_id = NULL,
                     lease_expires_at = NULL,
                     last_error = 'Worker lease expired; recovered on restart',
-                    next_retry_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
+                    next_retry_at = ?,
+                    updated_at = ?
                 WHERE job_id = ?
-            """, (job_id,))
+            """, (now_str, now_str, job_id))
 
             reclaimed_jobs.append(job_id)
             logger.info("Reclaimed stale job %s from failed worker (Resuming at stage %s)", job_id, stage)

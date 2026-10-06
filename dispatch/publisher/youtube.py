@@ -42,7 +42,6 @@ def upload_youtube_short(
     token_file = credentials_path or Path("youtube_token.json")
     if not token_file.exists() and not os.getenv("YOUTUBE_ACCESS_TOKEN"):
         logger.info("[MOCK/SIMULATION] YouTube upload configured for '%s' (Privacy: %s).", title, privacy_status)
-        logger.info("Credentials file 'youtube_token.json' not found. Video marked ready in outbox.")
         return {
             "status": "published",
             "remote_id": f"yt_sim_{video_path.stem}",

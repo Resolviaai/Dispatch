@@ -41,6 +41,14 @@ def process_incoming_file(filepath: Path, session_id: Optional[str] = None) -> O
 
     logger.info("Checking incoming file: %s", filepath.name)
 
+    # 0. Check if already processed/registered in DB
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM chunks WHERE filename = ?", (filepath.name,))
+        if cursor.fetchone():
+            logger.debug("File %s already registered in chunks, skipping watcher staging.", filepath.name)
+            return None
+
     # 1. Stabilization check
     if not is_file_stable(filepath):
         logger.info("File %s is still writing or empty, skipping for now.", filepath.name)
