@@ -2,8 +2,11 @@
 Provides a modern dark-canvas UI (Layer 0 #0B0F17) for reviewing, approving,
 and publishing video clips on both PC and mobile browsers.
 """
+import os
 import shutil
 import psutil
+import logging
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, HTTPException, Request
@@ -21,6 +24,13 @@ from dispatch.config import (
 from dispatch import db
 from dispatch.ingestion.watcher import scan_incoming
 from dispatch.sync.receiver import router as sync_router
+from dispatch.youtube_inbox.catcher import (
+    YouTubeInboxCatcher,
+    extract_youtube_video_id,
+    scan_channel_for_dispatch_uploads
+)
+
+logger = logging.getLogger("dispatch.web")
 
 app = FastAPI(title="Dispatch Dashboard", version="1.0.0")
 
@@ -44,6 +54,11 @@ class ApproveRequest(BaseModel):
 
 class RejectRequest(BaseModel):
     reason: Optional[str] = "User rejected"
+
+
+class YouTubeIngestRequest(BaseModel):
+    url: str
+    force_whisper: Optional[bool] = False
 
 
 class SettingsRequest(BaseModel):
@@ -196,6 +211,59 @@ async def trigger_scan():
     """Manual trigger to scan incoming drops."""
     staged = scan_incoming()
     return {"status": "success", "staged_count": len(staged)}
+
+
+@app.get("/api/youtube/inbox")
+async def get_youtube_inbox_items():
+    """List YouTube Inbox items and their current processing status."""
+    return {"items": db.list_youtube_inbox(limit=30)}
+
+
+@app.post("/api/youtube/ingest")
+async def ingest_youtube_video(payload: YouTubeIngestRequest):
+    """Trigger on-demand download, transcription, and clip rendering from a YouTube video URL/ID."""
+    video_id = extract_youtube_video_id(payload.url)
+    if not video_id:
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL or Video ID")
+
+    # Start background processing thread so API returns immediately to client
+    catcher = YouTubeInboxCatcher()
+
+    def _run_bg_catcher():
+        try:
+            catcher.process_video(payload.url, force_whisper=bool(payload.force_whisper))
+        except Exception as e:
+            logger.error("Error in background YouTube ingestion for %s: %s", video_id, e)
+
+    t = threading.Thread(target=_run_bg_catcher, daemon=True)
+    t.start()
+
+    return {
+        "status": "processing_queued",
+        "video_id": video_id,
+        "message": f"YouTube video {video_id} accepted. Downloading, extracting transcript, and generating clips in background."
+    }
+
+
+@app.post("/api/youtube/scan")
+async def scan_youtube_channel():
+    """Scan configured YouTube channel for [DISPATCH] video uploads."""
+    channel_id = db.get_setting("youtube_channel_id", os.getenv("DISPATCH_YOUTUBE_CHANNEL_ID", ""))
+    marker = db.get_setting("youtube_inbox_marker", "[DISPATCH]")
+    if not channel_id:
+        return {
+            "discovered": [],
+            "message": "No channel ID configured. Set DISPATCH_YOUTUBE_CHANNEL_ID in .env or settings."
+        }
+
+    discovered = scan_channel_for_dispatch_uploads(channel_id=channel_id, marker=marker)
+    # Automatically queue discovered videos
+    catcher = YouTubeInboxCatcher()
+    for item in discovered:
+        v_id = item["video_id"]
+        threading.Thread(target=catcher.process_video, args=(v_id,), daemon=True).start()
+
+    return {"discovered": discovered, "queued_count": len(discovered)}
 
 
 # --- Embedded HTML Dashboard ---

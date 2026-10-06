@@ -1,21 +1,12 @@
-# Dispatch: Autonomous Personal Content Engine
-# Core Web, API, and Ingestion
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-pydantic>=2.0.0
-python-multipart>=0.0.6
-jinja2>=3.1.2
-httpx>=0.25.0
-requests>=2.31.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
+python-dotenv>=1.0.0
 psutil>=5.9.0
-
-# Speech Recognition & Audio Pipeline
+requests>=2.31.0
 faster-whisper>=1.0.0
-
-# Platform Publishing Adapters
-google-api-python-client>=2.100.0
-google-auth-oauthlib>=1.0.0
-google-auth-httplib2>=0.1.0
-
-# Windows System Management (Optional)
-pywin32>=306; sys_platform == 'win32'
+google-api-python-client>=2.140.0
+google-auth-oauthlib>=1.2.0
+yt-dlp>=2024.8.0
+youtube-transcript-api>=0.6.2
+pillow>=10.0.0

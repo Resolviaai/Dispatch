@@ -212,13 +212,38 @@ def init_db():
             ON pipeline_jobs (status, next_retry_at, lease_expires_at);
         """)
 
+        # YouTube Transport / Inbox Table (Idempotent cloud queue)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS youtube_inbox (
+                video_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                channel_id TEXT,
+                upload_time TIMESTAMP,
+                duration REAL DEFAULT 0.0,
+                status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, DOWNLOADED, TRANSCRIPT_FETCHED, CLIPS_CREATED, COMPLETED, FAILED
+                local_video_path TEXT,
+                transcript_source TEXT,                    -- 'youtube' or 'whisper'
+                segments_json TEXT,                        -- JSON array of timestamped segments
+                last_error TEXT,
+                retry_count INTEGER DEFAULT 0,
+                discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_youtube_status 
+            ON youtube_inbox (status, updated_at);
+        """)
+
         # Default settings if not already present
         cursor.execute("""
             INSERT OR IGNORE INTO settings (key, value) VALUES
             ('publish_mode', ?),
             ('auto_process', 'true'),
             ('youtube_enabled', 'true'),
-            ('instagram_enabled', 'true');
+            ('instagram_enabled', 'true'),
+            ('youtube_inbox_enabled', 'true'),
+            ('youtube_inbox_marker', '[DISPATCH]');
         """, (DEFAULT_PUBLISH_MODE,))
 
         conn.commit()
@@ -436,3 +461,108 @@ def get_active_pipeline_jobs() -> List[Dict[str, Any]]:
             LIMIT 50
         """)
         return [dict(row) for row in cursor.fetchall()]
+
+
+# --- YouTube Inbox Helpers ---
+
+def register_youtube_video(
+    video_id: str,
+    title: str,
+    channel_id: Optional[str] = None,
+    upload_time: Optional[str] = None,
+    duration: float = 0.0
+) -> bool:
+    """Register discovered YouTube video in inbox idempotently.
+    Returns True if newly inserted, False if already present.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT video_id FROM youtube_inbox WHERE video_id = ?", (video_id,))
+        if cursor.fetchone():
+            return False
+
+        cursor.execute("""
+            INSERT INTO youtube_inbox (video_id, title, channel_id, upload_time, duration, status)
+            VALUES (?, ?, ?, ?, ?, 'DISCOVERED')
+        """, (video_id, title, channel_id, upload_time, duration))
+        conn.commit()
+        return True
+
+
+def get_youtube_video(video_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve YouTube inbox record by video ID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM youtube_inbox WHERE video_id = ?", (video_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_youtube_video(
+    video_id: str,
+    status: str,
+    local_video_path: Optional[str] = None,
+    transcript_source: Optional[str] = None,
+    segments_json: Optional[str] = None,
+    last_error: Optional[str] = None
+):
+    """Update status, paths, or errors on YouTube inbox item."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        updates = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+        params: List[Any] = [status]
+
+        if local_video_path is not None:
+            updates.append("local_video_path = ?")
+            params.append(local_video_path)
+
+        if transcript_source is not None:
+            updates.append("transcript_source = ?")
+            params.append(transcript_source)
+
+        if segments_json is not None:
+            updates.append("segments_json = ?")
+            params.append(segments_json)
+
+        if last_error is not None:
+            updates.append("last_error = ?")
+            params.append(last_error)
+            if status == "FAILED":
+                updates.append("retry_count = retry_count + 1")
+
+        query = f"UPDATE youtube_inbox SET {', '.join(updates)} WHERE video_id = ?"
+        params.append(video_id)
+        cursor.execute(query, params)
+        conn.commit()
+
+
+def list_youtube_inbox(status: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """List YouTube inbox items with optional status filtering."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if status:
+            cursor.execute(
+                "SELECT * FROM youtube_inbox WHERE status = ? ORDER BY discovered_at DESC LIMIT ?",
+                (status, limit)
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM youtube_inbox ORDER BY discovered_at DESC LIMIT ?",
+                (limit,)
+            )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def is_youtube_video_processed(video_id: str) -> bool:
+    """Check if a video has already been completely processed or clips created."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT status FROM youtube_inbox WHERE video_id = ?",
+            (video_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        return row["status"] in ("CLIPS_CREATED", "COMPLETED")
+

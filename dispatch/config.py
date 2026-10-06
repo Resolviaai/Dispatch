@@ -18,9 +18,10 @@ PROCESSING_DIR = STORAGE_DIR / "processing"
 CLIPS_DIR = STORAGE_DIR / "clips"
 DATABASE_DIR = STORAGE_DIR / "database"
 QUARANTINE_DIR = STORAGE_DIR / "quarantine"
+YOUTUBE_INBOX_DIR = STORAGE_DIR / "youtube_inbox"
 
 # Ensure directories exist
-for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR, QUARANTINE_DIR]:
+for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR, QUARANTINE_DIR, YOUTUBE_INBOX_DIR]:
     path.mkdir(parents=True, exist_ok=True)
 
 # Database path
