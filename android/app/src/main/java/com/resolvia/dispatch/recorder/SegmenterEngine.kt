@@ -182,14 +182,14 @@ class SegmenterEngine(
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        val syncWork = OneTimeWorkRequestBuilder<ResumableSyncWorker>()
+        val ytSyncWork = OneTimeWorkRequestBuilder<com.resolvia.dispatch.sync.YouTubeDirectUploadWorker>()
             .setConstraints(constraints)
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "DispatchSyncWorker",
+            "DispatchYouTubeDirectUploadWorker",
             ExistingWorkPolicy.REPLACE,
-            syncWork
+            ytSyncWork
         )
     }
 

@@ -216,11 +216,12 @@ def init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS youtube_inbox (
                 video_id TEXT PRIMARY KEY,
+                dispatch_id TEXT,
                 title TEXT NOT NULL,
                 channel_id TEXT,
                 upload_time TIMESTAMP,
                 duration REAL DEFAULT 0.0,
-                status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, DOWNLOADED, TRANSCRIPT_FETCHED, CLIPS_CREATED, COMPLETED, FAILED
+                status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, WAITING_FOR_YOUTUBE, DOWNLOADED, TRANSCRIPT_FETCHED, CLIPS_CREATED, COMPLETED, FAILED
                 local_video_path TEXT,
                 transcript_source TEXT,                    -- 'youtube' or 'whisper'
                 segments_json TEXT,                        -- JSON array of timestamped segments
@@ -233,6 +234,17 @@ def init_db():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_youtube_status 
             ON youtube_inbox (status, updated_at);
+        """)
+
+        # Migration: Ensure dispatch_id column exists if table was created in older schema
+        cursor.execute("PRAGMA table_info(youtube_inbox);")
+        yt_cols = [col[1] for col in cursor.fetchall()]
+        if "dispatch_id" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN dispatch_id TEXT;")
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
+            ON youtube_inbox (dispatch_id);
         """)
 
         # Default settings if not already present
@@ -470,7 +482,8 @@ def register_youtube_video(
     title: str,
     channel_id: Optional[str] = None,
     upload_time: Optional[str] = None,
-    duration: float = 0.0
+    duration: float = 0.0,
+    dispatch_id: Optional[str] = None
 ) -> bool:
     """Register discovered YouTube video in inbox idempotently.
     Returns True if newly inserted, False if already present.
@@ -482,9 +495,9 @@ def register_youtube_video(
             return False
 
         cursor.execute("""
-            INSERT INTO youtube_inbox (video_id, title, channel_id, upload_time, duration, status)
-            VALUES (?, ?, ?, ?, ?, 'DISCOVERED')
-        """, (video_id, title, channel_id, upload_time, duration))
+            INSERT INTO youtube_inbox (video_id, dispatch_id, title, channel_id, upload_time, duration, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'DISCOVERED')
+        """, (video_id, dispatch_id, title, channel_id, upload_time, duration))
         conn.commit()
         return True
 
@@ -498,9 +511,19 @@ def get_youtube_video(video_id: str) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+def get_youtube_video_by_dispatch_id(dispatch_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve YouTube inbox record by unique phone dispatch_id."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM youtube_inbox WHERE dispatch_id = ?", (dispatch_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
 def update_youtube_video(
     video_id: str,
     status: str,
+    dispatch_id: Optional[str] = None,
     local_video_path: Optional[str] = None,
     transcript_source: Optional[str] = None,
     segments_json: Optional[str] = None,
@@ -511,6 +534,10 @@ def update_youtube_video(
         cursor = conn.cursor()
         updates = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
         params: List[Any] = [status]
+
+        if dispatch_id is not None:
+            updates.append("dispatch_id = ?")
+            params.append(dispatch_id)
 
         if local_video_path is not None:
             updates.append("local_video_path = ?")

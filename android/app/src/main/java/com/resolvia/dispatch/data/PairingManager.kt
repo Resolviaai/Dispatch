@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 
 /**
- * Manages device pairing credentials and discovered laptop network endpoints.
+ * Manages device pairing credentials, YouTube Cloud Inbox tokens, and discovered laptop endpoints.
  * Persists configuration securely in Android SharedPreferences.
  */
 class PairingManager(context: Context) {
@@ -16,6 +16,10 @@ class PairingManager(context: Context) {
         private const val KEY_LAN_HOST = "lan_host"
         private const val KEY_TAILSCALE_HOST = "tailscale_host"
         private const val KEY_AUTH_TOKEN = "auth_token"
+        private const val KEY_YT_ACCESS_TOKEN = "yt_access_token"
+        private const val KEY_YT_REFRESH_TOKEN = "yt_refresh_token"
+        private const val KEY_YT_CLIENT_ID = "yt_client_id"
+        private const val KEY_YT_CLIENT_SECRET = "yt_client_secret"
         private const val DEFAULT_TOKEN = ""
         private const val DEFAULT_LAN = ""
     }
@@ -32,11 +36,30 @@ class PairingManager(context: Context) {
         get() = prefs.getString(KEY_AUTH_TOKEN, DEFAULT_TOKEN) ?: DEFAULT_TOKEN
         set(value) = prefs.edit().putString(KEY_AUTH_TOKEN, value).apply()
 
+    var youtubeAccessToken: String
+        get() = prefs.getString(KEY_YT_ACCESS_TOKEN, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_YT_ACCESS_TOKEN, value).apply()
+
+    var youtubeRefreshToken: String
+        get() = prefs.getString(KEY_YT_REFRESH_TOKEN, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_YT_REFRESH_TOKEN, value).apply()
+
+    var youtubeClientId: String
+        get() = prefs.getString(KEY_YT_CLIENT_ID, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_YT_CLIENT_ID, value).apply()
+
+    var youtubeClientSecret: String
+        get() = prefs.getString(KEY_YT_CLIENT_SECRET, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_YT_CLIENT_SECRET, value).apply()
+
     val isPaired: Boolean
         get() = authToken.isNotBlank() && (lanHost.isNotBlank() || tailscaleHost.isNotBlank())
 
+    val isYouTubeConfigured: Boolean
+        get() = youtubeAccessToken.isNotBlank() || (youtubeRefreshToken.isNotBlank() && youtubeClientId.isNotBlank())
+
     /**
-     * Parse connection string from dashboard: dispatch://pair?lan=...&tailscale=...&token=...
+     * Parse connection string from dashboard: dispatch://pair?lan=...&tailscale=...&token=...&yt_refresh=...
      */
     fun saveFromConnectionString(uriString: String): Boolean {
         return try {
@@ -44,10 +67,18 @@ class PairingManager(context: Context) {
             val lan = uri.getQueryParameter("lan")
             val ts = uri.getQueryParameter("tailscale")
             val token = uri.getQueryParameter("token")
+            val ytAccess = uri.getQueryParameter("yt_token")
+            val ytRefresh = uri.getQueryParameter("yt_refresh")
+            val ytCid = uri.getQueryParameter("yt_client_id")
+            val ytCsec = uri.getQueryParameter("yt_client_secret")
 
             if (!lan.isNullOrBlank()) lanHost = lan
             if (!ts.isNullOrBlank()) tailscaleHost = ts
             if (!token.isNullOrBlank()) authToken = token
+            if (!ytAccess.isNullOrBlank()) youtubeAccessToken = ytAccess
+            if (!ytRefresh.isNullOrBlank()) youtubeRefreshToken = ytRefresh
+            if (!ytCid.isNullOrBlank()) youtubeClientId = ytCid
+            if (!ytCsec.isNullOrBlank()) youtubeClientSecret = ytCsec
             true
         } catch (_: Exception) {
             false

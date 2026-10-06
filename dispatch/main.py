@@ -35,6 +35,7 @@ from dispatch.transcription.transcriber import transcribe_video
 from dispatch.ai_clips.highlight_finder import identify_and_save_highlights
 from dispatch.video_engine.renderer import render_clip
 from dispatch.publisher.outbox import process_outbox_queue
+from dispatch.youtube_inbox.poller import YouTubeInboxPoller
 from dispatch.web.app import app
 
 # Configure logging
@@ -146,7 +147,12 @@ def start_dispatch(run_web: bool = True):
     worker_thread.start()
     logger.info("Autonomous pipeline worker thread running in background")
 
-    # 6. Start Web Dashboard
+    # 6. Start autonomous YouTube Cloud Inbox Poller daemon
+    youtube_poller = YouTubeInboxPoller()
+    youtube_poller.start()
+    logger.info("Autonomous YouTube Cloud Inbox poller active (Checks immediately on boot + every 10 min)")
+
+    # 7. Start Web Dashboard
     if run_web:
         logger.info("Launching Web Dashboard on http://%s:%d", WEB_HOST, WEB_PORT)
         logger.info("Review clips on PC: http://localhost:%d", WEB_PORT)

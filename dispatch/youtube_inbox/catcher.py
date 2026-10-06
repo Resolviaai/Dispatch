@@ -167,20 +167,19 @@ class YouTubeInboxCatcher:
         self,
         url_or_id: str,
         session_id: Optional[str] = None,
+        dispatch_id: Optional[str] = None,
         force_whisper: bool = False
     ) -> Dict[str, Any]:
         """Full end-to-end processing pipeline for a single YouTube video.
         
         1. Extract and validate video ID.
         2. Idempotent check in SQLite DB.
-        3. Fetch metadata and register in youtube_inbox.
-        4. Download video media.
-        5. Fetch transcript:
-           - Tries YouTube captions / VTT.
-           - If captions not ready or missing -> fallback to local faster-whisper.
-        6. Detect semantic highlights (Gemini Flash / heuristic).
-        7. Render vertical 9:16 candidate clips with ASS subtitles.
-        8. Mark completed in youtube_inbox and return result summary.
+        3. Fetch metadata and register in youtube_inbox with dispatch_id.
+        4. Download video media (DOWNLOADING).
+        5. Fetch transcript (TRANSCRIBING: YouTube captions / VTT with Whisper fallback).
+        6. Detect semantic highlights (ANALYZING: Gemini Flash / heuristic).
+        7. Render vertical 9:16 candidate clips (RENDERING: FFmpeg + ASS).
+        8. Mark completed (CLIPS_CREATED -> ready_review) and return result summary.
         """
         video_id = extract_youtube_video_id(url_or_id)
         if not video_id:
@@ -201,24 +200,33 @@ class YouTubeInboxCatcher:
         # 1. Fetch metadata
         try:
             info = self.fetch_video_info(video_id)
+            if not dispatch_id:
+                from dispatch.youtube_inbox.oauth import extract_dispatch_id
+                dispatch_id = extract_dispatch_id(info.get("description", ""))
+
             db.register_youtube_video(
                 video_id=video_id,
                 title=info["title"],
                 channel_id=info["channel_id"],
                 upload_time=info["upload_date"],
-                duration=info["duration"]
+                duration=info["duration"],
+                dispatch_id=dispatch_id
             )
         except Exception as e:
             logger.error("Failed to fetch info for video %s: %s", video_id, e)
-            db.register_youtube_video(video_id=video_id, title=f"YouTube Video {video_id}")
+            db.register_youtube_video(
+                video_id=video_id,
+                title=f"YouTube Video {video_id}",
+                dispatch_id=dispatch_id
+            )
             info = {"title": f"YouTube Video {video_id}", "duration": 0.0}
 
-        db.update_youtube_video(video_id, status="PROCESSING")
+        db.update_youtube_video(video_id, status="DOWNLOADING", dispatch_id=dispatch_id)
 
         # 2. Download media
         try:
             local_video_path = self.download_video(video_id)
-            db.update_youtube_video(video_id, status="DOWNLOADED", local_video_path=str(local_video_path))
+            db.update_youtube_video(video_id, status="TRANSCRIBING", local_video_path=str(local_video_path))
         except Exception as e:
             error_msg = f"Failed to download video: {e}"
             logger.error(error_msg)
@@ -282,7 +290,8 @@ class YouTubeInboxCatcher:
             segments=segments
         )
 
-        # 5. Extract highlights
+        # 5. Extract highlights (ANALYZING)
+        db.update_youtube_video(video_id, status="ANALYZING")
         logger.info("Detecting candidate highlights for %s (Duration: %.1fs)", video_id, total_duration)
         publish_mode = db.get_setting("publish_mode", DEFAULT_PUBLISH_MODE) or "private"
         clip_ids = identify_and_save_highlights(
@@ -295,7 +304,8 @@ class YouTubeInboxCatcher:
 
         logger.info("Identified %d candidate clips for YouTube video %s", len(clip_ids), video_id)
 
-        # 6. Render candidate clips
+        # 6. Render candidate clips (RENDERING)
+        db.update_youtube_video(video_id, status="RENDERING")
         rendered_clips = []
         for cid in clip_ids:
             with db.get_db_connection() as conn:
