@@ -17,9 +17,10 @@ INCOMING_DIR = STORAGE_DIR / "incoming"
 PROCESSING_DIR = STORAGE_DIR / "processing"
 CLIPS_DIR = STORAGE_DIR / "clips"
 DATABASE_DIR = STORAGE_DIR / "database"
+QUARANTINE_DIR = STORAGE_DIR / "quarantine"
 
 # Ensure directories exist
-for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR]:
+for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR, QUARANTINE_DIR]:
     path.mkdir(parents=True, exist_ok=True)
 
 # Database path

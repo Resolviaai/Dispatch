@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dispatch | Autonomous Content Control</title>
+  <title>Dispatch | Autonomous Content Engine</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background-color: #0B0F17; color: #F1F5F9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -12,7 +12,7 @@
     .surface-nested { background-color: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.05); }
     @keyframes pulse-subtle {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
+      50% { opacity: 0.4; }
     }
     .pulse-indicator { animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
   </style>
@@ -20,7 +20,8 @@
 <body class="min-h-screen antialiased flex flex-col">
 
   <!-- Header -->
-  <header class="border-b border-white/10 bg-[#0B0F17]/90 backdrop-blur sticky top-0 z-50 px-4 lg:px-8 py-3.5 flex items-center justify-between">
+  <header class="border-b border-white/10 bg-[#0B0F17]/95 backdrop-blur sticky top-0 z-50 px-4 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+    <!-- Brand -->
     <div class="flex items-center space-x-3">
       <div class="w-8 h-8 rounded bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center">
         <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -28,47 +29,64 @@
         </svg>
       </div>
       <div>
-        <h1 class="text-sm font-semibold tracking-wider uppercase text-white">Dispatch</h1>
-        <p class="text-[11px] text-slate-400 font-mono">Autonomous Content Engine</p>
+        <div class="flex items-center space-x-2">
+          <h1 class="text-sm font-semibold tracking-wider uppercase text-white">Dispatch</h1>
+          <span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-700/40">V1</span>
+        </div>
+        <p class="text-[10px] text-slate-400 font-mono">Autonomous Content Engine</p>
       </div>
     </div>
 
-    <!-- Quick Stats & Settings -->
-    <div class="flex items-center space-x-3 text-xs">
-      <button onclick="openPairingModal()" class="flex items-center space-x-1.5 px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
+    <!-- Quick Actions & Settings -->
+    <div class="flex items-center flex-wrap gap-2 text-xs">
+      <!-- Pair Phone Modal Button -->
+      <button onclick="openPairingModal()" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
         <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
         </svg>
         <span>Pair Phone</span>
       </button>
 
-      <a href="/mobile" target="_blank" class="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
+      <!-- Download APK Button -->
+      <a href="/download/dispatch.apk" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded bg-emerald-950/40 border border-emerald-500/30 hover:bg-emerald-900/40 text-emerald-300 transition text-[11px]">
+        <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+        <span class="hidden sm:inline">Download</span>
+        <span>APK</span>
+      </a>
+
+      <!-- Open Mobile Web Camera -->
+      <a href="/mobile" target="_blank" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
         <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
         </svg>
-        <span>Open Mobile Camera</span>
+        <span class="hidden sm:inline">Mobile</span>
+        <span>Camera</span>
       </a>
 
-      <div class="hidden sm:flex items-center space-x-2 px-3 py-1.5 rounded surface text-slate-300">
+      <!-- Disk Health -->
+      <div class="hidden md:flex items-center space-x-2 px-2.5 py-1.5 rounded surface text-slate-300">
         <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
         <span id="disk-info" class="font-mono text-[11px]">Disk: -- GB free</span>
       </div>
 
-      <div class="flex items-center bg-black/40 border border-white/10 rounded p-0.5">
-        <button id="mode-private-btn" onclick="setPublishMode('private')" class="px-2.5 py-1 text-[11px] font-medium rounded transition">
+      <!-- Publish Mode Toggle -->
+      <div class="flex items-center bg-black/50 border border-white/10 rounded p-0.5">
+        <button id="mode-private-btn" onclick="setPublishMode('private')" class="px-2 py-1 text-[11px] font-medium rounded transition">
           Private / Draft
         </button>
-        <button id="mode-public-btn" onclick="setPublishMode('public')" class="px-2.5 py-1 text-[11px] font-medium rounded transition">
+        <button id="mode-public-btn" onclick="setPublishMode('public')" class="px-2 py-1 text-[11px] font-medium rounded transition">
           Auto Public
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Main Content -->
-  <main class="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-6 space-y-6">
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-5 space-y-6">
 
-    <!-- KPI Metrics -->
+    <!-- KPI Metrics Grid -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
       <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
         <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Ready For Review</span>
@@ -106,7 +124,6 @@
 
       <!-- Pipeline Jobs List -->
       <div id="pipeline-jobs-container" class="space-y-2.5">
-        <!-- Rendered via JS -->
         <div id="pipeline-idle-placeholder" class="surface-nested rounded p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
           <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -116,23 +133,46 @@
       </div>
     </div>
 
-    <!-- Review Section Header -->
-    <div class="flex items-center justify-between pt-2">
-      <div>
-        <h2 class="text-base font-semibold text-white">Clips Awaiting Approval</h2>
-        <p class="text-xs text-slate-400 mt-0.5">Review generated short-form clips, edit tags, and dispatch.</p>
+    <!-- Review Section Header & Tabs -->
+    <div class="space-y-3 pt-1">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 class="text-base font-semibold text-white">Content Library & Reviews</h2>
+          <p class="text-xs text-slate-400 mt-0.5">Review generated short-form clips, edit metadata, and dispatch across platforms.</p>
+        </div>
+
+        <div class="flex items-center space-x-2">
+          <!-- Refresh Button -->
+          <button onclick="fetchClips()" class="text-xs px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 flex items-center space-x-1.5 transition">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
       </div>
-      <button onclick="fetchClips()" class="text-xs px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 flex items-center space-x-1.5 transition">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-        </svg>
-        <span>Refresh</span>
-      </button>
+
+      <!-- Section Navigation Tabs -->
+      <div class="flex items-center space-x-2 border-b border-white/10 pb-2">
+        <button id="tab-ready-btn" onclick="switchClipsTab('ready')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm">
+          <span>Awaiting Approval</span>
+          <span id="tab-ready-count" class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-white/20">0</span>
+        </button>
+        <button id="tab-approved-btn" onclick="switchClipsTab('approved')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition">
+          <span>Approved & Published</span>
+          <span id="tab-approved-count" class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-white/10">0</span>
+        </button>
+      </div>
     </div>
 
-    <!-- Clips Grid -->
-    <div id="clips-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+    <!-- Clips Grid (Awaiting Approval View) -->
+    <div id="clips-ready-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
       <!-- Dynamic Clip Cards injected here -->
+    </div>
+
+    <!-- Clips Grid (Approved & Published View) -->
+    <div id="clips-approved-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 hidden">
+      <!-- Dynamic Approved/Published Cards injected here -->
     </div>
 
     <!-- Empty State -->
@@ -140,13 +180,13 @@
       <svg class="w-10 h-10 mx-auto text-slate-500 mb-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
       </svg>
-      <h3 class="text-sm font-medium text-slate-200">No clips pending review</h3>
-      <p class="text-xs text-slate-400 mt-1 max-w-sm mx-auto">When your phone completes recording and syncs to your PC, Dispatch automatically cuts and subtitles candidates here.</p>
+      <h3 id="empty-state-title" class="text-sm font-medium text-slate-200">No clips pending review</h3>
+      <p id="empty-state-desc" class="text-xs text-slate-400 mt-1 max-w-sm mx-auto">When your phone completes recording and syncs to your PC, Dispatch automatically cuts and subtitles candidates here.</p>
     </div>
 
     <!-- Device Pairing Modal -->
-    <div id="pairing-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-      <div class="surface rounded-xl max-w-md w-full p-6 space-y-4 border border-white/10 shadow-2xl">
+    <div id="pairing-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="surface rounded-xl max-w-lg w-full p-6 space-y-4 border border-white/10 shadow-2xl">
         <div class="flex items-center justify-between border-b border-white/10 pb-3">
           <div class="flex items-center space-x-2">
             <div class="w-2.5 h-2.5 rounded-full bg-indigo-500"></div>
@@ -157,11 +197,26 @@
           </button>
         </div>
 
-        <p class="text-xs text-slate-300 leading-relaxed">
-          Configure your POCO C65 once. The phone securely memorizes both routes and syncs automatically in the background.
-        </p>
+        <!-- Step 1: Install APK -->
+        <div class="bg-indigo-950/30 border border-indigo-500/30 rounded-lg p-3 space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-white font-mono uppercase">Step 1: Install App on POCO C65</span>
+            <a href="/download/dispatch.apk" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-mono text-[10px] flex items-center space-x-1">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              </svg>
+              <span>Download APK</span>
+            </a>
+          </div>
+          <p class="text-[11px] text-slate-300 leading-relaxed">
+            Download and install <code>Dispatch-POCO-C65-v1.apk</code> directly on your phone. Enables 1080p background recording even when screen is locked.
+          </p>
+        </div>
 
-        <div class="space-y-3 text-xs">
+        <!-- Step 2: Connection Credentials -->
+        <div class="space-y-3 text-xs pt-1">
+          <span class="text-[10px] font-semibold text-slate-400 font-mono uppercase block">Step 2: Connect Phone to Laptop</span>
+
           <div>
             <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Local LAN Endpoint (Home Wi-Fi)</label>
             <div class="flex items-center space-x-2">
@@ -188,7 +243,7 @@
           </div>
 
           <div class="pt-2 border-t border-white/5">
-            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">1-Click Pairing URI (Paste into Phone)</label>
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">1-Click Pairing URI (Paste into App or Open)</label>
             <div class="flex items-center space-x-2">
               <input type="text" id="pair-uri" readonly class="w-full text-[11px] font-mono px-2.5 py-1.5 rounded surface-input text-white">
               <button onclick="copyField('pair-uri')" class="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] shadow">Copy All</button>
@@ -208,7 +263,31 @@
 
   <script>
     let currentPublishMode = "private";
+    let activeTab = "ready"; // "ready" or "approved"
+    let cachedClipsData = { ready: [], recent_approved: [] };
     const STAGES = ["VERIFY", "TRANSCRIBE", "ANALYZE", "RENDER", "FINALIZE"];
+
+    // Safe Clipboard Copy Helper
+    function safeCopyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).catch(() => {
+          fallbackCopy(text);
+        });
+      }
+      fallbackCopy(text);
+    }
+
+    function fallbackCopy(text) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+    }
 
     async function loadStatus() {
       try {
@@ -230,11 +309,11 @@
       const privBtn = document.getElementById("mode-private-btn");
       const pubBtn = document.getElementById("mode-public-btn");
       if (currentPublishMode === "public") {
-        pubBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded bg-indigo-600 text-white shadow";
-        privBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded text-slate-400 hover:text-white";
+        pubBtn.className = "px-2 py-1 text-[11px] font-medium rounded bg-indigo-600 text-white shadow";
+        privBtn.className = "px-2 py-1 text-[11px] font-medium rounded text-slate-400 hover:text-white";
       } else {
-        privBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded bg-slate-700 text-white shadow";
-        pubBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded text-slate-400 hover:text-white";
+        privBtn.className = "px-2 py-1 text-[11px] font-medium rounded bg-slate-700 text-white shadow";
+        pubBtn.className = "px-2 py-1 text-[11px] font-medium rounded text-slate-400 hover:text-white";
       }
     }
 
@@ -246,6 +325,28 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ publish_mode: mode })
       });
+    }
+
+    function switchClipsTab(tab) {
+      activeTab = tab;
+      const readyBtn = document.getElementById("tab-ready-btn");
+      const approvedBtn = document.getElementById("tab-approved-btn");
+      const readyContainer = document.getElementById("clips-ready-container");
+      const approvedContainer = document.getElementById("clips-approved-container");
+
+      if (tab === "ready") {
+        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm";
+        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition";
+        readyContainer.classList.remove("hidden");
+        approvedContainer.classList.add("hidden");
+        renderReadyClips(cachedClipsData.ready);
+      } else {
+        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm";
+        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition";
+        readyContainer.classList.add("hidden");
+        approvedContainer.classList.remove("hidden");
+        renderApprovedClips(cachedClipsData.recent_approved);
+      }
     }
 
     async function fetchPipelineJobs() {
@@ -276,7 +377,6 @@
           const card = document.createElement("div");
           card.className = "surface-nested rounded p-3 space-y-2 border border-white/5";
 
-          // Status Badge styling
           let statusBadgeClass = "bg-slate-800 text-slate-300 border-slate-700";
           let statusLabel = job.status;
           if (job.status === "PROCESSING") {
@@ -294,18 +394,15 @@
             statusBadgeClass = "bg-rose-900 text-rose-200 border-rose-700";
           }
 
-          // Stage Progression Items
           const currentStageIdx = STAGES.indexOf(job.current_stage);
           const stageStepsHtml = STAGES.map((s, idx) => {
             let stepClass = "text-slate-600 border-slate-800 bg-black/20";
             let iconHtml = `<span class="w-3.5 h-3.5 flex items-center justify-center text-[9px] font-mono">${idx + 1}</span>`;
 
             if (idx < currentStageIdx) {
-              // Passed
               stepClass = "text-emerald-400 border-emerald-500/30 bg-emerald-950/30 font-medium";
               iconHtml = `<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`;
             } else if (idx === currentStageIdx) {
-              // Active
               stepClass = "text-indigo-300 border-indigo-500/50 bg-indigo-950/50 font-semibold shadow-sm";
               iconHtml = `<span class="w-1.5 h-1.5 rounded-full bg-indigo-400 pulse-indicator"></span>`;
             }
@@ -322,7 +419,7 @@
             <div class="flex items-center justify-between flex-wrap gap-2">
               <div class="flex items-center space-x-2">
                 <span class="font-mono text-xs text-white font-medium">${job.filename || job.chunk_id || job.id}</span>
-                ${job.duration ? `<span class="text-[10px] text-slate-400 font-mono">(${job.duration.toFixed(1)}s, ${job.aspect_ratio || 'auto'})</span>` : ''}
+                ${job.duration ? `<span class="text-[10px] text-slate-400 font-mono">(${job.duration.toFixed(1)}s, ${job.aspect_ratio || '9:16'})</span>` : ''}
               </div>
               <div class="flex items-center space-x-2">
                 ${job.worker_id ? `<span class="text-[10px] text-slate-500 font-mono hidden sm:inline">Worker: ${job.worker_id}</span>` : ''}
@@ -330,7 +427,6 @@
               </div>
             </div>
 
-            <!-- Stages visual sequence -->
             <div class="flex items-center space-x-1.5 overflow-x-auto py-1">
               ${stageStepsHtml}
             </div>
@@ -355,86 +451,157 @@
       try {
         const res = await fetch("/api/clips");
         const data = await res.json();
-        const container = document.getElementById("clips-container");
-        const emptyState = document.getElementById("empty-state");
+        cachedClipsData = data;
 
-        container.innerHTML = "";
-        if (!data.ready || data.ready.length === 0) {
-          emptyState.classList.remove("hidden");
-          return;
+        document.getElementById("tab-ready-count").innerText = (data.ready || []).length;
+        document.getElementById("tab-approved-count").innerText = (data.recent_approved || []).length;
+
+        if (activeTab === "ready") {
+          renderReadyClips(data.ready || []);
+        } else {
+          renderApprovedClips(data.recent_approved || []);
         }
-        emptyState.classList.add("hidden");
-
-        data.ready.forEach(clip => {
-          const card = document.createElement("div");
-          card.className = "surface rounded-lg overflow-hidden flex flex-col justify-between";
-          card.id = `clip-card-${clip.id}`;
-
-          const videoSrc = clip.video_url || "";
-          const thumbSrc = clip.thumbnail_url || "";
-
-          card.innerHTML = `
-            <div class="relative bg-black aspect-[9/16] max-h-[380px] w-full overflow-hidden flex items-center justify-center">
-              <video src="${videoSrc}" poster="${thumbSrc}" controls preload="metadata" class="w-full h-full object-contain"></video>
-              <div class="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur border border-white/10 text-[10px] font-mono text-emerald-400">
-                Score: ${clip.virality_score}/100
-              </div>
-            </div>
-
-            <div class="p-4 space-y-3 flex-1 flex flex-col justify-between">
-              <div class="space-y-2">
-                <div>
-                  <label class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Title (Roman Hinglish)</label>
-                  <input type="text" id="title-${clip.id}" value="${clip.title || ''}" class="w-full text-xs px-2.5 py-1.5 rounded surface-input text-white focus:outline-none focus:border-indigo-500">
-                </div>
-
-                <div>
-                  <label class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Hashtags</label>
-                  <input type="text" id="tags-${clip.id}" value="${clip.hashtags || ''}" class="w-full text-xs px-2.5 py-1.5 rounded surface-input text-slate-300 focus:outline-none focus:border-indigo-500">
-                </div>
-
-                <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-400 pt-1">
-                  <label class="flex items-center space-x-1.5 cursor-pointer">
-                    <input type="checkbox" checked id="yt-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                    <span>YouTube</span>
-                  </label>
-                  <label class="flex items-center space-x-1.5 cursor-pointer">
-                    <input type="checkbox" checked id="ig-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                    <span>Instagram</span>
-                  </label>
-                  <label class="flex items-center space-x-1.5 cursor-pointer">
-                    <input type="checkbox" checked id="li-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                    <span>LinkedIn</span>
-                  </label>
-                  <label class="flex items-center space-x-1.5 cursor-pointer">
-                    <input type="checkbox" checked id="x-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                    <span>X (Twitter)</span>
-                  </label>
-                </div>
-              </div>
-
-              <!-- Action Buttons -->
-              <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
-                <button onclick="approveClip('${clip.id}')" class="h-10 text-xs font-semibold rounded bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white transition flex items-center justify-center space-x-1">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-                  </svg>
-                  <span>Approve</span>
-                </button>
-                <button onclick="rejectClip('${clip.id}')" class="h-10 text-xs font-semibold rounded bg-rose-600/20 hover:bg-rose-600/30 active:scale-95 text-rose-300 border border-rose-500/30 transition flex items-center justify-center space-x-1">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-                  </svg>
-                  <span>Reject</span>
-                </button>
-              </div>
-            </div>
-          `;
-          container.appendChild(card);
-        });
       } catch (e) {
         console.error("Fetch clips error", e);
       }
+    }
+
+    function renderReadyClips(clips) {
+      const container = document.getElementById("clips-ready-container");
+      const emptyState = document.getElementById("empty-state");
+      container.innerHTML = "";
+
+      if (!clips || clips.length === 0) {
+        emptyState.classList.remove("hidden");
+        document.getElementById("empty-state-title").innerText = "No clips pending review";
+        document.getElementById("empty-state-desc").innerText = "When your phone completes recording and syncs to your PC, Dispatch automatically cuts and subtitles candidates here.";
+        return;
+      }
+      emptyState.classList.add("hidden");
+
+      clips.forEach(clip => {
+        const card = document.createElement("div");
+        card.className = "surface rounded-lg overflow-hidden flex flex-col justify-between";
+        card.id = `clip-card-${clip.id}`;
+
+        const videoSrc = clip.video_url || "";
+        const thumbSrc = clip.thumbnail_url || "";
+
+        card.innerHTML = `
+          <div class="relative bg-black aspect-[9/16] max-h-[380px] w-full overflow-hidden flex items-center justify-center">
+            <video src="${videoSrc}" poster="${thumbSrc}" controls preload="metadata" class="w-full h-full object-contain"></video>
+            <div class="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-white/10 text-[10px] font-mono text-emerald-400">
+              Score: ${clip.virality_score || 0}/100
+            </div>
+          </div>
+
+          <div class="p-4 space-y-3 flex-1 flex flex-col justify-between">
+            <div class="space-y-2">
+              <div>
+                <label class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Title (Roman Hinglish)</label>
+                <input type="text" id="title-${clip.id}" value="${(clip.title || '').replace(/"/g, '&quot;')}" class="w-full text-xs px-2.5 py-1.5 rounded surface-input text-white focus:outline-none focus:border-indigo-500">
+              </div>
+
+              <div>
+                <label class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Hashtags</label>
+                <input type="text" id="tags-${clip.id}" value="${(clip.hashtags || '').replace(/"/g, '&quot;')}" class="w-full text-xs px-2.5 py-1.5 rounded surface-input text-slate-300 focus:outline-none focus:border-indigo-500">
+              </div>
+
+              <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-400 pt-1">
+                <label class="flex items-center space-x-1.5 cursor-pointer">
+                  <input type="checkbox" checked id="yt-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>YouTube</span>
+                </label>
+                <label class="flex items-center space-x-1.5 cursor-pointer">
+                  <input type="checkbox" checked id="ig-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>Instagram</span>
+                </label>
+                <label class="flex items-center space-x-1.5 cursor-pointer">
+                  <input type="checkbox" checked id="li-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>LinkedIn</span>
+                </label>
+                <label class="flex items-center space-x-1.5 cursor-pointer">
+                  <input type="checkbox" checked id="x-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>X (Twitter)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+              <button onclick="approveClip('${clip.id}')" class="h-10 text-xs font-semibold rounded bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white transition flex items-center justify-center space-x-1">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span>Approve</span>
+              </button>
+              <button onclick="rejectClip('${clip.id}')" class="h-10 text-xs font-semibold rounded bg-rose-600/20 hover:bg-rose-600/30 active:scale-95 text-rose-300 border border-rose-500/30 transition flex items-center justify-center space-x-1">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                <span>Reject</span>
+              </button>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function renderApprovedClips(clips) {
+      const container = document.getElementById("clips-approved-container");
+      const emptyState = document.getElementById("empty-state");
+      container.innerHTML = "";
+
+      if (!clips || clips.length === 0) {
+        emptyState.classList.remove("hidden");
+        document.getElementById("empty-state-title").innerText = "No approved or published clips yet";
+        document.getElementById("empty-state-desc").innerText = "When you approve clips from the review queue, they will appear here with live publishing tracking.";
+        return;
+      }
+      emptyState.classList.add("hidden");
+
+      clips.forEach(clip => {
+        const card = document.createElement("div");
+        card.className = "surface rounded-lg overflow-hidden flex flex-col justify-between";
+        card.id = `approved-clip-${clip.id}`;
+
+        const videoSrc = clip.video_url || "";
+        const thumbSrc = clip.thumbnail_url || "";
+        const isPublished = clip.status === "published";
+
+        const statusPill = isPublished 
+          ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">PUBLISHED</span>`
+          : `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-500/30">APPROVED • QUEUED</span>`;
+
+        card.innerHTML = `
+          <div class="relative bg-black aspect-[9/16] max-h-[380px] w-full overflow-hidden flex items-center justify-center">
+            <video src="${videoSrc}" poster="${thumbSrc}" controls preload="metadata" class="w-full h-full object-contain"></video>
+            <div class="absolute top-2 right-2">
+              ${statusPill}
+            </div>
+          </div>
+
+          <div class="p-4 space-y-3 flex-1 flex flex-col justify-between">
+            <div class="space-y-2">
+              <div>
+                <h4 class="text-xs font-semibold text-white leading-snug line-clamp-2">${clip.title || 'Untitled Clip'}</h4>
+                <p class="text-[11px] font-mono text-indigo-400 mt-1">${clip.hashtags || ''}</p>
+              </div>
+
+              <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-2 border-t border-white/5">
+                <span>Virality: ${clip.virality_score || 0}/100</span>
+                <span>${clip.platforms || 'youtube,instagram'}</span>
+              </div>
+            </div>
+
+            <div class="pt-2 text-[10px] font-mono text-slate-500 text-right">
+              ID: ${clip.id}
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
     }
 
     async function approveClip(clipId) {
@@ -466,7 +633,7 @@
           })
         });
         if (card) card.remove();
-        loadStatus();
+        fetchClips();
       } catch (e) {
         alert("Approve failed: " + e);
         if (card) card.style.opacity = "1";
@@ -484,7 +651,7 @@
           body: JSON.stringify({ reason: "User tapped reject" })
         });
         if (card) card.remove();
-        loadStatus();
+        fetchClips();
       } catch (e) {
         alert("Reject failed: " + e);
         if (card) card.style.opacity = "1";
@@ -525,11 +692,10 @@
 
     function copyField(elementId) {
       const el = document.getElementById(elementId);
-      navigator.clipboard.writeText(el.value);
-      const originalVal = el.value;
-      const prevBorder = el.style.borderColor;
+      safeCopyText(el.value);
+      const originalBorder = el.style.borderColor;
       el.style.borderColor = "#10B981";
-      setTimeout(() => { el.style.borderColor = prevBorder; }, 1200);
+      setTimeout(() => { el.style.borderColor = originalBorder; }, 1200);
     }
 
     // Auto-refresh loops

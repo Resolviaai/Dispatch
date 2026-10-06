@@ -42,3 +42,12 @@ client_secrets.json
 Thumbs.db
 [Dd]esktop.ini
 .DS_Store
+
+# Android build outputs & caches
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+storage/quarantine/*
+!storage/quarantine/.gitkeep
+

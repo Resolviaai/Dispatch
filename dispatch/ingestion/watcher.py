@@ -10,6 +10,7 @@ from typing import Callable, Optional, List, Dict, Any
 from dispatch.config import (
     INCOMING_DIR,
     PROCESSING_DIR,
+    QUARANTINE_DIR,
     ALLOWED_VIDEO_EXTENSIONS,
     FILE_STABILIZE_SECONDS,
 )
@@ -48,7 +49,12 @@ def process_incoming_file(filepath: Path, session_id: Optional[str] = None) -> O
     # 2. Probe with ffprobe
     is_valid, metadata, error = probe_video(filepath)
     if not is_valid:
-        logger.error("Invalid video %s: %s", filepath.name, error)
+        logger.error("Invalid video %s: %s. Quarantining file.", filepath.name, error)
+        try:
+            quarantine_path = QUARANTINE_DIR / filepath.name
+            shutil.move(str(filepath), str(quarantine_path))
+        except Exception as q_err:
+            logger.warning("Could not quarantine %s: %s", filepath.name, q_err)
         return None
 
     # 3. Calculate hash

@@ -270,3 +270,27 @@
    - Purged legacy references to Syncthing / LAN sync folders in `README.md`.
    - Updated architecture diagrams to reflect 4-platform publishing (YouTube, Instagram, LinkedIn, X).
    - Verified 23/23 tests pass across full suite.
+
+---
+
+### [2026-10-06] Web & Mobile UI Overhaul and Direct APK Distribution
+1. **Android APK Compilation (`Dispatch-POCO-C65-v1.apk`)**:
+   - Configured `android/gradle.properties` (`android.useAndroidX=true`, `android.nonTransitiveRClass=true`).
+   - Compiled debug APK via `./gradlew.bat assembleDebug`: **BUILD SUCCESSFUL**. Output binary: `android/app/build/outputs/apk/debug/app-debug.apk` (10.8 MB).
+   - Added `/download/dispatch.apk` endpoint in `dispatch/web/app.py` serving `Dispatch-POCO-C65-v1.apk` directly over LAN with correct MIME type.
+2. **Mobile Web UI Bug Fixes & Resilient UX (`mobile_recorder.html`)**:
+   - **Concurrency Guard**: Added `isSyncing` mutex in background sync worker preventing duplicate parallel upload races on the same segment.
+   - **Durable Outbox Drawer**: Added expandable outbox view showing all queued segments, individual sizes, SHA-256 prefixes, and a manual "Sync Now" trigger.
+   - **Insecure Context Graceful Handling**: Handled Chrome Android HTTP restriction (`getUserMedia` unavailable over plain LAN HTTP). Added one-tap native camera picker fallback `<input type="file" capture="environment">`, live capture preview card, and direct links to download native APK or configure Chrome flags.
+   - **Hardware Controls**: Added Flip Camera (front/back camera toggle) and Screen WakeLock (`navigator.wakeLock.request('screen')`) preventing phone screen sleep during continuous recording sessions.
+   - **Safe Clipboard Copy**: Added safe fallback with `document.execCommand('copy')` so copy buttons never throw exceptions on plain HTTP origins.
+   - **Mobile Navigation**: Added top-bar tabs for quick switching between Mobile Camera, Review Clips (`/`), and APK download.
+3. **Web Dashboard Improvements (`index.html`)**:
+   - **Review & Approved Tabs**: Added "Awaiting Approval" and "Approved & Published" view tabs with dynamic counter badges. Displays past approved clips with publication status, virality score, platforms, and timestamp.
+   - **Prominent APK Download Button**: Added direct "Download APK" action in the header and within Step 1 of the Device Pairing Modal.
+   - **Mobile Responsiveness**: Cleaned up header wrapping and controls for narrow smartphone displays.
+4. **Storage & Ingestion Hardening**:
+   - Added `QUARANTINE_DIR` (`storage/quarantine/`) in `dispatch/config.py`.
+   - Updated `watcher.py` to automatically quarantine corrupted or invalid video files after stabilization checks, eliminating infinite re-probe loops.
+   - Verified all 23/23 tests pass with 100% success rate.
+

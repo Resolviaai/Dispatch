@@ -72,6 +72,22 @@ async def get_mobile_recorder():
     return HTMLResponse("<h1>Mobile recorder template not found</h1>", status_code=404)
 
 
+@app.get("/download/dispatch.apk")
+async def download_android_apk():
+    """Download the native Dispatch Android APK compiled for POCO C65."""
+    apk_path = ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    if not apk_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Android APK is currently compiling. Please retry in a few seconds."
+        )
+    return FileResponse(
+        str(apk_path),
+        media_type="application/vnd.android.package-archive",
+        filename="Dispatch-POCO-C65-v1.apk"
+    )
+
+
 @app.get("/api/pipeline/jobs")
 async def get_pipeline_jobs():
     """Return live checkpointed jobs with current stage, status, leases, and retry timers."""
