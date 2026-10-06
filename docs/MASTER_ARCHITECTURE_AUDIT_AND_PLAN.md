@@ -154,14 +154,23 @@ PHASE 1 (COMPLETED & PUSHED)
   [x] Direct pipeline staging in receiver.py (eliminate polling delay)
   [x] Clean Gradle build (10.9 MB debug APK) & Git push to main (commit d26b5fc)
 
-PHASE 2 (CURRENT - VERIFICATION)
-  [ ] Deploy updated APK to POCO C65 via browser download (http://192.168.0.101:8000/download/dispatch.apk)
-  [ ] Verify live sync: upload the existing 134 MB clip and observe the progress bar
-  [ ] Confirm pipeline execution: Whisper transcription -> Gemini hook extraction -> FFmpeg render
-  [ ] Verify candidate clip appears in the PC Web Dashboard (http://localhost:8000)
+PHASE 2: RELIABILITY BOUNDARY & CRITICAL HARDENING (COMPLETED & PUSHED)
+  [x] Background Heartbeat Architecture: HeartbeatThread in dispatch/orchestrator/heartbeat.py pings every 15s to renew 300s lease
+  [x] Atomic Job Claim: Replaced select+update race with single atomic `UPDATE ... RETURNING *` in SQLite
+  [x] Deduplication: enqueue_job(chunk_id) checks for active jobs before creating duplicates
+  [x] Watcher Deduplication: watcher.py checks database before staging incoming files
+  [x] SQLite WAL & Pragmas: Added WAL, busy_timeout=30000, synchronous=NORMAL, and index coverage
+  [x] Receiver Security & Sanitization: Regex validation on segment_id, removed leaked YouTube OAuth secrets from pairing config
+  [x] Media Retention: check_and_finalize_clip preserves clip videos; never unlinks published creator files
+  [x] Mobile WorkManager Policy: Changed REPLACE to KEEP policy to preserve in-flight outbox uploads
+  [x] Mobile Hardware Error Handling: Wired CameraX onError callbacks to prevent silent recording failure
+  [x] Server Proof-of-Receipt Verification: ResumableSyncWorker and LiveSyncManager call /verify-chunk before deleting local segments
+  [x] Room Offset Durability: Persisted remoteOffset to SQLite outbox table during resumable chunk upload
+  [x] All 29 unit and destructive chaos tests passing (Ran in 8.25s)
 
-PHASE 3 (PRODUCTION POLISH)
-  [ ] Implement mDNS / SSDP broadcast so mobile app auto-discovers PC IP without manual entry
-  [ ] Add WebSocket real-time progress push from PC pipeline to Web Dashboard
-  [ ] Configure YouTube Data API v3 OAuth token refresh for one-click publishing
+PHASE 3: USER DEPLOYMENT & TESTING (READY NOW)
+  [ ] User installs updated APK on POCO C65 via browser (http://192.168.0.101:8000/download/dispatch.apk)
+  [ ] Record a 2-minute test segment and observe auto-sync to PC
+  [ ] Verify pipeline execution: Whisper (beam=1, threads=4) -> Gemini analysis -> FFmpeg 9:16 vertical render
+  [ ] Review generated clip in PC Dashboard (http://localhost:8000)
 ```
