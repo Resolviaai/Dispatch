@@ -82,22 +82,31 @@ def pipeline_worker_loop():
     """Autonomous background worker executing checkpointed stages and outbox publishing."""
     logger.info("Dispatch Background Checkpointed Pipeline Worker started")
     worker_id = "laptop_worker_01"
+    last_watchdog_time = time.time()
 
     while True:
         try:
-            # 1. Ingestion: scan incoming folder for newly arrived phone sync files
+            # 1. Watchdog: Periodically reclaim stale/zombie worker leases
+            now = time.time()
+            if now - last_watchdog_time > 45.0:
+                last_watchdog_time = now
+                recovery_res = recover_laptop_orchestrator()
+                if recovery_res.get("reclaimed_jobs"):
+                    logger.warning("Watchdog reclaimed %d stalled jobs with expired leases", len(recovery_res["reclaimed_jobs"]))
+
+            # 2. Ingestion: scan incoming folder for newly arrived phone sync files
             staged_chunks = scan_incoming()
             for chunk in staged_chunks:
                 enqueue_job(chunk_id=chunk["chunk_id"], session_id=chunk.get("session_id"))
 
-            # 2. Orchestration: claim and execute the next checkpointed job stage
+            # 3. Orchestration: claim and execute the next checkpointed job stage
             job = claim_job(worker_id=worker_id, lease_duration_seconds=60)
             if job:
                 stage_runner.process_job_step(job, worker_id)
                 time.sleep(0.5)
                 continue
 
-            # 3. Publishing Outbox: process queued social uploads
+            # 4. Publishing Outbox: process queued social uploads
             process_outbox_queue()
 
         except Exception as e:

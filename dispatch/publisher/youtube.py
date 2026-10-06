@@ -35,7 +35,8 @@ def upload_youtube_short(
     if "#Shorts" not in title and "#shorts" not in title:
         title = f"{title} #Shorts"
 
-    tag_list = [t.strip().lstrip("#") for t in tags.replace(",", " ").split() if t.strip()]
+    safe_tags = tags or ""
+    tag_list = [t.strip().lstrip("#") for t in safe_tags.replace(",", " ").split() if t.strip()]
 
     # Check for credentials
     token_file = credentials_path or Path("youtube_token.json")

@@ -238,19 +238,32 @@ Dispatch includes a hardware-aware **Resource Governor** (`dispatch/governor/`) 
 
 ### Instagram Reels
 - Set `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_USER_ID` in your `.env` file.
-- When credentials are not yet configured, Dispatch operates in simulation mode, tracking states in SQLite without crashing.
+- Resumable container video streaming with automatic status polling.
+
+### LinkedIn Video
+- Set `LINKEDIN_ACCESS_TOKEN` and `LINKEDIN_AUTHOR_URN` in your `.env` file.
+- Supports LinkedIn UGC API registered video uploads with custom commentary.
+
+### X (formerly Twitter)
+- Set `X_BEARER_TOKEN` or `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` in `.env`.
+- Supports chunked media uploads and status tweets with hashtags.
+
+*Note: In absence of credentials, adapters run in transparent simulation mode, logging actions and recording state in SQLite without pipeline disruption.*
 
 ---
 
-## 11. Running Automated Chaos & Failure Tests
+## 11. Automated Verification & Destructive Chaos Tests
 
-Run the comprehensive test suite validating all 25 mission-critical failure scenarios (network drops, phone battery death, laptop power cuts, API 429 timeouts, disk full, lease recoveries):
+Run the full suite validating all 25 mission-critical failure scenarios and destructive edge cases (abrupt SIGKILL, corrupt chunk quarantine, multi-worker CAS collision, lease fencing tokens, 4-platform idempotency, database hot backups):
 
 ```powershell
-# Run all tests across the suite
+# Run entire test suite (23 unit, integration, and chaos tests)
 python -m unittest discover tests
 
-# Run specific chaos and resilience test
+# Run destructive high-concurrency and crash recovery tests
+python -m unittest tests/test_destructive.py
+
+# Run network, battery, and AI failover chaos tests
 python -m unittest tests/test_chaos.py
 ```
 

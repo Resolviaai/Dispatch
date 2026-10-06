@@ -21,7 +21,8 @@ from dispatch.orchestrator.state_machine import PipelineStage, JobStatus
 from dispatch.orchestrator.job_queue import (
     complete_stage_checkpoint,
     fail_stage_job,
-    renew_heartbeat
+    renew_heartbeat,
+    LeaseLostError
 )
 from dispatch.orchestrator.retry_engine import RetryEngine
 from dispatch.governor.resource_governor import ResourceGovernor
@@ -91,10 +92,14 @@ class PipelineStageRunner:
                 logger.warning("Unknown stage %s for job %s", current_stage, job_id)
                 return False
 
-            # Checkpoint stage completion
-            complete_stage_checkpoint(job_id, current_stage)
+            # Checkpoint stage completion with fencing lease check
+            complete_stage_checkpoint(job_id, current_stage, worker_id=worker_id)
             return True
 
+        except LeaseLostError as le:
+            logger.warning("Fencing lease lost for job %s at stage %s: %s. Safely abandoning step.",
+                           job_id, current_stage.value, le)
+            return False
         except Exception as e:
             logger.exception("Error processing stage %s for job %s: %s", current_stage.value, job_id, e)
             target_status, is_permanent, reason = self.retry_engine.classify_error(e)

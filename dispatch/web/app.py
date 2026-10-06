@@ -145,7 +145,8 @@ async def handle_approve_clip(clip_id: str, payload: ApproveRequest):
         clip_id=clip_id,
         custom_title=payload.title,
         custom_tags=payload.hashtags,
-        custom_mode=payload.publish_mode
+        custom_mode=payload.publish_mode,
+        custom_platforms=payload.platforms
     )
     return {"status": "success", "message": f"Clip {clip_id} approved"}
 

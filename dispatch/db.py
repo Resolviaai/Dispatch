@@ -7,7 +7,49 @@ import uuid
 import contextlib
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from dispatch.config import DB_PATH, DEFAULT_PUBLISH_MODE
+from pathlib import Path
+from dispatch.config import DB_PATH, DATABASE_DIR, DEFAULT_PUBLISH_MODE
+
+CURRENT_SCHEMA_VERSION = 2
+
+
+def verify_db_integrity() -> bool:
+    """Run PRAGMA integrity_check to verify SQLite database health."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA integrity_check;")
+        res = cursor.fetchone()
+        return res[0] == "ok" if res else False
+
+
+def backup_database(backup_dir: Optional[Path] = None) -> Path:
+    """Create a non-blocking hot SQLite snapshot backup using sqlite3.Connection.backup().
+    Preserves rolling 5 latest snapshots.
+    """
+    target_dir = backup_dir or (DATABASE_DIR / "backups")
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = target_dir / f"dispatch_backup_{timestamp}.db"
+
+    source_conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+    dest_conn = sqlite3.connect(str(backup_file))
+    try:
+        source_conn.backup(dest_conn)
+    finally:
+        dest_conn.close()
+        source_conn.close()
+
+    # Retention: keep latest 5 backups
+    existing_backups = sorted(target_dir.glob("dispatch_backup_*.db"), key=lambda p: p.stat().st_mtime)
+    while len(existing_backups) > 5:
+        oldest = existing_backups.pop(0)
+        try:
+            oldest.unlink()
+        except Exception:
+            pass
+
+    return backup_file
 
 
 @contextlib.contextmanager
@@ -28,9 +70,14 @@ def get_db_connection():
 
 
 def init_db():
-    """Initialize database tables and initial settings."""
+    """Initialize database tables, migrations, and initial settings."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+
+        # Check and update schema version
+        cursor.execute("PRAGMA user_version;")
+        user_ver_row = cursor.fetchone()
+        user_ver = user_ver_row[0] if user_ver_row else 0
 
         # Sessions Table
         cursor.execute("""
@@ -296,7 +343,13 @@ def update_clip_media(clip_id: str, video_path: str, thumbnail_path: str):
         conn.commit()
 
 
-def approve_clip(clip_id: str, custom_title: Optional[str] = None, custom_tags: Optional[str] = None, custom_mode: Optional[str] = None):
+def approve_clip(
+    clip_id: str,
+    custom_title: Optional[str] = None,
+    custom_tags: Optional[str] = None,
+    custom_mode: Optional[str] = None,
+    custom_platforms: Optional[str] = None
+):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
@@ -307,15 +360,16 @@ def approve_clip(clip_id: str, custom_title: Optional[str] = None, custom_tags: 
         title = custom_title if custom_title is not None else clip["title"]
         hashtags = custom_tags if custom_tags is not None else clip["hashtags"]
         publish_mode = custom_mode if custom_mode is not None else clip["publish_mode"]
+        target_platforms = custom_platforms if custom_platforms is not None else (clip["platform_targets"] or "youtube,instagram")
 
         cursor.execute("""
             UPDATE clips 
-            SET status = 'approved', title = ?, hashtags = ?, publish_mode = ?, approved_at = CURRENT_TIMESTAMP
+            SET status = 'approved', title = ?, hashtags = ?, publish_mode = ?, platform_targets = ?, approved_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (title, hashtags, publish_mode, clip_id))
+        """, (title, hashtags, publish_mode, target_platforms, clip_id))
 
         # Enqueue to publishing outbox for each selected platform
-        platforms = [p.strip() for p in (clip["platform_targets"] or "youtube,instagram").split(",") if p.strip()]
+        platforms = [p.strip() for p in target_platforms.split(",") if p.strip()]
         for plat in platforms:
             idempotency_key = f"{clip_id}_{plat}"
             cursor.execute("""

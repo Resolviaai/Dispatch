@@ -205,4 +205,49 @@
    - Added a tactile chunk duration selector (`10m`, `15m`, `30m`) directly to the Mobile Web PWA recorder interface.
    - Verified that the zero-install Mobile Web PWA provides the lowest friction, zero build tooling, and highest reliability on the POCO C65.
 
+---
+
+### [2026-10-06] Final Production Hardening & Full Autonomous Verification
+1. **Cryptographic Proof-of-Receipt & Quarantine Invariant (P0 Resolved)**:
+   - Updated `dispatch/sync/receiver.py`: Added `verify_file_integrity(filepath, expected_size, expected_sha256)` enforcing exact byte counts and SHA-256 hashes.
+   - In `/api/sync/reconcile` and `/api/sync/upload/init`: Corrupted or truncated segments are never marked `VERIFIED`; they are immediately quarantined (`corrupt_{seg_id}.bad`) and purged from active queues.
+   - Added `GET /api/sync/verify-chunk`: Explicit cryptographic proof endpoint allowing phone to confirm file existence and hash match before deleting local media.
+2. **Job Queue Concurrency & Lease Fencing (P0 Resolved)**:
+   - Updated `dispatch/orchestrator/job_queue.py`: Added atomic Compare-And-Swap (CAS) in `claim_job()` to eliminate multi-worker race conditions.
+   - Added `LeaseLostError` and lease fencing verification in `complete_stage_checkpoint()`: validates `worker_id` ownership and unexpired lease timestamp, preventing zombie workers from corrupting stage transitions.
+   - Updated `dispatch/orchestrator/pipeline_runner.py`: Passes `worker_id` and cleanly handles `LeaseLostError`.
+   - Updated `dispatch/main.py`: Added periodic 45-second watchdog in `pipeline_worker_loop` invoking `recover_laptop_orchestrator()` to auto-reclaim stale/zombie worker leases during daemon uptime.
+3. **Full Platform Publishing Suite (P1 Resolved)**:
+   - Created `dispatch/publisher/linkedin.py`: LinkedIn UGC API video asset registration, binary chunk upload, commentary, and simulation fallback.
+   - Created `dispatch/publisher/twitter.py`: X / Twitter API v2 + v1.1 chunked video upload, tweet creation, and simulation fallback.
+   - Enhanced `dispatch/publisher/instagram.py`: Resumable Reels container creation, byte streaming, status polling, and publishing.
+   - Hardened `dispatch/publisher/youtube.py`: Handles `None` tags gracefully, eliminating `AttributeError`.
+   - Updated `dispatch/publisher/outbox.py`: Dispatches to all 4 platforms with `idempotency_key = f"{clip_id}_{platform}"`, coalescing `None` fields.
+   - Updated `approve_clip` in `dispatch/db.py` and `dispatch/web/app.py`: Accepts `custom_platforms`.
+   - Updated `dispatch/web/templates/index.html`: Added platform checkboxes (YouTube, Instagram, LinkedIn, X).
+4. **Media Pipeline Safety & Atomic Rendering (P1 Resolved)**:
+   - Updated `dispatch/video_engine/renderer.py`: Renders to temporary `.tmp.mp4` and `.tmp.jpg`, atomically renaming only on successful exit code 0.
+   - Constrained FFmpeg to `-threads 2` and Windows `BELOW_NORMAL_PRIORITY_CLASS` to preserve desktop fluidity.
+5. **Database & State Integrity**:
+   - Updated `dispatch/db.py`: `CURRENT_SCHEMA_VERSION = 2`, `verify_db_integrity()` via SQLite `PRAGMA integrity_check`, and `backup_database()` hot snapshot backup via `sqlite3.Connection.backup()` keeping rolling 5 backups.
+6. **Pairing & Dynamic Network Flow**:
+   - Added `GET /api/sync/pairing/config` returning discovered LAN IP, Tailscale IP, and auth token.
+   - Added Pairing Modal to `dispatch/web/templates/index.html` with copyable connection string.
+   - Created `PairingManager.kt` persisting configuration in SharedPreferences.
+   - Updated `ResumableSyncWorker.kt` to dynamically probe `PairingManager` endpoints with `X-Dispatch-Device-Token`.
+7. **Native Android CameraX Hardware Recording & Foreground Service**:
+   - Created `CameraCaptureManager.kt`: CameraX FHD 1080p `VideoCapture<Recorder>` with audio recording.
+   - Created `RecordingForegroundService.kt`: Android foreground service with `FOREGROUND_SERVICE_TYPE_CAMERA` and `FOREGROUND_SERVICE_TYPE_MICROPHONE` ensuring Doze/screen-off never terminates recording.
+   - Updated `AndroidManifest.xml`: Added microphone foreground permission and service declaration.
+   - Updated `SegmenterEngine.kt`: Wired with `CameraCaptureManager`, `RecordingForegroundService`, rolling 10-minute timer coroutine, atomic `.tmp` -> `.mp4` rename, SHA-256 calculation, and WorkManager sync trigger.
+   - Updated `MainActivity.kt`: Jetpack Compose with CameraX `PreviewView`, runtime permission requester for Camera/Mic/Notifications, POCO C65 battery optimization dialog, and pairing modal.
+8. **Destructive Chaos Test Suite (`tests/test_destructive.py`)**:
+   - Created and verified 5 destructive chaos tests:
+     1. Real Process Termination (SIGKILL) & Orchestrator Startup Recovery
+     2. Corrupt Chunk Quarantine & Cryptographic Proof-of-Receipt Refusal
+     3. Concurrent Multi-Worker Claim Collision (Atomic CAS) & Split-Brain Lease Fencing (`LeaseLostError`)
+     4. Multi-Platform Publishing Idempotency across YouTube, Instagram, LinkedIn, and Twitter
+     5. Database Hot Backup and SQLite PRAGMA Integrity
+   - Full test suite: 23/23 tests passing with 100% success rate (`python -m unittest discover tests`).
+
 

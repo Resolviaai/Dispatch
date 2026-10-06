@@ -35,6 +35,13 @@
 
     <!-- Quick Stats & Settings -->
     <div class="flex items-center space-x-3 text-xs">
+      <button onclick="openPairingModal()" class="flex items-center space-x-1.5 px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
+        <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+        </svg>
+        <span>Pair Phone</span>
+      </button>
+
       <a href="/mobile" target="_blank" class="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
         <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
@@ -135,6 +142,66 @@
       </svg>
       <h3 class="text-sm font-medium text-slate-200">No clips pending review</h3>
       <p class="text-xs text-slate-400 mt-1 max-w-sm mx-auto">When your phone completes recording and syncs to your PC, Dispatch automatically cuts and subtitles candidates here.</p>
+    </div>
+
+    <!-- Device Pairing Modal -->
+    <div id="pairing-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="surface rounded-xl max-w-md w-full p-6 space-y-4 border border-white/10 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-white/10 pb-3">
+          <div class="flex items-center space-x-2">
+            <div class="w-2.5 h-2.5 rounded-full bg-indigo-500"></div>
+            <h3 class="text-sm font-semibold uppercase tracking-wider text-white">Pair Phone With Laptop</h3>
+          </div>
+          <button onclick="closePairingModal()" class="text-slate-400 hover:text-white p-1 rounded">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <p class="text-xs text-slate-300 leading-relaxed">
+          Configure your POCO C65 once. The phone securely memorizes both routes and syncs automatically in the background.
+        </p>
+
+        <div class="space-y-3 text-xs">
+          <div>
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Local LAN Endpoint (Home Wi-Fi)</label>
+            <div class="flex items-center space-x-2">
+              <input type="text" id="pair-lan" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded surface-input text-emerald-300">
+              <button onclick="copyField('pair-lan')" class="px-2.5 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Tailscale Remote Endpoint (Outside Home)</label>
+            <div class="flex items-center space-x-2">
+              <input type="text" id="pair-tailscale" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded surface-input text-indigo-300" placeholder="Tailscale not detected on laptop">
+              <button onclick="copyField('pair-tailscale')" class="px-2.5 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Device Auth Secret Token</label>
+            <div class="flex items-center space-x-2">
+              <input type="password" id="pair-token" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded surface-input text-amber-300">
+              <button onclick="toggleTokenVisibility()" id="btn-show-token" class="px-2 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Show</button>
+              <button onclick="copyField('pair-token')" class="px-2.5 py-1.5 rounded surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
+            </div>
+          </div>
+
+          <div class="pt-2 border-t border-white/5">
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">1-Click Pairing URI (Paste into Phone)</label>
+            <div class="flex items-center space-x-2">
+              <input type="text" id="pair-uri" readonly class="w-full text-[11px] font-mono px-2.5 py-1.5 rounded surface-input text-white">
+              <button onclick="copyField('pair-uri')" class="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] shadow">Copy All</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2 flex justify-end">
+          <button onclick="closePairingModal()" class="px-4 py-2 text-xs font-medium rounded surface hover:bg-white/[0.08] text-slate-300">
+            Done
+          </button>
+        </div>
+      </div>
     </div>
 
   </main>
@@ -326,14 +393,22 @@
                   <input type="text" id="tags-${clip.id}" value="${clip.hashtags || ''}" class="w-full text-xs px-2.5 py-1.5 rounded surface-input text-slate-300 focus:outline-none focus:border-indigo-500">
                 </div>
 
-                <div class="flex items-center space-x-3 text-[11px] text-slate-400 pt-1">
+                <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-400 pt-1">
                   <label class="flex items-center space-x-1.5 cursor-pointer">
                     <input type="checkbox" checked id="yt-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                    <span>YouTube Shorts</span>
+                    <span>YouTube</span>
                   </label>
                   <label class="flex items-center space-x-1.5 cursor-pointer">
                     <input type="checkbox" checked id="ig-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
-                    <span>Instagram Reels</span>
+                    <span>Instagram</span>
+                  </label>
+                  <label class="flex items-center space-x-1.5 cursor-pointer">
+                    <input type="checkbox" checked id="li-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                    <span>LinkedIn</span>
+                  </label>
+                  <label class="flex items-center space-x-1.5 cursor-pointer">
+                    <input type="checkbox" checked id="x-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                    <span>X (Twitter)</span>
                   </label>
                 </div>
               </div>
@@ -365,12 +440,16 @@
     async function approveClip(clipId) {
       const title = document.getElementById(`title-${clipId}`).value;
       const tags = document.getElementById(`tags-${clipId}`).value;
-      const yt = document.getElementById(`yt-${clipId}`).checked;
-      const ig = document.getElementById(`ig-${clipId}`).checked;
+      const yt = document.getElementById(`yt-${clipId}`)?.checked;
+      const ig = document.getElementById(`ig-${clipId}`)?.checked;
+      const li = document.getElementById(`li-${clipId}`)?.checked;
+      const x = document.getElementById(`x-${clipId}`)?.checked;
 
       const platforms = [];
       if (yt) platforms.push("youtube");
       if (ig) platforms.push("instagram");
+      if (li) platforms.push("linkedin");
+      if (x) platforms.push("x");
 
       const card = document.getElementById(`clip-card-${clipId}`);
       if (card) card.style.opacity = "0.4";
@@ -410,6 +489,47 @@
         alert("Reject failed: " + e);
         if (card) card.style.opacity = "1";
       }
+    }
+
+    // Pairing Modal Functions
+    async function openPairingModal() {
+      const modal = document.getElementById("pairing-modal");
+      modal.classList.remove("hidden");
+      try {
+        const res = await fetch("/api/sync/pairing/config");
+        const data = await res.json();
+        document.getElementById("pair-lan").value = data.lan_url;
+        document.getElementById("pair-tailscale").value = data.tailscale_url || "Tailscale IP not active";
+        document.getElementById("pair-token").value = data.auth_token;
+        document.getElementById("pair-uri").value = data.connection_string;
+      } catch (e) {
+        console.error("Failed to load pairing config", e);
+      }
+    }
+
+    function closePairingModal() {
+      document.getElementById("pairing-modal").classList.add("hidden");
+    }
+
+    function toggleTokenVisibility() {
+      const input = document.getElementById("pair-token");
+      const btn = document.getElementById("btn-show-token");
+      if (input.type === "password") {
+        input.type = "text";
+        btn.innerText = "Hide";
+      } else {
+        input.type = "password";
+        btn.innerText = "Show";
+      }
+    }
+
+    function copyField(elementId) {
+      const el = document.getElementById(elementId);
+      navigator.clipboard.writeText(el.value);
+      const originalVal = el.value;
+      const prevBorder = el.style.borderColor;
+      el.style.borderColor = "#10B981";
+      setTimeout(() => { el.style.borderColor = prevBorder; }, 1200);
     }
 
     // Auto-refresh loops

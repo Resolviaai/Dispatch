@@ -13,6 +13,7 @@ storage/clips/*
 storage/database/*.db
 storage/database/*.db-wal
 storage/database/*.db-shm
+storage/database/backups/
 !storage/database/.gitkeep
 storage/mobile/*
 !storage/mobile/.gitkeep

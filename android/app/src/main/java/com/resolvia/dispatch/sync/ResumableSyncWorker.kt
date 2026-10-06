@@ -23,13 +23,7 @@ class ResumableSyncWorker(
     private val dao = db.recordingDao()
     private val client = OkHttpClient()
     private val gson = Gson()
-    private val authToken = "dispatch_paired_secret_default"
-
-    // Discovered laptop endpoints (LAN + Tailscale fallback)
-    private val baseUrls = listOf(
-        "http://192.168.1.15:8765", // Local LAN (Default preference)
-        "http://laptop.tailnet.ts.net:8765" // Tailscale private network
-    )
+    private val pairingManager = com.resolvia.dispatch.data.PairingManager(appContext)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val activeUrl = findReachableServer() ?: return@withContext Result.retry()
@@ -54,8 +48,12 @@ class ResumableSyncWorker(
     }
 
     private fun findReachableServer(): String? {
-        for (url in baseUrls) {
-            val req = Request.Builder().url("$url/api/sync/ping").build()
+        val endpoints = pairingManager.getCandidateEndpoints()
+        for (url in endpoints) {
+            val req = Request.Builder()
+                .url("$url/api/sync/ping")
+                .header("X-Dispatch-Device-Token", pairingManager.authToken)
+                .build()
             try {
                 client.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) return url
@@ -76,7 +74,7 @@ class ResumableSyncWorker(
             addProperty("filename", file.name)
             addProperty("file_size_bytes", totalBytes)
             addProperty("sha256_hash", sha256)
-            addProperty("auth_token", authToken)
+            addProperty("auth_token", pairingManager.authToken)
         }
 
         val initReq = Request.Builder()
@@ -118,7 +116,7 @@ class ResumableSyncWorker(
                     .addHeader("x-file-size", totalBytes.toString())
                     .addHeader("x-sha256", sha256)
                     .addHeader("x-session-id", sessionId)
-                    .addHeader("x-auth-token", authToken)
+                    .addHeader("x-auth-token", pairingManager.authToken)
                     .build()
 
                 try {

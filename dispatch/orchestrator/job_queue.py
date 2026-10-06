@@ -57,8 +57,15 @@ def enqueue_job(chunk_id: str, session_id: Optional[str] = None) -> str:
     return job_id
 
 
+class LeaseLostError(RuntimeError):
+    """Raised when a worker attempts to complete a job whose lease expired or was reclaimed."""
+    pass
+
+
 def claim_job(worker_id: str, lease_duration_seconds: int = 45) -> Optional[Dict[str, Any]]:
-    """Atomically claim the next eligible job and grant a timed lease."""
+    """Atomically claim the next eligible job and grant a timed lease.
+    Uses atomic conditional update to guarantee strict concurrency safety.
+    """
     init_job_queue_schema()
     now_str = datetime.now().isoformat()
     lease_until = (datetime.now() + timedelta(seconds=lease_duration_seconds)).isoformat()
@@ -82,7 +89,7 @@ def claim_job(worker_id: str, lease_duration_seconds: int = 45) -> Optional[Dict
 
         job_id = row["job_id"]
 
-        # Atomically claim with lease
+        # Atomically claim with lease ONLY IF status is still claimable (atomic compare-and-swap)
         cursor.execute("""
             UPDATE pipeline_jobs
             SET status = 'PROCESSING',
@@ -91,8 +98,13 @@ def claim_job(worker_id: str, lease_duration_seconds: int = 45) -> Optional[Dict
                 heartbeat_at = ?,
                 attempt_count = attempt_count + 1,
                 updated_at = ?
-            WHERE job_id = ?
+            WHERE job_id = ? 
+              AND status IN ('QUEUED', 'RETRY_PENDING', 'WAITING_FOR_AI', 'WAITING_FOR_RESOURCES')
         """, (worker_id, lease_until, now_str, now_str, job_id))
+
+        if cursor.rowcount == 0:
+            # Another concurrent worker claimed the job between the SELECT and UPDATE
+            return None
 
         cursor.execute("SELECT * FROM pipeline_jobs WHERE job_id = ?", (job_id,))
         claimed = cursor.fetchone()
@@ -118,22 +130,50 @@ def renew_heartbeat(job_id: str, worker_id: str, extend_seconds: int = 45) -> bo
         return cursor.rowcount > 0
 
 
-def complete_stage_checkpoint(job_id: str, current_stage: PipelineStage) -> PipelineStage:
-    """Record completed stage checkpoint and transition job to the next stage."""
+def complete_stage_checkpoint(
+    job_id: str,
+    current_stage: PipelineStage,
+    worker_id: Optional[str] = None
+) -> PipelineStage:
+    """Record completed stage checkpoint and transition job to the next stage.
+    Fencing token verification: if worker_id is provided, strictly enforces that the
+    worker still owns an unexpired active lease, preventing split-brain zombie workers.
+    """
     next_stage = get_next_stage(current_stage)
     next_status = JobStatus.COMPLETED.value if next_stage == PipelineStage.COMPLETED else JobStatus.QUEUED.value
     now_str = datetime.now().isoformat()
 
     with get_db_connection() as conn:
-        conn.execute("""
-            UPDATE pipeline_jobs
-            SET current_stage = ?,
-                status = ?,
-                worker_id = NULL,
-                lease_expires_at = NULL,
-                updated_at = ?
-            WHERE job_id = ?
-        """, (next_stage.value, next_status, now_str, job_id))
+        cursor = conn.cursor()
+        if worker_id:
+            cursor.execute("""
+                UPDATE pipeline_jobs
+                SET current_stage = ?,
+                    status = ?,
+                    worker_id = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE job_id = ? 
+                  AND worker_id = ? 
+                  AND current_stage = ?
+                  AND status = 'PROCESSING'
+                  AND datetime(lease_expires_at) >= datetime(?)
+            """, (next_stage.value, next_status, now_str, job_id, worker_id, current_stage.value, now_str))
+
+            if cursor.rowcount == 0:
+                raise LeaseLostError(
+                    f"Fencing check failed for job {job_id}: worker {worker_id} lost lease for stage {current_stage.value}."
+                )
+        else:
+            conn.execute("""
+                UPDATE pipeline_jobs
+                SET current_stage = ?,
+                    status = ?,
+                    worker_id = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE job_id = ?
+            """, (next_stage.value, next_status, now_str, job_id))
 
     logger.info("Job %s passed checkpoint: %s -> %s (Status: %s)",
                 job_id, current_stage.value, next_stage.value, next_status)

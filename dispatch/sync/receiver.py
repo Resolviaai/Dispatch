@@ -58,9 +58,115 @@ async def ping_receiver(auth_token: Optional[str] = None):
     }
 
 
+@router.get("/pairing/config")
+async def get_pairing_config():
+    """Return discovered laptop network endpoints and pairing token for phone configuration."""
+    import socket
+    import psutil
+    from dispatch.config import WEB_PORT
+
+    lan_ip = None
+    tailscale_ip = None
+
+    for iface, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                ip = addr.address
+                if ip.startswith("100."):
+                    tailscale_ip = ip
+                elif (ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.")) and not lan_ip:
+                    lan_ip = ip
+
+    lan_url = f"http://{lan_ip}:{WEB_PORT}" if lan_ip else f"http://127.0.0.1:{WEB_PORT}"
+    tailscale_url = f"http://{tailscale_ip}:{WEB_PORT}" if tailscale_ip else ""
+
+    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={AUTH_TOKEN}"
+
+    return {
+        "lan_url": lan_url,
+        "tailscale_url": tailscale_url,
+        "auth_token": AUTH_TOKEN,
+        "connection_string": connection_string
+    }
+
+
+@router.get("/verify-chunk")
+async def verify_chunk_explicit(
+    segment_id: str,
+    sha256: str,
+    file_size: Optional[int] = None,
+    auth_token: Optional[str] = Header(None, alias="x-auth-token")
+):
+    """Explicit cryptographic proof-of-receipt endpoint for phone before deleting local files.
+    Returns 200 with {"verified": True} only if the fully assembled file exists and hashes match.
+    """
+    if auth_token:
+        verify_token(auth_token)
+
+    final_name = f"{segment_id}.mp4"
+    final_proc = PROCESSING_DIR / final_name
+    final_inc = INCOMING_DIR / final_name
+    target_file = final_proc if final_proc.exists() else (final_inc if final_inc.exists() else None)
+
+    # 1. Check physical file on disk
+    if target_file and target_file.exists():
+        actual_size = target_file.stat().st_size
+        if file_size is not None and actual_size != file_size:
+            return {"verified": False, "reason": "size_mismatch", "status": "RETRY_REQUIRED"}
+
+        hasher = hashlib.sha256()
+        with open(target_file, "rb") as f:
+            while chunk := f.read(1024 * 1024):
+                hasher.update(chunk)
+        actual_hash = hasher.hexdigest()
+        if actual_hash == sha256:
+            return {"verified": True, "segment_id": segment_id, "size": actual_size, "status": "VERIFIED"}
+        else:
+            return {"verified": False, "reason": "sha256_mismatch", "status": "CORRUPT_RETRY_REQUIRED"}
+
+    # 2. Check if already processed by pipeline into clips and safely purged
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ?", (final_name,))
+        row = cursor.fetchone()
+        if row and row["status"] == "processed" and row["file_hash"] == sha256:
+            return {"verified": True, "segment_id": segment_id, "status": "VERIFIED_PROCESSED"}
+
+    return {"verified": False, "reason": "file_not_found", "status": "MISSING"}
+
+
+def verify_file_integrity(filepath: Path, expected_size: int, expected_sha256: str) -> bool:
+    """Strictly verify that a local file exists, matches expected size, and matches expected SHA-256."""
+    if not filepath.exists():
+        return False
+    try:
+        actual_size = filepath.stat().st_size
+        if actual_size != expected_size:
+            logger.warning("Size mismatch for %s: expected %d, got %d", filepath.name, expected_size, actual_size)
+            return False
+
+        hasher = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            while chunk := f.read(1024 * 1024):
+                hasher.update(chunk)
+        actual_sha256 = hasher.hexdigest()
+        if actual_sha256 != expected_sha256:
+            logger.warning("SHA-256 mismatch for %s: expected %s, got %s", filepath.name, expected_sha256, actual_sha256)
+            return False
+        return True
+    except Exception as e:
+        logger.error("Integrity check failed for %s: %s", filepath.name, e)
+        return False
+
+
 @router.post("/reconcile")
 async def reconcile_manifest(payload: ReconcileRequest):
-    """Bidirectional reconciliation: phone sends manifest, laptop returns exact verified states & offsets."""
+    """Bidirectional reconciliation: phone sends manifest, laptop returns exact verified states & offsets.
+    CRITICAL INVARIANT: NEVER tell phone a segment is VERIFIED unless:
+    1. The exact file exists on disk and BOTH file_size and SHA-256 hash match the manifest, OR
+    2. The chunk is recorded in SQLite as 'processed' (raw file was safely transformed to clips and purged to save space) AND the recorded SHA-256 matches.
+    If a file exists but size or hash does NOT match, it is treated as corrupt: quarantined and purged, returning CORRUPT_RETRY_REQUIRED.
+    """
     verify_token(payload.auth_token)
     results = []
 
@@ -72,27 +178,58 @@ async def reconcile_manifest(payload: ReconcileRequest):
             expected_size = item.file_size_bytes
             expected_sha256 = item.sha256_hash
 
-            # Check if finalized file exists in processing or incoming
             final_name = f"{seg_id}.mp4"
             final_proc = PROCESSING_DIR / final_name
             final_inc = INCOMING_DIR / final_name
             part_file = INCOMING_DIR / f"{seg_id}.part"
 
+            target_file = final_proc if final_proc.exists() else (final_inc if final_inc.exists() else None)
+
             cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ?", (final_name,))
             db_chunk = cursor.fetchone()
 
-            if (final_proc.exists() or final_inc.exists()) and db_chunk and db_chunk["status"] != "failed":
+            is_verified = False
+
+            if target_file is not None:
+                # File exists on disk: verify physical bytes and SHA-256
+                if verify_file_integrity(target_file, expected_size, expected_sha256):
+                    is_verified = True
+                else:
+                    logger.error("Corrupted file detected during reconcile for %s! Quarantining.", target_file.name)
+                    corrupt_path = INCOMING_DIR / f"corrupt_{seg_id}.bad"
+                    try:
+                        target_file.rename(corrupt_path)
+                    except Exception:
+                        try:
+                            target_file.unlink()
+                        except Exception:
+                            pass
+
+            elif db_chunk and db_chunk["status"] == "processed" and db_chunk["file_hash"] == expected_sha256:
+                # Pipeline already processed source chunk into clips and safely purged source video
+                is_verified = True
+
+            if is_verified:
                 results.append({
                     "segment_id": seg_id,
                     "status": "VERIFIED",
                     "remote_offset": expected_size
                 })
             elif part_file.exists():
-                results.append({
-                    "segment_id": seg_id,
-                    "status": "PARTIAL",
-                    "remote_offset": part_file.stat().st_size
-                })
+                actual_part_size = part_file.stat().st_size
+                if actual_part_size > expected_size:
+                    part_file.unlink(missing_ok=True)
+                    results.append({
+                        "segment_id": seg_id,
+                        "status": "MISSING",
+                        "remote_offset": 0
+                    })
+                else:
+                    results.append({
+                        "segment_id": seg_id,
+                        "status": "PARTIAL",
+                        "remote_offset": actual_part_size
+                    })
             else:
                 results.append({
                     "segment_id": seg_id,
@@ -105,21 +242,38 @@ async def reconcile_manifest(payload: ReconcileRequest):
 
 @router.post("/upload/init")
 async def init_upload(payload: InitUploadRequest):
-    """Initialize a chunked resumable upload and query remote offset."""
+    """Initialize a chunked resumable upload and query remote offset.
+    Strictly verifies existing files against expected file_size_bytes and sha256_hash.
+    """
     verify_token(payload.auth_token)
     seg_id = payload.segment_id
     final_name = f"{seg_id}.mp4"
+    final_proc = PROCESSING_DIR / final_name
+    final_inc = INCOMING_DIR / final_name
 
-    # Check if already completed and verified
-    if (PROCESSING_DIR / final_name).exists() or (INCOMING_DIR / final_name).exists():
-        return {
-            "status": "already_completed",
-            "remote_offset": payload.file_size_bytes,
-            "verified": True
-        }
+    target_file = final_proc if final_proc.exists() else (final_inc if final_inc.exists() else None)
+
+    if target_file is not None:
+        if verify_file_integrity(target_file, payload.file_size_bytes, payload.sha256_hash):
+            return {
+                "status": "already_completed",
+                "remote_offset": payload.file_size_bytes,
+                "verified": True
+            }
+        else:
+            logger.warning("Existing file %s failed size/SHA256 check on upload init. Purging corrupted bytes.", target_file.name)
+            target_file.unlink(missing_ok=True)
 
     part_file = INCOMING_DIR / f"{seg_id}.part"
-    current_offset = part_file.stat().st_size if part_file.exists() else 0
+    if part_file.exists():
+        part_size = part_file.stat().st_size
+        if part_size > payload.file_size_bytes:
+            part_file.unlink(missing_ok=True)
+            current_offset = 0
+        else:
+            current_offset = part_size
+    else:
+        current_offset = 0
 
     return {
         "status": "in_progress",

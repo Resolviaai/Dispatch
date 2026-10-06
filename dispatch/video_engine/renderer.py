@@ -67,7 +67,10 @@ def render_clip(
         ass_subtitle_path=ass_path if (ass_path and ass_path.exists()) else None
     )
 
-    # 3. Construct FFmpeg command
+    temp_video_path = CLIPS_DIR / f"{clip_id}.tmp.mp4"
+    temp_thumb_path = CLIPS_DIR / f"{clip_id}.tmp.jpg"
+
+    # 3. Construct FFmpeg command with restricted threads to preserve desktop responsiveness
     cmd = [
         "ffmpeg", "-y",
         "-ss", str(round(start_time, 3)),
@@ -80,25 +83,30 @@ def render_clip(
         "-preset", "fast",
         "-crf", "20",
         "-pix_fmt", "yuv420p",
+        "-threads", "2",
         "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
-        str(output_video_path)
+        str(temp_video_path)
     ]
 
-    logger.info("Executing FFmpeg render for clip %s (%.1fs - %.1fs)", clip_id, start_time, end_time)
+    logger.info("Executing FFmpeg atomic render for clip %s (%.1fs - %.1fs)", clip_id, start_time, end_time)
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 
     if result.returncode != 0:
         error_msg = result.stderr.strip()
         logger.error("FFmpeg render failed for %s: %s", clip_id, error_msg)
-        # Clean up temporary ASS file
+        if temp_video_path.exists():
+            temp_video_path.unlink()
         if ass_path and ass_path.exists():
             ass_path.unlink()
         raise RuntimeError(f"FFmpeg render failed: {error_msg}")
 
-    # 4. Generate preview thumbnail
+    # Atomic rename: guarantees system never exposes an unplayable partial video
+    temp_video_path.replace(output_video_path)
+
+    # 4. Generate preview thumbnail atomically
     thumb_time = min(1.5, duration / 2.0)
     thumb_cmd = [
         "ffmpeg", "-y",
@@ -106,9 +114,13 @@ def render_clip(
         "-i", str(output_video_path),
         "-vframes", "1",
         "-q:v", "2",
-        str(output_thumb_path)
+        str(temp_thumb_path)
     ]
-    subprocess.run(thumb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    thumb_res = subprocess.run(thumb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if thumb_res.returncode == 0 and temp_thumb_path.exists():
+        temp_thumb_path.replace(output_thumb_path)
+    elif temp_thumb_path.exists():
+        temp_thumb_path.unlink()
 
     # Clean up temporary ASS file
     if ass_path and ass_path.exists():

@@ -5,9 +5,11 @@ import time
 import logging
 from pathlib import Path
 from typing import Dict, Any, List
-from dispatch import db
 from dispatch.publisher.youtube import upload_youtube_short
 from dispatch.publisher.instagram import upload_instagram_reel
+from dispatch.publisher.linkedin import upload_linkedin_video
+from dispatch.publisher.twitter import upload_x_video
+from dispatch import db
 
 logger = logging.getLogger("dispatch.publisher.outbox")
 
@@ -28,11 +30,11 @@ def process_outbox_queue() -> int:
         job_id = job["id"]
         clip_id = job["clip_id"]
         platform = job["platform"].lower()
-        publish_mode = job.get("publish_mode", "private")
+        publish_mode = job.get("publish_mode") or "private"
         video_path = Path(job["video_path"]) if job.get("video_path") else None
-        title = job.get("title", "Dispatch Video")
-        description = job.get("description", "")
-        hashtags = job.get("hashtags", "")
+        title = job.get("title") or "Dispatch Video"
+        description = job.get("description") or ""
+        hashtags = job.get("hashtags") or ""
 
         if not video_path or not video_path.exists():
             logger.error("Job %s clip video file missing: %s", job_id, video_path)
@@ -63,6 +65,17 @@ def process_outbox_queue() -> int:
                 result = upload_instagram_reel(
                     video_path=video_path,
                     caption=f"{title}\n\n{description}\n\n{hashtags}"
+                )
+            elif platform == "linkedin":
+                result = upload_linkedin_video(
+                    video_path=video_path,
+                    commentary=f"{title}\n\n{description}\n\n{hashtags}",
+                    title=title
+                )
+            elif platform in ("x", "twitter"):
+                result = upload_x_video(
+                    video_path=video_path,
+                    text=f"{title}\n\n{hashtags}"
                 )
             else:
                 logger.warning("Unsupported platform %s for job %s", platform, job_id)
