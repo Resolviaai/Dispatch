@@ -16,8 +16,8 @@ class PairingManager(context: Context) {
         private const val KEY_LAN_HOST = "lan_host"
         private const val KEY_TAILSCALE_HOST = "tailscale_host"
         private const val KEY_AUTH_TOKEN = "auth_token"
-        private const val DEFAULT_TOKEN = "dispatch_paired_secret_default"
-        private const val DEFAULT_LAN = "http://192.168.1.15:8765"
+        private const val DEFAULT_TOKEN = ""
+        private const val DEFAULT_LAN = ""
     }
 
     var lanHost: String
@@ -31,6 +31,9 @@ class PairingManager(context: Context) {
     var authToken: String
         get() = prefs.getString(KEY_AUTH_TOKEN, DEFAULT_TOKEN) ?: DEFAULT_TOKEN
         set(value) = prefs.edit().putString(KEY_AUTH_TOKEN, value).apply()
+
+    val isPaired: Boolean
+        get() = authToken.isNotBlank() && (lanHost.isNotBlank() || tailscaleHost.isNotBlank())
 
     /**
      * Parse connection string from dashboard: dispatch://pair?lan=...&tailscale=...&token=...

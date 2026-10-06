@@ -9,6 +9,7 @@ Validates the 25 mission-critical failure scenarios for Dispatch:
 - Tailscale/LAN failover and DHCP changes
 - Negative preference feedback loop
 """
+import os
 import unittest
 import tempfile
 import shutil
@@ -55,6 +56,7 @@ AUTH_TOKEN = "dispatch_paired_secret_default"
 
 class TestDispatchChaosEngineering(unittest.TestCase):
     def setUp(self):
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
         init_db()
         init_mobile_db()
         init_job_queue_schema()

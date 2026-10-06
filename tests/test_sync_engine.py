@@ -18,6 +18,8 @@ AUTH_TOKEN = "dispatch_paired_secret_default"
 
 
 def test_resumable_sync_and_reconcile():
+    import os
+    os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
     init_db()
     init_mobile_db()
 

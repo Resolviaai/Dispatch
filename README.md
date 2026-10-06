@@ -33,7 +33,7 @@ The system is built so the user only touches 5 high-value, tactile actions:
   - FFmpeg hardware acceleration where available, with fast CPU software fallback.
   - No heavyweight Docker/WSL2 containers to safeguard the 43.6 GB free SSD space.
 - **Mobile Hardware**: POCO C65 (Android 14+), recording 1080p @ 30 fps.
-- **Transfer**: Resumable local Wi-Fi sync (via LAN folder sync/Syncthing or TUS background upload). Zero manual cables.
+- **Transfer**: Resumable local Wi-Fi & Tailscale peer-to-peer sync (via TUS-style chunked background upload with SHA-256 cryptographic verification). Zero manual cables, zero cloud storage.
 - **Budget & Cost**: 100% free local infrastructure; optional pennies spent strictly on Google Gemini Flash API for high-level semantic highlight extraction.
 
 ---
@@ -44,8 +44,8 @@ Dispatch is structured into seven decoupled, fault-tolerant pillars:
 
 ```
 [POCO C65 Mobile Phone]
-  │ (Records rolling 15-30 min chunks to prevent thermal/file corruption)
-  │ Automatic Background Wi-Fi LAN Sync
+  │ (Records rolling 10-minute segments into .tmp files with CameraX hardware pipeline)
+  │ Automatic Background Resumable TUS Sync (LAN Wi-Fi or Tailscale WireGuard)
   ▼
 [Pillar 1: Ingestion & Session Watcher] (dispatch/ingestion)
   │ Watches incoming/ directory, validates file completion, verifies ffprobe integrity
@@ -70,15 +70,15 @@ Dispatch is structured into seven decoupled, fault-tolerant pillars:
   ▼
 [Pillar 5: Review & Control Web Dashboard] (dispatch/web)
   │ Modern dark-canvas dashboard (FastAPI + Tailwind UI) accessible via PC & phone
-  │ Live clip preview, platform checkboxes, Public vs Private toggle, 1-click Approve/Reject
+  │ Live clip preview, 4-platform checkboxes, Public vs Private toggle, 1-click Approve/Reject
   ▼
 [Pillar 6: Publishing & Scheduling Engine] (dispatch/publisher)
-  │ Idempotent publishing outbox for YouTube Shorts & Instagram Reels
+  │ Idempotent publishing outbox for YouTube Shorts, Instagram Reels, LinkedIn, and X (Twitter)
   │ Handles Private/Draft uploads vs Public scheduled drops
   │ Auto-cleans exported video files upon verified upload
   ▼
 [Pillar 7: Master Dispatch Daemon & CLI] (dispatch/main.py)
-  │ Single command boots entire pipeline: Watcher + Worker Queue + Web Dashboard
+  │ Single command boots entire pipeline: Ingestion Watcher + Worker Queue + Web Dashboard
 ```
 
 ---
@@ -117,19 +117,27 @@ Dispatch/
 │   │   ├── app.py
 │   │   ├── static/
 │   │   └── templates/
-│   ├── publisher/                # Pillar 6: YouTube & Instagram publishing adapters
+│   ├── publisher/                # Pillar 6: Multi-platform publishing adapters
 │   │   ├── __init__.py
 │   │   ├── youtube.py
 │   │   ├── instagram.py
+│   │   ├── linkedin.py
+│   │   ├── twitter.py
 │   │   └── outbox.py
 │   └── main.py                   # Pillar 7: Unified daemon entry point
+├── android/                      # Native Android Studio Project (POCO C65)
+│   ├── app/                      # CameraX recorder, Room DB, WorkManager sync
+│   ├── gradlew, gradlew.bat      # Self-contained Gradle wrapper scripts
+│   └── build.gradle.kts
 ├── storage/
 │   ├── incoming/                 # Phone drops raw video chunks here via Wi-Fi sync
 │   ├── processing/               # Active workspace during transcription/cutting
 │   ├── clips/                    # Finished candidate clips ready for review
 │   └── database/
 │       └── dispatch.db           # SQLite state, idempotency keys, & preference logs
-└── tests/                        # Comprehensive unit & end-to-end integration tests
+├── requirements.txt              # Standard Python dependencies
+├── pyproject.toml                # Modern package configuration
+└── tests/                        # Comprehensive unit, chaos & destructive tests
 ```
 
 ---
@@ -138,7 +146,7 @@ Dispatch/
 
 To fit comfortably within the 43.6 GB disk space constraint:
 1. **Raw Sessions**: Once all candidate clips are extracted, rendered, and verified on disk, the raw multi-hour source chunks are automatically purged from `incoming/` and `processing/`.
-2. **Finished Clips**: Stored in `storage/clips/` (~1.5 GB for 50 clips). Once an approved clip is uploaded to YouTube or Instagram and verified, the local clip file is deleted.
+2. **Finished Clips**: Stored in `storage/clips/` (~1.5 GB for 50 clips). Once an approved clip is uploaded to YouTube, Instagram, LinkedIn, or X (Twitter) and verified, the local clip file is automatically purged to safeguard disk space.
 3. **Database Records**: Transcripts, timestamps, review decisions, and publication audit logs are permanently retained in SQLite (a few megabytes total).
 
 ---
@@ -146,17 +154,24 @@ To fit comfortably within the 43.6 GB disk space constraint:
 ## 6. How to Run
 
 1. **Install Prerequisites**: Python 3.11+ and FFmpeg (with `libass` support).
-2. **Set API Key**: Set your `GEMINI_API_KEY` in environment variables or `.env`.
-3. **Start Dispatch Daemon**:
+2. **Install Dependencies**:
+   ```powershell
+   pip install -r requirements.txt
+   ```
+3. **Set API Key (Optional)**: Set `GEMINI_API_KEY` in environment variables or `.env` for AI highlight extraction (automatic local heuristic fallback kicks in if unavailable).
+4. **Start Dispatch Master Daemon**:
    ```powershell
    python -m dispatch.main
    ```
-4. **Access Control Dashboard**: Open `http://localhost:8765` on your PC (or `http://<your-pc-ip>:8765` from your POCO C65 phone browser).
-5. **Install Windows Silent Background Service (Optional)**:
+5. **Access Control Dashboard**: Open `http://localhost:8765` on your PC (or `http://<your-pc-ip>:8765` from your POCO C65 phone browser).
+6. **One-Time Phone Pairing**:
+   - Tap the **Pairing** button on the web dashboard to see your unique connection string (e.g., `dispatch://pair?lan=...&token=...`).
+   - In the Android app or mobile web recorder, paste the string to securely pair phone with laptop with zero hardcoded credentials.
+7. **Windows Silent Background Auto-Start**:
    ```cmd
    scripts\install_windows_startup.bat
    ```
-   Registers Dispatch in Windows Task Scheduler to start silently on login with below-normal CPU priority and zero terminal popups.
+   Registers Dispatch in Windows Task Scheduler to start silently on login with below-normal CPU priority and zero terminal popups. To remove at any time, run `scripts\uninstall_windows_startup.bat`.
 
 ---
 
@@ -165,11 +180,11 @@ To fit comfortably within the 43.6 GB disk space constraint:
 Dispatch does **not** rely on third-party cloud storage (S3, R2, Supabase) or fragile sync folders. It features a custom **TUS-style chunked, byte-resumable synchronization engine**:
 
 ### Architecture:
-- **Phone = Durable Source of Truth & Outbox**: Uses SQLite in Write-Ahead Logging (WAL) mode or IndexedDB.
+- **Phone = Durable Source of Truth & Outbox**: Uses Room SQLite in Write-Ahead Logging (WAL) mode or IndexedDB.
 - **Laptop = Opportunistic Worker**: Safe for laptop to be OFF, sleeping, or disconnected; phone keeps records safely queued.
-- **Rolling Segments (15 mins)**: Records into `.tmp` files and atomically commits to `.mp4` with SHA-256 checksums. Battery death or crashes only lose the active segment, never the session.
+- **Rolling Segments (10 mins)**: Records into `.tmp` files and atomically commits to `.mp4` with SHA-256 checksums. Battery death or crashes only lose the active segment, never the session.
 - **Confirmed Byte Resuming**: If network drops at 5%, 50%, or 99%, the upload resumes from the exact remote byte offset without restarting from 0%.
-- **Conservative Retention**: Phone **never** deletes a local recording until the laptop explicitly confirms SHA-256 verification via `/api/sync/reconcile`.
+- **Conservative Retention**: Phone **never** deletes a local recording until the laptop explicitly confirms SHA-256 verification via `/api/sync/reconcile` and `/api/sync/verify-chunk`.
 
 ### How to Record on Your POCO C65:
 
@@ -182,9 +197,14 @@ Dispatch does **not** rely on third-party cloud storage (S3, R2, Supabase) or fr
 3. Chunks automatically upload in the background to your laptop whenever reachable.
 
 #### Option B: Native Android Studio App (`android/`)
-1. Open the `android/` directory in Android Studio.
-2. Build and install the APK (`./gradlew assembleDebug`) on your POCO C65.
-3. Features CameraX video recording, Room SQLite WAL storage, WorkManager background upload with Wi-Fi constraints, and `BootReceiver` for automatic recovery on phone reboot.
+1. Build the APK locally using the included Gradle wrapper:
+   ```bash
+   cd android
+   ./gradlew assembleDebug      # Linux / macOS
+   .\gradlew.bat assembleDebug  # Windows
+   ```
+   Or open the `android/` directory directly in Android Studio.
+2. Features CameraX FHD video recording, Room SQLite WAL storage, persistent Foreground Service with sticky notification, WorkManager background upload with Wi-Fi constraints, and `BootReceiver` for automatic recovery on phone reboot.
 
 #### Option C: Python Mobile Engine (`dispatch_mobile/`)
 - Run inside Termux on Android:

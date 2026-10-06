@@ -13,11 +13,33 @@ from dispatch.config import INCOMING_DIR, PROCESSING_DIR
 from dispatch import db
 from dispatch.ingestion.validator import probe_video
 
+import secrets
+
 logger = logging.getLogger("dispatch.sync.receiver")
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
-AUTH_TOKEN = os.getenv("DISPATCH_AUTH_TOKEN", "dispatch_paired_secret_default")
+
+def get_auth_token() -> str:
+    """Return the configured or dynamically generated cryptographically secure auth token.
+    Precedence:
+    1. DISPATCH_AUTH_TOKEN environment variable (if explicitly provided).
+    2. Persistent database setting (device_auth_token in SQLite settings table).
+    3. Auto-generates a high-entropy 256-bit secure URL-safe token and saves it in database settings.
+    Guarantees: Zero hardcoded fallback credentials.
+    """
+    env_token = os.getenv("DISPATCH_AUTH_TOKEN")
+    if env_token and env_token.strip():
+        return env_token.strip()
+
+    persisted_token = db.get_setting("device_auth_token")
+    if persisted_token and persisted_token.strip():
+        return persisted_token.strip()
+
+    generated_token = secrets.token_urlsafe(32)
+    db.set_setting("device_auth_token", generated_token)
+    logger.info("Generated new cryptographically secure device pairing token: %s...", generated_token[:8])
+    return generated_token
 
 
 class InitUploadRequest(BaseModel):
@@ -42,7 +64,8 @@ class ReconcileRequest(BaseModel):
 
 
 def verify_token(token: str):
-    if token != AUTH_TOKEN:
+    expected_token = get_auth_token()
+    if not token or token.strip() != expected_token:
         raise HTTPException(status_code=401, detail="Unauthorized: invalid device token")
 
 
@@ -80,12 +103,13 @@ async def get_pairing_config():
     lan_url = f"http://{lan_ip}:{WEB_PORT}" if lan_ip else f"http://127.0.0.1:{WEB_PORT}"
     tailscale_url = f"http://{tailscale_ip}:{WEB_PORT}" if tailscale_ip else ""
 
-    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={AUTH_TOKEN}"
+    token = get_auth_token()
+    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={token}"
 
     return {
         "lan_url": lan_url,
         "tailscale_url": tailscale_url,
-        "auth_token": AUTH_TOKEN,
+        "auth_token": token,
         "connection_string": connection_string
     }
 

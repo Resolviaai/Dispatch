@@ -50,6 +50,7 @@ AUTH_TOKEN = "dispatch_paired_secret_default"
 class TestDestructiveChaos(unittest.TestCase):
 
     def setUp(self):
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
         init_db()
         init_job_queue_schema()
         with get_db_connection() as conn:
