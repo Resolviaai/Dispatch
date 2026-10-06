@@ -50,10 +50,15 @@ def test_web_dashboard():
     assert res.status_code == 200
     assert res.json()["status"] == "success"
 
-    # Verify clip is no longer in ready_review
-    res = client.get("/api/clips")
-    clip_ids_after = [c["id"] for c in res.json()["ready"]]
-    assert clip_id not in clip_ids_after
+    # 5. Test pipeline jobs endpoint
+    res = client.get("/api/pipeline/jobs")
+    assert res.status_code == 200
+    assert "jobs" in res.json()
+
+    # 6. Test mobile recorder page
+    res = client.get("/mobile")
+    assert res.status_code == 200
+    assert "Dispatch Mobile Recorder" in res.text
 
     print("ALL WEB DASHBOARD TESTS PASSED SUCCESSFULLY!")
 

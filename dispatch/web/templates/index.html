@@ -1,189 +1,4 @@
-"""FastAPI Web Dashboard for Dispatch.
-Provides a modern dark-canvas UI (Layer 0 #0B0F17) for reviewing, approving,
-and publishing video clips on both PC and mobile browsers.
-"""
-import shutil
-import psutil
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
-from dispatch.config import (
-    CLIPS_DIR,
-    INCOMING_DIR,
-    PROCESSING_DIR,
-    ROOT_DIR,
-    DEFAULT_PUBLISH_MODE
-)
-from dispatch import db
-from dispatch.ingestion.watcher import scan_incoming
-from dispatch.sync.receiver import router as sync_router
-
-app = FastAPI(title="Dispatch Dashboard", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(sync_router)
-
-
-class ApproveRequest(BaseModel):
-    title: Optional[str] = None
-    hashtags: Optional[str] = None
-    publish_mode: Optional[str] = None  # "private" or "public"
-    platforms: Optional[str] = None     # "youtube,instagram"
-
-
-class RejectRequest(BaseModel):
-    reason: Optional[str] = "User rejected"
-
-
-class SettingsRequest(BaseModel):
-    publish_mode: Optional[str] = None
-    auto_process: Optional[str] = None
-
-
-@app.get("/clips/{filename}")
-async def get_clip_file(filename: str):
-    """Stream clip video or image thumbnail directly from storage."""
-    file_path = CLIPS_DIR / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    media_type = "video/mp4" if filename.endswith(".mp4") else "image/jpeg"
-    return FileResponse(file_path, media_type=media_type)
-
-
-@app.get("/mobile", response_class=HTMLResponse)
-@app.get("/mobile/recorder", response_class=HTMLResponse)
-async def get_mobile_recorder():
-    """Serve the standalone mobile camera recorder PWA for POCO C65 and Android phones."""
-    template_path = Path(__file__).parent / "templates" / "mobile_recorder.html"
-    if template_path.exists():
-        with open(template_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    return HTMLResponse("<h1>Mobile recorder template not found</h1>", status_code=404)
-
-
-@app.get("/api/pipeline/jobs")
-async def get_pipeline_jobs():
-    """Return live checkpointed jobs with current stage, status, leases, and retry timers."""
-    return {"jobs": db.get_active_pipeline_jobs()}
-
-
-@app.get("/api/status")
-async def get_system_status():
-    """Return system resource metrics and pipeline counters."""
-    disk = psutil.disk_usage(str(ROOT_DIR))
-    free_gb = round(disk.free / (1024 ** 3), 1)
-    total_gb = round(disk.total / (1024 ** 3), 1)
-
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM clips WHERE status = 'ready_review'")
-        ready_count = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM clips WHERE status = 'approved'")
-        approved_count = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM clips WHERE status = 'published'")
-        published_count = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM chunks")
-        chunks_count = cursor.fetchone()[0]
-
-    return {
-        "disk_free_gb": free_gb,
-        "disk_total_gb": total_gb,
-        "disk_percent_used": disk.percent,
-        "ready_clips": ready_count,
-        "approved_clips": approved_count,
-        "published_clips": published_count,
-        "total_chunks": chunks_count,
-        "publish_mode": db.get_setting("publish_mode", DEFAULT_PUBLISH_MODE),
-        "auto_process": db.get_setting("auto_process", "true")
-    }
-
-
-@app.get("/api/clips")
-async def list_clips():
-    """List clips grouped by status."""
-    ready_clips = db.get_clips_for_review()
-    for c in ready_clips:
-        if c.get("video_path"):
-            c["video_url"] = f"/clips/{Path(c['video_path']).name}"
-        if c.get("thumbnail_path"):
-            c["thumbnail_url"] = f"/clips/{Path(c['thumbnail_path']).name}"
-
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM clips WHERE status IN ('approved', 'published') ORDER BY created_at DESC LIMIT 20")
-        published_clips = [dict(r) for r in cursor.fetchall()]
-        for c in published_clips:
-            if c.get("video_path"):
-                c["video_url"] = f"/clips/{Path(c['video_path']).name}"
-            if c.get("thumbnail_path"):
-                c["thumbnail_url"] = f"/clips/{Path(c['thumbnail_path']).name}"
-
-    return {
-        "ready": ready_clips,
-        "recent_approved": published_clips
-    }
-
-
-@app.post("/api/clips/{clip_id}/approve")
-async def handle_approve_clip(clip_id: str, payload: ApproveRequest):
-    """Approve a clip and enqueue it to the publishing outbox."""
-    db.approve_clip(
-        clip_id=clip_id,
-        custom_title=payload.title,
-        custom_tags=payload.hashtags,
-        custom_mode=payload.publish_mode
-    )
-    return {"status": "success", "message": f"Clip {clip_id} approved"}
-
-
-@app.post("/api/clips/{clip_id}/reject")
-async def handle_reject_clip(clip_id: str, payload: RejectRequest):
-    """Reject a clip and record negative preference learning data."""
-    db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected")
-    return {"status": "success", "message": f"Clip {clip_id} rejected"}
-
-
-@app.get("/api/settings")
-async def get_settings():
-    return {
-        "publish_mode": db.get_setting("publish_mode", DEFAULT_PUBLISH_MODE),
-        "auto_process": db.get_setting("auto_process", "true")
-    }
-
-
-@app.post("/api/settings")
-async def update_settings(payload: SettingsRequest):
-    if payload.publish_mode:
-        db.set_setting("publish_mode", payload.publish_mode)
-    if payload.auto_process:
-        db.set_setting("auto_process", payload.auto_process)
-    return {"status": "success", "message": "Settings updated"}
-
-
-@app.post("/api/scan_incoming")
-async def trigger_scan():
-    """Manual trigger to scan incoming drops."""
-    staged = scan_incoming()
-    return {"status": "success", "staged_count": len(staged)}
-
-
-# --- Embedded HTML Dashboard ---
-
-DASHBOARD_HTML = """<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -194,6 +9,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     body { background-color: #0B0F17; color: #F1F5F9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .surface { background-color: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
     .surface-input { background-color: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); }
+    .surface-nested { background-color: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.05); }
+    @keyframes pulse-subtle {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .pulse-indicator { animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
   </style>
 </head>
 <body class="min-h-screen antialiased flex flex-col">
@@ -208,12 +29,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       <div>
         <h1 class="text-sm font-semibold tracking-wider uppercase text-white">Dispatch</h1>
-        <p class="text-[11px] text-slate-400 font-mono">Autonomous Engine Active</p>
+        <p class="text-[11px] text-slate-400 font-mono">Autonomous Content Engine</p>
       </div>
     </div>
 
     <!-- Quick Stats & Settings -->
     <div class="flex items-center space-x-3 text-xs">
+      <a href="/mobile" target="_blank" class="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded surface hover:bg-white/[0.06] text-slate-300 transition text-[11px]">
+        <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+        </svg>
+        <span>Open Mobile Camera</span>
+      </a>
+
       <div class="hidden sm:flex items-center space-x-2 px-3 py-1.5 rounded surface text-slate-300">
         <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
         <span id="disk-info" class="font-mono text-[11px]">Disk: -- GB free</span>
@@ -237,19 +65,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
       <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
         <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Ready For Review</span>
-        <span id="stat-ready" class="text-2xl font-semibold tracking-tight text-white mt-1">0</span>
+        <span id="stat-ready" class="text-2xl font-semibold tracking-tight text-white mt-1 text-right">0</span>
       </div>
       <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
         <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Approved / Queued</span>
-        <span id="stat-approved" class="text-2xl font-semibold tracking-tight text-indigo-400 mt-1">0</span>
+        <span id="stat-approved" class="text-2xl font-semibold tracking-tight text-indigo-400 mt-1 text-right">0</span>
       </div>
       <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
         <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Published</span>
-        <span id="stat-published" class="text-2xl font-semibold tracking-tight text-emerald-400 mt-1">0</span>
+        <span id="stat-published" class="text-2xl font-semibold tracking-tight text-emerald-400 mt-1 text-right">0</span>
       </div>
       <div class="surface rounded-lg p-3.5 flex flex-col justify-between">
         <span class="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Storage Health</span>
-        <span id="stat-storage" class="text-2xl font-semibold tracking-tight text-slate-200 mt-1">--%</span>
+        <span id="stat-storage" class="text-2xl font-semibold tracking-tight text-slate-200 mt-1 text-right">--%</span>
+      </div>
+    </div>
+
+    <!-- Active Pipeline Stage & Leases Widget -->
+    <div class="surface rounded-lg p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <div class="w-2 h-2 rounded-full bg-indigo-500 pulse-indicator"></div>
+          <h2 class="text-xs uppercase tracking-wider font-semibold text-white">Live Pipeline & Stage Checkpoints</h2>
+          <span id="active-jobs-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-700/50">0 active</span>
+        </div>
+        <button onclick="fetchPipelineJobs()" class="text-[11px] text-slate-400 hover:text-slate-200 flex items-center space-x-1">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          <span>Sync</span>
+        </button>
+      </div>
+
+      <!-- Pipeline Jobs List -->
+      <div id="pipeline-jobs-container" class="space-y-2.5">
+        <!-- Rendered via JS -->
+        <div id="pipeline-idle-placeholder" class="surface-nested rounded p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <span>Pipeline Idle — Waiting for phone sync or new video chunks</span>
+        </div>
       </div>
     </div>
 
@@ -285,6 +141,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <script>
     let currentPublishMode = "private";
+    const STAGES = ["VERIFY", "TRANSCRIBE", "ANALYZE", "RENDER", "FINALIZE"];
 
     async function loadStatus() {
       try {
@@ -322,6 +179,108 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ publish_mode: mode })
       });
+    }
+
+    async function fetchPipelineJobs() {
+      try {
+        const res = await fetch("/api/pipeline/jobs");
+        const data = await res.json();
+        const container = document.getElementById("pipeline-jobs-container");
+        const badge = document.getElementById("active-jobs-badge");
+        const jobs = data.jobs || [];
+
+        const activeJobs = jobs.filter(j => j.status !== 'COMPLETED');
+        badge.innerText = `${activeJobs.length} active`;
+
+        if (activeJobs.length === 0) {
+          container.innerHTML = `
+            <div id="pipeline-idle-placeholder" class="surface-nested rounded p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <span>Pipeline Idle — Waiting for phone sync or new video chunks</span>
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = "";
+        activeJobs.forEach(job => {
+          const card = document.createElement("div");
+          card.className = "surface-nested rounded p-3 space-y-2 border border-white/5";
+
+          // Status Badge styling
+          let statusBadgeClass = "bg-slate-800 text-slate-300 border-slate-700";
+          let statusLabel = job.status;
+          if (job.status === "PROCESSING") {
+            statusBadgeClass = "bg-indigo-900/80 text-indigo-200 border-indigo-700 pulse-indicator";
+          } else if (job.status === "WAITING_FOR_AI") {
+            statusBadgeClass = "bg-amber-950/80 text-amber-300 border-amber-700";
+            statusLabel = "Waiting for AI (Backoff)";
+          } else if (job.status === "WAITING_FOR_RESOURCES") {
+            statusBadgeClass = "bg-rose-950/80 text-rose-300 border-rose-700";
+            statusLabel = "Waiting for Resources";
+          } else if (job.status === "RETRY_PENDING") {
+            statusBadgeClass = "bg-amber-900/80 text-amber-200 border-amber-600";
+            statusLabel = `Retry Pending (#${job.retry_count})`;
+          } else if (job.status === "FAILED_PERMANENT") {
+            statusBadgeClass = "bg-rose-900 text-rose-200 border-rose-700";
+          }
+
+          // Stage Progression Items
+          const currentStageIdx = STAGES.indexOf(job.current_stage);
+          const stageStepsHtml = STAGES.map((s, idx) => {
+            let stepClass = "text-slate-600 border-slate-800 bg-black/20";
+            let iconHtml = `<span class="w-3.5 h-3.5 flex items-center justify-center text-[9px] font-mono">${idx + 1}</span>`;
+
+            if (idx < currentStageIdx) {
+              // Passed
+              stepClass = "text-emerald-400 border-emerald-500/30 bg-emerald-950/30 font-medium";
+              iconHtml = `<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`;
+            } else if (idx === currentStageIdx) {
+              // Active
+              stepClass = "text-indigo-300 border-indigo-500/50 bg-indigo-950/50 font-semibold shadow-sm";
+              iconHtml = `<span class="w-1.5 h-1.5 rounded-full bg-indigo-400 pulse-indicator"></span>`;
+            }
+
+            return `
+              <div class="flex items-center space-x-1 px-2 py-0.5 rounded border text-[10px] ${stepClass}">
+                ${iconHtml}
+                <span>${s}</span>
+              </div>
+            `;
+          }).join("");
+
+          card.innerHTML = `
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div class="flex items-center space-x-2">
+                <span class="font-mono text-xs text-white font-medium">${job.filename || job.chunk_id || job.id}</span>
+                ${job.duration ? `<span class="text-[10px] text-slate-400 font-mono">(${job.duration.toFixed(1)}s, ${job.aspect_ratio || 'auto'})</span>` : ''}
+              </div>
+              <div class="flex items-center space-x-2">
+                ${job.worker_id ? `<span class="text-[10px] text-slate-500 font-mono hidden sm:inline">Worker: ${job.worker_id}</span>` : ''}
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono border ${statusBadgeClass}">${statusLabel}</span>
+              </div>
+            </div>
+
+            <!-- Stages visual sequence -->
+            <div class="flex items-center space-x-1.5 overflow-x-auto py-1">
+              ${stageStepsHtml}
+            </div>
+
+            ${job.last_error ? `
+              <div class="text-[10px] text-amber-300/90 font-mono bg-black/40 px-2 py-1 rounded border border-amber-900/30 truncate" title="${job.last_error}">
+                Error: ${job.last_error}
+              </div>
+            ` : ''}
+          `;
+
+          container.appendChild(card);
+        });
+
+      } catch (e) {
+        console.error("Fetch pipeline jobs error", e);
+      }
     }
 
     async function fetchClips() {
@@ -453,20 +412,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    // Auto-refresh every 10 seconds
+    // Auto-refresh loops
     setInterval(fetchClips, 10000);
+    setInterval(fetchPipelineJobs, 3000);
+
+    // Initial loads
     fetchClips();
+    fetchPipelineJobs();
   </script>
 </body>
 </html>
-"""
-
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard_home():
-    """Serve the single-page dashboard HTML."""
-    template_path = Path(__file__).parent / "templates" / "index.html"
-    if template_path.exists():
-        with open(template_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    return HTMLResponse(content=DASHBOARD_HTML)

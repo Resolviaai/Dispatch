@@ -191,5 +191,14 @@
    - Enforces Windows `BELOW_NORMAL_PRIORITY_CLASS` to keep UI, games, and browsing completely fluid.
 6. **25 Chaos Scenarios Verified**:
    - Verified `tests/test_chaos.py` passing 100% across all 25 failure modes (network cut at 5/50/99%, phone battery death, laptop power cuts, API 429 backoff, disk space floors).
+7. **Live Pipeline Stage Monitor in Web Dashboard**:
+   - Created `dispatch/web/templates/index.html`: Added a live active pipeline widget displaying real-time stage progression (`VERIFY` -> `TRANSCRIBE` -> `ANALYZE` -> `RENDER` -> `FINALIZE`), status pills (`PROCESSING`, `WAITING_FOR_AI`, `WAITING_FOR_RESOURCES`, `RETRY_PENDING`), and error details with 3s live polling.
+   - Updated `dispatch/web/app.py` to serve `templates/index.html` with graceful inline fallback.
+   - Updated `tests/test_web.py` asserting `/api/pipeline/jobs` and `/mobile` routes; passed 100%.
+8. **Tailscale Remote Mesh Documentation**:
+   - Added Section 8 in `README.md` detailing 2-minute zero-config WireGuard peer-to-peer setup between POCO C65 and Windows laptop for recording outside home networks.
+9. **Full Verification**:
+   - Ran 18 unit and chaos tests: 100% passed in < 1 second.
+   - Ran full autonomous E2E pipeline test (`tests/test_end_to_end.py`): 100% passed with synthesis, Whisper transcription, heuristic highlight packaging, 9:16 FFmpeg render, local storage auto-cleanup, and simulated multi-platform publishing.
 
 

@@ -194,7 +194,33 @@ Dispatch does **not** rely on third-party cloud storage (S3, R2, Supabase) or fr
 
 ---
 
-## 8. Resource Governor & Laptop Performance Manager
+## 8. Remote Connectivity & Outside-the-Home Sync (Tailscale Quickstart)
+
+To record while away from home (coffee shops, commuting, travel, outdoors) without paying for cloud storage or opening fragile router ports, Dispatch integrates with **Tailscale**: a free, zero-configuration WireGuard encrypted peer-to-peer mesh.
+
+### 2-Minute Setup:
+1. **On your Windows Laptop**:
+   - Download and install [Tailscale for Windows](https://tailscale.com/download/windows).
+   - Sign in with your Google or Microsoft account.
+   - Note your laptop's Tailscale IP (e.g. `100.85.12.34`) or MagicDNS name (e.g. `http://rohit-laptop:8765`).
+2. **On your POCO C65 Phone**:
+   - Install **Tailscale** from the Google Play Store.
+   - Sign in with the **same** account.
+   - Toggle Tailscale **ON**.
+3. **Record Anywhere**:
+   - Open your mobile browser and navigate to:
+     ```
+     http://<laptop-tailscale-ip>:8765/mobile
+     ```
+   - Chunks stream directly to your home laptop in the background over encrypted peer-to-peer WireGuard.
+4. **Intelligent Multi-Route Failover**:
+   - When home on the same Wi-Fi, `dispatch/transport/transport_manager.py` automatically routes sync over high-speed local LAN.
+   - When outside, it seamlessly falls back to Tailscale with zero manual switching.
+   - If your laptop is asleep or off, the phone keeps all chunks safely stored in its local outbox and automatically syncs when the laptop connects.
+
+---
+
+## 9. Resource Governor & Laptop Performance Manager
 
 Dispatch includes a hardware-aware **Resource Governor** (`dispatch/governor/`) preventing laptop lag, overheating, or battery drain:
 - **Windows Process Priority**: Runs worker threads with `BELOW_NORMAL_PRIORITY_CLASS` so foreground games, IDEs, and browsers remain smooth.
@@ -204,7 +230,7 @@ Dispatch includes a hardware-aware **Resource Governor** (`dispatch/governor/`) 
 
 ---
 
-## 9. Platform Publishing Credentials
+## 10. Platform Publishing Credentials
 
 ### YouTube Shorts
 - Save your OAuth 2.0 client secrets in Google Cloud Console.
@@ -216,7 +242,7 @@ Dispatch includes a hardware-aware **Resource Governor** (`dispatch/governor/`) 
 
 ---
 
-## 10. Running Automated Chaos & Failure Tests
+## 11. Running Automated Chaos & Failure Tests
 
 Run the comprehensive test suite validating all 25 mission-critical failure scenarios (network drops, phone battery death, laptop power cuts, API 429 timeouts, disk full, lease recoveries):
 
