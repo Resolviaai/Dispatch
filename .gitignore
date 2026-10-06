@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Dispatch local storage & media files
+storage/incoming/*
+!storage/incoming/.gitkeep
+storage/processing/*
+!storage/processing/.gitkeep
+storage/clips/*
+!storage/clips/.gitkeep
+storage/database/*.db
+storage/database/*.db-wal
+storage/database/*.db-shm
+!storage/database/.gitkeep
+storage/mobile/*
+!storage/mobile/.gitkeep
+
+# Media & temporary files
+*.mp4
+*.mkv
+*.mov
+*.wav
+*.mp3
+*.ass
+*.jpg
+*.jpeg
+*.png
+
+# Environment & credentials
+.env
+youtube_token.json
+client_secrets.json
+*.pem
+*.key
+
+# Editor & OS files
+.vscode/
+.idea/
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store
