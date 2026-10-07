@@ -67,50 +67,10 @@ fun ClipsScreen(
     var linkedInEnabled by remember { mutableStateOf(true) }
     var twitterEnabled by remember { mutableStateOf(false) }
 
-    // Load clips from PC server
+    // Clip review stays on the PC dashboard; the phone does not poll the PC.
     fun fetchClips() {
-        if (pairingManager.lanHost.isBlank()) return
-        isLoading = true
-        coroutineScope.launch(Dispatchers.IO) {
-            try {
-                val client = OkHttpClient()
-                val req = Request.Builder()
-                    .url("${pairingManager.lanHost.trimEnd('/')}/api/clips")
-                    .get()
-                    .build()
-
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val body = resp.body?.string() ?: ""
-                        val json = Gson().fromJson(body, JsonArray::class.java)
-                        val items = mutableListOf<RemoteClipItem>()
-                        for (i in 0 until json.size()) {
-                            val obj = json[i].asJsonObject
-                            items.add(
-                                RemoteClipItem(
-                                    id = obj.get("id")?.asString ?: "clip_$i",
-                                    title = obj.get("title")?.asString ?: "Generated Clip",
-                                    hook = obj.get("hook")?.asString ?: "Strong hook",
-                                    duration = obj.get("duration")?.asFloat ?: 42.0f,
-                                    status = obj.get("status")?.asString ?: "ready_review",
-                                    filename = obj.get("filename")?.asString ?: "clip.mp4"
-                                )
-                            )
-                        }
-                        withContext(Dispatchers.Main) {
-                            clipsList = items
-                            isLoading = false
-                            if (items.isNotEmpty()) {
-                                currentTitle = items[0].title
-                                currentCaption = items[0].hook
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-                withContext(Dispatchers.Main) { isLoading = false }
-            }
-        }
+        clipsList = emptyList()
+        isLoading = false
     }
 
     LaunchedEffect(Unit) {
@@ -418,32 +378,7 @@ fun ClipsScreen(
 
             Button(
                 onClick = {
-                    // Approve clip on PC
-                    coroutineScope.launch(Dispatchers.IO) {
-                        try {
-                            val client = OkHttpClient()
-                            val clipId = if (clipsList.isNotEmpty()) clipsList[0].id else "clip_01"
-                            val payload = "{\"title\":\"${currentTitle}\",\"publish_mode\":\"public\"}"
-                            val req = Request.Builder()
-                                .url("${pairingManager.lanHost.trimEnd('/')}/api/clips/$clipId/approve")
-                                .post(payload.toRequestBody("application/json".toMediaType()))
-                                .build()
-                            client.newCall(req).execute().use { resp ->
-                                withContext(Dispatchers.Main) {
-                                    if (resp.isSuccessful) {
-                                        Toast.makeText(context, "Clip Approved & Queued for Publish!", Toast.LENGTH_SHORT).show()
-                                        fetchClips()
-                                    } else {
-                                        Toast.makeText(context, "Approve failed: HTTP ${resp.code}", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(context, "Network error: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
+                    Toast.makeText(context, "Review and approve clips on the Dispatch PC dashboard.", Toast.LENGTH_LONG).show()
                 },
                 modifier = Modifier.weight(1.5f).height(48.dp),
                 shape = RoundedCornerShape(10.dp),

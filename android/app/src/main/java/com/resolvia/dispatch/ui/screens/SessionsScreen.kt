@@ -23,11 +23,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.data.SegmentEntity
 import com.resolvia.dispatch.data.durationSeconds
-import com.resolvia.dispatch.sync.LiveSyncManager
-import com.resolvia.dispatch.sync.SyncState
 import com.resolvia.dispatch.ui.components.NavigationTab
 import com.resolvia.dispatch.ui.theme.*
 import java.text.SimpleDateFormat
@@ -35,17 +32,16 @@ import java.util.*
 
 @Composable
 fun SessionsScreen(
-    syncState: SyncState,
-    pairingManager: PairingManager,
     recentSegments: List<SegmentEntity>,
     onSyncNow: () -> Unit,
     onNavigate: (NavigationTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
-    val isUploading = syncState.isSyncing || recentSegments.any { it.status == "QUEUED_FOR_UPLOAD" || it.status == "RECORDING" }
+    val isRecording = recentSegments.any { it.status == "RECORDING" }
     val totalBytes = recentSegments.sumOf { it.fileSizeBytes }
     val pendingCount = recentSegments.count { it.status == "QUEUED_FOR_UPLOAD" }
+    val uploadedCount = recentSegments.count { it.status == "UPLOADED_TO_YOUTUBE" }
 
     Column(
         modifier = modifier
@@ -71,14 +67,14 @@ fun SessionsScreen(
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = if (isUploading) "Session saved" else "Working on your clips",
+                    text = if (isRecording) "Recording" else "Upload status",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
                     color = TextPrimary
                 )
                 Text(
-                    text = if (isUploading) "Your recording has been saved locally." else "We're finding the best moments and preparing clips.",
+                    text = "Phone uploads go to YouTube. Dispatch PC processes the upload independently.",
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
@@ -149,7 +145,7 @@ fun SessionsScreen(
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // Circular Progress Indicator
-                val percent = if (syncState.isSyncing) syncState.percent else if (pendingCount == 0) 100 else 0
+                val percent = if (pendingCount == 0 && uploadedCount > 0) 100 else 0
                 Box(
                     modifier = Modifier.size(76.dp),
                     contentAlignment = Alignment.Center
@@ -186,42 +182,30 @@ fun SessionsScreen(
                     verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Text(
-                        text = if (percent == 100) "Uploaded to PC" else "Uploading to PC",
+                        text = when {
+                            pendingCount > 0 -> "Waiting to upload to YouTube"
+                            uploadedCount > 0 -> "Uploaded to YouTube"
+                            else -> "No uploads yet"
+                        },
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         color = TextPrimary
                     )
-                    val targetHost = syncState.connectedHost?.replace("http://", "") ?: pairingManager.lanHost.replace("http://", "")
                     Text(
-                        text = "Via Wi-Fi (${if (targetHost.isNotBlank()) targetHost else "192.168.0.102:8000"})",
+                        text = "Cloud inbox: YouTube",
                         fontSize = 11.sp,
                         color = TextSecondary
                     )
 
-                    val currMb = (syncState.currentBytes / (1024.0 * 1024.0)).toInt()
                     val totalMb = (totalBytes / (1024.0 * 1024.0)).toInt().coerceAtLeast(1)
                     Text(
-                        text = "$currMb MB / $totalMb MB",
+                        text = "$uploadedCount uploaded • $pendingCount queued • $totalMb MB on phone",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         color = TextMuted
                     )
 
-                    if (syncState.speedMbps > 0) {
-                        Text(
-                            text = String.format("%.1f MB/s • Uploading active", syncState.speedMbps),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = SemanticSuccessText
-                        )
-                    } else if (syncState.error != null) {
-                        Text(
-                            text = syncState.error ?: "",
-                            fontSize = 10.sp,
-                            color = SemanticRecordingText
-                        )
-                    }
                 }
             }
         }
@@ -229,13 +213,13 @@ fun SessionsScreen(
         // Action Trigger Button
         Button(
             onClick = onSyncNow,
-            enabled = !syncState.isSyncing,
+            enabled = pendingCount > 0,
             modifier = Modifier.fillMaxWidth().height(46.dp),
             shape = RoundedCornerShape(10.dp),
             colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
         ) {
             Text(
-                text = if (syncState.isSyncing) "UPLOADING CHUNKS..." else "SYNC NOW / RETRY ALL CHUNKS",
+                text = "RETRY YOUTUBE UPLOADS",
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 12.sp,
@@ -255,17 +239,17 @@ fun SessionsScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("📶", fontSize = 20.sp)
+                Text("☁️", fontSize = 20.sp)
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "You can leave the app",
+                        text = "Background YouTube upload",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
                     Text(
-                        text = "We'll keep uploading in the background.",
+                        text = "Uploads continue while Dispatch is in the background.",
                         fontSize = 11.sp,
                         color = TextSecondary
                     )
@@ -285,9 +269,9 @@ fun SessionsScreen(
         ) {
             PipelineStepIcon("✓", "Saved", isCompleted = true, isActive = false)
             Text("—", color = CardBorder)
-            PipelineStepIcon("↑", "Uploading", isCompleted = syncState.percent == 100, isActive = syncState.isSyncing)
+            PipelineStepIcon("↑", "YouTube", isCompleted = uploadedCount > 0, isActive = pendingCount > 0)
             Text("—", color = CardBorder)
-            PipelineStepIcon("✨", "Processing", isCompleted = false, isActive = syncState.percent == 100)
+            PipelineStepIcon("✨", "PC processing", isCompleted = false, isActive = false)
             Text("—", color = CardBorder)
             PipelineStepIcon("▶", "Clips ready", isCompleted = false, isActive = false)
         }

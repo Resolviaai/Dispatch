@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.work.*
 import com.resolvia.dispatch.data.AppDatabase
-import com.resolvia.dispatch.sync.ResumableSyncWorker
+import com.resolvia.dispatch.sync.YouTubeDirectUploadWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -20,7 +20,7 @@ class BootReceiver : BroadcastReceiver() {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     recoverInterruptedSessions(context)
-                    scheduleSyncWork(context)
+                    scheduleYouTubeUpload(context)
                 } finally {
                     pendingResult.finish()
                 }
@@ -69,19 +69,19 @@ class BootReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun scheduleSyncWork(context: Context) {
+    private fun scheduleYouTubeUpload(context: Context) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        val syncReq = OneTimeWorkRequestBuilder<ResumableSyncWorker>()
+        val uploadReq = OneTimeWorkRequestBuilder<YouTubeDirectUploadWorker>()
             .setConstraints(constraints)
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "dispatch_resumable_sync",
+            "dispatch_youtube_uploads_after_boot",
             ExistingWorkPolicy.REPLACE,
-            syncReq
+            uploadReq
         )
     }
 

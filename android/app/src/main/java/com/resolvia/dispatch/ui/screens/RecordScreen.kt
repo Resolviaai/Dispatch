@@ -35,8 +35,6 @@ import com.resolvia.dispatch.data.SegmentEntity
 import com.resolvia.dispatch.data.durationSeconds
 import com.resolvia.dispatch.recorder.CameraCaptureManager
 import com.resolvia.dispatch.recorder.SegmenterEngine
-import com.resolvia.dispatch.sync.LiveSyncManager
-import com.resolvia.dispatch.sync.SyncState
 import com.resolvia.dispatch.ui.components.NavigationTab
 import com.resolvia.dispatch.ui.theme.*
 import kotlinx.coroutines.delay
@@ -51,8 +49,6 @@ fun RecordScreen(
     segmenterEngine: SegmenterEngine,
     cameraCaptureManager: CameraCaptureManager,
     pairingManager: PairingManager,
-    liveSyncManager: LiveSyncManager,
-    syncState: SyncState,
     recentSegments: List<SegmentEntity>,
     onNavigate: (NavigationTab) -> Unit,
     modifier: Modifier = Modifier
@@ -67,7 +63,6 @@ fun RecordScreen(
         HomeRecordView(
             onStartRecording = onStartRecording,
             pairingManager = pairingManager,
-            syncState = syncState,
             recentSegments = recentSegments,
             onNavigate = onNavigate,
             modifier = modifier
@@ -82,7 +77,6 @@ fun RecordScreen(
 fun HomeRecordView(
     onStartRecording: () -> Unit,
     pairingManager: PairingManager,
-    syncState: SyncState,
     recentSegments: List<SegmentEntity>,
     onNavigate: (NavigationTab) -> Unit,
     modifier: Modifier = Modifier
@@ -131,11 +125,11 @@ fun HomeRecordView(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // PC Connection Badge Pill
-                val isOnline = syncState.isServerOnline
+                // YouTube account status. The phone does not connect to the PC.
+                val isOnline = pairingManager.isYouTubeConfigured
                 val badgeBg = if (isOnline) SemanticSuccessBg else SemanticWarningBg
                 val badgeDot = if (isOnline) SemanticSuccess else SemanticWarning
-                val badgeText = if (isOnline) "PC connected" else "Searching PC..."
+                val badgeText = if (isOnline) "YouTube ready" else "Set up YouTube"
 
                 Row(
                     modifier = Modifier
@@ -226,9 +220,9 @@ fun HomeRecordView(
         }
 
         // 4. Metric Cards Row (3 Cards: Ready, Processing, Attention)
-        val readyCount = recentSegments.count { it.status == "UPLOADED_TO_PC" || it.status == "UPLOADED_TO_YOUTUBE" }
+        val readyCount = recentSegments.count { it.status == "UPLOADED_TO_YOUTUBE" }
         val processingCount = recentSegments.count { it.status == "RECORDING" || it.status == "QUEUED_FOR_UPLOAD" }
-        val attentionCount = if (!syncState.isServerOnline && recentSegments.isNotEmpty()) 1 else 0
+        val attentionCount = recentSegments.count { it.status.startsWith("ERROR") }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -236,7 +230,7 @@ fun HomeRecordView(
         ) {
             MetricCard(
                 count = readyCount.toString(),
-                label = "clips ready",
+                label = "uploaded to YouTube",
                 modifier = Modifier.weight(1f),
                 onClick = { onNavigate(NavigationTab.CLIPS) }
             )
@@ -315,7 +309,7 @@ fun HomeRecordView(
                             ) {
                                 Text("✓", fontSize = 10.sp, color = SemanticSuccess)
                                 Text(
-                                    text = if (lastSeg.status == "UPLOADED_TO_PC") "Synced • Processing" else "Pending Sync",
+                                    text = if (lastSeg.status == "UPLOADED_TO_YOUTUBE") "Uploaded to YouTube" else "Waiting for YouTube upload",
                                     fontSize = 10.sp,
                                     color = SemanticSuccessText
                                 )

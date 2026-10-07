@@ -223,13 +223,12 @@ class TestTier1MobileEngine(DispatchE2EBaseTestCase):
         self.assertIn("distributionUrl", text)
         self.assertIn("gradle-", text)
 
-    def test_f10_all_23_kotlin_sources_exist_and_non_empty(self):
-        """F10.4: All core Kotlin source files exist and have non-empty length."""
+    def test_f10_active_kotlin_sources_exist_and_non_empty(self):
+        """F10.4: Active Android sources exist and have non-empty length."""
         expected_classes = [
             "DispatchApplication.kt",
             "MainActivity.kt",
             "data/AppDatabase.kt",
-            "data/NetworkDiscovery.kt",
             "data/OutboxEntity.kt",
             "data/PairingManager.kt",
             "data/RecordingDao.kt",
@@ -239,8 +238,6 @@ class TestTier1MobileEngine(DispatchE2EBaseTestCase):
             "recorder/CameraCaptureManager.kt",
             "recorder/RecordingForegroundService.kt",
             "recorder/SegmenterEngine.kt",
-            "sync/LiveSyncManager.kt",
-            "sync/ResumableSyncWorker.kt",
             "sync/YouTubeDirectUploadWorker.kt",
             "ui/components/BottomNavBar.kt",
             "ui/screens/ClipsScreen.kt",

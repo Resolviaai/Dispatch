@@ -1,55 +1,32 @@
 """FastAPI Web Dashboard for Dispatch.
-Provides a modern dark-canvas UI (Layer 0 #0B0F17) for reviewing, approving,
-and publishing video clips on both PC and mobile browsers.
+Provides the local PC dashboard for reviewing, approving, and publishing clips.
 """
 import os
-import shutil
 import psutil
 import logging
 import threading
 import time
 import re
-import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from dispatch.config import (
     CLIPS_DIR,
-    INCOMING_DIR,
-    PROCESSING_DIR,
     ROOT_DIR,
-    DEFAULT_PUBLISH_MODE,
-    ALLOWED_VIDEO_EXTENSIONS
+    DEFAULT_PUBLISH_MODE
 )
 from dispatch import db
-from dispatch.ingestion.validator import probe_video
-from dispatch.orchestrator.job_queue import enqueue_job
-from dispatch.ingestion.watcher import scan_incoming
-from dispatch.sync.receiver import router as sync_router
 from dispatch.youtube_inbox.catcher import (
     YouTubeInboxCatcher,
-    extract_youtube_video_id,
-    scan_channel_for_dispatch_uploads
+    extract_youtube_video_id
 )
 
 logger = logging.getLogger("dispatch.web")
 
 app = FastAPI(title="Dispatch Dashboard", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(sync_router)
-
 
 class ApproveRequest(BaseModel):
     title: Optional[str] = None
@@ -82,27 +59,19 @@ async def get_clip_file(filename: str):
     return FileResponse(file_path, media_type=media_type)
 
 
-@app.get("/mobile", response_class=HTMLResponse)
-@app.get("/mobile/recorder", response_class=HTMLResponse)
-async def get_mobile_recorder():
-    """Serve the standalone mobile camera recorder PWA for POCO C65 and Android phones."""
-    template_path = Path(__file__).parent / "templates" / "mobile_recorder.html"
-    if template_path.exists():
-        with open(template_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    return HTMLResponse("<h1>Mobile recorder template not found</h1>", status_code=404)
-
-
 @app.get("/download/dispatch.apk")
 async def download_android_apk():
     """Download the native Dispatch Android APK compiled for POCO C65."""
     apk_path = ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
-    if not apk_path.exists():
-        apk_path = ROOT_DIR / "storage" / "download" / "dispatch.apk"
-    if not apk_path.exists():
+    source_dir = ROOT_DIR / "android" / "app" / "src" / "main"
+    source_updated_at = max(
+        (path.stat().st_mtime for path in source_dir.rglob("*") if path.is_file()),
+        default=0,
+    )
+    if not apk_path.exists() or apk_path.stat().st_mtime < source_updated_at:
         raise HTTPException(
             status_code=404,
-            detail="Android APK is currently compiling. Please retry in a few seconds."
+            detail="The current Android source has not been built into an APK yet."
         )
     return FileResponse(
         str(apk_path),
@@ -214,104 +183,6 @@ async def update_settings(payload: SettingsRequest):
     return {"status": "success", "message": "Settings updated"}
 
 
-@app.post("/api/scan_incoming")
-async def trigger_scan():
-    """Manual trigger to scan incoming drops."""
-    staged = scan_incoming()
-    return {"status": "success", "staged_count": len(staged)}
-
-
-@app.post("/api/upload")
-async def handle_direct_upload(
-    file: UploadFile = File(...),
-    session_id: Optional[str] = Form(None)
-):
-    """Direct web upload endpoint for video files with immediate validation and pipeline enqueue."""
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file selected")
-
-    original_name = Path(file.filename).name
-    ext = Path(original_name).suffix.lower()
-    if ext not in ALLOWED_VIDEO_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported video format: '{ext}'. Allowed extensions: {', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))}"
-        )
-
-    sess_id = (session_id or "").strip() or f"web_upload_{int(time.time())}"
-    clean_stem = re.sub(r'[^A-Za-z0-9_-]', '_', Path(original_name).stem)[:48]
-    seg_id = f"{clean_stem}_{int(time.time())}"
-
-    temp_file = INCOMING_DIR / f"{seg_id}.direct_upload"
-    final_file = PROCESSING_DIR / f"{seg_id}{ext}"
-
-    hasher = hashlib.sha256()
-    total_bytes = 0
-    try:
-        with open(temp_file, "wb") as f:
-            while chunk := await file.read(1024 * 512):
-                f.write(chunk)
-                hasher.update(chunk)
-                total_bytes += len(chunk)
-
-        if total_bytes == 0:
-            temp_file.unlink(missing_ok=True)
-            raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes)")
-
-        computed_sha = hasher.hexdigest()
-        logger.info("Web direct upload received for %s (%d bytes, SHA: %s)", seg_id, total_bytes, computed_sha[:8])
-
-        if final_file.exists():
-            final_file.unlink(missing_ok=True)
-        shutil.move(str(temp_file), str(final_file))
-
-    except HTTPException:
-        temp_file.unlink(missing_ok=True)
-        raise
-    except Exception as e:
-        temp_file.unlink(missing_ok=True)
-        logger.exception("Failed to write uploaded video file %s", original_name)
-        raise HTTPException(status_code=500, detail=f"Failed to process upload: {str(e)}")
-
-    chunk_id = db.register_chunk(
-        session_id=sess_id,
-        filename=final_file.name,
-        filepath=str(final_file),
-        file_hash=computed_sha
-    )
-
-    is_valid, meta, err = probe_video(final_file)
-    if not is_valid:
-        final_file.unlink(missing_ok=True)
-        with db.get_db_connection() as conn:
-            conn.cursor().execute("UPDATE chunks SET status = 'corrupted' WHERE id = ?", (chunk_id,))
-            conn.commit()
-        raise HTTPException(status_code=400, detail=f"Video validation failed: {err}")
-
-    db.update_chunk_metadata(
-        chunk_id=chunk_id,
-        duration=meta.get("duration", 0),
-        width=meta.get("width", 0),
-        height=meta.get("height", 0),
-        aspect_ratio=meta.get("aspect_ratio", "16:9"),
-        status="verified"
-    )
-
-    job_id = enqueue_job(chunk_id=chunk_id, session_id=sess_id)
-    logger.info("Directly enqueued pipeline job %s for web uploaded chunk %s", job_id, chunk_id)
-
-    return {
-        "status": "queued",
-        "chunk_id": chunk_id,
-        "job_id": job_id,
-        "filename": final_file.name,
-        "bytes_received": total_bytes,
-        "duration": meta.get("duration", 0),
-        "aspect_ratio": meta.get("aspect_ratio", "16:9")
-    }
-
-
-
 @app.get("/api/youtube/inbox")
 async def get_youtube_inbox_items():
     """List YouTube Inbox items and their current processing status."""
@@ -342,27 +213,6 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest):
         "video_id": video_id,
         "message": f"YouTube video {video_id} accepted. Downloading, extracting transcript, and generating clips in background."
     }
-
-
-@app.post("/api/youtube/scan")
-async def scan_youtube_channel():
-    """Scan configured YouTube channel for [DISPATCH] video uploads."""
-    channel_id = db.get_setting("youtube_channel_id", os.getenv("DISPATCH_YOUTUBE_CHANNEL_ID", ""))
-    marker = db.get_setting("youtube_inbox_marker", "[DISPATCH]")
-    if not channel_id:
-        return {
-            "discovered": [],
-            "message": "No channel ID configured. Set DISPATCH_YOUTUBE_CHANNEL_ID in .env or settings."
-        }
-
-    discovered = scan_channel_for_dispatch_uploads(channel_id=channel_id, marker=marker)
-    # Automatically queue discovered videos
-    catcher = YouTubeInboxCatcher()
-    for item in discovered:
-        v_id = item["video_id"]
-        threading.Thread(target=catcher.process_video, args=(v_id,), daemon=True).start()
-
-    return {"discovered": discovered, "queued_count": len(discovered)}
 
 
 # --- Integrations & Authentication APIs ---
@@ -421,7 +271,6 @@ async def update_gemini_key(payload: GeminiKeyRequest):
 
     env_path = ROOT_DIR / ".env"
     env_content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-    import re
     if "GEMINI_API_KEY=" in env_content:
         env_content = re.sub(r"GEMINI_API_KEY=.*", f"GEMINI_API_KEY={new_key}", env_content)
     else:

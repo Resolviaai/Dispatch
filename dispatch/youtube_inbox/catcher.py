@@ -262,7 +262,9 @@ class YouTubeInboxCatcher:
         total_duration = info["duration"]
         if total_duration <= 0.0:
             from dispatch.ingestion.validator import probe_video
-            meta = probe_video(local_video_path)
+            valid, meta, error = probe_video(local_video_path)
+            if not valid:
+                raise RuntimeError(f"Downloaded YouTube video is not readable: {error}")
             total_duration = meta.get("duration", 60.0)
 
         # Also register a chunk in the DB so clips have a valid chunk_id reference
@@ -303,6 +305,8 @@ class YouTubeInboxCatcher:
         )
 
         logger.info("Identified %d candidate clips for YouTube video %s", len(clip_ids), video_id)
+        if not clip_ids:
+            raise RuntimeError(f"Gemini returned no renderable highlights for YouTube video {video_id}")
 
         # 6. Render candidate clips (RENDERING)
         db.update_youtube_video(video_id, status="RENDERING")
@@ -333,7 +337,12 @@ class YouTubeInboxCatcher:
                 )
                 rendered_clips.append(cid)
             except Exception as e:
-                logger.error("Failed to render clip %s: %s", cid, e)
+                logger.exception("Failed to render clip %s", cid)
+                db.update_youtube_video(video_id, status="FAILED", last_error=f"FFmpeg render failed: {e}")
+                raise
+
+        if not rendered_clips:
+            raise RuntimeError(f"FFmpeg did not produce an output clip for YouTube video {video_id}")
 
         db.update_youtube_video(video_id, status="CLIPS_CREATED")
         logger.info("YouTube Inbox processing complete for %s. %d clips ready for review.", video_id, len(rendered_clips))

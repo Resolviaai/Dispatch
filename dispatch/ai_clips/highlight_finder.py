@@ -47,7 +47,18 @@ def extract_clips_gemini(transcript_text: str, segments: List[Dict[str, Any]]) -
     negative_context = get_negative_feedback_prompt()
     user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    # Use the 4 available models from Google AI Studio quota tier:
+    # 1. gemini-3.5-flash (primary high-quality model)
+    # 2. gemini-3.8-flash (primary alternative)
+    # 3. gemini-3.5-flash-lite (fast lightweight fallback)
+    # 4. gemini-3.1-flash-lite (high RPM/RPD fallback)
+    CANDIDATE_MODELS = [
+        "gemini-3.5-flash",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
+    ]
+
     headers = {
         "x-goog-api-key": GEMINI_API_KEY,
         "Content-Type": "application/json"
@@ -68,22 +79,23 @@ def extract_clips_gemini(transcript_text: str, segments: List[Dict[str, Any]]) -
         }
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=25)
-        if response.status_code != 200:
-            logger.warning("Gemini Flash API returned %d: %s", response.status_code, response.text[:200])
-            return None
-
-        data = response.json()
-        raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        clips = json.loads(raw_text)
-
-        if isinstance(clips, list) and len(clips) > 0:
-            logger.info("Gemini Flash successfully identified %d clips", len(clips))
-            return clips
-    except Exception as e:
-        logger.warning("Gemini Flash API request failed: %s", e)
-        return None
+    for model_name in CANDIDATE_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        try:
+            logger.info("Requesting highlight extraction via %s...", model_name)
+            response = requests.post(url, headers=headers, json=payload, timeout=45)
+            if response.status_code == 200:
+                data = response.json()
+                raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                clips = json.loads(raw_text)
+                if isinstance(clips, list) and len(clips) > 0:
+                    logger.info("Gemini (%s) successfully identified %d clips", model_name, len(clips))
+                    return clips
+            else:
+                logger.warning("Gemini model %s returned %d: %s. Trying next model...",
+                               model_name, response.status_code, response.text[:150])
+        except Exception as e:
+            logger.warning("Gemini model %s request failed (%s). Trying next model...", model_name, e)
 
     return None
 
@@ -203,14 +215,12 @@ def identify_and_save_highlights(
         transcript_lines.append(f"[{int(start_m):02d}:{start_s:05.2f} -> {int(end_m):02d}:{end_s:05.2f}] {s['text']}")
     transcript_text = "\n".join(transcript_lines)
 
-    # 1. Use Gemini Flash when configured, or offline heuristic when no API key / API failure
-    raw_clips = None
-    if GEMINI_API_KEY:
-        raw_clips = extract_clips_gemini(transcript_text, segments)
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is required to analyze YouTube inbox videos")
 
+    raw_clips = extract_clips_gemini(transcript_text, segments)
     if not raw_clips:
-        logger.info("Using local heuristic highlight engine (Gemini unavailable or returned no clips).")
-        raw_clips = extract_clips_local_heuristic(segments, total_duration)
+        raise RuntimeError("Gemini did not return usable highlight clips")
 
     saved_clip_ids = []
 

@@ -3,7 +3,6 @@ package com.resolvia.dispatch.ui.screens
 import android.content.Context
 import android.os.Environment
 import android.os.StatFs
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,32 +21,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.resolvia.dispatch.data.PairingManager
-import com.resolvia.dispatch.sync.LiveSyncManager
-import com.resolvia.dispatch.sync.SyncState
 import com.resolvia.dispatch.ui.theme.*
-import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(
     pairingManager: PairingManager,
-    liveSyncManager: LiveSyncManager,
-    syncState: SyncState,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    var hostInput by remember { mutableStateOf(pairingManager.lanHost.ifBlank { "http://192.168.0.102:8000" }) }
-    var pinInput by remember { mutableStateOf(pairingManager.pairingPin) }
-    var isTestingConnection by remember { mutableStateOf(false) }
-    var isPairingWithPin by remember { mutableStateOf(false) }
-    var autoWifiSyncEnabled by remember { mutableStateOf(true) }
     var autoSegmentEnabled by remember { mutableStateOf(true) }
-    var ytCloudEnabled by remember { mutableStateOf(pairingManager.isYouTubeConfigured) }
+    var isYouTubeConfigured by remember { mutableStateOf(pairingManager.isYouTubeConfigured) }
+    var refreshToken by remember { mutableStateOf(pairingManager.youtubeRefreshToken) }
+    var clientId by remember { mutableStateOf(pairingManager.youtubeClientId) }
+    var clientSecret by remember { mutableStateOf(pairingManager.youtubeClientSecret) }
 
     // Storage stat
     val (freeGb, totalGb) = getStorageStats()
@@ -70,268 +61,28 @@ fun SettingsScreen(
             modifier = Modifier.padding(top = 4.dp)
         )
 
-        // 2. PC Connection Card (Screen 6)
-        Text(
-            text = "PC Connection",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextSecondary
-        )
-
+        // YouTube credentials are stored on the phone and used only for YouTube uploads.
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(CardSurface, RoundedCornerShape(14.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(14.dp))
-                .padding(16.dp)
+            modifier = Modifier.fillMaxWidth().background(CardSurface, RoundedCornerShape(14.dp))
+                .border(1.dp, CardBorder, RoundedCornerShape(14.dp)).padding(16.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(InputBackground, RoundedCornerShape(10.dp))
-                            .border(1.dp, CardBorder, RoundedCornerShape(10.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "PC",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = PrimarySky
-                        )
-                    }
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            val isOnline = syncState.isServerOnline
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(if (isOnline) SemanticSuccess else SemanticWarning, CircleShape)
-                            )
-                            Text(
-                                text = if (isOnline) "Connected" else "Disconnected",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isOnline) SemanticSuccessText else SemanticWarningText
-                            )
-                        }
-
-                        Text(
-                            text = hostInput.replace("http://", ""),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = TextMuted
-                        )
-                    }
-                }
-
-                // PC Host Address Input
-                OutlinedTextField(
-                    value = hostInput,
-                    onValueChange = { hostInput = it },
-                    label = { Text("PC Host URL / IP", fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = TextPrimary
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = InputBackground,
-                        unfocusedContainerColor = InputBackground,
-                        focusedBorderColor = PrimarySky,
-                        unfocusedBorderColor = CardBorder,
-                        focusedLabelColor = PrimarySky,
-                        unfocusedLabelColor = TextMuted
-                    )
-                )
-
-                // 6-Digit Pairing PIN Input
-                OutlinedTextField(
-                    value = pinInput,
-                    onValueChange = { if (it.length <= 6) pinInput = it },
-                    label = { Text("6-Digit Pairing PIN", fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
-                    placeholder = { Text("e.g. 123456", fontSize = 12.sp, color = TextMuted, fontFamily = FontFamily.Monospace) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = InputBackground,
-                        unfocusedContainerColor = InputBackground,
-                        focusedBorderColor = PrimarySky,
-                        unfocusedBorderColor = CardBorder,
-                        focusedLabelColor = PrimarySky,
-                        unfocusedLabelColor = TextMuted
-                    )
-                )
-
-                // Action Buttons: Pair with PIN, Test Connection, Reconnect
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            isPairingWithPin = true
-                            pairingManager.autoPairFromHost(hostInput, pinInput) { success, msg ->
-                                isPairingWithPin = false
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1.1f).height(42.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                        enabled = !isPairingWithPin
-                    ) {
-                        Text(
-                            text = if (isPairingWithPin) "Pairing..." else "Pair (PIN)",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            color = Color.White
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            isTestingConnection = true
-                            coroutineScope.launch {
-                                val ok = liveSyncManager.networkDiscovery.pingEndpoint(hostInput)
-                                isTestingConnection = false
-                                Toast.makeText(
-                                    context,
-                                    if (ok) "PC is Reachable & Online!" else "Could not reach PC at $hostInput",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        },
-                        modifier = Modifier.weight(0.9f).height(42.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder),
-                        enabled = !isTestingConnection
-                    ) {
-                        Text(
-                            text = if (isTestingConnection) "Testing..." else "Test ping",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = TextPrimary
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            isTestingConnection = true
-                            coroutineScope.launch {
-                                val discovered = liveSyncManager.networkDiscovery.discoverAndConnect(timeoutMs = 2500L)
-                                isTestingConnection = false
-                                if (discovered != null) {
-                                    hostInput = discovered
-                                    pinInput = pairingManager.pairingPin
-                                    Toast.makeText(context, "Discovered & Paired: $discovered", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Search timed out. Check Wi-Fi.", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1.0f).height(42.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder),
-                        enabled = !isTestingConnection
-                    ) {
-                        Text(
-                            text = "Auto-Find",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = TextPrimary
-                        )
-                    }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("YouTube upload account", fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold, color = TextPrimary)
+                Text("Enter the refresh token, client ID, and client secret from your authorized YouTube OAuth credentials. The phone uploads directly to YouTube and does not connect to the PC.", fontSize = 11.sp, color = TextSecondary)
+                OutlinedTextField(value = refreshToken, onValueChange = { refreshToken = it }, label = { Text("Refresh token") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = clientId, onValueChange = { clientId = it }, label = { Text("OAuth client ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = clientSecret, onValueChange = { clientSecret = it }, label = { Text("OAuth client secret") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                Button(onClick = {
+                    pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
+                    isYouTubeConfigured = pairingManager.isYouTubeConfigured
+                }, enabled = refreshToken.isNotBlank() && clientId.isNotBlank() && clientSecret.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
+                    Text("Save YouTube credentials")
                 }
             }
         }
 
-        // 3. Background Sync Section
-        Text(
-            text = "Background Sync",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextSecondary
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(CardSurface, RoundedCornerShape(14.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(14.dp))
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("📶", fontSize = 20.sp)
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = "Sync over Wi-Fi automatically",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                        Text(
-                            text = "Uploads start complete after each recording. You can leave the app.",
-                            fontSize = 10.sp,
-                            color = TextSecondary
-                        )
-                    }
-                }
-
-                Switch(
-                    checked = autoWifiSyncEnabled,
-                    onCheckedChange = { autoWifiSyncEnabled = it },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = PrimaryBlue
-                    )
-                )
-            }
-        }
-
-        // 4. YouTube Cloud Sync Section (User Priority)
+        // YouTube upload status
         Text(
             text = "YouTube Cloud Inbox",
             fontFamily = FontFamily.Monospace,
@@ -360,27 +111,26 @@ fun SettingsScreen(
                     Text("☁️", fontSize = 20.sp)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            text = "Direct YouTube Cloud Sync",
+                            text = "Direct phone-to-YouTube upload",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary
                         )
                         Text(
-                            text = if (pairingManager.isYouTubeConfigured) "Connected to YouTube. Cloud transcription active." else "Pair with PC on Wi-Fi to sync YouTube credentials.",
+                            text = if (isYouTubeConfigured) "Ready. Uploads go to YouTube; PC processing runs independently." else "Add YouTube OAuth credentials above. The PC is not contacted by the phone.",
                             fontSize = 10.sp,
-                            color = if (pairingManager.isYouTubeConfigured) SemanticSuccessText else TextSecondary
+                            color = if (isYouTubeConfigured) SemanticSuccessText else TextSecondary
                         )
                     }
                 }
 
-                Switch(
-                    checked = ytCloudEnabled,
-                    onCheckedChange = { ytCloudEnabled = it },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = PrimaryBlue
-                    )
+                Text(
+                    text = if (isYouTubeConfigured) "READY" else "SET UP",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isYouTubeConfigured) SemanticSuccessText else TextSecondary
                 )
             }
         }

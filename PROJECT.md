@@ -1,5 +1,9 @@
 # Project: Dispatch — Autonomous Personal Content Engine
 
+## Current Architecture (2026-10-07)
+
+The active target is **Phone → Record → YouTube; PC → detect upload → download original → YouTube captions (Whisper only when unavailable) → Gemini → FFmpeg clip → PC dashboard**. Phone-to-PC LAN/Tailscale sync and discovery are obsolete. The current handoff and milestone status are in `PROGRESS.md`; the architecture and feature tables below are retained as historical project context and are not current requirements where they conflict with this section.
+
 ## Architecture
 Dispatch is a dual-tier autonomous personal content engine:
 1. **Android Capture Tier (POCO C65)**:

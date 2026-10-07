@@ -38,9 +38,9 @@ The system is built so the user only touches 5 high-value, tactile actions:
 💻 Laptop (Dispatch Catcher Daemon)
    └── Starts immediately on boot + polls every 10 min
        └── Discovers [DISPATCH] uploads matching dispatch_id
-       └── Downloads highest quality 1080p MP4 via yt-dlp
-       └── Extracts timestamped transcript (YouTube VTT captions -> local Whisper fallback)
-       └── Gemini Flash analyzes hooks, complete thoughts & retention
+       └── Downloads the original video via yt-dlp
+       └── Retrieves YouTube captions when available (local Whisper fallback)
+       └── Sends the timestamped transcript to Gemini for clip selection
        └── FFmpeg cuts clips, formats 9:16 vertical video & burns ASS captions
           │
           ▼
@@ -48,12 +48,11 @@ The system is built so the user only touches 5 high-value, tactile actions:
    └── Live clip preview → 1-click Approve → Dispatches across platforms
 ```
 
-### Why this architecture?
-- **Zero Network Setup**: You don't need port-forwarding, static IPs, or to ensure your laptop is awake when recording.
-- **Phone = Durable Thrower**: Records, queues upload, sends to YouTube, done.
-- **YouTube = Cloud Buffer**: Holds recordings safely until laptop wakes up.
-- **Laptop = Opportunistic Worker**: Catches videos whenever powered on, processes in background with low CPU priority.
-- **Offline / Local Fallback**: Also retains peer-to-peer Wi-Fi TUS sync if recording without internet.
+### Current architecture boundary
+- The phone records and uploads directly to YouTube. It does not discover, pair with, or transfer video to the PC.
+- The PC polls the authenticated YouTube account, downloads each Dispatch upload, processes it, and serves the review dashboard locally.
+- If phone credentials are missing, the upload stays queued; there is no PC/LAN fallback.
+- Private uploads are still the intended phone setting. Confirm that the PC can download a private upload before declaring the end-to-end milestone complete.
 
 ---
 
@@ -139,10 +138,9 @@ python -m dispatch.main
 You will see:
 ```text
 BOOTING DISPATCH: AUTONOMOUS PERSONAL CONTENT ENGINE
-Database & Job Queue initialized
-Autonomous pipeline worker thread running in background
+Database initialized
 Autonomous YouTube Cloud Inbox poller active
-Launching Web Dashboard on http://0.0.0.0:8000
+Launching Web Dashboard on http://127.0.0.1:8000
 ```
 
 ### Step 4: Access Dashboard
@@ -160,14 +158,9 @@ Open **http://localhost:8000** in your browser.
    - Pro Camera controls: Front/Back lens toggle, LED torch, AE/AF locking, tap-to-focus.
    - Background `RecordingForegroundService` keeps recording even when screen is locked.
    - `YouTubeDirectUploadWorker` automatically uploads recordings to YouTube as Private upon tapping Stop.
+4. In **Settings**, enter the authorized account's YouTube OAuth refresh token, client ID, and client secret. The app stores them on the phone and uploads directly to YouTube; it does not pair with the PC.
 
-### Option B: Zero-Install Mobile Web PWA Recorder
-1. Open your phone's browser and navigate to:
-   ```
-   http://<your-laptop-ip>:8000/mobile
-   ```
-2. Tap the large Record button.
-3. Automatically syncs recordings to your laptop over local Wi-Fi.
+The phone and PC operate independently after YouTube is configured. Review generated clips at `http://localhost:8000` on the PC.
 
 ---
 

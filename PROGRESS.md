@@ -1,3 +1,75 @@
+# Current Handoff for Antigravity — 2026-10-07
+
+This section is the current source of truth and supersedes conflicting historical implementation notes below. Historical notes and architecture decisions are retained for context.
+
+## 1. Current architecture
+
+- **Phone:** CameraX records locally, then WorkManager uploads the recording directly to the Dispatch YouTube account. The phone must not discover, pair with, poll, or send video to the PC.
+- **PC:** The Dispatch daemon polls the authenticated YouTube uploads playlist, downloads each new Dispatch upload, retrieves YouTube captions when available (local Whisper fallback otherwise), sends the transcript to Gemini, renders selected clips with FFmpeg, and serves results in the PC dashboard.
+- **Review:** The dashboard is PC-local at `http://localhost:8000`.
+
+## 2. Completed changes in this work session
+
+- Removed phone startup/server polling, LAN sync scheduling, and subnet-discovery scheduling from the active Android app.
+- Phone recording now enqueues only `YouTubeDirectUploadWorker`; missing YouTube credentials no longer fall back to PC/LAN transfer.
+- Replaced Android LAN/Tailscale pairing storage with YouTube-only credentials and a local settings form. The phone can upload after a user enters its YouTube OAuth refresh token, client ID, and client secret.
+- Removed old PC upload, mobile-recorder serving, incoming-folder scan, and sync-router routes from the active FastAPI dashboard. Removed PC/phone pairing, direct file-upload, manual channel-scan, and phone polling UI from the served dashboard.
+- PC host default is now `127.0.0.1`.
+- PC startup now starts the YouTube poller and dashboard; it no longer starts the old phone-file ingestion worker or UDP discovery beacon.
+- Poller no longer uses public-channel scraping as a substitute for authenticated account discovery.
+- YouTube inbox analysis now requires Gemini; it no longer silently substitutes the local heuristic. Empty Gemini output and failed FFmpeg renders surface as `FAILED` rather than a completed inbox item.
+- Removed the Android-only `LiveSyncManager.kt`, `ResumableSyncWorker.kt`, and `NetworkDiscovery.kt`, plus the unused Python `dispatch_mobile/sync_client.py`. The Android source inventory assertion was updated for those removals.
+- Kept `YouTubeDirectUploadWorker.kt`; it is the required phone-to-YouTube path, not the obsolete phone-to-PC worker.
+
+## 3. Deleted files and why
+
+- `android/app/src/main/java/com/resolvia/dispatch/sync/LiveSyncManager.kt` — active phone-to-PC streaming, discovery calls, and resumable transfer UI state.
+- `android/app/src/main/java/com/resolvia/dispatch/sync/ResumableSyncWorker.kt` — WorkManager LAN/Tailscale file upload worker.
+- `android/app/src/main/java/com/resolvia/dispatch/data/NetworkDiscovery.kt` — UDP discovery and local subnet probing for the PC receiver.
+- `dispatch_mobile/sync_client.py` — standalone Python phone-to-laptop resumable sync client; repository search found no external imports/usages.
+
+No progress, architecture, decision, TODO, recording, database, YouTube, Gemini, FFmpeg, or pipeline documentation/files were deleted.
+
+## 4. Intentionally kept
+
+- `YouTubeDirectUploadWorker.kt`, CameraX recording, Android Room models/DAO, boot recovery, and WorkManager scheduling remain because they support recording and YouTube cloud upload.
+- `dispatch/youtube_inbox/`, YouTube OAuth, transcript parsing, Gemini highlight logic, FFmpeg rendering, dashboard, database, and pipeline state remain.
+- Existing `dispatch/sync/receiver.py` and `dispatch/transport/` are no longer mounted or started by the app, but remain because legacy Python tests still import and exercise them. Do not delete until those tests are migrated to the YouTube architecture.
+- `dispatch/web/templates/mobile_recorder.html` remains as UI source, but `/mobile` no longer serves it. It still contains old sync requests; keep it disconnected unless its removal is separately confirmed because it is UI code.
+- `dispatch_mobile/` recording, recovery, and retention code remains; it is recording/state behavior, not the standalone network sync client.
+- `PROJECT.md`, this file's historical log, `README.md`, and `docs/MASTER_ARCHITECTURE_AUDIT_AND_PLAN.md` remain as context. Older network-sync entries are historical and are superseded by this handoff.
+
+## 5. Current status and blockers
+
+- Code changes are in progress and have **not** completed the first real-video milestone.
+- Android build is unverified. Android Studio's JBR exists, but the wrapper could not use the profile Gradle lock, the offline workspace cache lacked the Gradle distribution, and network access could not download it. Direct Gradle invocation also could not connect to its local daemon.
+- No ADB executable or connected phone is available in this workspace, so no real phone recording/upload was performed.
+- `GEMINI_API_KEY` is not configured here. Gemini analysis and the complete PC pipeline could not be run.
+- A local `youtube_token.json` file exists, but its account access and scopes were not tested or exposed.
+- Phone uploads remain `private`. The PC uses `yt-dlp` without a browser cookie/session. Confirm that the PC can download a private upload from the same account; YouTube Data API upload-list OAuth alone does not prove media download works. Do not silently change visibility without deciding this compatibility point.
+- A full run must verify: phone capture → YouTube upload → PC detection → original download → YouTube caption retrieval → Gemini input/response → FFmpeg output → dashboard clip.
+
+## 6. Important decisions and constraints
+
+- YouTube is the only phone-to-PC handoff. No LiveSync, LAN/Tailscale pairing, subnet sweep, direct video upload, or PC reachability loop may return.
+- Keep YouTube's own resumable upload protocol inside `YouTubeDirectUploadWorker`; it uploads to YouTube and is distinct from the deleted PC sync worker.
+- Gemini must receive the transcript for analysis. A missing key/API failure must not be reported as successful clip analysis.
+- Keep captions-first behavior and local Whisper only when YouTube captions are unavailable.
+- Do not spend effort on advanced recovery or networking before the first end-to-end sample works.
+- Do not delete old components with active legacy test imports until those tests are migrated. Preserve all docs/history and all recording, DB, YouTube, Gemini, FFmpeg, and pipeline code.
+
+## 7. Exact next step for the next coding agent
+
+Use an environment with the Gradle 8.13 distribution and the POCO C65 attached. Build `android/app` (`assembleDebug`), fix only compile errors in this migration, install the APK, enter the account's authorized YouTube OAuth refresh token/client ID/client secret in Settings, then record and upload one short real clip. On the PC, run the poller against that same account and verify private-video download first. Continue through captions, Gemini, FFmpeg, and the dashboard; stop and diagnose the first failed stage before adding more code. Record the observed video ID and stage-by-stage result here without copying OAuth secrets.
+
+## Validation performed for this cleanup
+
+- Repository-wide `rg` checks found no active Android references to the deleted workers/discovery manager or to the deleted Python sync client. Remaining old sync route references are in preserved legacy Python tests, `dispatch/sync/receiver.py`, `dispatch/transport/`, and the retained historical/PWA documentation; the receiver and PWA routes are not mounted by the active dashboard.
+- Python compilation passed for the changed daemon, config, dashboard, YouTube poller/catcher, and Gemini highlight finder. Importing the FastAPI app confirmed it exposes no `/api/sync`, `/api/upload`, `/api/scan_incoming`, or `/mobile` routes.
+- `git diff --check` passed. The Android Gradle build and real phone-to-dashboard flow remain unverified for the environment limitations above.
+
+---
+
 # Dispatch: Live Progress & System Log
 
 **Last Updated:** 2026-10-06  

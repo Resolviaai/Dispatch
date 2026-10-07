@@ -3,7 +3,6 @@ package com.resolvia.dispatch.recorder
 import android.content.Context
 import androidx.work.*
 import com.resolvia.dispatch.data.*
-import com.resolvia.dispatch.sync.ResumableSyncWorker
 import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileInputStream
@@ -160,7 +159,7 @@ class SegmenterEngine(
         )
 
         // Trigger WorkManager background sync immediately
-        triggerBackgroundSync()
+        triggerYouTubeUpload()
     }
 
     suspend fun stopSession(cameraManager: CameraCaptureManager) = withContext(Dispatchers.Main) {
@@ -186,29 +185,18 @@ class SegmenterEngine(
         }
     }
 
-    fun triggerBackgroundSync() {
+    fun triggerYouTubeUpload() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        // 1. Enqueue LAN / Direct server sync worker
-        val lanWork = OneTimeWorkRequestBuilder<com.resolvia.dispatch.sync.ResumableSyncWorker>()
-            .setConstraints(constraints)
-            .build()
-
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "DispatchResumableSyncWorker",
-            ExistingWorkPolicy.KEEP,
-            lanWork
-        )
-
-        // 2. Enqueue YouTube Direct Cloud Upload worker
+        // Recordings leave the phone only through the YouTube cloud inbox.
         val ytSyncWork = OneTimeWorkRequestBuilder<com.resolvia.dispatch.sync.YouTubeDirectUploadWorker>()
             .setConstraints(constraints)
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "DispatchYouTubeDirectUploadWorker",
+            "DispatchYouTubeUploadWorker",
             ExistingWorkPolicy.KEEP,
             ytSyncWork
         )

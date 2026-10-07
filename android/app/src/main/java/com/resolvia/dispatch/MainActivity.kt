@@ -1,7 +1,6 @@
 package com.resolvia.dispatch
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -11,7 +10,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -25,16 +23,13 @@ import com.resolvia.dispatch.data.AppDatabase
 import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.recorder.CameraCaptureManager
 import com.resolvia.dispatch.recorder.SegmenterEngine
-import com.resolvia.dispatch.sync.LiveSyncManager
 import com.resolvia.dispatch.ui.components.DispatchBottomBar
 import com.resolvia.dispatch.ui.components.NavigationTab
-import com.resolvia.dispatch.ui.screens.ClipsScreen
 import com.resolvia.dispatch.ui.screens.RecordScreen
 import com.resolvia.dispatch.ui.screens.SessionsScreen
 import com.resolvia.dispatch.ui.screens.SettingsScreen
 import com.resolvia.dispatch.ui.theme.CanvasBackground
 import com.resolvia.dispatch.ui.theme.DispatchTheme
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -43,7 +38,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var cameraCaptureManager: CameraCaptureManager
     private lateinit var database: AppDatabase
     private lateinit var pairingManager: PairingManager
-    private lateinit var liveSyncManager: LiveSyncManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,7 +48,6 @@ class MainActivity : ComponentActivity() {
         segmenterEngine = SegmenterEngine(this, database)
         cameraCaptureManager = CameraCaptureManager(this)
         pairingManager = PairingManager(this)
-        liveSyncManager = LiveSyncManager(this)
 
         setContent {
             DispatchApp(
@@ -63,7 +56,6 @@ class MainActivity : ComponentActivity() {
                 cameraCaptureManager = cameraCaptureManager,
                 database = database,
                 pairingManager = pairingManager,
-                liveSyncManager = liveSyncManager
             )
         }
     }
@@ -76,14 +68,12 @@ fun DispatchApp(
     cameraCaptureManager: CameraCaptureManager,
     database: AppDatabase,
     pairingManager: PairingManager,
-    liveSyncManager: LiveSyncManager
 ) {
     val context = activity
     var currentTab by remember { mutableStateOf(NavigationTab.RECORD) }
     var isRecording by remember { mutableStateOf(false) }
 
     val recentSegments by database.recordingDao().getAllSegmentsFlow().collectAsState(initial = emptyList())
-    val syncState by liveSyncManager.syncState.collectAsState()
 
     // Required camera & mic permissions
     var hasCameraPermission by remember { mutableStateOf(false) }
@@ -119,11 +109,6 @@ fun DispatchApp(
             permissionLauncher.launch(permissionsToRequest)
         }
 
-        // Autonomous server discovery loop (every 10s)
-        while (true) {
-            liveSyncManager.probeServerStatus()
-            delay(10000L)
-        }
     }
 
     DispatchTheme {
@@ -171,18 +156,12 @@ fun DispatchApp(
                                         isRecording = false
                                         // Navigate to Sessions tab to see upload sync
                                         currentTab = NavigationTab.SESSIONS
-                                        // Trigger sync in background
-                                        segmenterEngine.triggerBackgroundSync()
-                                        (activity.application as? DispatchApplication)?.applicationScope?.launch {
-                                            liveSyncManager.syncNow()
-                                        }
+                                        segmenterEngine.triggerYouTubeUpload()
                                     }
                                 },
                                 segmenterEngine = segmenterEngine,
                                 cameraCaptureManager = cameraCaptureManager,
                                 pairingManager = pairingManager,
-                                liveSyncManager = liveSyncManager,
-                                syncState = syncState,
                                 recentSegments = recentSegments,
                                 onNavigate = { currentTab = it }
                             )
@@ -190,32 +169,21 @@ fun DispatchApp(
 
                         NavigationTab.SESSIONS -> {
                             SessionsScreen(
-                                syncState = syncState,
-                                pairingManager = pairingManager,
                                 recentSegments = recentSegments,
                                 onSyncNow = {
-                                    segmenterEngine.triggerBackgroundSync()
-                                    (activity.application as? DispatchApplication)?.applicationScope?.launch {
-                                        liveSyncManager.syncNow()
-                                    } ?: activity.lifecycleScope.launch {
-                                        liveSyncManager.syncNow()
-                                    }
+                                    segmenterEngine.triggerYouTubeUpload()
                                 },
                                 onNavigate = { currentTab = it }
                             )
                         }
 
-                        NavigationTab.CLIPS -> {
-                            ClipsScreen(
-                                pairingManager = pairingManager
-                            )
+                        NavigationTab.CLIPS -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                            androidx.compose.material3.Text("Review clips on the Dispatch PC dashboard.", color = Color.White)
                         }
 
                         NavigationTab.SETTINGS -> {
                             SettingsScreen(
                                 pairingManager = pairingManager,
-                                liveSyncManager = liveSyncManager,
-                                syncState = syncState
                             )
                         }
                     }

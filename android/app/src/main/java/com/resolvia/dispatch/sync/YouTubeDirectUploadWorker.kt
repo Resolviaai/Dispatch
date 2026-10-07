@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
  * Autonomous Direct YouTube Cloud Uploader for Dispatch Mobile.
  * Uploads finalized video recordings directly to YouTube Data API v3 as Private,
  * tagging them with unique dispatch_id metadata for zero-touch laptop catching.
- * If YouTube credentials are not yet configured, cleanly delegates to ResumableSyncWorker.
+ * If YouTube credentials are missing, keeps the recording queued and reports a setup error.
  */
 class YouTubeDirectUploadWorker(
     appContext: Context,
@@ -49,10 +49,10 @@ class YouTubeDirectUploadWorker(
             accessToken = refreshYouTubeToken() ?: ""
         }
 
-        // If no YouTube token configured on phone yet, fallback to local network/Tailscale sync worker
+        // Keep recordings queued for YouTube setup; never fall back to PC/LAN transfer.
         if (accessToken.isBlank()) {
-            val fallbackWorker = ResumableSyncWorker(applicationContext, params)
-            return@withContext fallbackWorker.doWork()
+            android.util.Log.e("YouTubeUploader", "YouTube credentials are missing; refusing PC/LAN transfer")
+            return@withContext Result.failure()
         }
 
         // 2. Iterate and upload recordings directly to YouTube

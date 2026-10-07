@@ -72,10 +72,10 @@ dependencies {
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
 
-    // WorkManager (Reliable background upload sync)
+    // WorkManager (Reliable background YouTube uploads)
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
-    // OkHttp (TUS resumable chunked upload)
+    // OkHttp (YouTube Data API resumable upload)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
 }
