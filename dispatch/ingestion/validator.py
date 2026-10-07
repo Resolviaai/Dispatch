@@ -72,20 +72,37 @@ def probe_video(filepath: Path) -> Tuple[bool, Dict[str, Any], Optional[str]]:
             effective_height = height
 
         duration = float(format_info.get("duration") or video_stream.get("duration") or 0.0)
+        if duration <= 0.0:
+            return False, {}, f"Invalid video duration: {duration}s (must be > 0)"
+
+        if effective_width <= 0 or effective_height <= 0:
+            return False, {}, f"Invalid dimensions: {effective_width}x{effective_height}"
+
+        # Real FFmpeg decode validation: ffprobe inspects containers, but ffmpeg -f null verifies decodable frames
+        decode_cmd = [
+            "ffmpeg",
+            "-v", "error",
+            "-i", str(filepath),
+            "-f", "null",
+            "-"
+        ]
+        try:
+            decode_res = subprocess.run(decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+            if decode_res.returncode != 0:
+                return False, {}, f"FFmpeg decode verification failed: {decode_res.stderr.strip()[:200]}"
+        except subprocess.TimeoutExpired:
+            return False, {}, "FFmpeg decode verification timed out"
 
         # Detect aspect ratio
-        if effective_width > 0 and effective_height > 0:
-            ratio_val = effective_width / effective_height
-            if 0.5 <= ratio_val <= 0.65:
-                aspect_ratio = "9:16"  # Portrait
-            elif 1.6 <= ratio_val <= 1.85:
-                aspect_ratio = "16:9"  # Landscape
-            elif ratio_val < 1.0:
-                aspect_ratio = "vertical_other"
-            else:
-                aspect_ratio = "horizontal_other"
+        ratio_val = effective_width / effective_height
+        if 0.5 <= ratio_val <= 0.65:
+            aspect_ratio = "9:16"  # Portrait
+        elif 1.6 <= ratio_val <= 1.85:
+            aspect_ratio = "16:9"  # Landscape
+        elif ratio_val < 1.0:
+            aspect_ratio = "vertical_other"
         else:
-            aspect_ratio = "unknown"
+            aspect_ratio = "horizontal_other"
 
         metadata = {
             "duration": duration,

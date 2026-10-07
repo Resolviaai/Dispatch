@@ -77,11 +77,17 @@ def get_youtube_service(token_path: Optional[Path] = None):
     return None
 
 
-def list_authenticated_user_uploads(max_results: int = 50, max_pages: int = 3) -> List[Dict[str, Any]]:
+def list_authenticated_user_uploads(
+    max_results_per_page: int = 50,
+    stop_on_known_page: bool = True
+) -> List[Dict[str, Any]]:
     """Query YouTube Data API v3 for the authenticated user's uploads (including Unlisted and Private).
-    Supports nextPageToken pagination to avoid missing videos beyond the first page.
+    Paginates dynamically until nextPageToken is exhausted OR until an entire page consists of
+    already-ingested videos (early-stop to avoid wasteful API quota consumption).
     Returns list of discovered videos with metadata and extracted dispatch_id.
     """
+    from dispatch import db
+
     service = get_youtube_service()
     if not service:
         return []
@@ -98,11 +104,9 @@ def list_authenticated_user_uploads(max_results: int = 50, max_pages: int = 3) -
 
         # 2. Query uploads playlist with pageToken pagination
         page_token = None
-        pages_fetched = 0
-        per_page = min(max_results, 50)
+        per_page = min(max_results_per_page, 50)
 
-        while pages_fetched < max_pages:
-            pages_fetched += 1
+        while True:
             kwargs = {
                 "playlistId": uploads_playlist_id,
                 "part": "snippet,status",
@@ -112,10 +116,18 @@ def list_authenticated_user_uploads(max_results: int = 50, max_pages: int = 3) -
                 kwargs["pageToken"] = page_token
 
             playlist_resp = service.playlistItems().list(**kwargs).execute()
+            page_items = playlist_resp.get("items", [])
+            if not page_items:
+                break
 
-            for item in playlist_resp.get("items", []):
+            page_has_new_item = False
+
+            for item in page_items:
                 snippet = item.get("snippet", {})
                 video_id = snippet.get("resourceId", {}).get("videoId")
+                if not video_id:
+                    continue
+
                 title = snippet.get("title", "")
                 description = snippet.get("description", "")
                 tags = snippet.get("tags", [])
@@ -132,7 +144,7 @@ def list_authenticated_user_uploads(max_results: int = 50, max_pages: int = 3) -
                     or any("dispatch" in t.lower() for t in tags)
                 )
 
-                if is_dispatch and video_id:
+                if is_dispatch:
                     if not dispatch_id:
                         dispatch_id = f"dsp_{published_at[:10]}_{video_id[:6]}"
 
@@ -144,6 +156,16 @@ def list_authenticated_user_uploads(max_results: int = 50, max_pages: int = 3) -
                         "published_at": published_at,
                         "privacy_status": privacy
                     })
+
+                    # Check if this video is already ingested/completed in the database
+                    if not db.is_youtube_video_processed(video_id):
+                        page_has_new_item = True
+
+            # Early-stop optimization: If a full page was inspected and contained ONLY already-processed
+            # videos, stop paging further back in history.
+            if stop_on_known_page and not page_has_new_item and len(page_items) >= per_page:
+                logger.debug("Early-stop: Page contained only already-ingested videos. Halting pagination.")
+                break
 
             page_token = playlist_resp.get("nextPageToken")
             if not page_token:

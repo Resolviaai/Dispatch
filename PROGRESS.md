@@ -41,12 +41,20 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
 
 ## 5. Current status and blockers
 
-### Pillar 1 (YouTube Ingestion & Media Validation) ? Verified Complete (2026-10-07)
+### Pillar 1 (YouTube Ingestion & Media Validation) ? VERIFIED COMPLETE (2026-10-07)
 - **Contract:** Authenticated YouTube uploads -> `DISCOVERED` -> `DOWNLOADING` -> `VALIDATING` -> `DOWNLOADED` (stops strictly at `DOWNLOADED`).
-- **Real YouTube Observable Proof:** Video `-XjBMmr1ZJg` uploaded as `unlisted`, discovered via `list_authenticated_user_uploads()` with `nextPageToken` pagination, downloaded via `catcher.ingest_video()`, and validated via `ffprobe` (`640x360`, 3.065s, codecs `av1`+`aac`).
-- **Database Invariant:** Verified in `youtube_inbox` SQLite table with `status = 'DOWNLOADED'`, `duration = 3.065`, and valid `local_video_path`.
-- **Legacy Ingestion Isolation:** `dispatch/ingestion/watcher.py` marked deprecated and excluded from active execution. `probe_video` preserved in `validator.py`.
-- **Android App:** Updated `YouTubeDirectUploadWorker.kt` to upload as `unlisted` (accessible to Dispatch PC poller without browser cookies).
+- **Transport Visibility:** Formally standardized on **UNLISTED** visibility (`privacyStatus = 'unlisted'`). Unlisted videos are completely invisible from channel pages, search, and feeds, yet streamable by the PC poller autonomously without requiring fragile, expiring browser cookies.
+- **Discovery Pagination & Early-Stop:** `list_authenticated_user_uploads()` paginates dynamically until `nextPageToken` is exhausted, with early-stop optimization when an entire page contains only already-ingested videos.
+- **Real Observable 10-Minute Mobile Segment Proof:**
+  - **Video ID:** `_tfhYwf9wOY` (URL: `https://www.youtube.com/watch?v=_tfhYwf9wOY`)
+  - **Title:** `[DISPATCH] 2026-10-07 21:29 (10-min Mobile Segment)`
+  - **Dispatch ID:** `dsp_phone_seg_10m_proof`
+  - **Stage 1 (Discovery):** Discovered via authenticated API query across uploads playlist.
+  - **Stage 2 (Registration):** Registered idempotently in `youtube_inbox` SQLite table (`DISCOVERED`).
+  - **Stage 3 (Download):** Downloaded via `yt-dlp` to `storage/youtube_inbox/_tfhYwf9wOY.mp4` (`9.82 MB`).
+  - **Stage 4 (Deep Media Validation):** Passed both `ffprobe` format inspection and real frame-by-frame `ffmpeg -v error -i ... -f null -` decode verification (`duration = 600.05s / 10.0 min`, `360x640`, 9:16 vertical, `h264` + `aac`).
+  - **Stage 5 (Completion):** Recorded `status = 'DOWNLOADED'` in SQLite `youtube_inbox` table.
+- **Strict Ingestion Isolation:** `YouTubeInboxCatcher.ingest_video()` is the sole active ingestion path (FastAPI dashboard and poller updated). `process_video()` deprecated with clear legacy warnings. Old `dispatch/ingestion/watcher.py` deprecated.
 
 
 - Code changes are in progress and have **not** completed the first real-video milestone.

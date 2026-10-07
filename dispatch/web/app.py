@@ -201,7 +201,7 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest):
 
     def _run_bg_catcher():
         try:
-            catcher.process_video(payload.url, force_whisper=bool(payload.force_whisper))
+            catcher.ingest_video(payload.url)
         except Exception as e:
             logger.error("Error in background YouTube ingestion for %s: %s", video_id, e)
 
@@ -211,7 +211,7 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest):
     return {
         "status": "processing_queued",
         "video_id": video_id,
-        "message": f"YouTube video {video_id} accepted. Downloading, extracting transcript, and generating clips in background."
+        "message": f"YouTube video {video_id} accepted for Pillar 1 ingestion (download & media validation)."
     }
 
 

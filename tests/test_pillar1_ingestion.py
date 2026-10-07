@@ -101,7 +101,7 @@ class TestPillar1Ingestion(unittest.TestCase):
         mock_service.playlistItems.return_value = mock_playlist_items
 
         with patch("dispatch.youtube_inbox.oauth.get_youtube_service", return_value=mock_service):
-            results = list_authenticated_user_uploads(max_results=50, max_pages=3)
+            results = list_authenticated_user_uploads(max_results_per_page=50, stop_on_known_page=False)
             self.assertEqual(len(results), 2)
             self.assertEqual(results[0]["video_id"], "p1_page1_01")
             self.assertEqual(results[1]["video_id"], "p1_page2_02")

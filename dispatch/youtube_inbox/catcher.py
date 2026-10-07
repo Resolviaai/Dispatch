@@ -284,8 +284,11 @@ class YouTubeInboxCatcher:
         dispatch_id: Optional[str] = None,
         force_whisper: bool = False
     ) -> Dict[str, Any]:
-        """Full end-to-end processing pipeline for a single YouTube video.
-        
+        """[LEGACY DOWNSTREAM DEMO] Full end-to-end processing pipeline for a single YouTube video.
+        WARNING: Do NOT use this in the active ingestion path! Active ingestion is handled
+        strictly by `ingest_video()`, which stops at `DOWNLOADED` per the Pillar 1 contract.
+        This function is preserved only for downstream testing until Pillars 2-4 take over.
+
         1. Extract and validate video ID.
         2. Idempotent check in SQLite DB.
         3. Fetch metadata and register in youtube_inbox with dispatch_id.
