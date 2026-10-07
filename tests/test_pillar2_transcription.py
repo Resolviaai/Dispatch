@@ -8,17 +8,24 @@ Case E: Word timestamp exactness flag (is_exact True vs False).
 Case F: Worker restart recovery.
 Case G: Zero speech / empty transcript handling.
 Case H: Database transcript idempotency per chunk_id.
+Case I: Strict ordering (transcript saved before TRANSCRIBED status, failure leaves status unchanged).
+Case J: Real source media dimensions preserved in chunk (no invented 1080x1920).
+Case K: Caption reprobe backoff rate limiting & next probe scheduling surviving restart.
+Case L: 4-hour (14400s) default caption wait window & environment variable override.
+Case M: Caption language restriction (subtitleslangs with en/hi preference).
 """
 import unittest
 from unittest.mock import MagicMock, patch
 import tempfile
 import json
+import os
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 from dispatch import db
 from dispatch.transcription.worker import TranscriptionWorker
 from dispatch.youtube_inbox.vtt_parser import parse_vtt_content, parse_inline_words
+from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
 
 
 class TestPillar2Transcription(unittest.TestCase):
@@ -160,7 +167,6 @@ class TestPillar2Transcription(unittest.TestCase):
 
         with patch("dispatch.transcription.worker.transcribe_video", side_effect=RuntimeError("Whisper OOM")):
             worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
-            # Should raise or handle
             try:
                 worker.process_pending()
             except RuntimeError:
@@ -253,7 +259,6 @@ Plain words here
         mock_catcher = MagicMock()
         mock_catcher.fetch_youtube_captions.return_value = None
 
-        # Return empty segments and empty text
         fake_whisper_empty = {
             "transcript_id": "tx_empty",
             "full_text": "",
@@ -290,6 +295,130 @@ Plain words here
             cursor.execute("SELECT full_text FROM transcripts WHERE chunk_id = ?", (chunk_id,))
             row = cursor.fetchone()
             self.assertEqual(row["full_text"], "Second")
+
+    def test_case_i_strict_transcription_persistence_order(self):
+        """Case I: Transcript is persisted before status=TRANSCRIBED. If save fails, status MUST NOT be TRANSCRIBED."""
+        video_id = "vid_test_i"
+        db.register_youtube_video(video_id=video_id, title="Test I", duration=60.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = [
+            {"start": 0.0, "end": 2.0, "text": "Valid speech", "words": []}
+        ]
+
+        # Simulate database failure during save_transcript
+        with patch("dispatch.db.save_transcript", side_effect=RuntimeError("Disk full")):
+            worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+            try:
+                worker.process_pending()
+            except RuntimeError:
+                pass
+
+        # Video must NOT be TRANSCRIBED
+        yt_record = db.get_youtube_video(video_id)
+        self.assertEqual(yt_record["status"], "FAILED")
+        self.assertIn("Disk full", yt_record["last_error"])
+
+    def test_case_j_preserves_real_source_media_metadata(self):
+        """Case J: Pillar 2 preserves real source dimensions (e.g. 360x640) and never invents 1080x1920."""
+        video_id = "vid_test_j"
+        db.register_youtube_video(video_id=video_id, title="Test J", duration=600.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = [
+            {"start": 0.0, "end": 2.0, "text": "Valid speech", "words": []}
+        ]
+
+        # Mock probe_video returning real 360x640 mobile dimensions
+        real_meta = {
+            "duration": 600.05,
+            "width": 360,
+            "height": 640,
+            "aspect_ratio": "9:16",
+            "has_audio": True
+        }
+        with patch("dispatch.ingestion.validator.probe_video", return_value=(True, real_meta, None)):
+            worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+            res = worker.process_pending()
+            self.assertEqual(len(res), 1)
+
+        chunk = db.get_chunk_by_file_hash(f"yt_{video_id}")
+        self.assertIsNotNone(chunk)
+        self.assertEqual(chunk["width"], 360)
+        self.assertEqual(chunk["height"], 640)
+        self.assertEqual(chunk["aspect_ratio"], "9:16")
+        self.assertEqual(chunk["status"], "transcribed")
+
+    def test_case_k_caption_reprobe_backoff_and_restart(self):
+        """Case K: 15s worker loop respects 300s reprobe backoff; persisted next_probe timestamp survives restart."""
+        video_id = "vid_test_k"
+        db.register_youtube_video(video_id=video_id, title="Test K", duration=60.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None  # unavailable
+
+        # Cycle 1: Enters WAITING_FOR_TRANSCRIPT and probes once
+        worker = TranscriptionWorker(caption_wait_seconds=14400, caption_reprobe_seconds=300, catcher=mock_catcher)
+        worker.process_pending()
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 1)
+
+        rec = db.get_youtube_video(video_id)
+        self.assertEqual(rec["status"], "WAITING_FOR_TRANSCRIPT")
+        next_probe_1 = rec["next_caption_probe_at"]
+        self.assertIsNotNone(next_probe_1)
+
+        # Cycle 2: Immediate follow-up cycle within 300s backoff must NOT call fetch_youtube_captions again
+        worker.process_pending()
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 1)
+
+        # Simulate daemon restart by instantiating new worker instance
+        worker_restarted = TranscriptionWorker(caption_wait_seconds=14400, caption_reprobe_seconds=300, catcher=mock_catcher)
+        worker_restarted.process_pending()
+        # Still within 300s window -> no new YouTube probe
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 1)
+
+        # Fast forward next_caption_probe_at into the past
+        past_probe = (datetime.now(timezone.utc) - timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
+        db.update_youtube_video(video_id=video_id, status="WAITING_FOR_TRANSCRIPT", next_caption_probe_at=past_probe)
+
+        # Cycle 3: Now probe is due -> must call fetch_youtube_captions
+        worker_restarted.process_pending()
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 2)
+
+    def test_case_l_caption_wait_defaults_and_env_override(self):
+        """Case L: Default wait window is 4 hours (14400s), overridable via DISPATCH_TRANSCRIPT_WAIT_SECONDS."""
+        w_default = TranscriptionWorker()
+        self.assertEqual(w_default.caption_wait_seconds, 14400)
+        self.assertEqual(w_default.caption_reprobe_seconds, 300)
+
+        with patch.dict(os.environ, {"DISPATCH_TRANSCRIPT_WAIT_SECONDS": "7200", "DISPATCH_CAPTION_REPROBE_SECONDS": "180"}):
+            w_env = TranscriptionWorker()
+            self.assertEqual(w_env.caption_wait_seconds, 7200)
+            self.assertEqual(w_env.caption_reprobe_seconds, 180)
+
+    def test_case_m_caption_language_restriction(self):
+        """Case M: fetch_youtube_captions restricts subtitleslangs to en/hi variants."""
+        catcher = YouTubeInboxCatcher()
+        captured_opts = {}
+
+        def mock_ydl_init(opts):
+            nonlocal captured_opts
+            captured_opts = opts
+            mock_inst = MagicMock()
+            mock_inst.__enter__.return_value = mock_inst
+            mock_inst.download.return_value = 0
+            return mock_inst
+
+        with patch("yt_dlp.YoutubeDL", side_effect=mock_ydl_init):
+            catcher.fetch_youtube_captions("mock_vid_123")
+
+        self.assertIn("subtitleslangs", captured_opts)
+        langs = captured_opts["subtitleslangs"]
+        self.assertTrue(any("en" in l for l in langs))
+        self.assertTrue(any("hi" in l for l in langs))
 
 
 if __name__ == "__main__":

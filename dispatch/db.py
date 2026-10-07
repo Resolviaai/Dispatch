@@ -236,7 +236,8 @@ def init_db():
                 discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 transcript_wait_started_at TIMESTAMP,
-                transcript_wait_deadline TIMESTAMP
+                transcript_wait_deadline TIMESTAMP,
+                next_caption_probe_at TIMESTAMP
             );
         """)
         cursor.execute("""
@@ -253,6 +254,8 @@ def init_db():
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_started_at TIMESTAMP;")
         if "transcript_wait_deadline" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_deadline TIMESTAMP;")
+        if "next_caption_probe_at" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_caption_probe_at TIMESTAMP;")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
@@ -553,7 +556,8 @@ def update_youtube_video(
     segments_json: Optional[str] = None,
     last_error: Optional[str] = None,
     transcript_wait_started_at: Optional[str] = None,
-    transcript_wait_deadline: Optional[str] = None
+    transcript_wait_deadline: Optional[str] = None,
+    next_caption_probe_at: Optional[str] = None
 ):
     """Update status, paths, or errors on YouTube inbox item."""
     with get_db_connection() as conn:
@@ -584,6 +588,10 @@ def update_youtube_video(
         if transcript_wait_deadline is not None:
             updates.append("transcript_wait_deadline = ?")
             params.append(transcript_wait_deadline)
+
+        if next_caption_probe_at is not None:
+            updates.append("next_caption_probe_at = ?")
+            params.append(next_caption_probe_at)
 
         if last_error is not None:
             updates.append("last_error = ?")

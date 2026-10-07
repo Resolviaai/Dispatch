@@ -76,6 +76,7 @@ class YouTubeInboxCatcher:
             "skip_download": True,
             "writeautomaticsub": True,
             "writesubtitles": True,
+            "subtitleslangs": ["en.*", "hi.*", "en", "hi"],
             "subtitlesformat": "vtt",
             "outtmpl": f"{temp_sub_prefix}.%(ext)s",
             "quiet": True,
@@ -92,12 +93,19 @@ class YouTubeInboxCatcher:
                 logger.info("No YouTube caption files found for video %s", video_id)
                 return None
 
-            # Choose preferred language (English or first available)
+            # Choose preferred language: 1. English (en.*), 2. Hindi (hi.*), 3. First available
             target_file = None
             for f in vtt_files:
-                if ".en." in f.name or f.name.endswith(".en.vtt"):
+                fname = f.name.lower()
+                if ".en." in fname or fname.endswith(".en.vtt") or ".en-" in fname:
                     target_file = f
                     break
+            if not target_file:
+                for f in vtt_files:
+                    fname = f.name.lower()
+                    if ".hi." in fname or fname.endswith(".hi.vtt") or ".hi-" in fname:
+                        target_file = f
+                        break
             if not target_file:
                 target_file = vtt_files[0]
 

@@ -58,22 +58,25 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
 
 ### Pillar 2 (Transcription & Caption Polling) — VERIFIED COMPLETE (2026-10-07)
 - **Contract:** `youtube_inbox.status = 'DOWNLOADED'` -> `WAITING_FOR_TRANSCRIPT` -> `TRANSCRIBED` (source: `youtube` or `whisper`).
-- **Standalone Worker:** Dedicated background thread `TranscriptionWorker` in `dispatch/transcription/worker.py` consumes `DOWNLOADED` items, assigns durable `transcript_wait_started_at` and `transcript_wait_deadline` timestamps, polls YouTube captions asynchronously, and triggers explicit local `faster-whisper` fallback only upon deadline expiry.
+- **Standalone Worker:** Dedicated background thread `TranscriptionWorker` in `dispatch/transcription/worker.py` consumes `DOWNLOADED` items, assigns durable `transcript_wait_started_at` and `transcript_wait_deadline` timestamps (defaulting to 4 hours / `14400s`), polls YouTube captions rate-safely with durable 5-minute (`300s`) reprobe backoff (`next_caption_probe_at`), and triggers explicit local `faster-whisper` fallback only upon deadline expiry.
+- **Strict Transaction Ordering (P0):** `_finalize_transcription()` creates/resolves the chunk, executes `db.save_transcript()`, confirms persistence succeeded, and only then updates `youtube_inbox.status = 'TRANSCRIBED'`. If transcript persistence fails, status transitions to `FAILED` and never `TRANSCRIBED`.
+- **Source Media Dimensions Preserved (P1):** Real source dimensions probed via `ffprobe` are persisted directly to chunk metadata (`360x640`, `9:16`); invented portrait dimensions (`1080x1920`) are strictly forbidden.
+- **Constrained Caption Languages (P1):** `fetch_youtube_captions()` restricts `subtitleslangs` to English and Hindi (`['en.*', 'hi.*', 'en', 'hi']`) rather than downloading all tracks, cleaning up temporary `.vtt` files immediately.
 - **Dual Transcript Normalization:**
   - **YouTube Captions:** Parsed via `vtt_parser.py` with inline word timestamp parsing (`<time>` tags -> `is_exact: True`), falling back to synthetic word boundaries (`is_exact: False`) for plain cues.
   - **Whisper Fallback:** Powered by `faster-whisper` (`small` model, `int8` CPU quantization with 8 Ryzen threads), Roman Hinglish initial prompt, and audio cleanup guaranteed via `finally:` blocks.
 - **Idempotency & Durability:** `db.save_transcript` deletes existing transcripts for the given `chunk_id` before inserting, ensuring at most one authoritative transcript record per chunk.
 - **Zero-Speech / Silence Support:** Videos with zero detected speech transition cleanly to `TRANSCRIBED` (`segments=[]`, `full_text=""`) without failing.
 - **Real Observable 10-Minute Proof Run:**
-  - **Video ID:** `_tfhYwf9wOY`
+  - **Video ID:** `_tfhYwf9wOY` (real 10-minute mobile segment proof)
   - **Wait Duration Used:** Configured wait window recorded in SQLite (`transcript_wait_started_at = 2026-10-07 16:47:15`, `transcript_wait_deadline = 2026-10-07 16:47:47`).
-  - **Transcript Source Used:** `whisper` (YouTube captions were unavailable).
+  - **Transcript Source Used:** `whisper` (real-world YouTube auto-captions were unavailable on the unlisted upload at test time; tested and verified with explicit fallback).
   - **Segment Count:** 17 segments formatted with timestamps and words.
   - **Word Exactness:** Whisper word-level timestamps extracted with probability scores.
   - **Transcript DB Row Count for Chunk:** Exactly 1 row (`transcript_id = tx_bfb9b82e`).
   - **Final `youtube_inbox.status`:** `TRANSCRIBED`.
-  - **Final Associated Chunk Status:** `transcribed` (`chunk_id = chk_20261007_222008_ef59e0`).
-- **Automated Test Suite:** 8 test cases in `tests/test_pillar2_transcription.py` verify all states, caption retrieval, wait window deadlines, Whisper fallback, engine failures, word exactness flags, worker restart recovery, silence handling, and database idempotency. All 8 tests passing.
+  - **Final Associated Chunk Status:** `transcribed` (`chunk_id = chk_20261007_222008_ef59e0`, `360x640`, `9:16`).
+- **Automated Test Suite:** 13 unit test cases in `tests/test_pillar2_transcription.py` verify all states, caption retrieval, wait window deadlines, Whisper fallback, engine failures, word exactness flags, worker restart recovery, silence handling, database idempotency, strict transaction ordering, source dimension preservation, reprobe backoff scheduling, and caption language restrictions. All 13 tests passing (100% OK).
 
 - Android build is unverified. Android Studio's JBR exists, but the wrapper could not use the profile Gradle lock, the offline workspace cache lacked the Gradle distribution, and network access could not download it. Direct Gradle invocation also could not connect to its local daemon.
 - No ADB executable or connected phone is available in this workspace, so no real phone recording/upload was performed.
@@ -103,42 +106,24 @@ Use an environment with the Gradle 8.13 distribution and the POCO C65 attached. 
 
 ---
 
-# Dispatch: Live Progress & System Log
+# Historical Architecture & Early Prototyping Log (SUPERSEDED)
 
-**Last Updated:** 2026-10-06  
-**System Status:** In Active Implementation  
-**Product:** Dispatch (Autonomous Personal Content Engine)
+> [!NOTE]
+> The table and log entries below reflect early development prototypes (prior to the 2026-10-07 architecture migration).
+> They are preserved for context and development history.
+> The canonical source of truth for all current architecture, state machines, and contracts is defined in `docs/CANONICAL_ARCHITECTURE.md` and in Section 1–5 above.
 
----
+### Historical Prototype Status (Archived 2026-10-06)
 
-## 1. Project Overview & Context
-- **Goal:** Autonomous pipeline converting continuous mobile recordings (POCO C65) into polished vertical short-form videos (YouTube Shorts, Instagram Reels, LinkedIn, X).
-- **Core Philosophy:** Lead-miner automation. System does 99% of heavy lifting. User only has 5 simple steps:
-  1. Record (Start)
-  2. Stop Record
-  3. Review clips on local web dashboard
-  4. Review/edit metadata tags
-  5. Approve (Auto-Publish vs. Draft/Private)
-- **Host Specs:** Windows 11, Ryzen 5 5600H (6 cores), 23.3 GB RAM, AMD Radeon RX 5500M 4GB VRAM (No CUDA), 43.6 GB free disk space.
-- **Key Constraints:** 
-  - 100% local/free processing (Fast CPU / OpenCL / Vulkan, with Gemini Flash API for fast highlight identification).
-  - Roman Hinglish captions ("Yeh automate ho gaya").
-  - Adaptive framing: 9:16 portrait passthrough vs. 16:9 landscape smart face-crop or fit-with-blur.
-  - Ephemeral rolling storage management to prevent disk filling.
-
----
-
-## 2. Pillar Architecture Status
-
-| Pillar | Component | Status | Notes |
+| Pillar | Component | Historical Prototype Status | Canonical Architecture Status |
 |---|---|---|---|
-| **Pillar 1** | YouTube Ingestion & Media Validation (`dispatch/youtube_inbox`) | Completed | Authenticated discovery, pagination, unlisted download, ffprobe validation verified on real YouTube video `-XjBMmr1ZJg` |
-| **Pillar 2** | Audio & Transcription Engine (`dispatch/transcription`) | Completed | FFmpeg 16kHz audio extraction, `faster-whisper` word alignment + VAD tested |
-| **Pillar 3** | AI Highlight & Packaging Engine (`dispatch/ai_clips`) | Completed | Dual-mode Gemini Flash + autonomous local heuristic, Roman Hinglish metadata, preference learner |
-| **Pillar 4** | Video Reframer & Subtitle Renderer (`dispatch/video_engine`) | Completed | Adaptive 9:16 framing (Fit-with-Blur & Crop), `.ass` styled captions, FFmpeg single-pass burn-in tested |
-| **Pillar 5** | Review & Control Web Dashboard (`dispatch/web`) | Completed | FastAPI + dark modern UI (Layer 0 canvas, 0 emojis, PC/mobile accessible) tested |
-| **Pillar 6** | Publishing & Outbox Queue (`dispatch/publisher`) | Completed | YouTube Shorts & Instagram API adapters, Private/Public modes, retries & auto-cleanup tested |
-| **Pillar 7** | Master Daemon Orchestrator (`dispatch/main.py`) | Completed | Single entry point combining watcher, worker queue, and dashboard; full E2E test passed 100% |
+| **Pillar 1** | YouTube Ingestion & Media Validation (`dispatch/youtube_inbox`) | Prototype tested | ✅ **Verified Complete** (Unlisted YouTube Ingestion + ffprobe decode verification) |
+| **Pillar 2** | Audio & Transcription Engine (`dispatch/transcription`) | Prototype tested | ✅ **Verified Complete** (Async YouTube caption polling with 4h deadline & Whisper fallback) |
+| **Pillar 3** | AI Highlight & Packaging Engine (`dispatch/ai_clips`) | Prototype tested | ⏳ Next (Gemini Flash transcript highlight extraction) |
+| **Pillar 4** | Video Reframer & Subtitle Renderer (`dispatch/video_engine`) | Prototype tested | ⏳ Pending verification |
+| **Pillar 5** | Review & Control Web Dashboard (`dispatch/web`) | Prototype tested | ⏳ Needs verification |
+| **Pillar 6** | Publishing & Outbox Queue (`dispatch/publisher`) | Prototype tested | ⏳ Needs verification |
+| **Pillar 7** | Master Daemon Orchestrator (`dispatch/main.py`) | Prototype tested | ✅ Active |
 
 ---
 
