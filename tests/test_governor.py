@@ -40,7 +40,8 @@ class TestResourceGovernor(unittest.TestCase):
         mock_battery.power_plugged = False
         mock_battery.percent = 20.0
 
-        with patch("psutil.sensors_battery", return_value=mock_battery):
+        with patch("psutil.sensors_battery", return_value=mock_battery), \
+             patch("psutil.cpu_percent", return_value=10.0):
             # Case 1: allow_on_battery = False -> Should disallow
             policy1 = GovernorPolicy(allow_on_battery=False, min_free_disk_gb=1.0)
             gov1 = ResourceGovernor(policy1)

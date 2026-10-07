@@ -15,6 +15,7 @@ import tempfile
 import shutil
 import hashlib
 import json
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
@@ -75,7 +76,7 @@ class TestDispatchChaosEngineering(unittest.TestCase):
         test_bytes = b"CHAOS_RECOVERY_PAYLOAD_BYTE_STREAM_" * 280  # ~10,080 bytes
         file_size = len(test_bytes)
         sha256_full = hashlib.sha256(test_bytes).hexdigest()
-        seg_id = f"seg_chaos_net_{int(datetime.now().timestamp())}"
+        seg_id = f"seg_chaos_net_{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
 
         # Init upload on server
         init_resp = client.post("/api/sync/upload/init", json={

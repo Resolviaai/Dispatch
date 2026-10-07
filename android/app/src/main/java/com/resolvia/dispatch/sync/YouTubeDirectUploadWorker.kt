@@ -35,8 +35,8 @@ class YouTubeDirectUploadWorker(
     private val gson = Gson()
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(120, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(600, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
         .build()
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -115,6 +115,13 @@ class YouTubeDirectUploadWorker(
         var uploadUrl: String? = null
         try {
             client.newCall(initReq).execute().use { resp ->
+                if (resp.code == 401) {
+                    val freshToken = refreshYouTubeToken()
+                    if (freshToken != null) {
+                        return uploadToYouTubeDirect(freshToken, file, dispatchId)
+                    }
+                    return false
+                }
                 if (!resp.isSuccessful) return false
                 uploadUrl = resp.header("Location")
             }
@@ -135,6 +142,13 @@ class YouTubeDirectUploadWorker(
 
         try {
             client.newCall(uploadReq).execute().use { resp ->
+                if (resp.code == 401) {
+                    val freshToken = refreshYouTubeToken()
+                    if (freshToken != null) {
+                        return uploadToYouTubeDirect(freshToken, file, dispatchId)
+                    }
+                    return false
+                }
                 return resp.isSuccessful
             }
         } catch (_: Exception) {

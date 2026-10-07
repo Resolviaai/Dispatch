@@ -33,13 +33,7 @@ def upload_x_video(
     key = api_key or os.getenv("X_API_KEY")
 
     if not token and not key:
-        logger.info("[MOCK/SIMULATION] X video publishing simulated for '%s'", video_path.name)
-        return {
-            "status": "published",
-            "remote_id": f"x_sim_{video_path.stem}",
-            "remote_url": f"https://x.com/i/status/sim_{video_path.stem}",
-            "is_simulation": True
-        }
+        raise PermissionError("X / Twitter API credentials missing (X_API_KEY, X_BEARER_TOKEN).")
 
     if not video_path.exists():
         raise FileNotFoundError(f"Video file missing: {video_path}")

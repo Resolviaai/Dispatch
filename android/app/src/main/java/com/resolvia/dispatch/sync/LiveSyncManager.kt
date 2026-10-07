@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.resolvia.dispatch.data.AppDatabase
+import com.resolvia.dispatch.data.NetworkDiscovery
 import com.resolvia.dispatch.data.PairingManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,8 +12,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.FileInputStream
@@ -29,7 +32,9 @@ data class SyncState(
     val speedMbps: Double = 0.0,
     val message: String = "Idle",
     val error: String? = null,
-    val lastSuccessSegmentId: String? = null
+    val lastSuccessSegmentId: String? = null,
+    val connectedHost: String? = null,
+    val isServerOnline: Boolean = false
 )
 
 class LiveSyncManager(private val context: Context) {
@@ -37,10 +42,11 @@ class LiveSyncManager(private val context: Context) {
     private val db = AppDatabase.getDatabase(context)
     private val dao = db.recordingDao()
     private val pairingManager = PairingManager(context)
+    val networkDiscovery = NetworkDiscovery(context, pairingManager)
     private val gson = Gson()
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
@@ -48,29 +54,57 @@ class LiveSyncManager(private val context: Context) {
     private val _syncState = MutableStateFlow(SyncState())
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
 
+    /**
+     * Checks if PC server is reachable, auto-discovering if necessary.
+     */
+    suspend fun probeServerStatus(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val serverUrl = networkDiscovery.discoverAndConnect(timeoutMs = 1500L)
+        if (serverUrl != null) {
+            _syncState.value = _syncState.value.copy(
+                connectedHost = serverUrl,
+                isServerOnline = true
+            )
+            Pair(true, serverUrl)
+        } else {
+            _syncState.value = _syncState.value.copy(
+                isServerOnline = false
+            )
+            Pair(false, pairingManager.lanHost)
+        }
+    }
+
     suspend fun syncNow(): Boolean = withContext(Dispatchers.IO) {
         if (_syncState.value.isSyncing) return@withContext true
 
-        _syncState.value = SyncState(isSyncing = true, message = "Locating PC dashboard...")
+        _syncState.value = _syncState.value.copy(
+            isSyncing = true,
+            error = null,
+            message = "Auto-discovering PC on Wi-Fi..."
+        )
 
+        // 1. Auto-discover active server (UDP beacon, subnet sweep, or known candidates)
         val activeUrl = findReachableServer()
         if (activeUrl == null) {
-            _syncState.value = SyncState(
+            _syncState.value = _syncState.value.copy(
                 isSyncing = false,
-                error = "Cannot connect to PC. Ensure PC is on same Wi-Fi.",
+                isServerOnline = false,
+                error = "Cannot find PC. Ensure PC is on same Wi-Fi with Dispatch running.",
                 message = "PC unreachable"
             )
             return@withContext false
         }
 
+        _syncState.value = _syncState.value.copy(
+            connectedHost = activeUrl,
+            isServerOnline = true
+        )
+
         // Auto-fetch auth token if missing
-        if (pairingManager.authToken.isBlank()) {
-            fetchAndSavePairingToken(activeUrl)
-        }
+        networkDiscovery.ensureAuthToken(activeUrl)
 
         val pendingItems = dao.getPendingOutboxItems()
         if (pendingItems.isEmpty()) {
-            _syncState.value = SyncState(
+            _syncState.value = _syncState.value.copy(
                 isSyncing = false,
                 message = "All clips up to date",
                 percent = 100
@@ -98,12 +132,26 @@ class LiveSyncManager(private val context: Context) {
                 error = null
             )
 
-            val success = uploadSegmentWithProgress(
+            // Try resumable chunked upload first
+            var success = uploadSegmentWithProgress(
                 baseUrl = activeUrl,
                 segmentId = item.segmentId,
                 sessionId = item.sessionId,
                 file = file
             )
+
+            // Fallback: If resumable chunked encountered edge-case failure, attempt direct multipart upload
+            if (!success) {
+                _syncState.value = _syncState.value.copy(
+                    message = "Retrying via direct upload for $segmentName..."
+                )
+                success = uploadSegmentDirect(
+                    baseUrl = activeUrl,
+                    segmentId = item.segmentId,
+                    sessionId = item.sessionId,
+                    file = file
+                )
+            }
 
             if (!success) {
                 _syncState.value = _syncState.value.copy(
@@ -114,7 +162,7 @@ class LiveSyncManager(private val context: Context) {
                 return@withContext false
             }
 
-            // Cleanup local file only after confirmed cryptographic verification
+            // Cleanup local file ONLY after confirmed cryptographic proof-of-receipt from PC
             val sha256 = calculateSha256(file)
             val isVerified = verifyWithServer(activeUrl, item.segmentId, sha256, totalBytes)
             if (isVerified) {
@@ -122,7 +170,13 @@ class LiveSyncManager(private val context: Context) {
                 dao.updateSegmentStatus(item.segmentId, "UPLOADED_TO_PC")
                 dao.deleteOutboxItem(item.segmentId)
             } else {
-                android.util.Log.w("LiveSyncManager", "Server verification check failed for ${item.segmentId}. Retaining local file.")
+                android.util.Log.w("LiveSyncManager", "Proof-of-receipt check failed for ${item.segmentId}. Preserving local file.")
+                _syncState.value = _syncState.value.copy(
+                    isSyncing = false,
+                    error = "Proof-of-receipt verification failed for $segmentName. Preserving local file.",
+                    message = "Verification failed"
+                )
+                return@withContext false
             }
 
             _syncState.value = _syncState.value.copy(
@@ -132,7 +186,7 @@ class LiveSyncManager(private val context: Context) {
             )
         }
 
-        _syncState.value = SyncState(
+        _syncState.value = _syncState.value.copy(
             isSyncing = false,
             message = "Sync complete. All clips on PC dashboard.",
             percent = 100
@@ -140,35 +194,21 @@ class LiveSyncManager(private val context: Context) {
         true
     }
 
-    private fun findReachableServer(): String? {
+    private suspend fun findReachableServer(): String? {
+        // Step 1: Active auto-discovery (UDP broadcast + Subnet sweep + known lanHost)
+        val discovered = networkDiscovery.discoverAndConnect(timeoutMs = 2000L)
+        if (discovered != null) return discovered
+
+        // Step 2: Probe candidate endpoints
         val endpoints = pairingManager.getCandidateEndpoints()
         for (url in endpoints) {
-            try {
-                val req = Request.Builder()
-                    .url("$url/api/sync/ping")
-                    .get()
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) return url
-                }
-            } catch (_: Exception) {}
+            if (networkDiscovery.pingEndpoint(url)) {
+                networkDiscovery.ensureAuthToken(url)
+                pairingManager.lanHost = url
+                return url
+            }
         }
         return null
-    }
-
-    private fun fetchAndSavePairingToken(baseUrl: String) {
-        try {
-            val req = Request.Builder().url("$baseUrl/api/sync/pairing/config").get().build()
-            client.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
-                    val token = body.get("auth_token")?.asString ?: ""
-                    if (token.isNotBlank()) {
-                        pairingManager.authToken = token
-                    }
-                }
-            }
-        } catch (_: Exception) {}
     }
 
     private fun uploadSegmentWithProgress(
@@ -198,6 +238,10 @@ class LiveSyncManager(private val context: Context) {
                 .build()
 
             client.newCall(initReq).execute().use { resp ->
+                if (resp.code == 401) {
+                    networkDiscovery.ensureAuthToken(baseUrl)
+                    return false
+                }
                 if (!resp.isSuccessful) return false
                 val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
                 if (body.get("status")?.asString == "already_completed") {
@@ -235,6 +279,34 @@ class LiveSyncManager(private val context: Context) {
                         .build()
 
                     client.newCall(chunkReq).execute().use { chunkResp ->
+                        if (chunkResp.code == 401) {
+                            networkDiscovery.ensureAuthToken(baseUrl)
+                            return false
+                        }
+                        if (chunkResp.code == 409) {
+                            android.util.Log.w("LiveSyncManager", "Offset mismatch (409) on $segmentId at offset $remoteOffset. Re-fetching server offset.")
+                            var resumed = false
+                            try {
+                                val reInitReq = Request.Builder()
+                                    .url("$baseUrl/api/sync/upload/init")
+                                    .post(initJson.toString().toRequestBody("application/json".toMediaType()))
+                                    .build()
+                                client.newCall(reInitReq).execute().use { reResp ->
+                                    if (reResp.isSuccessful) {
+                                        val reBody = gson.fromJson(reResp.body?.string(), JsonObject::class.java)
+                                        if (reBody.get("status")?.asString == "already_completed") {
+                                            return true
+                                        }
+                                        val serverOffset = reBody.get("remote_offset")?.asLong ?: 0L
+                                        remoteOffset = serverOffset
+                                        raf.seek(remoteOffset)
+                                        resumed = true
+                                    }
+                                }
+                            } catch (_: Exception) {}
+                            if (!resumed) return false
+                            return@use
+                        }
                         if (!chunkResp.isSuccessful) return false
                         val chunkBody = gson.fromJson(chunkResp.body?.string(), JsonObject::class.java)
                         remoteOffset = chunkBody.get("remote_offset")?.asLong ?: (remoteOffset + bytesToRead)
@@ -270,6 +342,43 @@ class LiveSyncManager(private val context: Context) {
         return true
     }
 
+    /**
+     * Direct multipart streaming fallback upload.
+     */
+    private fun uploadSegmentDirect(
+        baseUrl: String,
+        segmentId: String,
+        sessionId: String,
+        file: File
+    ): Boolean {
+        try {
+            val mediaType = "video/mp4".toMediaType()
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("segment_id", segmentId)
+                .addFormDataPart("session_id", sessionId)
+                .addFormDataPart("auth_token", pairingManager.authToken)
+                .addFormDataPart("file", file.name, file.asRequestBody(mediaType))
+                .build()
+
+            val req = Request.Builder()
+                .url("$baseUrl/api/sync/upload/direct")
+                .addHeader("x-auth-token", pairingManager.authToken)
+                .post(requestBody)
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                if (resp.code == 401) {
+                    networkDiscovery.ensureAuthToken(baseUrl)
+                    return false
+                }
+                return resp.isSuccessful
+            }
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
     private fun verifyWithServer(baseUrl: String, segmentId: String, sha256: String, fileSize: Long): Boolean {
         val url = "$baseUrl/api/sync/verify-chunk?segment_id=$segmentId&sha256=$sha256&file_size=$fileSize"
         val req = Request.Builder()
@@ -279,6 +388,9 @@ class LiveSyncManager(private val context: Context) {
             .build()
         return try {
             client.newCall(req).execute().use { resp ->
+                if (resp.code == 401) {
+                    networkDiscovery.ensureAuthToken(baseUrl)
+                }
                 if (!resp.isSuccessful) return false
                 val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
                 body?.get("verified")?.asBoolean == true

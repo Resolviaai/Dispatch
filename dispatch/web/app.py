@@ -7,9 +7,12 @@ import shutil
 import psutil
 import logging
 import threading
+import time
+import re
+import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -19,9 +22,12 @@ from dispatch.config import (
     INCOMING_DIR,
     PROCESSING_DIR,
     ROOT_DIR,
-    DEFAULT_PUBLISH_MODE
+    DEFAULT_PUBLISH_MODE,
+    ALLOWED_VIDEO_EXTENSIONS
 )
 from dispatch import db
+from dispatch.ingestion.validator import probe_video
+from dispatch.orchestrator.job_queue import enqueue_job
 from dispatch.ingestion.watcher import scan_incoming
 from dispatch.sync.receiver import router as sync_router
 from dispatch.youtube_inbox.catcher import (
@@ -91,6 +97,8 @@ async def get_mobile_recorder():
 async def download_android_apk():
     """Download the native Dispatch Android APK compiled for POCO C65."""
     apk_path = ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    if not apk_path.exists():
+        apk_path = ROOT_DIR / "storage" / "download" / "dispatch.apk"
     if not apk_path.exists():
         raise HTTPException(
             status_code=404,
@@ -211,6 +219,97 @@ async def trigger_scan():
     """Manual trigger to scan incoming drops."""
     staged = scan_incoming()
     return {"status": "success", "staged_count": len(staged)}
+
+
+@app.post("/api/upload")
+async def handle_direct_upload(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None)
+):
+    """Direct web upload endpoint for video files with immediate validation and pipeline enqueue."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected")
+
+    original_name = Path(file.filename).name
+    ext = Path(original_name).suffix.lower()
+    if ext not in ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video format: '{ext}'. Allowed extensions: {', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))}"
+        )
+
+    sess_id = (session_id or "").strip() or f"web_upload_{int(time.time())}"
+    clean_stem = re.sub(r'[^A-Za-z0-9_-]', '_', Path(original_name).stem)[:48]
+    seg_id = f"{clean_stem}_{int(time.time())}"
+
+    temp_file = INCOMING_DIR / f"{seg_id}.direct_upload"
+    final_file = PROCESSING_DIR / f"{seg_id}{ext}"
+
+    hasher = hashlib.sha256()
+    total_bytes = 0
+    try:
+        with open(temp_file, "wb") as f:
+            while chunk := await file.read(1024 * 512):
+                f.write(chunk)
+                hasher.update(chunk)
+                total_bytes += len(chunk)
+
+        if total_bytes == 0:
+            temp_file.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes)")
+
+        computed_sha = hasher.hexdigest()
+        logger.info("Web direct upload received for %s (%d bytes, SHA: %s)", seg_id, total_bytes, computed_sha[:8])
+
+        if final_file.exists():
+            final_file.unlink(missing_ok=True)
+        shutil.move(str(temp_file), str(final_file))
+
+    except HTTPException:
+        temp_file.unlink(missing_ok=True)
+        raise
+    except Exception as e:
+        temp_file.unlink(missing_ok=True)
+        logger.exception("Failed to write uploaded video file %s", original_name)
+        raise HTTPException(status_code=500, detail=f"Failed to process upload: {str(e)}")
+
+    chunk_id = db.register_chunk(
+        session_id=sess_id,
+        filename=final_file.name,
+        filepath=str(final_file),
+        file_hash=computed_sha
+    )
+
+    is_valid, meta, err = probe_video(final_file)
+    if not is_valid:
+        final_file.unlink(missing_ok=True)
+        with db.get_db_connection() as conn:
+            conn.cursor().execute("UPDATE chunks SET status = 'corrupted' WHERE id = ?", (chunk_id,))
+            conn.commit()
+        raise HTTPException(status_code=400, detail=f"Video validation failed: {err}")
+
+    db.update_chunk_metadata(
+        chunk_id=chunk_id,
+        duration=meta.get("duration", 0),
+        width=meta.get("width", 0),
+        height=meta.get("height", 0),
+        aspect_ratio=meta.get("aspect_ratio", "16:9"),
+        status="verified"
+    )
+
+    job_id = enqueue_job(chunk_id=chunk_id, session_id=sess_id)
+    logger.info("Directly enqueued pipeline job %s for web uploaded chunk %s", job_id, chunk_id)
+
+    return {
+        "status": "queued",
+        "chunk_id": chunk_id,
+        "job_id": job_id,
+        "filename": final_file.name,
+        "bytes_received": total_bytes,
+        "duration": meta.get("duration", 0),
+        "aspect_ratio": meta.get("aspect_ratio", "16:9")
+    }
+
 
 
 @app.get("/api/youtube/inbox")

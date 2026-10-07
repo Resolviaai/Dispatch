@@ -103,6 +103,7 @@ def claim_job(worker_id: str, lease_duration_seconds: int = 300) -> Optional[Dic
                 SELECT job_id FROM pipeline_jobs
                 WHERE status IN ('QUEUED', 'RETRY_PENDING', 'WAITING_FOR_AI', 'WAITING_FOR_RESOURCES')
                   AND datetime(next_retry_at) <= datetime(?)
+                  AND (attempt_count < max_attempts OR status IN ('WAITING_FOR_AI', 'WAITING_FOR_RESOURCES'))
                 ORDER BY created_at ASC
                 LIMIT 1
             )
@@ -206,7 +207,9 @@ def fail_stage_job(
         attempts = job["attempt_count"] if job else 1
         max_att = job["max_attempts"] if job else 5
 
-        if attempts >= max_att and not wait_state:
+        if attempts >= max_att and wait_state not in (JobStatus.WAITING_FOR_AI, JobStatus.WAITING_FOR_RESOURCES):
+            status_to_set = JobStatus.FAILED_PERMANENT.value
+        elif attempts >= (max_att * 2):
             status_to_set = JobStatus.FAILED_PERMANENT.value
 
         cursor.execute("""

@@ -165,6 +165,61 @@
       </div>
     </div>
 
+    <!-- Direct Video Ingestion Card (Drag & Drop / File Picker) -->
+    <div class="surface rounded-xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <div class="w-2.5 h-2.5 rounded-full bg-indigo-500"></div>
+          <h2 class="text-xs uppercase font-mono tracking-wider font-semibold text-white">Direct Video Ingest</h2>
+          <span class="text-[10px] text-slate-400 font-mono">Manual upload & test runner</span>
+        </div>
+        <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-black/40 text-slate-400 border border-white/5">MP4, MOV, MKV, WEBM</span>
+      </div>
+
+      <!-- Drag & Drop Zone -->
+      <div id="drop-zone" onclick="document.getElementById('web-upload-input').click()" class="border-2 border-dashed border-white/10 hover:border-indigo-500/50 bg-black/20 hover:bg-white/[0.02] rounded-xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-2">
+        <input type="file" id="web-upload-input" accept="video/mp4,video/quicktime,video/x-matroska,video/webm,.mp4,.mov,.mkv,.webm" class="hidden" onchange="handleFileSelected(this.files)">
+        <div class="w-10 h-10 rounded-full bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+          </svg>
+        </div>
+        <div class="space-y-1">
+          <p class="text-xs text-white font-medium">Click to browse or drag and drop video files here</p>
+          <p class="text-[11px] text-slate-400 font-mono">Files are validated via ffprobe and enqueued into the autonomous pipeline</p>
+        </div>
+      </div>
+
+      <!-- Selected File Preview & Progress Box (hidden until file selected) -->
+      <div id="upload-status-box" class="hidden surface-nested rounded-lg p-3 space-y-2.5">
+        <div class="flex items-center justify-between text-xs">
+          <div class="flex items-center space-x-2 truncate">
+            <svg class="w-4 h-4 text-indigo-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+            <span id="upload-filename" class="font-mono text-white truncate text-[11px]">filename.mp4</span>
+            <span id="upload-filesize" class="font-mono text-slate-400 text-[10px] shrink-0">(-- MB)</span>
+          </div>
+          <button onclick="cancelSelectedUpload()" id="btn-cancel-upload" class="text-slate-400 hover:text-rose-400 p-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="w-full bg-black/60 rounded-full h-1.5 overflow-hidden">
+          <div id="upload-progress-bar" class="bg-indigo-500 h-1.5 rounded-full transition-all duration-200" style="width: 0%"></div>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <span id="upload-status-msg" class="text-[10px] font-mono text-slate-400">Ready to upload</span>
+          <button onclick="startDirectUpload()" id="btn-start-upload" class="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-[11px] font-semibold text-white font-mono transition flex items-center space-x-1.5">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>Upload & Process</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- YouTube Cloud Inbox & Remote Catching Hub -->
     <div class="surface rounded-xl p-4 space-y-3">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -274,22 +329,32 @@
           </button>
         </div>
 
-        <!-- Interactive Live QR Code Card -->
+        <!-- Interactive Live QR Code Card & 6-Digit PIN Display -->
         <div class="flex flex-col sm:flex-row items-center gap-4 bg-black/50 p-4 rounded-xl border border-white/10">
           <div class="bg-white p-2.5 rounded-xl flex items-center justify-center shrink-0 shadow-lg">
             <canvas id="pairing-qr-canvas" class="w-36 h-36"></canvas>
           </div>
-          <div class="space-y-2 text-xs">
+          <div class="space-y-2 text-xs flex-1">
             <div class="flex items-center space-x-1.5">
               <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-              <span class="font-mono font-bold text-white uppercase text-[11px]">Scan from Dispatch App</span>
+              <span class="font-mono font-bold text-white uppercase text-[11px]">Scan or Enter PIN on Phone</span>
             </div>
             <p class="text-[11px] text-slate-300 leading-relaxed">
-              Open <strong>Pairing</strong> in your POCO C65 Dispatch app and enter your PC IP, or scan this QR code. Credentials sync automatically.
+              Open <strong>Settings</strong> in your POCO C65 Dispatch app and scan this QR code or type the 6-digit PIN below.
             </p>
-            <div class="flex flex-wrap gap-1.5 pt-1">
-              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-500/30">192.168.0.101:8000</span>
-              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">YouTube Token Ready</span>
+
+            <!-- Prominent Pairing PIN Box -->
+            <div class="p-2.5 rounded-lg bg-indigo-950/60 border border-indigo-500/40 space-y-1">
+              <span class="text-[10px] uppercase font-mono tracking-wider text-indigo-300 block font-semibold">6-Digit Pairing PIN</span>
+              <div class="flex items-center justify-between">
+                <span id="pair-pin-display" class="font-mono font-bold text-xl tracking-widest text-white">------</span>
+                <button onclick="copyField('pair-pin')" class="px-2.5 py-1 rounded text-[10px] font-mono bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition">Copy PIN</button>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-1.5 pt-0.5">
+              <span id="pair-ip-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 text-slate-300 border border-white/10">--:8000</span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">LAN Snooping Protected</span>
             </div>
           </div>
         </div>
@@ -301,6 +366,14 @@
             <div class="flex items-center space-x-2">
               <input type="text" id="pair-lan" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded-lg surface-input text-emerald-300">
               <button onclick="copyField('pair-lan')" class="px-2.5 py-1.5 rounded-lg surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">6-Digit Pairing PIN</label>
+            <div class="flex items-center space-x-2">
+              <input type="text" id="pair-pin" readonly class="w-full text-xs font-mono px-2.5 py-1.5 rounded-lg surface-input text-indigo-300 font-bold tracking-widest">
+              <button onclick="copyField('pair-pin')" class="px-2.5 py-1.5 rounded-lg surface hover:bg-white/[0.08] text-slate-300 font-mono text-[11px]">Copy</button>
             </div>
           </div>
 
@@ -975,6 +1048,18 @@
         document.getElementById("pair-token").value = data.auth_token;
         document.getElementById("pair-uri").value = data.connection_string;
 
+        if (data.pairing_pin) {
+          const pinInput = document.getElementById("pair-pin");
+          if (pinInput) pinInput.value = data.pairing_pin;
+          const pinDisplay = document.getElementById("pair-pin-display");
+          if (pinDisplay) pinDisplay.innerText = data.pairing_pin;
+        }
+
+        const ipBadge = document.getElementById("pair-ip-badge");
+        if (ipBadge && data.lan_url) {
+          ipBadge.innerText = data.lan_url.replace("http://", "");
+        }
+
         // Render QR Code on canvas
         const canvas = document.getElementById("pairing-qr-canvas");
         if (canvas && window.QRCode) {
@@ -1014,6 +1099,138 @@
       el.style.borderColor = "#10B981";
       setTimeout(() => { el.style.borderColor = originalBorder; }, 1200);
     }
+
+    // --- Direct Video Upload Logic ---
+    let selectedUploadFile = null;
+
+    document.addEventListener("DOMContentLoaded", () => {
+      initDropZone();
+    });
+
+    function initDropZone() {
+      const dropZone = document.getElementById("drop-zone");
+      if (!dropZone) return;
+
+      ["dragenter", "dragover"].forEach(name => {
+        dropZone.addEventListener(name, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.add("border-indigo-500", "bg-indigo-950/20");
+        });
+      });
+      ["dragleave", "drop"].forEach(name => {
+        dropZone.addEventListener(name, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.remove("border-indigo-500", "bg-indigo-950/20");
+        });
+      });
+      dropZone.addEventListener("drop", (e) => {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          handleFileSelected(files);
+        }
+      });
+    }
+
+    function handleFileSelected(files) {
+      if (!files || files.length === 0) return;
+      selectedUploadFile = files[0];
+      const statusBox = document.getElementById("upload-status-box");
+      const nameEl = document.getElementById("upload-filename");
+      const sizeEl = document.getElementById("upload-filesize");
+      const bar = document.getElementById("upload-progress-bar");
+      const msg = document.getElementById("upload-status-msg");
+      const btn = document.getElementById("btn-start-upload");
+
+      nameEl.innerText = selectedUploadFile.name;
+      const mb = (selectedUploadFile.size / (1024 * 1024)).toFixed(1);
+      sizeEl.innerText = `(${mb} MB)`;
+      bar.style.width = "0%";
+      bar.className = "bg-indigo-500 h-1.5 rounded-full transition-all duration-200";
+      msg.innerText = "Ready to upload";
+      btn.disabled = false;
+      btn.classList.remove("opacity-50");
+      statusBox.classList.remove("hidden");
+    }
+
+    function cancelSelectedUpload() {
+      selectedUploadFile = null;
+      const input = document.getElementById("web-upload-input");
+      if (input) input.value = "";
+      document.getElementById("upload-status-box").classList.add("hidden");
+    }
+
+    async function startDirectUpload() {
+      if (!selectedUploadFile) return;
+
+      const btn = document.getElementById("btn-start-upload");
+      const cancelBtn = document.getElementById("btn-cancel-upload");
+      const bar = document.getElementById("upload-progress-bar");
+      const msg = document.getElementById("upload-status-msg");
+
+      btn.disabled = true;
+      btn.classList.add("opacity-50");
+      cancelBtn.disabled = true;
+      msg.innerText = "Uploading to PC...";
+
+      const formData = new FormData();
+      formData.append("file", selectedUploadFile);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/upload");
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          bar.style.width = pct + "%";
+          msg.innerText = `Uploading: ${pct}%`;
+        }
+      };
+
+      xhr.onload = () => {
+        btn.disabled = false;
+        btn.classList.remove("opacity-50");
+        cancelBtn.disabled = false;
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            bar.style.width = "100%";
+            bar.className = "bg-emerald-500 h-1.5 rounded-full";
+            msg.innerHTML = `<span class="text-emerald-400 font-bold">Queued into pipeline! Job ID: ${data.job_id}</span>`;
+            setTimeout(() => {
+              cancelSelectedUpload();
+              fetchPipelineJobs();
+              fetchClips();
+            }, 3000);
+          } catch (e) {
+            msg.innerText = "Uploaded successfully!";
+          }
+        } else {
+          bar.className = "bg-rose-500 h-1.5 rounded-full";
+          let errDetail = "Upload failed";
+          try {
+            const err = JSON.parse(xhr.responseText);
+            errDetail = err.detail || err.message || errDetail;
+          } catch (_) {}
+          msg.innerText = "Error: " + errDetail;
+        }
+      };
+
+      xhr.onerror = () => {
+        btn.disabled = false;
+        btn.classList.remove("opacity-50");
+        cancelBtn.disabled = false;
+        bar.className = "bg-rose-500 h-1.5 rounded-full";
+        msg.innerText = "Network connection failed";
+      };
+
+      xhr.send(formData);
+    }
+
+    // Call initDropZone immediately as well in case script runs after load
+    initDropZone();
 
     // --- YouTube Cloud Inbox Client Logic ---
     async function fetchYouTubeInbox() {

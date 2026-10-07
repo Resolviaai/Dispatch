@@ -33,13 +33,7 @@ def upload_instagram_reel(
     user_id = ig_user_id or os.getenv("INSTAGRAM_USER_ID")
 
     if not token or not user_id:
-        logger.info("[MOCK/SIMULATION] Instagram Reel publishing simulated for '%s'", video_path.name)
-        return {
-            "status": "published",
-            "remote_id": f"ig_sim_{video_path.stem}",
-            "remote_url": f"https://instagram.com/reel/sim_{video_path.stem}",
-            "is_simulation": True
-        }
+        raise PermissionError("Instagram Graph API credentials missing (INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID).")
 
     if not video_path.exists():
         raise FileNotFoundError(f"Video file missing: {video_path}")

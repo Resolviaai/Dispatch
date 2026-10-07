@@ -17,6 +17,7 @@ import os
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from dispatch.web.app import app
@@ -288,24 +289,22 @@ if claimed:
         dummy_video = self.temp_dir / "rendered.mp4"
         dummy_video.write_bytes(b"TEST_VIDEO_BYTES_SIMULATED")
 
-        # 1. Test LinkedIn
-        li_res = upload_linkedin_video(
-            video_path=dummy_video,
-            title="Dispatch LinkedIn Test",
-            commentary="#buildinpublic #ai",
-            access_token=None
-        )
-        self.assertEqual(li_res["status"], "published")
-        self.assertTrue(li_res["is_simulation"])
+        # 1. Test LinkedIn raises PermissionError when credentials missing
+        with self.assertRaises(PermissionError):
+            upload_linkedin_video(
+                video_path=dummy_video,
+                title="Dispatch LinkedIn Test",
+                commentary="#buildinpublic #ai",
+                access_token=None
+            )
 
-        # 2. Test Twitter / X
-        tw_res = upload_x_video(
-            video_path=dummy_video,
-            text="Autonomous video engine #python",
-            bearer_token=None
-        )
-        self.assertEqual(tw_res["status"], "published")
-        self.assertTrue(tw_res["is_simulation"])
+        # 2. Test Twitter / X raises PermissionError when credentials missing
+        with self.assertRaises(PermissionError):
+            upload_x_video(
+                video_path=dummy_video,
+                text="Autonomous video engine #python",
+                bearer_token=None
+            )
 
         # 3. Test queue and dispatch all 4 platforms
         with get_db_connection() as conn:
@@ -325,12 +324,14 @@ if claimed:
             rows = cursor.fetchall()
             self.assertEqual(len(rows), 4)
 
-        success_count = process_outbox_queue()
-        self.assertEqual(success_count, 4)
+        # Without live credentials configured, outbox marks jobs blocked_needs_auth
+        with patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("YouTube auth missing")):
+            success_count = process_outbox_queue()
+            self.assertEqual(success_count, 0)
 
-        # Test Idempotency: re-running process_outbox_queue finds 0 pending
-        second_pass = process_outbox_queue()
-        self.assertEqual(second_pass, 0)
+            # Test Idempotency: re-running process_outbox_queue finds 0 pending
+            second_pass = process_outbox_queue()
+            self.assertEqual(second_pass, 0)
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -338,7 +339,7 @@ if claimed:
             rows = cursor.fetchall()
             self.assertEqual(len(rows), 4)
             for row in rows:
-                self.assertEqual(row["status"], "published")
+                self.assertEqual(row["status"], "blocked_needs_auth")
 
     def test_05_database_backup_and_integrity(self):
         """Verifies SQLite hot snapshot backup and PRAGMA integrity check."""

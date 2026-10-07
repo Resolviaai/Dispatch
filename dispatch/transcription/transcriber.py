@@ -13,8 +13,8 @@ logger = logging.getLogger("dispatch.transcription")
 _WHISPER_MODEL = None
 
 
-def get_whisper_model(model_size: str = "base", device: str = "cpu", compute_type: str = "int8"):
-    """Load or return cached WhisperModel instance optimized for AMD CPU multithreading."""
+def get_whisper_model(model_size: str = "small", device: str = "cpu", compute_type: str = "int8"):
+    """Load or return cached WhisperModel instance optimized for AMD Ryzen 5 5600H multithreading."""
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
         try:
@@ -25,7 +25,7 @@ def get_whisper_model(model_size: str = "base", device: str = "cpu", compute_typ
                 model_size,
                 device=device,
                 compute_type=compute_type,
-                cpu_threads=4
+                cpu_threads=8  # Ryzen 5 5600H has 12 threads; 8 leaves headroom for pipeline
             )
         except Exception as e:
             logger.error("Failed to load faster-whisper model: %s", e)
@@ -37,10 +37,11 @@ def transcribe_video(
     video_path: Path,
     chunk_id: Optional[str] = None,
     session_id: Optional[str] = None,
-    model_size: str = "base",
-    initial_prompt: Optional[str] = None
+    model_size: str = "small",
+    initial_prompt: Optional[str] = None,
+    language: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Transcribe video audio to text with word-level timestamps and VAD silence filtering.
+    """Transcribe video audio to text with word-level timestamps, Hinglish optimization, and VAD silence filtering.
     
     Args:
         video_path: Path to the video file.
@@ -48,6 +49,7 @@ def transcribe_video(
         session_id: Database session ID.
         model_size: Model size ("base", "small", "medium").
         initial_prompt: Prompt hint to encourage Roman Hinglish transcription.
+        language: Language code ("hi", "en", "auto", "hinglish").
         
     Returns:
         Dict containing full_text, segments (with word timestamps), and audio_path.
@@ -55,20 +57,34 @@ def transcribe_video(
     logger.info("Extracting audio from %s", video_path.name)
     audio_path = extract_audio(video_path)
 
-    # Prompt hint for Hinglish if not supplied
+    # Determine language setting
+    import os
+    configured_lang = language or db.get_setting("transcription_language") or os.getenv("DISPATCH_TRANSCRIPTION_LANGUAGE", "")
+    if configured_lang and configured_lang.lower() not in ("auto", "hinglish", "none"):
+        whisper_lang = configured_lang.lower().strip()
+    else:
+        whisper_lang = None
+
+    # Enhanced initial prompt for natural Hindi-English (Hinglish) code-switching in Roman script
     if not initial_prompt:
-        initial_prompt = "Main aaj discuss karunga video creation, coding, automation and workflow design."
+        initial_prompt = (
+            "Yeh video Hindi aur English mixed Hinglish language me hai. "
+            "Main aaj discuss karunga video creation, coding, automation, workflow design, aur productivity tricks."
+        )
 
     model = get_whisper_model(model_size=model_size)
 
-    logger.info("Starting speech transcription with word-level timestamps and VAD on %s", audio_path.name)
+    logger.info("Starting speech transcription (lang=%s) with word-level timestamps and VAD on %s",
+                whisper_lang or "auto-detect", audio_path.name)
     segments_raw, info = model.transcribe(
         str(audio_path),
         beam_size=1,
         word_timestamps=True,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=500),
-        initial_prompt=initial_prompt
+        initial_prompt=initial_prompt,
+        language=whisper_lang,
+        condition_on_previous_text=False
     )
 
     full_text_pieces = []
@@ -107,7 +123,9 @@ def transcribe_video(
             beam_size=3,
             word_timestamps=True,
             vad_filter=False,
-            initial_prompt=initial_prompt
+            initial_prompt=initial_prompt,
+            language=whisper_lang,
+            condition_on_previous_text=False
         )
         for seg in segments_raw:
             seg_text = seg.text.strip()
@@ -154,7 +172,6 @@ def transcribe_video(
     return {
         "transcript_id": transcript_id,
         "full_text": full_text,
-        "segments": formatted_segments,
-        "language": info.language,
-        "language_probability": info.language_probability
+        "language": getattr(info, "language", "unknown") if info else "unknown",
+        "language_probability": getattr(info, "language_probability", 0.0) if info else 0.0
     }

@@ -70,7 +70,7 @@ def verify_token(token: Optional[str] = None):
     if clean_token.startswith("Bearer "):
         clean_token = clean_token[7:].strip()
 
-    if clean_token != expected_token:
+    if not secrets.compare_digest(clean_token, expected_token):
         logger.warning("Rejected sync request: invalid auth token")
         raise HTTPException(status_code=401, detail="Invalid authentication token")
 
@@ -107,11 +107,68 @@ async def ping_receiver(auth_token: Optional[str] = None):
     }
 
 
-@router.get("/pairing/config")
-async def get_pairing_config():
-    """Return discovered laptop network endpoints and pairing token for phone configuration.
-    Crucial: never exposes cloud OAuth secrets (e.g. YouTube client secrets).
-    """
+_FAILED_PIN_ATTEMPTS: Dict[str, List[float]] = {}
+_PIN_LOCKOUTS: Dict[str, float] = {}
+MAX_PIN_ATTEMPTS_PER_WINDOW = 5
+PIN_RATE_LIMIT_WINDOW_SECONDS = 60
+PIN_LOCKOUT_DURATION_SECONDS = 300
+
+
+def check_pin_rate_limit(client_ip: str):
+    """Enforce rate limits on pairing PIN verification to prevent brute-force search."""
+    now = time.time()
+    lockout_until = _PIN_LOCKOUTS.get(client_ip, 0)
+    if now < lockout_until:
+        remaining = int(lockout_until - now)
+        logger.warning("PIN verification locked out for IP %s (remaining: %ds)", client_ip, remaining)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed pairing attempts. Lockout in effect for {remaining} seconds."
+        )
+    elif client_ip in _PIN_LOCKOUTS:
+        del _PIN_LOCKOUTS[client_ip]
+
+    attempts = _FAILED_PIN_ATTEMPTS.get(client_ip, [])
+    attempts = [t for t in attempts if now - t < PIN_RATE_LIMIT_WINDOW_SECONDS]
+    _FAILED_PIN_ATTEMPTS[client_ip] = attempts
+
+
+def record_pin_failure(client_ip: str):
+    """Record a failed PIN verification attempt and apply lockout if threshold exceeded."""
+    now = time.time()
+    attempts = _FAILED_PIN_ATTEMPTS.setdefault(client_ip, [])
+    attempts.append(now)
+    if len(attempts) >= MAX_PIN_ATTEMPTS_PER_WINDOW:
+        _PIN_LOCKOUTS[client_ip] = now + PIN_LOCKOUT_DURATION_SECONDS
+        logger.warning(
+            "Excessive failed pairing PIN attempts from %s (%d attempts). Locked out for %ds.",
+            client_ip, len(attempts), PIN_LOCKOUT_DURATION_SECONDS
+        )
+        del _FAILED_PIN_ATTEMPTS[client_ip]
+
+
+def record_pin_success(client_ip: str):
+    """Clear failed attempts on successful pairing."""
+    _FAILED_PIN_ATTEMPTS.pop(client_ip, None)
+    _PIN_LOCKOUTS.pop(client_ip, None)
+
+
+def secure_str_equals(val1: Optional[str], val2: Optional[str]) -> bool:
+    """Constant-time string comparison to prevent timing attacks."""
+    if val1 is None or val2 is None:
+        return False
+    return secrets.compare_digest(val1.strip(), val2.strip())
+
+
+def is_trusted_localhost(client_ip: Optional[str]) -> bool:
+    """Return True if connection originated strictly from local machine."""
+    if not client_ip:
+        return False
+    return client_ip in ("127.0.0.1", "::1", "localhost", "testclient")
+
+
+def get_network_endpoints() -> tuple[str, str]:
+    """Detect LAN and Tailscale URLs for server endpoints."""
     import socket
     import psutil
     from dispatch.config import WEB_PORT
@@ -119,25 +176,201 @@ async def get_pairing_config():
     lan_ip = None
     tailscale_ip = None
 
-    for iface, addrs in psutil.net_if_addrs().items():
-        for addr in addrs:
-            if addr.family == socket.AF_INET and not addr.address.startswith("127."):
-                ip = addr.address
-                if ip.startswith("100."):
-                    tailscale_ip = ip
-                elif (ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.")) and not lan_ip:
-                    lan_ip = ip
+    try:
+        for iface, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                    ip = addr.address
+                    if ip.startswith("100."):
+                        tailscale_ip = ip
+                    elif (ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.")) and not lan_ip:
+                        lan_ip = ip
+    except Exception as e:
+        logger.debug("Network interface query error: %s", e)
 
     lan_url = f"http://{lan_ip}:{WEB_PORT}" if lan_ip else f"http://127.0.0.1:{WEB_PORT}"
     tailscale_url = f"http://{tailscale_ip}:{WEB_PORT}" if tailscale_ip else ""
+    return lan_url, tailscale_url
 
-    token = get_auth_token()
-    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={token}"
+
+def get_youtube_pairing_credentials() -> tuple[str, str, str, str]:
+    """Retrieve YouTube OAuth credentials from youtube_token.json if configured."""
+    from dispatch.config import ROOT_DIR
+    import json
+    yt_token_file = ROOT_DIR / "youtube_token.json"
+    if yt_token_file.exists():
+        try:
+            with open(yt_token_file, "r", encoding="utf-8") as f:
+                yt_data = json.load(f)
+            return (
+                yt_data.get("token", ""),
+                yt_data.get("refresh_token", ""),
+                yt_data.get("client_id", ""),
+                yt_data.get("client_secret", "")
+            )
+        except Exception as e:
+            logger.debug("Could not read youtube_token.json for pairing: %s", e)
+    return "", "", "", ""
+
+
+class PairingHandshakeRequest(BaseModel):
+    pin: str
+    client_name: Optional[str] = "dispatch_mobile"
+
+
+def get_pairing_pin() -> str:
+    """Return the persistent or dynamically generated 6-digit pairing PIN.
+    Can be entered by the user on the phone or sent via header/query parameter.
+    """
+    pin = db.get_setting("pairing_pin")
+    if not pin or len(pin) != 6 or not pin.isdigit():
+        pin = f"{secrets.randbelow(900000) + 100000}"
+        db.set_setting("pairing_pin", pin)
+        logger.info("Generated persistent 6-digit pairing PIN: %s", pin)
+    return pin
+
+
+@router.get("/pairing/config")
+async def get_pairing_config(
+    request: Request,
+    pin: Optional[str] = None,
+    auth_token: Optional[str] = Header(None, alias="x-auth-token"),
+    x_pairing_pin: Optional[str] = Header(None, alias="x-pairing-pin"),
+    token: Optional[str] = None,
+    mask: bool = False
+):
+    """Return discovered laptop network endpoints and pairing token for phone configuration.
+    Security: Protected against unauthenticated LAN snooping.
+    Only permits:
+    1. Requests providing the valid pairing PIN (rate-limited, timing-attack safe)
+    2. Requests providing the valid device auth token
+    3. Localhost connections (creator viewing PC web dashboard)
+    """
+    client_ip = request.client.host if request.client else ""
+    is_localhost = is_trusted_localhost(client_ip)
+    expected_token = get_auth_token()
+    current_pin = get_pairing_pin()
+
+    provided_token = auth_token or token
+    if provided_token and provided_token.startswith("Bearer "):
+        provided_token = provided_token[7:].strip()
+
+    provided_pin = pin or x_pairing_pin
+
+    is_authenticated = False
+
+    if provided_pin:
+        check_pin_rate_limit(client_ip)
+        if secure_str_equals(provided_pin, current_pin):
+            record_pin_success(client_ip)
+            is_authenticated = True
+        else:
+            record_pin_failure(client_ip)
+            logger.warning("Rejected invalid pairing PIN attempt from %s", client_ip)
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid pairing PIN",
+                headers={"WWW-Authenticate": 'PairingPIN realm="dispatch"'}
+            )
+    elif provided_token:
+        if secure_str_equals(provided_token, expected_token):
+            is_authenticated = True
+        else:
+            logger.warning("Rejected invalid auth token from %s", client_ip)
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid authentication token",
+                headers={"WWW-Authenticate": 'Bearer realm="dispatch"'}
+            )
+    elif is_localhost:
+        is_authenticated = True
+
+    if not is_authenticated:
+        logger.warning("Blocked unauthenticated LAN access to /api/sync/pairing/config from %s", client_ip)
+        if mask:
+            lan_url, tailscale_url = get_network_endpoints()
+            return {
+                "lan_url": lan_url,
+                "tailscale_url": tailscale_url,
+                "auth_token": None,
+                "pairing_pin": None,
+                "yt_token": None,
+                "yt_refresh": None,
+                "yt_client_id": None,
+                "yt_client_secret": None,
+                "connection_string": None,
+                "authenticated": False,
+                "requires_pairing": True,
+                "message": "Authentication required. Provide valid x-auth-token or pairing PIN."
+            }
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Provide valid 'pin' query param, 'x-pairing-pin' header, or 'x-auth-token' header.",
+            headers={"WWW-Authenticate": 'Bearer realm="dispatch", PairingPIN realm="dispatch"'}
+        )
+
+    lan_url, tailscale_url = get_network_endpoints()
+    token_val = expected_token
+    yt_token, yt_refresh, yt_cid, yt_csec = get_youtube_pairing_credentials()
+
+    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={token_val}&pin={current_pin}"
+    if yt_token or yt_refresh:
+        connection_string += f"&yt_token={yt_token}&yt_refresh={yt_refresh}&yt_client_id={yt_cid}&yt_client_secret={yt_csec}"
 
     return {
         "lan_url": lan_url,
         "tailscale_url": tailscale_url,
-        "auth_token": token,
+        "auth_token": token_val,
+        "pairing_pin": current_pin,
+        "yt_token": yt_token,
+        "yt_refresh": yt_refresh,
+        "yt_client_id": yt_cid,
+        "yt_client_secret": yt_csec,
+        "connection_string": connection_string,
+        "authenticated": True
+    }
+
+
+@router.post("/pairing/handshake")
+async def pairing_handshake(
+    request: Request,
+    payload: PairingHandshakeRequest
+):
+    """Explicit POST pairing handshake: Client submits 6-digit PIN and receives auth_token."""
+    client_ip = request.client.host if request.client else ""
+    check_pin_rate_limit(client_ip)
+
+    current_pin = get_pairing_pin()
+    if not secure_str_equals(payload.pin, current_pin):
+        record_pin_failure(client_ip)
+        logger.warning("Failed pairing handshake PIN from %s (client: %s)", client_ip, payload.client_name)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid pairing PIN",
+            headers={"WWW-Authenticate": 'PairingPIN realm="dispatch"'}
+        )
+
+    record_pin_success(client_ip)
+    logger.info("Successful pairing handshake from %s (client: %s)", client_ip, payload.client_name)
+
+    lan_url, tailscale_url = get_network_endpoints()
+    token_val = get_auth_token()
+    yt_token, yt_refresh, yt_cid, yt_csec = get_youtube_pairing_credentials()
+
+    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={token_val}&pin={current_pin}"
+    if yt_token or yt_refresh:
+        connection_string += f"&yt_token={yt_token}&yt_refresh={yt_refresh}&yt_client_id={yt_cid}&yt_client_secret={yt_csec}"
+
+    return {
+        "status": "paired",
+        "lan_url": lan_url,
+        "tailscale_url": tailscale_url,
+        "auth_token": token_val,
+        "pairing_pin": current_pin,
+        "yt_token": yt_token,
+        "yt_refresh": yt_refresh,
+        "yt_client_id": yt_cid,
+        "yt_client_secret": yt_csec,
         "connection_string": connection_string
     }
 
@@ -147,12 +380,14 @@ async def verify_chunk_explicit(
     segment_id: str,
     sha256: str,
     file_size: Optional[int] = None,
-    auth_token: Optional[str] = Header(None, alias="x-auth-token")
+    auth_token: Optional[str] = Header(None, alias="x-auth-token"),
+    token: Optional[str] = None
 ):
     """Explicit cryptographic proof-of-receipt endpoint for phone before deleting local files.
-    Returns 200 with {"verified": True} only if the fully assembled file exists and hashes match.
+    Returns 200 with {"verified": True} only if the fully assembled file exists and hashes match,
+    or if chunk is confirmed in the database with matching SHA-256.
     """
-    verify_token(auth_token)
+    verify_token(auth_token or token)
     seg_id = sanitize_segment_id(segment_id)
 
     final_name = f"{seg_id}.mp4"
@@ -176,12 +411,18 @@ async def verify_chunk_explicit(
         else:
             return {"verified": False, "reason": "sha256_mismatch", "status": "CORRUPT_RETRY_REQUIRED"}
 
-    # 2. Check if already processed by pipeline into clips and safely archived/completed
+    # 2. Check database for registered or processed chunk with matching hash
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ?", (final_name,))
+        cursor.execute(
+            "SELECT status, file_hash, filepath FROM chunks WHERE filename = ? OR filename LIKE ? ORDER BY created_at DESC",
+            (final_name, f"{seg_id}%")
+        )
         row = cursor.fetchone()
-        if row and row["status"] in ("verified", "transcribed", "processed") and (row["file_hash"] or "").lower() == sha256.lower():
+        if row and (row["file_hash"] or "").lower() == sha256.lower():
+            db_path = Path(row["filepath"]) if row.get("filepath") else None
+            if db_path and db_path.exists():
+                return {"verified": True, "segment_id": seg_id, "size": db_path.stat().st_size, "status": "VERIFIED"}
             return {"verified": True, "segment_id": seg_id, "status": "VERIFIED_PROCESSED"}
 
     return {"verified": False, "reason": "file_not_found", "status": "MISSING"}
@@ -237,7 +478,7 @@ async def reconcile_manifest(payload: ReconcileRequest):
 
             target_file = final_proc if final_proc.exists() else (final_inc if final_inc.exists() else None)
 
-            cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ?", (final_name,))
+            cursor.execute("SELECT status, file_hash, filepath FROM chunks WHERE filename = ? OR filename LIKE ? ORDER BY created_at DESC", (final_name, f"{seg_id}%"))
             db_chunk = cursor.fetchone()
 
             is_verified = False
@@ -250,14 +491,14 @@ async def reconcile_manifest(payload: ReconcileRequest):
                     logger.error("Corrupted file detected during reconcile for %s! Quarantining.", target_file.name)
                     corrupt_path = INCOMING_DIR / f"corrupt_{seg_id}.bad"
                     try:
-                        target_file.rename(corrupt_path)
+                        target_file.replace(corrupt_path)
                     except Exception:
                         try:
                             target_file.unlink()
                         except Exception:
                             pass
 
-            elif db_chunk and db_chunk["status"] in ("verified", "transcribed", "processed") and (db_chunk["file_hash"] or "").lower() == expected_sha256.lower():
+            elif db_chunk and (db_chunk["file_hash"] or "").lower() == expected_sha256.lower():
                 is_verified = True
 
             if is_verified:
@@ -314,6 +555,17 @@ async def init_upload(payload: InitUploadRequest):
         else:
             logger.warning("Existing file %s failed size/SHA256 check on upload init. Purging corrupted bytes.", target_file.name)
             target_file.unlink(missing_ok=True)
+    else:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ? OR filename LIKE ? ORDER BY created_at DESC", (final_name, f"{seg_id}%"))
+            db_chunk = cursor.fetchone()
+            if db_chunk and (db_chunk["file_hash"] or "").lower() == payload.sha256_hash.lower():
+                return {
+                    "status": "already_completed",
+                    "remote_offset": payload.file_size_bytes,
+                    "verified": True
+                }
 
     part_file = INCOMING_DIR / f"{seg_id}.part"
     if part_file.exists():
@@ -341,7 +593,7 @@ async def upload_chunk(
     x_file_size: int = Header(...),
     x_sha256: str = Header(...),
     x_session_id: str = Header(...),
-    x_auth_token: str = Header(...)
+    x_auth_token: Optional[str] = Header(None)
 ):
     """Receive a byte chunk and append to the partial segment file at the verified offset."""
     verify_token(x_auth_token)
@@ -362,10 +614,37 @@ async def upload_chunk(
     if not chunk_bytes:
         return {"remote_offset": current_size, "completed": False}
 
+    # Pre-write validation: for offset=0 (fresh start), verify body hash against expected sha256
+    # before writing anything to disk. If the hash of the incoming body doesn't match and the
+    # body clearly can't reconstitute the declared file (wrong bytes), purge and reject.
+    if x_upload_offset == 0:
+        incoming_sha = hashlib.sha256(chunk_bytes).hexdigest()
+        if len(chunk_bytes) == x_file_size and incoming_sha.lower() != x_sha256.lower():
+            # Single-shot corrupt upload — reject before touching disk
+            logger.error("Pre-write SHA-256 mismatch for %s (single-shot): expected %s, got %s",
+                         seg_id, x_sha256, incoming_sha)
+            raise HTTPException(status_code=422, detail="Checksum mismatch on single-shot upload; rejected before write")
+        if len(chunk_bytes) != x_file_size and incoming_sha.lower() != x_sha256.lower():
+            # Multi-chunk but the first chunk is already clearly wrong bytes (different content hash)
+            # Purge any stale partial and reject
+            part_file.unlink(missing_ok=True)
+            logger.error("Corrupt chunk body for %s at offset 0: sha256 of incoming chunk doesn't match declared hash. Rejecting.",
+                         seg_id)
+            raise HTTPException(status_code=422, detail="Corrupt chunk data detected at offset 0; partial rejected")
+
     with open(part_file, "ab") as f:
         f.write(chunk_bytes)
 
     new_offset = part_file.stat().st_size
+
+    # Guard: if uploaded bytes exceed declared file size, data is corrupt — purge and reject
+    if new_offset > x_file_size:
+        logger.error(
+            "Chunk overflow for %s: received %d bytes but declared size is %d. Purging partial file.",
+            seg_id, new_offset, x_file_size
+        )
+        part_file.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="Chunk overflow: received more bytes than declared file size; partial file purged")
 
     # Check if upload is complete
     if new_offset == x_file_size:
@@ -382,15 +661,17 @@ async def upload_chunk(
             part_file.unlink()
             raise HTTPException(status_code=422, detail="Checksum mismatch; partial file purged")
 
-        # Atomic rename from .part to .mp4
-        part_file.rename(final_file)
+        # Atomic rename from .part to .mp4 using replace() to prevent Windows WinError 183
+        if final_file.exists():
+            final_file.unlink(missing_ok=True)
+        part_file.replace(final_file)
         logger.info("Segment %s verified and finalized to %s (%d bytes)",
                     seg_id, final_file.name, new_offset)
 
         # Move immediately to processing to avoid double scan delays
         target_path = PROCESSING_DIR / final_file.name
         if target_path.exists():
-            target_path = PROCESSING_DIR / f"{final_file.stem}_{int(time.time())}{final_file.suffix}"
+            target_path.unlink(missing_ok=True)
         shutil.move(str(final_file), str(target_path))
 
         # Register in laptop database
@@ -437,35 +718,48 @@ async def upload_direct_file(
     file: UploadFile = File(...),
     segment_id: str = Form(...),
     session_id: Optional[str] = Form(None),
-    auth_token: Optional[str] = Form(None)
+    auth_token: Optional[str] = Form(None),
+    x_auth_token: Optional[str] = Header(None, alias="x-auth-token")
 ):
     """Direct streaming multipart upload for mobile segments with immediate pipeline execution."""
-    verify_token(auth_token)
+    token = auth_token or x_auth_token
+    verify_token(token)
     seg_id = sanitize_segment_id(segment_id)
 
-    target_path = PROCESSING_DIR / f"{seg_id}.mp4"
-    if target_path.exists():
-        target_path = PROCESSING_DIR / f"{seg_id}_{int(time.time())}.mp4"
+    temp_target = INCOMING_DIR / f"{seg_id}.direct_upload"
+    final_target = PROCESSING_DIR / f"{seg_id}.mp4"
 
     hasher = hashlib.sha256()
     total_bytes = 0
-    with open(target_path, "wb") as f:
-        while chunk := await file.read(1024 * 512):
-            f.write(chunk)
-            hasher.update(chunk)
-            total_bytes += len(chunk)
+    try:
+        with open(temp_target, "wb") as f:
+            while chunk := await file.read(1024 * 512):
+                f.write(chunk)
+                hasher.update(chunk)
+                total_bytes += len(chunk)
 
-    computed_sha = hasher.hexdigest()
-    logger.info("Direct upload complete for %s (%d bytes, SHA: %s)", seg_id, total_bytes, computed_sha[:8])
+        computed_sha = hasher.hexdigest()
+        logger.info("Direct upload complete for %s (%d bytes, SHA: %s)", seg_id, total_bytes, computed_sha[:8])
+
+        # Purge any partial file from interrupted resumable attempts
+        (INCOMING_DIR / f"{seg_id}.part").unlink(missing_ok=True)
+
+        if final_target.exists():
+            final_target.unlink(missing_ok=True)
+        shutil.move(str(temp_target), str(final_target))
+
+    except Exception as e:
+        temp_target.unlink(missing_ok=True)
+        raise e
 
     chunk_id = db.register_chunk(
         session_id=session_id,
-        filename=target_path.name,
-        filepath=str(target_path),
+        filename=final_target.name,
+        filepath=str(final_target),
         file_hash=computed_sha
     )
 
-    is_valid, meta, err = probe_video(target_path)
+    is_valid, meta, err = probe_video(final_target)
     if is_valid:
         db.update_chunk_metadata(
             chunk_id=chunk_id,

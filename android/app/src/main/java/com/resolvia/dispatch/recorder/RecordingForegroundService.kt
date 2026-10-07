@@ -15,6 +15,8 @@ import com.resolvia.dispatch.MainActivity
  */
 class RecordingForegroundService : Service() {
 
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
     companion object {
         private const val CHANNEL_ID = "dispatch_recording_channel"
         private const val NOTIFICATION_ID = 1001
@@ -38,6 +40,21 @@ class RecordingForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        wakeLock = powerManager?.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
+            "Dispatch:RecordingWakeLock"
+        )
+        wakeLock?.acquire(60 * 60 * 1000L)
+    }
+
+    override fun onDestroy() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (_: Exception) {}
+        super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

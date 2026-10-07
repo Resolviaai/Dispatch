@@ -28,18 +28,7 @@ class ResumableSyncWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val activeUrl = findReachableServer() ?: return@withContext Result.retry()
         if (pairingManager.authToken.isBlank()) {
-            try {
-                val configReq = Request.Builder().url("$activeUrl/api/sync/pairing/config").build()
-                client.newCall(configReq).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
-                        val token = body.get("auth_token")?.asString ?: ""
-                        if (token.isNotBlank()) {
-                            pairingManager.authToken = token
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
+            return@withContext Result.retry()
         }
         val pendingItems = dao.getPendingOutboxItems()
 
@@ -61,18 +50,18 @@ class ResumableSyncWorker(
         Result.success()
     }
 
-    private fun findReachableServer(): String? {
+    private suspend fun findReachableServer(): String? {
+        val discovery = com.resolvia.dispatch.data.NetworkDiscovery(applicationContext, pairingManager)
+        val discovered = discovery.discoverAndConnect(timeoutMs = 2000L)
+        if (discovered != null) return discovered
+
         val endpoints = pairingManager.getCandidateEndpoints()
         for (url in endpoints) {
-            val req = Request.Builder()
-                .url("$url/api/sync/ping")
-                .header("X-Dispatch-Device-Token", pairingManager.authToken)
-                .build()
-            try {
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) return url
-                }
-            } catch (_: Exception) {}
+            if (discovery.pingEndpoint(url)) {
+                discovery.ensureAuthToken(url)
+                pairingManager.lanHost = url
+                return url
+            }
         }
         return null
     }

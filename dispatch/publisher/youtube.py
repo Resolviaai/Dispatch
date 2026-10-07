@@ -41,13 +41,7 @@ def upload_youtube_short(
     # Check for credentials
     token_file = credentials_path or Path("youtube_token.json")
     if not token_file.exists() and not os.getenv("YOUTUBE_ACCESS_TOKEN"):
-        logger.info("[MOCK/SIMULATION] YouTube upload configured for '%s' (Privacy: %s).", title, privacy_status)
-        return {
-            "status": "published",
-            "remote_id": f"yt_sim_{video_path.stem}",
-            "remote_url": f"https://youtube.com/shorts/sim_{video_path.stem}",
-            "is_simulation": True
-        }
+        raise PermissionError("YouTube OAuth credentials missing (youtube_token.json). Please authenticate via Settings.")
 
     # If real credentials exist, execute actual Google API client upload
     try:

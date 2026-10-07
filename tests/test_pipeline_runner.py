@@ -155,8 +155,8 @@ class TestPipelineCheckpointingAndRetry(unittest.TestCase):
             self.assertEqual(final_job["status"], "COMPLETED")
             self.assertEqual(final_job["current_stage"], "COMPLETED")
 
-        # Verify raw file was safely cleaned up
-        self.assertFalse(dummy_video.exists())
+        # Verify raw file was safely preserved (creator source video must never be deleted)
+        self.assertTrue(dummy_video.exists())
 
     def test_governor_hold_transitions_to_waiting_for_resources(self):
         # Register a chunk and job at TRANSCRIBE stage

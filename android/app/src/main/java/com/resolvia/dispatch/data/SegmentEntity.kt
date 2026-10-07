@@ -17,3 +17,6 @@ data class SegmentEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val finalizedAt: Long? = null
 )
+
+val SegmentEntity.durationSeconds: Long
+    get() = if (finalizedAt != null && finalizedAt > createdAt) (finalizedAt - createdAt) / 1000L else 0L

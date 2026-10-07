@@ -32,13 +32,7 @@ def upload_linkedin_video(
     author = author_urn or os.getenv("LINKEDIN_AUTHOR_URN")
 
     if not token or not author:
-        logger.info("[MOCK/SIMULATION] LinkedIn video publishing simulated for '%s'", video_path.name)
-        return {
-            "status": "published",
-            "remote_id": f"li_sim_{video_path.stem}",
-            "remote_url": f"https://www.linkedin.com/feed/update/urn:li:activity:sim_{video_path.stem}",
-            "is_simulation": True
-        }
+        raise PermissionError("LinkedIn API credentials missing (LINKEDIN_ACCESS_TOKEN and LINKEDIN_AUTHOR_URN).")
 
     if not video_path.exists():
         raise FileNotFoundError(f"Video file missing: {video_path}")

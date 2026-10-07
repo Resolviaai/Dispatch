@@ -232,17 +232,11 @@ class PipelineStageRunner:
                 )
 
     def _run_finalize_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path):
-        """Stage 5: Finalize chunk and mark processed. Cleans up raw incoming video chunk to preserve disk space."""
+        """Stage 5: Finalize chunk and mark processed. Preserves raw source video to prevent data loss."""
         chunk_id = chunk["id"]
-
-        if filepath.exists():
-            try:
-                filepath.unlink()
-                logger.info("Cleaned up source video %s to preserve local storage", filepath.name)
-            except Exception as e:
-                logger.warning("Could not delete source file %s: %s", filepath, e)
 
         with db.get_db_connection() as conn:
             conn.execute("UPDATE chunks SET status = 'processed' WHERE id = ?", (chunk_id,))
 
-        logger.info("Finalized job %s and chunk %s successfully!", job["job_id"], chunk_id)
+        logger.info("Finalized job %s and chunk %s successfully! (Source video preserved at %s)",
+                    job["job_id"], chunk_id, filepath.name)

@@ -284,12 +284,13 @@ def set_setting(key: str, value: str):
         conn.commit()
 
 
-def create_session(notes: str = "") -> str:
-    session_id = f"sess_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+def create_session(notes: str = "", session_id: Optional[str] = None) -> str:
+    if not session_id:
+        session_id = f"sess_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO sessions (id, status, notes) VALUES (?, 'recording', ?)",
+            "INSERT OR IGNORE INTO sessions (id, status, notes) VALUES (?, 'recording', ?)",
             (session_id, notes)
         )
         conn.commit()
