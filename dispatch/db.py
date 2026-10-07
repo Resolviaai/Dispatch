@@ -588,15 +588,20 @@ def list_youtube_inbox(status: Optional[str] = None, limit: int = 50) -> List[Di
 
 
 def is_youtube_video_processed(video_id: str) -> bool:
-    """Check if a video has already been completely processed or clips created."""
+    """Check if a video has already been ingested or completely processed."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT status FROM youtube_inbox WHERE video_id = ?",
+            "SELECT status, local_video_path FROM youtube_inbox WHERE video_id = ?",
             (video_id,)
         )
         row = cursor.fetchone()
         if not row:
             return False
-        return row["status"] in ("CLIPS_CREATED", "COMPLETED")
+        # If already DOWNLOADED or further along, check if local file is intact
+        if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIPT_FETCHED", "CLIPS_CREATED", "COMPLETED"):
+            from pathlib import Path
+            path = Path(row["local_video_path"]) if row["local_video_path"] else None
+            return bool(path and path.exists() and path.stat().st_size > 0)
+        return False
 

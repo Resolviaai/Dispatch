@@ -96,7 +96,7 @@ class YouTubeDirectUploadWorker(
                 addProperty("categoryId", "22")
             }
             val status = JsonObject().apply {
-                addProperty("privacyStatus", "private")
+                addProperty("privacyStatus", "unlisted")
                 addProperty("selfDeclaredMadeForKids", false)
             }
             add("snippet", snippet)

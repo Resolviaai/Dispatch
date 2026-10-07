@@ -117,16 +117,16 @@ class YouTubeInboxPoller:
                         dispatch_id=dispatch_id
                     )
 
-                # Process the video automatically
+                # Pillar 1 Ingestion: Discover -> Download -> Validate -> DOWNLOADED
                 try:
-                    logger.info("Starting autonomous processing for YouTube video %s (%s)", video_id, dispatch_id)
-                    result = self.catcher.process_video(
+                    logger.info("Starting Pillar 1 Ingestion for YouTube video %s (%s)", video_id, dispatch_id)
+                    result = self.catcher.ingest_video(
                         url_or_id=video_id,
                         dispatch_id=dispatch_id
                     )
                     processed_items.append(result)
                 except Exception as e:
-                    logger.error("Failed to process YouTube video %s: %s", video_id, e)
+                    logger.error("Failed to ingest YouTube video %s: %s", video_id, e)
                     db.update_youtube_video(video_id, status="FAILED", last_error=str(e))
 
             return processed_items

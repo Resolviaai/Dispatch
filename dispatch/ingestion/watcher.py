@@ -1,6 +1,9 @@
-"""Incoming video watcher and stabilization manager.
-Monitors the incoming folder, ensures transfers are complete, validates with ffprobe,
-and stages video files into processing.
+"""[LEGACY / DEPRECATED] Incoming video watcher and stabilization manager.
+NOTE: This module was designed for the obsolete direct phone-to-PC sync architecture
+where files were written to storage/incoming/. In the active architecture, YouTube Cloud
+Inbox is the sole phone-to-PC ingestion path.
+This file is preserved ONLY for backward compatibility with legacy unit tests.
+DO NOT IMPORT OR START IN PRODUCTION CODE.
 """
 import time
 import shutil

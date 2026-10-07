@@ -77,8 +77,9 @@ def get_youtube_service(token_path: Optional[Path] = None):
     return None
 
 
-def list_authenticated_user_uploads(max_results: int = 15) -> List[Dict[str, Any]]:
-    """Query YouTube Data API v3 for the authenticated user's recent uploads (including private).
+def list_authenticated_user_uploads(max_results: int = 50, max_pages: int = 3) -> List[Dict[str, Any]]:
+    """Query YouTube Data API v3 for the authenticated user's uploads (including Unlisted and Private).
+    Supports nextPageToken pagination to avoid missing videos beyond the first page.
     Returns list of discovered videos with metadata and extracted dispatch_id.
     """
     service = get_youtube_service()
@@ -95,45 +96,58 @@ def list_authenticated_user_uploads(max_results: int = 15) -> List[Dict[str, Any
 
         uploads_playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-        # 2. Query uploads playlist (contains all videos including Private and Unlisted)
-        playlist_resp = service.playlistItems().list(
-            playlistId=uploads_playlist_id,
-            part="snippet,status",
-            maxResults=max_results
-        ).execute()
+        # 2. Query uploads playlist with pageToken pagination
+        page_token = None
+        pages_fetched = 0
+        per_page = min(max_results, 50)
 
-        for item in playlist_resp.get("items", []):
-            snippet = item.get("snippet", {})
-            video_id = snippet.get("resourceId", {}).get("videoId")
-            title = snippet.get("title", "")
-            description = snippet.get("description", "")
-            tags = snippet.get("tags", [])
-            published_at = snippet.get("publishedAt", "")
-            privacy = item.get("status", {}).get("privacyStatus", "private")
+        while pages_fetched < max_pages:
+            pages_fetched += 1
+            kwargs = {
+                "playlistId": uploads_playlist_id,
+                "part": "snippet,status",
+                "maxResults": per_page
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
 
-            dispatch_id = extract_dispatch_id(description, tags)
+            playlist_resp = service.playlistItems().list(**kwargs).execute()
 
-            # Check if this is a Dispatch upload:
-            # Matches if dispatch_id is present, OR "[DISPATCH]" is in title, OR "dispatch" in tags
-            is_dispatch = (
-                dispatch_id is not None
-                or "[dispatch]" in title.lower()
-                or any("dispatch" in t.lower() for t in tags)
-            )
+            for item in playlist_resp.get("items", []):
+                snippet = item.get("snippet", {})
+                video_id = snippet.get("resourceId", {}).get("videoId")
+                title = snippet.get("title", "")
+                description = snippet.get("description", "")
+                tags = snippet.get("tags", [])
+                published_at = snippet.get("publishedAt", "")
+                privacy = item.get("status", {}).get("privacyStatus", "unlisted")
 
-            if is_dispatch and video_id:
-                if not dispatch_id:
-                    # Generate deterministic fallback dispatch_id
-                    dispatch_id = f"dsp_{published_at[:10]}_{video_id[:6]}"
+                dispatch_id = extract_dispatch_id(description, tags)
 
-                discovered.append({
-                    "video_id": video_id,
-                    "dispatch_id": dispatch_id,
-                    "title": title,
-                    "description": description,
-                    "published_at": published_at,
-                    "privacy_status": privacy
-                })
+                # Check if this is a Dispatch upload:
+                # Matches if dispatch_id is present, OR "[DISPATCH]" is in title, OR "dispatch" in tags
+                is_dispatch = (
+                    dispatch_id is not None
+                    or "[dispatch]" in title.lower()
+                    or any("dispatch" in t.lower() for t in tags)
+                )
+
+                if is_dispatch and video_id:
+                    if not dispatch_id:
+                        dispatch_id = f"dsp_{published_at[:10]}_{video_id[:6]}"
+
+                    discovered.append({
+                        "video_id": video_id,
+                        "dispatch_id": dispatch_id,
+                        "title": title,
+                        "description": description,
+                        "published_at": published_at,
+                        "privacy_status": privacy
+                    })
+
+            page_token = playlist_resp.get("nextPageToken")
+            if not page_token:
+                break
 
     except Exception as e:
         logger.warning("Error querying authenticated YouTube uploads: %s", e)

@@ -163,6 +163,120 @@ class YouTubeInboxCatcher:
         logger.info("Downloaded %s successfully (%.2f MB)", video_id, target_path.stat().st_size / (1024 * 1024))
         return target_path
 
+    def ingest_video(
+        self,
+        url_or_id: str,
+        dispatch_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Pillar 1: Dedicated YouTube Ingestion & Media Validation.
+        
+        Contract:
+          1. Discover & register video record in youtube_inbox idempotently (status: DISCOVERED).
+          2. Transition to DOWNLOADING and download video via yt-dlp.
+          3. Transition to VALIDATING and run real ffprobe validation (stream, decodable, duration, dimensions).
+          4. Persist verified metadata and local path, then transition to DOWNLOADED.
+          5. STOP. (Downstream stages consume DOWNLOADED records).
+        """
+        from dispatch.ingestion.validator import probe_video
+
+        video_id = extract_youtube_video_id(url_or_id)
+        if not video_id:
+            raise ValueError(f"Invalid YouTube URL or ID: {url_or_id}")
+
+        existing = db.get_youtube_video(video_id)
+        # Idempotency check: If already DOWNLOADED or completed downstream, return existing record
+        if existing and existing["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIPT_FETCHED", "CLIPS_CREATED", "COMPLETED"):
+            local_path = Path(existing["local_video_path"]) if existing.get("local_video_path") else None
+            if local_path and local_path.exists() and local_path.stat().st_size > 0:
+                is_valid, _, _ = probe_video(local_path)
+                if is_valid:
+                    logger.info("Video %s is already downloaded and verified. Skipping duplicate ingest.", video_id)
+                    return {
+                        "video_id": video_id,
+                        "status": existing["status"],
+                        "local_video_path": str(local_path),
+                        "verified": True
+                    }
+
+        logger.info("Starting Pillar 1 Ingestion for YouTube video: %s", video_id)
+
+        # 1. Fetch metadata & register DISCOVERED
+        info = {}
+        try:
+            info = self.fetch_video_info(video_id)
+            if not dispatch_id:
+                from dispatch.youtube_inbox.oauth import extract_dispatch_id
+                dispatch_id = extract_dispatch_id(info.get("description", ""))
+
+            db.register_youtube_video(
+                video_id=video_id,
+                title=info.get("title", f"YouTube Video {video_id}"),
+                channel_id=info.get("channel_id", ""),
+                upload_time=info.get("upload_date"),
+                duration=info.get("duration", 0.0),
+                dispatch_id=dispatch_id
+            )
+        except Exception as e:
+            logger.warning("Could not fetch remote info for video %s (%s). Registering placeholder.", video_id, e)
+            db.register_youtube_video(
+                video_id=video_id,
+                title=f"YouTube Video {video_id}",
+                dispatch_id=dispatch_id
+            )
+
+        db.update_youtube_video(video_id, status="DISCOVERED", dispatch_id=dispatch_id)
+
+        # 2. Transition to DOWNLOADING & download media
+        db.update_youtube_video(video_id, status="DOWNLOADING")
+        try:
+            local_video_path = self.download_video(video_id)
+        except Exception as e:
+            err = f"Download failed: {e}"
+            logger.error("Download failed for video %s: %s", video_id, err)
+            db.update_youtube_video(video_id, status="FAILED", last_error=err)
+            raise RuntimeError(err) from e
+
+        # 3. Transition to VALIDATING & run real ffprobe verification
+        db.update_youtube_video(video_id, status="VALIDATING", local_video_path=str(local_video_path))
+        is_valid, meta, err = probe_video(local_video_path)
+        if not is_valid:
+            error_msg = f"Media validation failed for {local_video_path.name}: {err}"
+            logger.error(error_msg)
+            # Remove corrupt or zero-byte file
+            try:
+                local_video_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            db.update_youtube_video(video_id, status="FAILED", last_error=error_msg)
+            raise ValueError(error_msg)
+
+        # 4. Verified: Persist metadata & set status = DOWNLOADED
+        total_duration = meta.get("duration", 0.0)
+        db.update_youtube_video(
+            video_id=video_id,
+            status="DOWNLOADED",
+            local_video_path=str(local_video_path)
+        )
+
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE youtube_inbox SET duration = ? WHERE video_id = ?",
+                (total_duration, video_id)
+            )
+            conn.commit()
+
+        logger.info("Pillar 1 Ingestion SUCCESS for %s -> DOWNLOADED (Duration: %.1fs, Dimensions: %dx%d)",
+                    video_id, total_duration, meta.get("width", 0), meta.get("height", 0))
+
+        return {
+            "video_id": video_id,
+            "status": "DOWNLOADED",
+            "local_video_path": str(local_video_path),
+            "metadata": meta,
+            "verified": True
+        }
+
     def process_video(
         self,
         url_or_id: str,

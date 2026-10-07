@@ -41,6 +41,14 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
 
 ## 5. Current status and blockers
 
+### Pillar 1 (YouTube Ingestion & Media Validation) ? Verified Complete (2026-10-07)
+- **Contract:** Authenticated YouTube uploads -> `DISCOVERED` -> `DOWNLOADING` -> `VALIDATING` -> `DOWNLOADED` (stops strictly at `DOWNLOADED`).
+- **Real YouTube Observable Proof:** Video `-XjBMmr1ZJg` uploaded as `unlisted`, discovered via `list_authenticated_user_uploads()` with `nextPageToken` pagination, downloaded via `catcher.ingest_video()`, and validated via `ffprobe` (`640x360`, 3.065s, codecs `av1`+`aac`).
+- **Database Invariant:** Verified in `youtube_inbox` SQLite table with `status = 'DOWNLOADED'`, `duration = 3.065`, and valid `local_video_path`.
+- **Legacy Ingestion Isolation:** `dispatch/ingestion/watcher.py` marked deprecated and excluded from active execution. `probe_video` preserved in `validator.py`.
+- **Android App:** Updated `YouTubeDirectUploadWorker.kt` to upload as `unlisted` (accessible to Dispatch PC poller without browser cookies).
+
+
 - Code changes are in progress and have **not** completed the first real-video milestone.
 - Android build is unverified. Android Studio's JBR exists, but the wrapper could not use the profile Gradle lock, the offline workspace cache lacked the Gradle distribution, and network access could not download it. Direct Gradle invocation also could not connect to its local daemon.
 - No ADB executable or connected phone is available in this workspace, so no real phone recording/upload was performed.
@@ -99,7 +107,7 @@ Use an environment with the Gradle 8.13 distribution and the POCO C65 attached. 
 
 | Pillar | Component | Status | Notes |
 |---|---|---|---|
-| **Pillar 1** | Ingestion & Session Watcher (`dispatch/ingestion`) | Completed | Automated watcher, file stabilization, `ffprobe` format validation & test passed |
+| **Pillar 1** | YouTube Ingestion & Media Validation (`dispatch/youtube_inbox`) | Completed | Authenticated discovery, pagination, unlisted download, ffprobe validation verified on real YouTube video `-XjBMmr1ZJg` |
 | **Pillar 2** | Audio & Transcription Engine (`dispatch/transcription`) | Completed | FFmpeg 16kHz audio extraction, `faster-whisper` word alignment + VAD tested |
 | **Pillar 3** | AI Highlight & Packaging Engine (`dispatch/ai_clips`) | Completed | Dual-mode Gemini Flash + autonomous local heuristic, Roman Hinglish metadata, preference learner |
 | **Pillar 4** | Video Reframer & Subtitle Renderer (`dispatch/video_engine`) | Completed | Adaptive 9:16 framing (Fit-with-Blur & Crop), `.ass` styled captions, FFmpeg single-pass burn-in tested |
