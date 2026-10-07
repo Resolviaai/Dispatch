@@ -227,14 +227,16 @@ def init_db():
                 channel_id TEXT,
                 upload_time TIMESTAMP,
                 duration REAL DEFAULT 0.0,
-                status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, WAITING_FOR_YOUTUBE, DOWNLOADED, TRANSCRIPT_FETCHED, CLIPS_CREATED, COMPLETED, FAILED
+                status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, DOWNLOADING, VALIDATING, DOWNLOADED, WAITING_FOR_TRANSCRIPT, TRANSCRIBED, CLIPS_CREATED, COMPLETED, FAILED
                 local_video_path TEXT,
                 transcript_source TEXT,                    -- 'youtube' or 'whisper'
                 segments_json TEXT,                        -- JSON array of timestamped segments
                 last_error TEXT,
                 retry_count INTEGER DEFAULT 0,
                 discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                transcript_wait_started_at TIMESTAMP,
+                transcript_wait_deadline TIMESTAMP
             );
         """)
         cursor.execute("""
@@ -242,11 +244,15 @@ def init_db():
             ON youtube_inbox (status, updated_at);
         """)
 
-        # Migration: Ensure dispatch_id column exists if table was created in older schema
+        # Migration: Ensure dispatch_id and transcript wait columns exist if table was created in older schema
         cursor.execute("PRAGMA table_info(youtube_inbox);")
         yt_cols = [col[1] for col in cursor.fetchall()]
         if "dispatch_id" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN dispatch_id TEXT;")
+        if "transcript_wait_started_at" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_started_at TIMESTAMP;")
+        if "transcript_wait_deadline" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_deadline TIMESTAMP;")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
@@ -319,6 +325,15 @@ def get_chunk_by_id(chunk_id: str) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+def get_chunk_by_file_hash(file_hash: str) -> Optional[Dict[str, Any]]:
+    """Retrieve chunk by its file_hash identifier."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM chunks WHERE file_hash = ?", (file_hash,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
 def update_chunk_metadata(chunk_id: str, duration: float, width: int, height: int, aspect_ratio: str, status: str = 'verified'):
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -334,6 +349,8 @@ def save_transcript(chunk_id: str, session_id: Optional[str], full_text: str, se
     transcript_id = f"tx_{uuid.uuid4().hex[:8]}"
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # Enforce idempotency: one authoritative transcript per chunk_id
+        cursor.execute("DELETE FROM transcripts WHERE chunk_id = ?", (chunk_id,))
         cursor.execute("""
             INSERT INTO transcripts (id, chunk_id, session_id, full_text, segments_json)
             VALUES (?, ?, ?, ?, ?)
@@ -534,7 +551,9 @@ def update_youtube_video(
     local_video_path: Optional[str] = None,
     transcript_source: Optional[str] = None,
     segments_json: Optional[str] = None,
-    last_error: Optional[str] = None
+    last_error: Optional[str] = None,
+    transcript_wait_started_at: Optional[str] = None,
+    transcript_wait_deadline: Optional[str] = None
 ):
     """Update status, paths, or errors on YouTube inbox item."""
     with get_db_connection() as conn:
@@ -557,6 +576,14 @@ def update_youtube_video(
         if segments_json is not None:
             updates.append("segments_json = ?")
             params.append(segments_json)
+
+        if transcript_wait_started_at is not None:
+            updates.append("transcript_wait_started_at = ?")
+            params.append(transcript_wait_started_at)
+
+        if transcript_wait_deadline is not None:
+            updates.append("transcript_wait_deadline = ?")
+            params.append(transcript_wait_deadline)
 
         if last_error is not None:
             updates.append("last_error = ?")
@@ -598,8 +625,11 @@ def is_youtube_video_processed(video_id: str) -> bool:
         row = cursor.fetchone()
         if not row:
             return False
-        # If already DOWNLOADED or further along, check if local file is intact
-        if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIPT_FETCHED", "CLIPS_CREATED", "COMPLETED"):
+        # If completed downstream, return True directly
+        if row["status"] in ("CLIPS_CREATED", "COMPLETED"):
+            return True
+        # If in progress with downloaded media, check if local file is intact
+        if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED", "TRANSCRIPT_FETCHED"):
             from pathlib import Path
             path = Path(row["local_video_path"]) if row["local_video_path"] else None
             return bool(path and path.exists() and path.stat().st_size > 0)

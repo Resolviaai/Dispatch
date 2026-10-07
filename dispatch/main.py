@@ -42,12 +42,18 @@ def start_dispatch(run_web: bool = True):
         sys.exit(1)
     logger.info("FFmpeg verified in system PATH")
 
-    # 4. YouTube is the only automatic video ingest path on PC.
+    # 4. YouTube is the only automatic video ingest path on PC (Pillar 1).
     youtube_poller = YouTubeInboxPoller()
     youtube_poller.start()
     logger.info("Autonomous YouTube Cloud Inbox poller active (Checks immediately on boot + every 10 min)")
 
-    # 5. Start Web Dashboard
+    # 5. Pillar 2: Autonomous Transcription Worker (YouTube captions with Whisper fallback)
+    from dispatch.transcription.worker import TranscriptionWorker
+    transcription_worker = TranscriptionWorker()
+    transcription_worker.start()
+    logger.info("Autonomous Transcription worker active (Consumes DOWNLOADED -> WAITING_FOR_TRANSCRIPT -> TRANSCRIBED)")
+
+    # 6. Start Web Dashboard
     if run_web:
         logger.info("Launching Web Dashboard on http://%s:%d", WEB_HOST, WEB_PORT)
         logger.info("Review clips on PC: http://localhost:%d", WEB_PORT)

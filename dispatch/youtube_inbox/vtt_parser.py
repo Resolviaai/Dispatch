@@ -38,6 +38,46 @@ def clean_vtt_text(text: str) -> str:
     return cleaned
 
 
+def parse_inline_words(raw_text: str, cue_start: float, cue_end: float) -> List[Dict[str, Any]]:
+    """Parse exact inline word timestamps like `<00:00:01.200><c> word</c>` if present."""
+    pattern = re.compile(r"<(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})>")
+    parts = pattern.split(raw_text)
+    if len(parts) <= 1:
+        return []
+
+    time_points = [cue_start]
+    texts = [parts[0]]
+    i = 1
+    while i < len(parts):
+        h, m, s, ms = parts[i:i+4]
+        t = int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+        time_points.append(round(t, 3))
+        texts.append(parts[i+4])
+        i += 5
+    time_points.append(cue_end)
+
+    words = []
+    for idx, txt in enumerate(texts):
+        cleaned = clean_vtt_text(txt)
+        if not cleaned:
+            continue
+        w_start = time_points[idx]
+        w_end = max(w_start + 0.05, time_points[idx+1])
+        tokens = cleaned.split()
+        if not tokens:
+            continue
+        dt = max(0.01, w_end - w_start) / len(tokens)
+        for sub_i, tok in enumerate(tokens):
+            words.append({
+                "word": tok,
+                "start": round(w_start + sub_i * dt, 3),
+                "end": round(w_start + (sub_i + 1) * dt, 3),
+                "probability": 1.0,
+                "is_exact": True
+            })
+    return words
+
+
 def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
     """Parse WebVTT string content into structured segment dictionaries.
     
@@ -63,11 +103,13 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
                 raw_text = " ".join(current_text_lines)
                 cleaned = clean_vtt_text(raw_text)
                 if cleaned:
+                    inline_words = parse_inline_words(raw_text, current_start, current_end)
                     raw_cues.append({
                         "start": current_start,
                         "end": current_end,
                         "text": cleaned,
-                        "raw": raw_text
+                        "raw": raw_text,
+                        "words": inline_words
                     })
                 current_text_lines = []
 
@@ -82,11 +124,13 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
         raw_text = " ".join(current_text_lines)
         cleaned = clean_vtt_text(raw_text)
         if cleaned:
+            inline_words = parse_inline_words(raw_text, current_start, current_end)
             raw_cues.append({
                 "start": current_start,
                 "end": current_end,
                 "text": cleaned,
-                "raw": raw_text
+                "raw": raw_text,
+                "words": inline_words
             })
 
     if not raw_cues:
@@ -105,11 +149,13 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
         if last_text and text.startswith(last_text):
             remainder = text[len(last_text):].strip()
             if remainder:
+                # Filter words belonging to remainder if inline words exist
+                rem_words = [w for w in cue["words"] if w["word"] in remainder.split()] if cue["words"] else []
                 deduped_cues.append({
                     "start": cue["start"],
                     "end": cue["end"],
                     "text": remainder,
-                    "words": []
+                    "words": rem_words
                 })
                 last_text = text
             continue
@@ -118,12 +164,11 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
             "start": cue["start"],
             "end": cue["end"],
             "text": text,
-            "words": []
+            "words": cue["words"]
         })
         last_text = text
 
-    # Merge small fragmented cues (e.g. < 2 seconds or sentence continuations)
-    # into coherent 3-8s thought chunks
+    # Merge small fragmented cues into coherent 3-8s thought chunks
     merged_segments: List[Dict[str, Any]] = []
     current_seg: Optional[Dict[str, Any]] = None
 
@@ -133,7 +178,7 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
                 "start": cue["start"],
                 "end": cue["end"],
                 "text": cue["text"],
-                "words": []
+                "words": list(cue.get("words", []))
             }
             continue
 
@@ -144,34 +189,44 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
         if gap < 1.5 and duration < 5.0 and not current_seg["text"].endswith((".", "?", "!")):
             current_seg["end"] = cue["end"]
             current_seg["text"] = f"{current_seg['text']} {cue['text']}".strip()
+            current_seg["words"].extend(cue.get("words", []))
         else:
             merged_segments.append(current_seg)
             current_seg = {
                 "start": cue["start"],
                 "end": cue["end"],
                 "text": cue["text"],
-                "words": []
+                "words": list(cue.get("words", []))
             }
 
     if current_seg is not None:
         merged_segments.append(current_seg)
 
-    # Build synthetic word boundaries for each segment if not present
+    # Build word boundaries for segments: keep exact words if fully populated, otherwise synthesize
     for seg in merged_segments:
-        words = seg["text"].split()
-        if not words:
+        text_words = seg["text"].split()
+        if not text_words:
+            seg["words"] = []
             continue
+
+        existing_words = seg.get("words", [])
+        # If all text words have corresponding exact words, keep them
+        if len(existing_words) == len(text_words) and all(w.get("is_exact") for w in existing_words):
+            continue
+
+        # If not, synthesize word boundaries with is_exact=False
         seg_duration = max(0.2, seg["end"] - seg["start"])
-        word_step = seg_duration / len(words)
+        word_step = seg_duration / len(text_words)
         word_objs = []
-        for i, w in enumerate(words):
+        for i, w in enumerate(text_words):
             w_start = round(seg["start"] + i * word_step, 3)
             w_end = round(seg["start"] + (i + 1) * word_step, 3)
             word_objs.append({
                 "word": w,
                 "start": w_start,
                 "end": w_end,
-                "probability": 1.0
+                "probability": 1.0,
+                "is_exact": False
             })
         seg["words"] = word_objs
 

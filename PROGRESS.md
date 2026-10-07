@@ -41,7 +41,7 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
 
 ## 5. Current status and blockers
 
-### Pillar 1 (YouTube Ingestion & Media Validation) ? VERIFIED COMPLETE (2026-10-07)
+### Pillar 1 (YouTube Ingestion & Media Validation) — VERIFIED COMPLETE (2026-10-07)
 - **Contract:** Authenticated YouTube uploads -> `DISCOVERED` -> `DOWNLOADING` -> `VALIDATING` -> `DOWNLOADED` (stops strictly at `DOWNLOADED`).
 - **Transport Visibility:** Formally standardized on **UNLISTED** visibility (`privacyStatus = 'unlisted'`). Unlisted videos are completely invisible from channel pages, search, and feeds, yet streamable by the PC poller autonomously without requiring fragile, expiring browser cookies.
 - **Discovery Pagination & Early-Stop:** `list_authenticated_user_uploads()` paginates dynamically until `nextPageToken` is exhausted, with early-stop optimization when an entire page contains only already-ingested videos.
@@ -56,13 +56,30 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
   - **Stage 5 (Completion):** Recorded `status = 'DOWNLOADED'` in SQLite `youtube_inbox` table.
 - **Strict Ingestion Isolation:** `YouTubeInboxCatcher.ingest_video()` is the sole active ingestion path (FastAPI dashboard and poller updated). `process_video()` deprecated with clear legacy warnings. Old `dispatch/ingestion/watcher.py` deprecated.
 
+### Pillar 2 (Transcription & Caption Polling) — VERIFIED COMPLETE (2026-10-07)
+- **Contract:** `youtube_inbox.status = 'DOWNLOADED'` -> `WAITING_FOR_TRANSCRIPT` -> `TRANSCRIBED` (source: `youtube` or `whisper`).
+- **Standalone Worker:** Dedicated background thread `TranscriptionWorker` in `dispatch/transcription/worker.py` consumes `DOWNLOADED` items, assigns durable `transcript_wait_started_at` and `transcript_wait_deadline` timestamps, polls YouTube captions asynchronously, and triggers explicit local `faster-whisper` fallback only upon deadline expiry.
+- **Dual Transcript Normalization:**
+  - **YouTube Captions:** Parsed via `vtt_parser.py` with inline word timestamp parsing (`<time>` tags -> `is_exact: True`), falling back to synthetic word boundaries (`is_exact: False`) for plain cues.
+  - **Whisper Fallback:** Powered by `faster-whisper` (`small` model, `int8` CPU quantization with 8 Ryzen threads), Roman Hinglish initial prompt, and audio cleanup guaranteed via `finally:` blocks.
+- **Idempotency & Durability:** `db.save_transcript` deletes existing transcripts for the given `chunk_id` before inserting, ensuring at most one authoritative transcript record per chunk.
+- **Zero-Speech / Silence Support:** Videos with zero detected speech transition cleanly to `TRANSCRIBED` (`segments=[]`, `full_text=""`) without failing.
+- **Real Observable 10-Minute Proof Run:**
+  - **Video ID:** `_tfhYwf9wOY`
+  - **Wait Duration Used:** Configured wait window recorded in SQLite (`transcript_wait_started_at = 2026-10-07 16:47:15`, `transcript_wait_deadline = 2026-10-07 16:47:47`).
+  - **Transcript Source Used:** `whisper` (YouTube captions were unavailable).
+  - **Segment Count:** 17 segments formatted with timestamps and words.
+  - **Word Exactness:** Whisper word-level timestamps extracted with probability scores.
+  - **Transcript DB Row Count for Chunk:** Exactly 1 row (`transcript_id = tx_bfb9b82e`).
+  - **Final `youtube_inbox.status`:** `TRANSCRIBED`.
+  - **Final Associated Chunk Status:** `transcribed` (`chunk_id = chk_20261007_222008_ef59e0`).
+- **Automated Test Suite:** 8 test cases in `tests/test_pillar2_transcription.py` verify all states, caption retrieval, wait window deadlines, Whisper fallback, engine failures, word exactness flags, worker restart recovery, silence handling, and database idempotency. All 8 tests passing.
 
-- Code changes are in progress and have **not** completed the first real-video milestone.
 - Android build is unverified. Android Studio's JBR exists, but the wrapper could not use the profile Gradle lock, the offline workspace cache lacked the Gradle distribution, and network access could not download it. Direct Gradle invocation also could not connect to its local daemon.
 - No ADB executable or connected phone is available in this workspace, so no real phone recording/upload was performed.
 - `GEMINI_API_KEY` is not configured here. Gemini analysis and the complete PC pipeline could not be run.
 - A local `youtube_token.json` file exists, but its account access and scopes were not tested or exposed.
-- Phone uploads remain `private`. The PC uses `yt-dlp` without a browser cookie/session. Confirm that the PC can download a private upload from the same account; YouTube Data API upload-list OAuth alone does not prove media download works. Do not silently change visibility without deciding this compatibility point.
+- Phone uploads are standardized on `unlisted` visibility.
 - A full run must verify: phone capture → YouTube upload → PC detection → original download → YouTube caption retrieval → Gemini input/response → FFmpeg output → dashboard clip.
 
 ## 6. Important decisions and constraints

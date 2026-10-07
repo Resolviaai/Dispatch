@@ -56,82 +56,47 @@ def transcribe_video(
     """
     logger.info("Extracting audio from %s", video_path.name)
     audio_path = extract_audio(video_path)
+    try:
+        # Determine language setting
+        import os
+        configured_lang = language or db.get_setting("transcription_language") or os.getenv("DISPATCH_TRANSCRIPTION_LANGUAGE", "")
+        if configured_lang and configured_lang.lower() not in ("auto", "hinglish", "none"):
+            whisper_lang = configured_lang.lower().strip()
+        else:
+            whisper_lang = None
 
-    # Determine language setting
-    import os
-    configured_lang = language or db.get_setting("transcription_language") or os.getenv("DISPATCH_TRANSCRIPTION_LANGUAGE", "")
-    if configured_lang and configured_lang.lower() not in ("auto", "hinglish", "none"):
-        whisper_lang = configured_lang.lower().strip()
-    else:
-        whisper_lang = None
+        # Enhanced initial prompt for natural Hindi-English (Hinglish) code-switching in Roman script
+        if not initial_prompt:
+            initial_prompt = (
+                "Yeh video Hindi aur English mixed Hinglish language me hai. "
+                "Main aaj discuss karunga video creation, coding, automation, workflow design, aur productivity tricks."
+            )
 
-    # Enhanced initial prompt for natural Hindi-English (Hinglish) code-switching in Roman script
-    if not initial_prompt:
-        initial_prompt = (
-            "Yeh video Hindi aur English mixed Hinglish language me hai. "
-            "Main aaj discuss karunga video creation, coding, automation, workflow design, aur productivity tricks."
-        )
+        model = get_whisper_model(model_size=model_size)
 
-    model = get_whisper_model(model_size=model_size)
-
-    logger.info("Starting speech transcription (lang=%s) with word-level timestamps and VAD on %s",
-                whisper_lang or "auto-detect", audio_path.name)
-    segments_raw, info = model.transcribe(
-        str(audio_path),
-        beam_size=1,
-        word_timestamps=True,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=500),
-        initial_prompt=initial_prompt,
-        language=whisper_lang,
-        condition_on_previous_text=False
-    )
-
-    full_text_pieces = []
-    formatted_segments = []
-
-    for seg in segments_raw:
-        seg_text = seg.text.strip()
-        if not seg_text:
-            continue
-
-        full_text_pieces.append(seg_text)
-
-        words_data = []
-        if seg.words:
-            for w in seg.words:
-                words_data.append({
-                    "word": w.word.strip(),
-                    "start": round(w.start, 3),
-                    "end": round(w.end, 3),
-                    "probability": round(w.probability, 3)
-                })
-
-        formatted_segments.append({
-            "id": seg.id,
-            "start": round(seg.start, 3),
-            "end": round(seg.end, 3),
-            "text": seg_text,
-            "words": words_data
-        })
-
-    # Resilient fallback: If VAD filtered everything, try once without VAD filter
-    if not formatted_segments and audio_path.exists():
-        logger.info("VAD detected 0 segments. Retrying transcription with vad_filter=False fallback.")
+        logger.info("Starting speech transcription (lang=%s) with word-level timestamps and VAD on %s",
+                    whisper_lang or "auto-detect", audio_path.name)
         segments_raw, info = model.transcribe(
             str(audio_path),
-            beam_size=3,
+            beam_size=1,
             word_timestamps=True,
-            vad_filter=False,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
             initial_prompt=initial_prompt,
             language=whisper_lang,
             condition_on_previous_text=False
         )
+
+        full_text_pieces = []
+        formatted_segments = []
+
         for seg in segments_raw:
             seg_text = seg.text.strip()
             if not seg_text:
                 continue
+
             full_text_pieces.append(seg_text)
+
             words_data = []
             if seg.words:
                 for w in seg.words:
@@ -141,6 +106,7 @@ def transcribe_video(
                         "end": round(w.end, 3),
                         "probability": round(w.probability, 3)
                     })
+
             formatted_segments.append({
                 "id": seg.id,
                 "start": round(seg.start, 3),
@@ -149,29 +115,65 @@ def transcribe_video(
                 "words": words_data
             })
 
-    full_text = " ".join(full_text_pieces)
-    logger.info("Transcription completed: %d segments, %d total words",
-                len(formatted_segments), len(full_text.split()))
+        # Resilient fallback: If VAD filtered everything, try once without VAD filter
+        if not formatted_segments and audio_path.exists():
+            logger.info("VAD detected 0 segments. Retrying transcription with vad_filter=False fallback.")
+            segments_raw, info = model.transcribe(
+                str(audio_path),
+                beam_size=3,
+                word_timestamps=True,
+                vad_filter=False,
+                initial_prompt=initial_prompt,
+                language=whisper_lang,
+                condition_on_previous_text=False
+            )
+            for seg in segments_raw:
+                seg_text = seg.text.strip()
+                if not seg_text:
+                    continue
+                full_text_pieces.append(seg_text)
+                words_data = []
+                if seg.words:
+                    for w in seg.words:
+                        words_data.append({
+                            "word": w.word.strip(),
+                            "start": round(w.start, 3),
+                            "end": round(w.end, 3),
+                            "probability": round(w.probability, 3)
+                        })
+                formatted_segments.append({
+                    "id": seg.id,
+                    "start": round(seg.start, 3),
+                    "end": round(seg.end, 3),
+                    "text": seg_text,
+                    "words": words_data
+                })
 
-    # Clean up temporary .wav file to conserve disk space
-    try:
-        audio_path.unlink()
-    except Exception as e:
-        logger.debug("Could not remove temp audio file: %s", e)
+        full_text = " ".join(full_text_pieces)
+        logger.info("Transcription completed: %d segments, %d total words",
+                    len(formatted_segments), len(full_text.split()))
 
-    # Save to SQLite database if chunk_id is provided
-    transcript_id = None
-    if chunk_id:
-        transcript_id = db.save_transcript(
-            chunk_id=chunk_id,
-            session_id=session_id,
-            full_text=full_text,
-            segments=formatted_segments
-        )
+        # Save to SQLite database if chunk_id is provided
+        transcript_id = None
+        if chunk_id:
+            transcript_id = db.save_transcript(
+                chunk_id=chunk_id,
+                session_id=session_id,
+                full_text=full_text,
+                segments=formatted_segments
+            )
 
-    return {
-        "transcript_id": transcript_id,
-        "full_text": full_text,
-        "language": getattr(info, "language", "unknown") if info else "unknown",
-        "language_probability": getattr(info, "language_probability", 0.0) if info else 0.0
-    }
+        return {
+            "transcript_id": transcript_id,
+            "full_text": full_text,
+            "segments": formatted_segments,
+            "language": getattr(info, "language", "unknown") if info else "unknown",
+            "language_probability": getattr(info, "language_probability", 0.0) if info else 0.0
+        }
+    finally:
+        # Clean up temporary .wav file to conserve disk space even on exceptions
+        if audio_path and audio_path.exists():
+            try:
+                audio_path.unlink()
+            except Exception as e:
+                logger.debug("Could not remove temp audio file: %s", e)
