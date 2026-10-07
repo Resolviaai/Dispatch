@@ -125,7 +125,11 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
 
 ## 7. Exact next step for the next coding agent
 
-Use an environment with the Gradle 8.13 distribution and the POCO C65 attached. Build `android/app` (`assembleDebug`), fix only compile errors in this migration, install the APK, enter the account's authorized YouTube OAuth refresh token/client ID/client secret in Settings, then record and upload one short real clip. On the PC, run the poller against that same account and verify private-video download first. Continue through captions, Gemini, FFmpeg, and the dashboard; stop and diagnose the first failed stage before adding more code. Record the observed video ID and stage-by-stage result here without copying OAuth secrets.
+- **Pillar 1:** ✅ VERIFIED COMPLETE
+- **Pillar 2:** ✅ VERIFIED COMPLETE
+- **Pillar 3:** ✅ VERIFIED COMPLETE (`TRANSCRIBED` -> `ANALYZING` -> `CLIPS_DEFINED`)
+- **Next Step:** Implement and verify **Pillar 4 (Video Reframer & Subtitle Renderer)** consuming `CLIPS_DEFINED` candidates and source video to render final 9:16 vertical clips with animated karaoke subtitles into `CLIPS_CREATED`.
+- Do NOT re-run, refactor, or alter verified Pillars 1, 2, or 3. Ensure phone upload and YouTube ingestion track remain untouched.
 
 ## Validation performed for this cleanup
 
@@ -148,7 +152,7 @@ Use an environment with the Gradle 8.13 distribution and the POCO C65 attached. 
 |---|---|---|---|
 | **Pillar 1** | YouTube Ingestion & Media Validation (`dispatch/youtube_inbox`) | Prototype tested | ✅ **Verified Complete** (Unlisted YouTube Ingestion + ffprobe decode verification) |
 | **Pillar 2** | Audio & Transcription Engine (`dispatch/transcription`) | Prototype tested | ✅ **Verified Complete** (Async YouTube caption polling with 4h deadline & Whisper fallback) |
-| **Pillar 3** | AI Highlight & Packaging Engine (`dispatch/ai_clips`) | Prototype tested | ⏳ Next (Gemini Flash transcript highlight extraction) |
+| **Pillar 3** | AI Highlight & Packaging Engine (`dispatch/ai_clips`) | Prototype tested | ✅ **Verified Complete** (Gemini Flash transcript highlight extraction & candidate validation) |
 | **Pillar 4** | Video Reframer & Subtitle Renderer (`dispatch/video_engine`) | Prototype tested | ⏳ Pending verification |
 | **Pillar 5** | Review & Control Web Dashboard (`dispatch/web`) | Prototype tested | ⏳ Needs verification |
 | **Pillar 6** | Publishing & Outbox Queue (`dispatch/publisher`) | Prototype tested | ⏳ Needs verification |

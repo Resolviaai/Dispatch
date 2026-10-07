@@ -37,9 +37,9 @@ PILLAR 7: Master Daemon & Coordinator (surrounds and coordinates PC system)
 
 | # | Pillar | Core Responsibility | Input → Output Contract | Status |
 |---|---|---|---|---|
-| **1** | **YouTube Ingestion & Media Validation** | Discover uploads via authenticated API, download media, validate file with ffprobe + full frame decode, create durable state | YouTube → `DISCOVERED` → `DOWNLOADING` → `VALIDATING` → **`DOWNLOADED`** | ✅ **Done / Closed** |
-| **2** | **Transcription Engine** | Obtain reliable timestamped transcript with asynchronous YouTube caption polling and explicit Whisper fallback | `DOWNLOADED` → `WAITING_FOR_TRANSCRIPT` → **`TRANSCRIBED`** | 🔨 **Next Focus** |
-| **3** | **AI Highlights** | Gemini evaluates full transcript to pick 20-90s complete thoughts, hooks, and Roman Hinglish packaging | Transcript → **Clip definitions** (`clips` table) | ⏳ Not verified |
+| **1** | **YouTube Ingestion & Media Validation** | Discover uploads via authenticated API, download media, validate file with ffprobe + full frame decode, create durable state | YouTube → `DISCOVERED` → `DOWNLOADING` → `VALIDATING` → **`DOWNLOADED`** | ✅ **Verified Complete** |
+| **2** | **Transcription Engine** | Obtain reliable timestamped transcript with asynchronous YouTube caption polling and explicit Whisper fallback | `DOWNLOADED` → `WAITING_FOR_TRANSCRIPT` → **`TRANSCRIBED`** | ✅ **Verified Complete** |
+| **3** | **AI Highlights** | Gemini evaluates full transcript to pick 20-90s complete thoughts, hooks, and Roman Hinglish packaging | `TRANSCRIBED` → `ANALYZING` → **`CLIPS_DEFINED`** | ✅ **Verified Complete** |
 | **4** | **Video Engine & Renderer** | Render 9:16 vertical short-form video with adaptive layout (fit-blur/crop) and burned animated subtitles | Clip definitions + source video → **9:16 MP4 clips** | ⏳ Not verified |
 | **5** | **Review Dashboard** | Modern local web interface to play clips, edit titles/tags, toggle public/private, and 1-click approve/reject | Rendered clips → **Approved / Rejected** | ⏳ Needs verification |
 | **6** | **Publishing & Outbox** | Upload approved clips to target platforms (YouTube Shorts, Instagram, etc.) with idempotency & retry tracking | Approved clips → **Published media** | ⏳ Partially implemented |
