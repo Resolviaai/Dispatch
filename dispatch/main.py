@@ -53,7 +53,13 @@ def start_dispatch(run_web: bool = True):
     transcription_worker.start()
     logger.info("Autonomous Transcription worker active (Consumes DOWNLOADED -> WAITING_FOR_TRANSCRIPT -> TRANSCRIBED)")
 
-    # 6. Start Web Dashboard
+    # 6. Pillar 3: Autonomous AI Highlight Selection Worker (Gemini Semantic Extraction)
+    from dispatch.ai_clips.worker import HighlightWorker
+    highlight_worker = HighlightWorker()
+    highlight_worker.start()
+    logger.info("Autonomous AI Highlight worker active (Consumes TRANSCRIBED -> ANALYZING -> CLIPS_DEFINED)")
+
+    # 7. Start Web Dashboard
     if run_web:
         logger.info("Launching Web Dashboard on http://%s:%d", WEB_HOST, WEB_PORT)
         logger.info("Review clips on PC: http://localhost:%d", WEB_PORT)

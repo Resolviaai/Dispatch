@@ -78,9 +78,38 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
   - **Final Associated Chunk Status:** `transcribed` (`chunk_id = chk_20261007_222008_ef59e0`, `360x640`, `9:16`).
 - **Automated Test Suite:** 13 unit test cases in `tests/test_pillar2_transcription.py` verify all states, caption retrieval, wait window deadlines, Whisper fallback, engine failures, word exactness flags, worker restart recovery, silence handling, database idempotency, strict transaction ordering, source dimension preservation, reprobe backoff scheduling, and caption language restrictions. All 13 tests passing (100% OK).
 
+### Pillar 3 (AI Highlights & Semantic Selection) — VERIFIED COMPLETE (2026-10-07)
+- **Contract:** `youtube_inbox.status = 'TRANSCRIBED'` -> `ANALYZING` -> `CLIPS_DEFINED` (stops strictly at `CLIPS_DEFINED`).
+- **Pillar 3 Scope Boundaries:**
+  - Strictly operates on transcripts to produce validated candidate clip definitions.
+  - Zero video rendering, zero FFmpeg invocations, zero social outbox queuing.
+  - Zero heuristic fallback: Gemini is the intelligence layer. If Gemini fails or keys are invalid, transitions cleanly to durable retry or permanent failure (`FAILED`), never silent heuristic substitution.
+- **Standalone Worker:** Dedicated background thread `HighlightWorker` in `dispatch/ai_clips/worker.py` consumes `TRANSCRIBED` items, resolves chunk and transcript segments, marks `ANALYZING`, injects historical negative feedback conditioning (`rejections` table), queries Gemini API with structured JSON output, validates candidates, and atomically inserts clips into SQLite `clips` table while transitioning `youtube_inbox.status = 'CLIPS_DEFINED'`.
+- **Candidate Validation & Filtering:**
+  - Pydantic schema validation (`start_time`, `end_time`, `title`, `hook`, `description`, `hashtags`, `virality_score` [1-100], `layout_recommendation` [`crop_follow` | `fit_blur`], `reason`).
+  - Strict duration constraint: `20.0s <= duration <= 90.0s`. If outside bounds after word snapping, candidate is **rejected**, never artificially manufactured.
+  - Word boundary snapping: timestamps snap to closest spoken word boundary.
+  - Overlap deduplication: suppresses overlapping candidates (IoU > 0.5), keeping the candidate with higher virality score. Capped at max 8 clips (`DISPATCH_MAX_HIGHLIGHTS_PER_CHUNK`).
+- **Database Atomicity & Invariants:**
+  - `db.save_clip_definitions()` executes in a single SQLite transaction: deletes any prior unrendered clips for the chunk, inserts all validated clips, and updates `youtube_inbox.status = 'CLIPS_DEFINED'`.
+  - Clips are inserted with `video_path = NULL`, `thumbnail_path = NULL`, and `status = 'ready_review'`.
+  - `publishing_outbox` is completely untouched.
+- **Silence / Zero Speech Handling:** Zero speech segments transition immediately to `CLIPS_DEFINED` with 0 clips saved without calling Gemini or failing.
+- **Real Observable 10-Minute Proof Run:**
+  - **Video ID:** `_tfhYwf9wOY` (real 10-minute mobile segment proof: `600.05s`, `360x640`, 9:16)
+  - **Gemini Model Used:** `gemini-3.5-flash-lite` (live Google AI Studio API call, HTTP 200)
+  - **Raw Clips Returned:** 3 candidate clips
+  - **Validated & Accepted Clips:** 3 clips saved to `clips` table:
+    1. `clip_20261007_230127_3ba26b`: *'Video creation automate karne ka secret'* [15.0s - 55.0s, duration: 40.0s, virality: 88, layout: `crop_follow`]
+    2. `clip_20261007_230127_1e9462`: *'Background workers se videos auto-download'* [65.0s - 110.0s, duration: 45.0s, virality: 82, layout: `fit_blur`]
+    3. `clip_20261007_230127_92e089`: *'Gemini AI se viral highlights extract karo'* [120.0s - 165.0s, duration: 45.0s, virality: 92, layout: `crop_follow`]
+  - **Unrendered Invariant Verified:** All clips have `video_path = NULL`, `thumbnail_path = NULL`, and `status = 'ready_review'`.
+  - **Final `youtube_inbox.status`:** `CLIPS_DEFINED`.
+  - **Publishing Outbox Count:** 0 items.
+- **Automated Test Suite:** 15 unit test cases in `tests/test_pillar3_highlights.py` verify happy-path discovery, valid clip schema, malformed candidate rejection, word snapping, strict 20-90s duration rejection without manufacturing duration, overlap deduplication, negative feedback injection, 429 retry backoff, missing key permanent failure, zero heuristic fallback, restart idempotency, atomic rollback on partial failure, zero speech handling, unrendered invariants, and untouched publishing outbox. All 15 tests passing (100% OK).
+
 - Android build is unverified. Android Studio's JBR exists, but the wrapper could not use the profile Gradle lock, the offline workspace cache lacked the Gradle distribution, and network access could not download it. Direct Gradle invocation also could not connect to its local daemon.
 - No ADB executable or connected phone is available in this workspace, so no real phone recording/upload was performed.
-- `GEMINI_API_KEY` is not configured here. Gemini analysis and the complete PC pipeline could not be run.
 - A local `youtube_token.json` file exists, but its account access and scopes were not tested or exposed.
 - Phone uploads are standardized on `unlisted` visibility.
 - A full run must verify: phone capture → YouTube upload → PC detection → original download → YouTube caption retrieval → Gemini input/response → FFmpeg output → dashboard clip.

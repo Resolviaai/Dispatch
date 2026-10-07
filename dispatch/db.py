@@ -237,7 +237,10 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 transcript_wait_started_at TIMESTAMP,
                 transcript_wait_deadline TIMESTAMP,
-                next_caption_probe_at TIMESTAMP
+                next_caption_probe_at TIMESTAMP,
+                ai_attempt_count INTEGER DEFAULT 0,
+                next_ai_attempt_at TIMESTAMP,
+                last_ai_error TEXT
             );
         """)
         cursor.execute("""
@@ -245,7 +248,7 @@ def init_db():
             ON youtube_inbox (status, updated_at);
         """)
 
-        # Migration: Ensure dispatch_id and transcript wait columns exist if table was created in older schema
+        # Migration: Ensure dispatch_id, transcript wait, and AI retry columns exist if table was created in older schema
         cursor.execute("PRAGMA table_info(youtube_inbox);")
         yt_cols = [col[1] for col in cursor.fetchall()]
         if "dispatch_id" not in yt_cols:
@@ -256,6 +259,12 @@ def init_db():
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_deadline TIMESTAMP;")
         if "next_caption_probe_at" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_caption_probe_at TIMESTAMP;")
+        if "ai_attempt_count" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN ai_attempt_count INTEGER DEFAULT 0;")
+        if "next_ai_attempt_at" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_ai_attempt_at TIMESTAMP;")
+        if "last_ai_error" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN last_ai_error TEXT;")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
@@ -557,9 +566,12 @@ def update_youtube_video(
     last_error: Optional[str] = None,
     transcript_wait_started_at: Optional[str] = None,
     transcript_wait_deadline: Optional[str] = None,
-    next_caption_probe_at: Optional[str] = None
+    next_caption_probe_at: Optional[str] = None,
+    ai_attempt_count: Optional[int] = None,
+    next_ai_attempt_at: Optional[str] = None,
+    last_ai_error: Optional[str] = None
 ):
-    """Update status, paths, or errors on YouTube inbox item."""
+    """Update status, paths, errors, or retry schedule on YouTube inbox item."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         updates = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
@@ -592,6 +604,18 @@ def update_youtube_video(
         if next_caption_probe_at is not None:
             updates.append("next_caption_probe_at = ?")
             params.append(next_caption_probe_at)
+
+        if ai_attempt_count is not None:
+            updates.append("ai_attempt_count = ?")
+            params.append(ai_attempt_count)
+
+        if next_ai_attempt_at is not None:
+            updates.append("next_ai_attempt_at = ?")
+            params.append(next_ai_attempt_at)
+
+        if last_ai_error is not None:
+            updates.append("last_ai_error = ?")
+            params.append(last_ai_error)
 
         if last_error is not None:
             updates.append("last_error = ?")
@@ -634,7 +658,7 @@ def is_youtube_video_processed(video_id: str) -> bool:
         if not row:
             return False
         # If completed downstream, return True directly
-        if row["status"] in ("CLIPS_CREATED", "COMPLETED"):
+        if row["status"] in ("CLIPS_DEFINED", "CLIPS_CREATED", "COMPLETED"):
             return True
         # If in progress with downloaded media, check if local file is intact
         if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED", "TRANSCRIPT_FETCHED"):
@@ -642,4 +666,71 @@ def is_youtube_video_processed(video_id: str) -> bool:
             path = Path(row["local_video_path"]) if row["local_video_path"] else None
             return bool(path and path.exists() and path.stat().st_size > 0)
         return False
+
+
+def save_clip_definitions(
+    chunk_id: Optional[str],
+    session_id: Optional[str],
+    video_id: str,
+    clip_defs: List[Dict[str, Any]],
+    publish_mode: str = "private",
+    platform_targets: str = "youtube,instagram"
+) -> List[str]:
+    """Atomically persist validated clip definitions in a single transaction.
+    
+    1. Removes any prior unrendered/candidate clips for this chunk to prevent duplicate clips on retry.
+    2. Inserts all validated clip definitions into `clips` with video_path=None, thumbnail_path=None, status='ready_review'.
+    3. Updates youtube_inbox status to 'CLIPS_DEFINED'.
+    All performed in a single database transaction.
+    """
+    saved_clip_ids: List[str] = []
+    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # 1. Clean up prior candidate/unrendered clips for this chunk to ensure idempotency
+        if chunk_id:
+            cursor.execute("""
+                DELETE FROM clips 
+                WHERE chunk_id = ? AND (video_path IS NULL OR video_path = '') AND status = 'ready_review'
+            """, (chunk_id,))
+
+        # 2. Insert all validated clips
+        for idx, c in enumerate(clip_defs):
+            clip_id = f"clip_{now_str}_{uuid.uuid4().hex[:6]}"
+            start_t = float(c["start_time"])
+            end_t = float(c["end_time"])
+            duration = round(end_t - start_t, 2)
+            title = c.get("title", "Dispatch Highlight")
+            hook = c.get("hook", "")
+            description = c.get("description", "")
+            hashtags = c.get("hashtags", "#Shorts #Reels")
+            virality_score = int(c.get("virality_score", 70))
+            layout_mode = c.get("layout_recommendation", "fit_blur")
+
+            cursor.execute("""
+                INSERT INTO clips (
+                    id, session_id, chunk_id, start_time, end_time, duration,
+                    title, hook, description, hashtags, virality_score,
+                    layout_mode, status, publish_mode, platform_targets,
+                    video_path, thumbnail_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL)
+            """, (
+                clip_id, session_id, chunk_id, start_t, end_t, duration,
+                title, hook, description, hashtags, virality_score,
+                layout_mode, publish_mode, platform_targets
+            ))
+            saved_clip_ids.append(clip_id)
+
+        # 3. Atomically transition youtube_inbox to CLIPS_DEFINED
+        cursor.execute("""
+            UPDATE youtube_inbox 
+            SET status = 'CLIPS_DEFINED', updated_at = CURRENT_TIMESTAMP
+            WHERE video_id = ?
+        """, (video_id,))
+
+        conn.commit()
+
+    return saved_clip_ids
 
