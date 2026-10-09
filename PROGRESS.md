@@ -437,6 +437,34 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
    - Real-time `devicechange` detection when an external mic is plugged in.
    - Live 3-bar animated VU sound level visualizer on the viewfinder giving real-time feedback that the microphone is picking up sound.
 5. **Native Android APK Recompilation**:
-   - Built with Gradle: **BUILD SUCCESSFUL in 29s**. Updated binary: `android/app/build/outputs/apk/debug/app-debug.apk` (10.89 MB).
+### [2026-10-09] Production Final Release: Autonomous Session Pipeline, Screen-Off Background Recording, and Clean APK Build
+
+1. **Multi-Segment Session Continuity & Ingestion Identity**:
+   - Enriched mobile upload metadata: attaches `session_id`, `segment_id`, and `sequence_number` to YouTube descriptions and tags.
+   - PC poller (`oauth.py`) and catcher (`catcher.py`) extract session metadata via regex and persist it into SQLite `youtube_inbox` (`session_id TEXT`, `sequence_number INTEGER`).
+   - Transcription worker (`worker.py`) associates chunks and transcripts with the session ID.
+   - Highlights worker (`ai_clips/worker.py`) records session ID onto all generated clips.
+
+2. **1–2 Hour Screen-Off Background Recording (POCO C65 / HyperOS / Android 13/14)**:
+   - `RecordingForegroundService` implements `LifecycleService` and acquires `PARTIAL_WAKE_LOCK` without timeout.
+   - Displays ongoing notification with `FOREGROUND_SERVICE_TYPE_CAMERA | FOREGROUND_SERVICE_TYPE_MICROPHONE`.
+   - `CameraCaptureManager` binds directly to the foreground service lifecycle via coroutine-safe `startAndAwaitBind()`.
+   - `SegmenterEngine` coordinates rolling segments (10 minutes) and awaits active segment finalization before service shutdown.
+
+3. **Autonomous Drain-Loop YouTube Upload Worker**:
+   - `YouTubeDirectUploadWorker.kt` implements a drain loop over `dao.getPendingUploadSegments()`, preventing stranded segments.
+   - Idempotency verified via `findExistingUploadByDispatchId()`.
+   - Persists `youtubeVideoId` into Room SQLite via `MIGRATION_1_2` (bumped `AppDatabase` to version 2).
+
+4. **Speech Cleanup, Hinglish Transliteration & Poppins Font Support**:
+   - `highlight_finder.py`: Pause-aware boundary detection, repetition/false-start cleanup throughout candidate clips.
+   - 1:1 Roman Hinglish token transliteration with syllable preserving mapping.
+   - Added `Poppins` font to caption styling presets in web studio.
+
+5. **Final UI Packaging & Android APK Build**:
+   - React 18 / Vite 5 review studio compiled cleanly into `android/app/src/main/assets/web`.
+   - Single source of truth UI loaded via WebView in `MainActivity.kt`.
+   - Android debug APK assembled cleanly via Gradle (`gradlew.bat assembleDebug`): **BUILD SUCCESSFUL in 34s**, output: `android/app/build/outputs/apk/debug/app-debug.apk` (14.58 MB), mirrored to `storage/dispatch.apk`.
+   - Obsolete test artifacts purged and focused unit test suites passing (100% OK).
 
 

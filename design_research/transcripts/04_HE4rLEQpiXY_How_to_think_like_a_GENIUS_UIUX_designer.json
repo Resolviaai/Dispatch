@@ -1,0 +1,805 @@
+{
+  "meta": {
+    "id": "HE4rLEQpiXY",
+    "url": "https://www.youtube.com/watch?v=HE4rLEQpiXY",
+    "title": "How to think like a GENIUS UI/UX designer",
+    "uploader": "Kole Jain",
+    "duration": 331,
+    "description": "Design smarter and save 20% on Mobbin with my link: https://mobbin.com/kole\n\nHere's what separates the good from the genius (and no it's not scroll effects). It's all about how your approach a web design, where you start from, and who the UI is actually for. We tackle all of that in under 6 minutes.\n\nEnjoying the content? Check out some more!\n@kolejain \n\nTimestamps:\n0:00 Intro\n0:26 User intent\n1:27 Leverage existing layouts\n2:12 Use the right tools\n2:42 Content structure\n3:32 Functional animatio",
+    "slug": "How_to_think_like_a_GENIUS_UIUX_designer",
+    "snippets_count": 158,
+    "total_words": 1061
+  },
+  "snippets": [
+    {
+      "text": "Most designers want to work for big tech",
+      "start": 0.08,
+      "duration": 4.08
+    },
+    {
+      "text": "or start an agency, but most designers",
+      "start": 1.92,
+      "duration": 4.08
+    },
+    {
+      "text": "won't. Most designers focus on making",
+      "start": 4.16,
+      "duration": 4.8
+    },
+    {
+      "text": "things look good, but genius designers",
+      "start": 6.0,
+      "duration": 4.88
+    },
+    {
+      "text": "don't. They focus on making things work",
+      "start": 8.96,
+      "duration": 3.84
+    },
+    {
+      "text": "brilliantly for the user. Think of web",
+      "start": 10.88,
+      "duration": 4.32
+    },
+    {
+      "text": "design not as art, but as a story, and",
+      "start": 12.8,
+      "duration": 4.559
+    },
+    {
+      "text": "not every story needs 3D graphics or",
+      "start": 15.2,
+      "duration": 3.919
+    },
+    {
+      "text": "buttery smooth scrolling. If your goal",
+      "start": 17.359,
+      "duration": 4.321
+    },
+    {
+      "text": "is to impress other designers, maybe.",
+      "start": 19.119,
+      "duration": 4.24
+    },
+    {
+      "text": "But if your goal is to guide someone to",
+      "start": 21.68,
+      "duration": 3.679
+    },
+    {
+      "text": "an action, all that flare might just be",
+      "start": 23.359,
+      "duration": 4.0
+    },
+    {
+      "text": "in the way. Start with user intent.",
+      "start": 25.359,
+      "duration": 3.601
+    },
+    {
+      "text": "Let's say you need to design a user flow",
+      "start": 27.359,
+      "duration": 3.84
+    },
+    {
+      "text": "that enables customers to rent vacation",
+      "start": 28.96,
+      "duration": 4.72
+    },
+    {
+      "text": "properties, not unlike Airbnb. A UI",
+      "start": 31.199,
+      "duration": 4.161
+    },
+    {
+      "text": "designer might start thinking about the",
+      "start": 33.68,
+      "duration": 3.6
+    },
+    {
+      "text": "icons or the layout of each card and",
+      "start": 35.36,
+      "duration": 3.92
+    },
+    {
+      "text": "entirely lose the plot of why we're",
+      "start": 37.28,
+      "duration": 4.08
+    },
+    {
+      "text": "designing. The intent of the user is to",
+      "start": 39.28,
+      "duration": 4.0
+    },
+    {
+      "text": "search for accommodations. So, a search",
+      "start": 41.36,
+      "duration": 3.92
+    },
+    {
+      "text": "bar is a natural starting point. We can",
+      "start": 43.28,
+      "duration": 3.92
+    },
+    {
+      "text": "then augment with useful features like",
+      "start": 45.28,
+      "duration": 3.84
+    },
+    {
+      "text": "destination, amount of travelers, and",
+      "start": 47.2,
+      "duration": 3.519
+    },
+    {
+      "text": "dates. You might think the next step is",
+      "start": 49.12,
+      "duration": 3.68
+    },
+    {
+      "text": "to put a header above this and slap an",
+      "start": 50.719,
+      "duration": 3.68
+    },
+    {
+      "text": "image on the background. But think about",
+      "start": 52.8,
+      "duration": 4.0
+    },
+    {
+      "text": "the user. Does this design do anything",
+      "start": 54.399,
+      "duration": 4.8
+    },
+    {
+      "text": "extra that this design didn't? Not at",
+      "start": 56.8,
+      "duration": 4.32
+    },
+    {
+      "text": "all. But there can be more than one",
+      "start": 59.199,
+      "duration": 4.401
+    },
+    {
+      "text": "intent for a website. Maybe user knows",
+      "start": 61.12,
+      "duration": 4.16
+    },
+    {
+      "text": "they want to go on a vacation but",
+      "start": 63.6,
+      "duration": 3.44
+    },
+    {
+      "text": "doesn't know where. They're there to",
+      "start": 65.28,
+      "duration": 4.4
+    },
+    {
+      "text": "browse. We can serve that intent too by",
+      "start": 67.04,
+      "duration": 5.2
+    },
+    {
+      "text": "displaying our listings, but the user",
+      "start": 69.68,
+      "duration": 4.72
+    },
+    {
+      "text": "probably wants something more specific.",
+      "start": 72.24,
+      "duration": 4.879
+    },
+    {
+      "text": "So, we can add in filtering UI elements.",
+      "start": 74.4,
+      "duration": 4.88
+    },
+    {
+      "text": "Notice how the fonts, colors, and icons",
+      "start": 77.119,
+      "duration": 4.161
+    },
+    {
+      "text": "affect the aesthetics, but do very",
+      "start": 79.28,
+      "duration": 3.92
+    },
+    {
+      "text": "little to change the functionality. Only",
+      "start": 81.28,
+      "duration": 4.159
+    },
+    {
+      "text": "as the user intent expands do we expand",
+      "start": 83.2,
+      "duration": 4.32
+    },
+    {
+      "text": "the functionality of our designs? But we",
+      "start": 85.439,
+      "duration": 3.761
+    },
+    {
+      "text": "jump the gun a little by building full",
+      "start": 87.52,
+      "duration": 3.84
+    },
+    {
+      "text": "UIs before talking about leveraging",
+      "start": 89.2,
+      "duration": 4.08
+    },
+    {
+      "text": "existing layouts. Why not put the search",
+      "start": 91.36,
+      "duration": 3.759
+    },
+    {
+      "text": "bar down here or arrange the cards like",
+      "start": 93.28,
+      "duration": 3.76
+    },
+    {
+      "text": "this? Truth be told, nothing is stopping",
+      "start": 95.119,
+      "duration": 4.161
+    },
+    {
+      "text": "us from making a UI like this if it",
+      "start": 97.04,
+      "duration": 4.079
+    },
+    {
+      "text": "serves the user better. But after 30",
+      "start": 99.28,
+      "duration": 3.92
+    },
+    {
+      "text": "plus years of websites, users have come",
+      "start": 101.119,
+      "duration": 4.161
+    },
+    {
+      "text": "to expect certain layouts. This doesn't",
+      "start": 103.2,
+      "duration": 4.16
+    },
+    {
+      "text": "preclude us from trying new layouts, but",
+      "start": 105.28,
+      "duration": 4.0
+    },
+    {
+      "text": "means that typically information should",
+      "start": 107.36,
+      "duration": 3.84
+    },
+    {
+      "text": "flow top to bottom and left to right.",
+      "start": 109.28,
+      "duration": 3.6
+    },
+    {
+      "text": "Navigation is at the top of the page,",
+      "start": 111.2,
+      "duration": 3.279
+    },
+    {
+      "text": "and call to actions are typically",
+      "start": 112.88,
+      "duration": 3.919
+    },
+    {
+      "text": "eye-catching and easy to find. Designs",
+      "start": 114.479,
+      "duration": 4.0
+    },
+    {
+      "text": "that follow these guides are generally",
+      "start": 116.799,
+      "duration": 3.521
+    },
+    {
+      "text": "much easier to integrate new sections",
+      "start": 118.479,
+      "duration": 3.92
+    },
+    {
+      "text": "seamlessly and make responsive.",
+      "start": 120.32,
+      "duration": 4.0
+    },
+    {
+      "text": "Respecting these expectations, but",
+      "start": 122.399,
+      "duration": 3.921
+    },
+    {
+      "text": "making the design uniquely yours, like",
+      "start": 124.32,
+      "duration": 4.32
+    },
+    {
+      "text": "adding a cool micro interaction or a set",
+      "start": 126.32,
+      "duration": 4.4
+    },
+    {
+      "text": "of unique features is what separates the",
+      "start": 128.64,
+      "duration": 4.08
+    },
+    {
+      "text": "good from the genius. And if you're",
+      "start": 130.72,
+      "duration": 3.92
+    },
+    {
+      "text": "trying to think like a genius designer,",
+      "start": 132.72,
+      "duration": 3.92
+    },
+    {
+      "text": "it helps to see how the best are already",
+      "start": 134.64,
+      "duration": 4.64
+    },
+    {
+      "text": "thinking. Mobin is a curated library of",
+      "start": 136.64,
+      "duration": 6.08
+    },
+    {
+      "text": "realworld UI and UX from full user flows",
+      "start": 139.28,
+      "duration": 6.0
+    },
+    {
+      "text": "down to individual components all pulled",
+      "start": 142.72,
+      "duration": 4.96
+    },
+    {
+      "text": "from top apps and websites. Instead of",
+      "start": 145.28,
+      "duration": 4.16
+    },
+    {
+      "text": "downloading dozens of apps just to",
+      "start": 147.68,
+      "duration": 3.68
+    },
+    {
+      "text": "reverse engineer their design patterns,",
+      "start": 149.44,
+      "duration": 3.84
+    },
+    {
+      "text": "Mobin lets you search and explore them",
+      "start": 151.36,
+      "duration": 4.08
+    },
+    {
+      "text": "all in one place. Personally, I'm always",
+      "start": 153.28,
+      "duration": 4.08
+    },
+    {
+      "text": "diving into the UI element section.",
+      "start": 155.44,
+      "duration": 3.36
+    },
+    {
+      "text": "There's a link in the description if you",
+      "start": 157.36,
+      "duration": 2.72
+    },
+    {
+      "text": "do want to check it out. Thank you to",
+      "start": 158.8,
+      "duration": 3.12
+    },
+    {
+      "text": "Mobin for sponsoring this video. But",
+      "start": 160.08,
+      "duration": 3.84
+    },
+    {
+      "text": "without a content structure, design has",
+      "start": 161.92,
+      "duration": 3.92
+    },
+    {
+      "text": "very little value. There are two steps",
+      "start": 163.92,
+      "duration": 4.08
+    },
+    {
+      "text": "to designing around content. The first",
+      "start": 165.84,
+      "duration": 4.64
+    },
+    {
+      "text": "is to decide which content to display.",
+      "start": 168.0,
+      "duration": 4.4
+    },
+    {
+      "text": "Understanding how the user will interact",
+      "start": 170.48,
+      "duration": 3.759
+    },
+    {
+      "text": "with the design will determine what type",
+      "start": 172.4,
+      "duration": 3.6
+    },
+    {
+      "text": "of information is presented. For",
+      "start": 174.239,
+      "duration": 3.681
+    },
+    {
+      "text": "example, on our travel page, we can",
+      "start": 176.0,
+      "duration": 3.599
+    },
+    {
+      "text": "include a short description for every",
+      "start": 177.92,
+      "duration": 3.52
+    },
+    {
+      "text": "listing. But if the user wants a",
+      "start": 179.599,
+      "duration": 3.36
+    },
+    {
+      "text": "detailed look, they'll just click on the",
+      "start": 181.44,
+      "duration": 3.6
+    },
+    {
+      "text": "listing. They need the specifics to scan",
+      "start": 182.959,
+      "duration": 4.161
+    },
+    {
+      "text": "like the location, rating, and price",
+      "start": 185.04,
+      "duration": 4.479
+    },
+    {
+      "text": "before anything else. The second step is",
+      "start": 187.12,
+      "duration": 3.759
+    },
+    {
+      "text": "structuring the content that we do",
+      "start": 189.519,
+      "duration": 3.281
+    },
+    {
+      "text": "display. Currently, our design has",
+      "start": 190.879,
+      "duration": 4.161
+    },
+    {
+      "text": "perfect content, meaning that the titles",
+      "start": 192.8,
+      "duration": 4.48
+    },
+    {
+      "text": "and locations are all short. But what if",
+      "start": 195.04,
+      "duration": 4.16
+    },
+    {
+      "text": "we had a destination with a really long",
+      "start": 197.28,
+      "duration": 4.48
+    },
+    {
+      "text": "name or save icons on really bright",
+      "start": 199.2,
+      "duration": 4.64
+    },
+    {
+      "text": "listing images? We'd probably want to",
+      "start": 201.76,
+      "duration": 4.72
+    },
+    {
+      "text": "truncate long names and add a circle to",
+      "start": 203.84,
+      "duration": 4.64
+    },
+    {
+      "text": "the icon to guarantee contrast.",
+      "start": 206.48,
+      "duration": 3.679
+    },
+    {
+      "text": "Otherwise, you end up with unintended",
+      "start": 208.48,
+      "duration": 3.679
+    },
+    {
+      "text": "consequences, which are not fun to deal",
+      "start": 210.159,
+      "duration": 4.481
+    },
+    {
+      "text": "with. Animations should add clarity or",
+      "start": 212.159,
+      "duration": 4.401
+    },
+    {
+      "text": "functionality to a design. Just take a",
+      "start": 214.64,
+      "duration": 4.4
+    },
+    {
+      "text": "look at my old portfolio website. It's",
+      "start": 216.56,
+      "duration": 5.039
+    },
+    {
+      "text": "awful. All of these animations didn't do",
+      "start": 219.04,
+      "duration": 4.88
+    },
+    {
+      "text": "anything. Navigation is a great example",
+      "start": 221.599,
+      "duration": 4.481
+    },
+    {
+      "text": "of this. As we add more links, we simply",
+      "start": 223.92,
+      "duration": 4.239
+    },
+    {
+      "text": "run out of room. So, we consolidate them",
+      "start": 226.08,
+      "duration": 4.64
+    },
+    {
+      "text": "into a menu that can animate in serving",
+      "start": 228.159,
+      "duration": 4.64
+    },
+    {
+      "text": "a purpose. Or if our web app starts to",
+      "start": 230.72,
+      "duration": 4.32
+    },
+    {
+      "text": "take on a browsing priority, instead of",
+      "start": 232.799,
+      "duration": 4.08
+    },
+    {
+      "text": "sticking this block to the top of the",
+      "start": 235.04,
+      "duration": 3.839
+    },
+    {
+      "text": "screen, we can reduce the size of the",
+      "start": 236.879,
+      "duration": 4.321
+    },
+    {
+      "text": "search bar and have it animate in when",
+      "start": 238.879,
+      "duration": 4.481
+    },
+    {
+      "text": "clicked. These are all great examples of",
+      "start": 241.2,
+      "duration": 4.319
+    },
+    {
+      "text": "progressive disclosure, showing the user",
+      "start": 243.36,
+      "duration": 4.239
+    },
+    {
+      "text": "what they need to see and revealing more",
+      "start": 245.519,
+      "duration": 4.401
+    },
+    {
+      "text": "as it's required. That's why a load more",
+      "start": 247.599,
+      "duration": 4.321
+    },
+    {
+      "text": "button is preferable over infinite",
+      "start": 249.92,
+      "duration": 3.92
+    },
+    {
+      "text": "scroll. It gives the user more control",
+      "start": 251.92,
+      "duration": 4.08
+    },
+    {
+      "text": "and crucially, it lets them actually",
+      "start": 253.84,
+      "duration": 4.16
+    },
+    {
+      "text": "reach the footer, something infinite",
+      "start": 256.0,
+      "duration": 4.32
+    },
+    {
+      "text": "scroll often makes impossible. Context",
+      "start": 258.0,
+      "duration": 4.8
+    },
+    {
+      "text": "matters, but as a general rule, buttons",
+      "start": 260.32,
+      "duration": 4.0
+    },
+    {
+      "text": "should almost always have a small",
+      "start": 262.8,
+      "duration": 3.76
+    },
+    {
+      "text": "animation, while scrolljacking effects",
+      "start": 264.32,
+      "duration": 4.64
+    },
+    {
+      "text": "should be used very sparingly, if ever.",
+      "start": 266.56,
+      "duration": 4.48
+    },
+    {
+      "text": "Finally, design systems add a layer of",
+      "start": 268.96,
+      "duration": 4.32
+    },
+    {
+      "text": "replicability and speed that's tough to",
+      "start": 271.04,
+      "duration": 4.4
+    },
+    {
+      "text": "match. But the system has to reflect the",
+      "start": 273.28,
+      "duration": 4.56
+    },
+    {
+      "text": "values of the team. A lean startup might",
+      "start": 275.44,
+      "duration": 4.479
+    },
+    {
+      "text": "need something lightweight and flexible,",
+      "start": 277.84,
+      "duration": 4.24
+    },
+    {
+      "text": "quick to update and easy to scrap.",
+      "start": 279.919,
+      "duration": 3.921
+    },
+    {
+      "text": "Whereas something like Google's material",
+      "start": 282.08,
+      "duration": 4.72
+    },
+    {
+      "text": "design is massive and deeply defined",
+      "start": 283.84,
+      "duration": 4.88
+    },
+    {
+      "text": "because the use cases span dozens of",
+      "start": 286.8,
+      "duration": 4.08
+    },
+    {
+      "text": "products and billions of users. More",
+      "start": 288.72,
+      "duration": 4.0
+    },
+    {
+      "text": "importantly, the development of a design",
+      "start": 290.88,
+      "duration": 4.0
+    },
+    {
+      "text": "system is often more critical than the",
+      "start": 292.72,
+      "duration": 4.479
+    },
+    {
+      "text": "design itself. The process of defining",
+      "start": 294.88,
+      "duration": 4.8
+    },
+    {
+      "text": "rules, spacing, typography scales,",
+      "start": 297.199,
+      "duration": 4.321
+    },
+    {
+      "text": "interaction patterns gives you an",
+      "start": 299.68,
+      "duration": 4.079
+    },
+    {
+      "text": "architecture for expansion. But a design",
+      "start": 301.52,
+      "duration": 4.0
+    },
+    {
+      "text": "system isn't about making everything",
+      "start": 303.759,
+      "duration": 3.44
+    },
+    {
+      "text": "look the same. It's about giving your",
+      "start": 305.52,
+      "duration": 3.6
+    },
+    {
+      "text": "team a shared language. And like any",
+      "start": 307.199,
+      "duration": 3.761
+    },
+    {
+      "text": "language, mastery means knowing when to",
+      "start": 309.12,
+      "duration": 3.44
+    },
+    {
+      "text": "bend the rules. You don't break the",
+      "start": 310.96,
+      "duration": 3.2
+    },
+    {
+      "text": "system by accident. You break it with",
+      "start": 312.56,
+      "duration": 3.76
+    },
+    {
+      "text": "intention. Overall, I hope this gave",
+      "start": 314.16,
+      "duration": 4.0
+    },
+    {
+      "text": "some perspective on how to think like a",
+      "start": 316.32,
+      "duration": 3.439
+    },
+    {
+      "text": "better designer. If you're interested in",
+      "start": 318.16,
+      "duration": 3.12
+    },
+    {
+      "text": "checking out Mobin, it'll be the first",
+      "start": 319.759,
+      "duration": 3.44
+    },
+    {
+      "text": "link in the description below. And",
+      "start": 321.28,
+      "duration": 5.32
+    },
+    {
+      "text": "thanks for watching.",
+      "start": 323.199,
+      "duration": 3.401
+    }
+  ]
+}

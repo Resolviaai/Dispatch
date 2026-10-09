@@ -1,0 +1,1680 @@
+{
+  "meta": {
+    "id": "2TlIg3VokY8",
+    "url": "https://www.youtube.com/watch?v=2TlIg3VokY8",
+    "title": "The UX Psychology Behind Apps People Can’t Stop Using",
+    "uploader": "uxpeak",
+    "duration": 694,
+    "description": "💎 Try Mobbin for free and get 20% off: https://mobbin.com/uxpeak\n\n🚀 Start learning advanced UX/UI design with our uxpeak+ platform → https://www.uxpeak.com\n\nMost apps don’t fail because the UI looks ugly.\n\nThey fail because the design ignores how people actually make decisions.\n\nA blank form feels harder than a pre-filled one.\n0% progress feels worse than 20%.\nA signup wall feels worse than getting value first.\nA small price can feel expensive or cheap depending on what the user saw right before",
+    "slug": "The_UX_Psychology_Behind_Apps_People_Can",
+    "snippets_count": 333,
+    "total_words": 2115
+  },
+  "snippets": [
+    {
+      "text": "Most apps fail not because they look",
+      "start": 0.0,
+      "duration": 4.04
+    },
+    {
+      "text": "bad, but because they ignore how people",
+      "start": 1.84,
+      "duration": 4.48
+    },
+    {
+      "text": "actually think. The best designers in",
+      "start": 4.04,
+      "duration": 4.32
+    },
+    {
+      "text": "the world don't just push pixels. They",
+      "start": 6.32,
+      "duration": 4.4
+    },
+    {
+      "text": "understand psychology. And today, I'm",
+      "start": 8.36,
+      "duration": 4.12
+    },
+    {
+      "text": "going to show you six psychology",
+      "start": 10.72,
+      "duration": 4.08
+    },
+    {
+      "text": "principles that will completely change",
+      "start": 12.48,
+      "duration": 4.32
+    },
+    {
+      "text": "the way you design. Every single one",
+      "start": 14.8,
+      "duration": 3.96
+    },
+    {
+      "text": "comes with a real before and after, so",
+      "start": 16.8,
+      "duration": 3.52
+    },
+    {
+      "text": "you can see exactly what to do",
+      "start": 18.76,
+      "duration": 4.12
+    },
+    {
+      "text": "differently. Let's go. Here's something",
+      "start": 20.32,
+      "duration": 4.72
+    },
+    {
+      "text": "that sounds obvious, but almost nobody",
+      "start": 22.88,
+      "duration": 5.4
+    },
+    {
+      "text": "does. Stop giving users blank forms.",
+      "start": 25.04,
+      "duration": 5.12
+    },
+    {
+      "text": "Look at this booking screen. Five",
+      "start": 28.28,
+      "duration": 4.319
+    },
+    {
+      "text": "completely empty fields. Every single",
+      "start": 30.16,
+      "duration": 4.48
+    },
+    {
+      "text": "one is a decision the user has to make",
+      "start": 32.599,
+      "duration": 4.281
+    },
+    {
+      "text": "before anything happens. Psychologists",
+      "start": 34.64,
+      "duration": 4.76
+    },
+    {
+      "text": "call this decision fatigue. The more",
+      "start": 36.88,
+      "duration": 4.68
+    },
+    {
+      "text": "choices you stack on someone at once,",
+      "start": 39.4,
+      "duration": 3.68
+    },
+    {
+      "text": "the more likely they are to make no",
+      "start": 41.56,
+      "duration": 3.96
+    },
+    {
+      "text": "choice at all and just leave. A study",
+      "start": 43.08,
+      "duration": 4.36
+    },
+    {
+      "text": "from Columbia University found that when",
+      "start": 45.52,
+      "duration": 4.56
+    },
+    {
+      "text": "a grocery store displayed 24 jam",
+      "start": 47.44,
+      "duration": 5.56
+    },
+    {
+      "text": "flavors, only 3% of people bought one.",
+      "start": 50.08,
+      "duration": 5.12
+    },
+    {
+      "text": "When they showed just six, the purchase",
+      "start": 53.0,
+      "duration": 5.48
+    },
+    {
+      "text": "rate jumped to 30%. More choices doesn't",
+      "start": 55.2,
+      "duration": 5.4
+    },
+    {
+      "text": "mean better. It means harder.",
+      "start": 58.48,
+      "duration": 3.745
+    },
+    {
+      "text": "Now look at this version. Same screen,",
+      "start": 60.6,
+      "duration": 2.16
+    },
+    {
+      "text": "[music]",
+      "start": 62.225,
+      "duration": 2.294
+    },
+    {
+      "text": "same fields, but everything is",
+      "start": 62.76,
+      "duration": 4.04
+    },
+    {
+      "text": "pre-filled with the most common choices.",
+      "start": 64.519,
+      "duration": 4.241
+    },
+    {
+      "text": "And the button doesn't just say search.",
+      "start": 66.8,
+      "duration": 3.52
+    },
+    {
+      "text": "It tells you there are already 12",
+      "start": 68.76,
+      "duration": 3.36
+    },
+    {
+      "text": "results waiting. Here's why this works",
+      "start": 70.32,
+      "duration": 5.0
+    },
+    {
+      "text": "so well. 70 to 90% of users in most",
+      "start": 72.12,
+      "duration": 4.84
+    },
+    {
+      "text": "products never change the default",
+      "start": 75.32,
+      "duration": 4.84
+    },
+    {
+      "text": "values. That's not laziness. It's trust.",
+      "start": 76.96,
+      "duration": 5.56
+    },
+    {
+      "text": "When you provide a smart default, users",
+      "start": 80.16,
+      "duration": 4.08
+    },
+    {
+      "text": "read it as a recommendation. You're",
+      "start": 82.52,
+      "duration": 3.96
+    },
+    {
+      "text": "saying, \"This is what most people pick.\"",
+      "start": 84.24,
+      "duration": 4.32
+    },
+    {
+      "text": "And that's incredibly persuasive. The",
+      "start": 86.48,
+      "duration": 4.0
+    },
+    {
+      "text": "user's job shifts from \"Fill this out",
+      "start": 88.56,
+      "duration": 4.12
+    },
+    {
+      "text": "from scratch.\" to \"Scan and adjust what",
+      "start": 90.48,
+      "duration": 4.16
+    },
+    {
+      "text": "doesn't fit.\" That's a fundamentally",
+      "start": 92.68,
+      "duration": 4.28
+    },
+    {
+      "text": "easier task. So, the principle is called",
+      "start": 94.64,
+      "duration": 4.84
+    },
+    {
+      "text": "smart defaults. And the rule is simple.",
+      "start": 96.96,
+      "duration": 4.44
+    },
+    {
+      "text": "Pre-select the most common choice for",
+      "start": 99.48,
+      "duration": 3.88
+    },
+    {
+      "text": "every field. Don't make users think when",
+      "start": 101.4,
+      "duration": 4.36
+    },
+    {
+      "text": "you already know the answer.",
+      "start": 103.36,
+      "duration": 4.04
+    },
+    {
+      "text": "This tip will change the way you think",
+      "start": 105.76,
+      "duration": 4.0
+    },
+    {
+      "text": "about onboarding entirely. Researchers",
+      "start": 107.4,
+      "duration": 4.56
+    },
+    {
+      "text": "at Columbia ran a study at a car wash.",
+      "start": 109.76,
+      "duration": 3.8
+    },
+    {
+      "text": "One group of customers got a loyalty",
+      "start": 111.96,
+      "duration": 4.08
+    },
+    {
+      "text": "card with eight empty stamps. Fill all",
+      "start": 113.56,
+      "duration": 4.84
+    },
+    {
+      "text": "eight, get a free wash. The second group",
+      "start": 116.04,
+      "duration": 4.72
+    },
+    {
+      "text": "got a card with 10 stamps, but two were",
+      "start": 118.4,
+      "duration": 4.48
+    },
+    {
+      "text": "already filled in. Same eight washes",
+      "start": 120.76,
+      "duration": 3.96
+    },
+    {
+      "text": "needed, but the group that started with",
+      "start": 122.88,
+      "duration": 4.12
+    },
+    {
+      "text": "two stamps completed the card at nearly",
+      "start": 124.72,
+      "duration": 4.52
+    },
+    {
+      "text": "double the rate. That's the goal",
+      "start": 127.0,
+      "duration": 4.56
+    },
+    {
+      "text": "gradient effect. The closer people feel",
+      "start": 129.24,
+      "duration": 4.28
+    },
+    {
+      "text": "to finishing something, the faster they",
+      "start": 131.56,
+      "duration": 3.92
+    },
+    {
+      "text": "move toward it. And the critical insight",
+      "start": 133.52,
+      "duration": 4.16
+    },
+    {
+      "text": "is this, you can choose where the",
+      "start": 135.48,
+      "duration": 4.08
+    },
+    {
+      "text": "starting line is. Look at this",
+      "start": 137.68,
+      "duration": 5.04
+    },
+    {
+      "text": "onboarding screen. 0% complete, five",
+      "start": 139.56,
+      "duration": 5.72
+    },
+    {
+      "text": "empty stamps. It's telling the user you",
+      "start": 142.72,
+      "duration": 4.8
+    },
+    {
+      "text": "haven't started and there's a lot ahead.",
+      "start": 145.28,
+      "duration": 4.4
+    },
+    {
+      "text": "That's deflating, even if the actual",
+      "start": 147.52,
+      "duration": 4.52
+    },
+    {
+      "text": "work is minimal. Now, this version. Same",
+      "start": 149.68,
+      "duration": 5.0
+    },
+    {
+      "text": "form, same fields, but progress already",
+      "start": 152.04,
+      "duration": 4.88
+    },
+    {
+      "text": "shows 20%. The first step is checked",
+      "start": 154.68,
+      "duration": 4.44
+    },
+    {
+      "text": "off. The user can see exactly where they",
+      "start": 156.92,
+      "duration": 4.56
+    },
+    {
+      "text": "are and how close the finish line is.",
+      "start": 159.12,
+      "duration": 4.4
+    },
+    {
+      "text": "They didn't do any extra work. You just",
+      "start": 161.48,
+      "duration": 4.4
+    },
+    {
+      "text": "reframed account creation as step one",
+      "start": 163.52,
+      "duration": 3.96
+    },
+    {
+      "text": "instead of treating it as a separate",
+      "start": 165.88,
+      "duration": 5.56
+    },
+    {
+      "text": "event. 0% feels like standing still. 20%",
+      "start": 167.48,
+      "duration": 6.24
+    },
+    {
+      "text": "feels like momentum. And that feeling is",
+      "start": 171.44,
+      "duration": 3.96
+    },
+    {
+      "text": "what separates the users who finish",
+      "start": 173.72,
+      "duration": 3.52
+    },
+    {
+      "text": "onboarding from the ones who drop off at",
+      "start": 175.4,
+      "duration": 3.88
+    },
+    {
+      "text": "the second screen. LinkedIn does this",
+      "start": 177.24,
+      "duration": 3.999
+    },
+    {
+      "text": "brilliantly. They show you a profile",
+      "start": 179.28,
+      "duration": 3.56
+    },
+    {
+      "text": "strength meter from the moment you sign",
+      "start": 181.239,
+      "duration": 4.128
+    },
+    {
+      "text": "up, and it's never at zero. The rule,",
+      "start": 182.84,
+      "duration": 5.119
+    },
+    {
+      "text": "[music] never start a user at zero. Find",
+      "start": 185.367,
+      "duration": 4.073
+    },
+    {
+      "text": "something they've already done and count",
+      "start": 187.959,
+      "duration": 3.56
+    },
+    {
+      "text": "it. That artificial head start creates",
+      "start": 189.44,
+      "duration": 3.92
+    },
+    {
+      "text": "real motivation. If you want to get",
+      "start": 191.519,
+      "duration": 3.361
+    },
+    {
+      "text": "better at designing onboarding that",
+      "start": 193.36,
+      "duration": 2.487
+    },
+    {
+      "text": "actually works,",
+      "start": 194.88,
+      "duration": 1.079
+    },
+    {
+      "text": ">> [music]",
+      "start": 195.847,
+      "duration": 1.913
+    },
+    {
+      "text": ">> Mobbin is genuinely the best resource",
+      "start": 195.959,
+      "duration": 3.56
+    },
+    {
+      "text": "for it. You can study how top teams",
+      "start": 197.76,
+      "duration": 4.4
+    },
+    {
+      "text": "design onboarding, upgrades, checkouts,",
+      "start": 199.519,
+      "duration": 4.281
+    },
+    {
+      "text": "and other key flows. So, instead of",
+      "start": 202.16,
+      "duration": 3.0
+    },
+    {
+      "text": "guessing what good UX looks [music]",
+      "start": 203.8,
+      "duration": 3.84
+    },
+    {
+      "text": "like, you can actually see it. In fact,",
+      "start": 205.16,
+      "duration": 3.88
+    },
+    {
+      "text": "one of the first things we do before",
+      "start": 207.64,
+      "duration": 3.52
+    },
+    {
+      "text": "designing any onboarding flow is go to",
+      "start": 209.04,
+      "duration": 4.0
+    },
+    {
+      "text": "Mobbin and search for onboarding.",
+      "start": 211.16,
+      "duration": 3.76
+    },
+    {
+      "text": "Instantly, you can see real examples",
+      "start": 213.04,
+      "duration": 3.56
+    },
+    {
+      "text": "from top products, which makes it much",
+      "start": 214.92,
+      "duration": 3.8
+    },
+    {
+      "text": "easier to find inspiration and see what",
+      "start": 216.6,
+      "duration": 4.2
+    },
+    {
+      "text": "good patterns look like in practice.",
+      "start": 218.72,
+      "duration": 3.28
+    },
+    {
+      "text": "It's a simple trick that helps you",
+      "start": 220.8,
+      "duration": 3.2
+    },
+    {
+      "text": "design better and faster. And if you",
+      "start": 222.0,
+      "duration": 4.239
+    },
+    {
+      "text": "want to try it, too, you can get 20% off",
+      "start": 224.0,
+      "duration": 3.2
+    },
+    {
+      "text": "using the special link in the",
+      "start": 226.239,
+      "duration": 3.161
+    },
+    {
+      "text": "description. So far, we've talked about",
+      "start": 227.2,
+      "duration": 4.6
+    },
+    {
+      "text": "making things easier or making things",
+      "start": 229.4,
+      "duration": 4.64
+    },
+    {
+      "text": "urgent. But if the user doesn't trust",
+      "start": 231.8,
+      "duration": 4.76
+    },
+    {
+      "text": "you yet, none of it matters. Most apps",
+      "start": 234.04,
+      "duration": 3.92
+    },
+    {
+      "text": "ask for something before they give",
+      "start": 236.56,
+      "duration": 3.76
+    },
+    {
+      "text": "anything. Sign up to see your results.",
+      "start": 237.96,
+      "duration": 4.28
+    },
+    {
+      "text": "Create an account to continue. Enter",
+      "start": 240.32,
+      "duration": 4.0
+    },
+    {
+      "text": "your email to unlock. The user hasn't",
+      "start": 242.24,
+      "duration": 3.96
+    },
+    {
+      "text": "received a single thing of value and",
+      "start": 244.32,
+      "duration": 3.36
+    },
+    {
+      "text": "already the app wants something from",
+      "start": 246.2,
+      "duration": 3.64
+    },
+    {
+      "text": "them. Look at the screen. The user",
+      "start": 247.68,
+      "duration": 4.96
+    },
+    {
+      "text": "entered their URL, hit analyze, waited",
+      "start": 249.84,
+      "duration": 4.64
+    },
+    {
+      "text": "for the scan, and now the results are",
+      "start": 252.64,
+      "duration": 4.08
+    },
+    {
+      "text": "blurred out behind a lock. Create an",
+      "start": 254.48,
+      "duration": 4.68
+    },
+    {
+      "text": "account to see your report. Think about",
+      "start": 256.72,
+      "duration": 4.639
+    },
+    {
+      "text": "what that communicates. You're holding",
+      "start": 259.16,
+      "duration": 4.08
+    },
+    {
+      "text": "the results hostage. It's like a",
+      "start": 261.359,
+      "duration": 3.841
+    },
+    {
+      "text": "restaurant asking for your credit card",
+      "start": 263.24,
+      "duration": 4.04
+    },
+    {
+      "text": "before they show you the menu. You'd",
+      "start": 265.2,
+      "duration": 4.28
+    },
+    {
+      "text": "walk out, and that's exactly what users",
+      "start": 267.28,
+      "duration": 4.8
+    },
+    {
+      "text": "do here. Now this approach. The user",
+      "start": 269.48,
+      "duration": 4.92
+    },
+    {
+      "text": "hits analyze and actually gets a real",
+      "start": 272.08,
+      "duration": 4.96
+    },
+    {
+      "text": "report. Not the full thing, but enough",
+      "start": 274.4,
+      "duration": 5.6
+    },
+    {
+      "text": "to be genuinely useful. Their score,",
+      "start": 277.04,
+      "duration": 5.48
+    },
+    {
+      "text": "their top issues, what passed. They can",
+      "start": 280.0,
+      "duration": 4.16
+    },
+    {
+      "text": "already see what's wrong with their site",
+      "start": 282.52,
+      "duration": 3.76
+    },
+    {
+      "text": "and start thinking about fixes. And then",
+      "start": 284.16,
+      "duration": 4.12
+    },
+    {
+      "text": "at the bottom, a simple [music] prompt.",
+      "start": 286.28,
+      "duration": 3.36
+    },
+    {
+      "text": "Want the complete breakdown with",
+      "start": 288.28,
+      "duration": 3.4
+    },
+    {
+      "text": "step-by- step instructions? Save your",
+      "start": 289.64,
+      "duration": 4.12
+    },
+    {
+      "text": "report. The difference in conversion is",
+      "start": 291.68,
+      "duration": 3.728
+    },
+    {
+      "text": "massive because of a principle called",
+      "start": 293.76,
+      "duration": 3.68
+    },
+    {
+      "text": "[music] reciprocity. When someone gives",
+      "start": 295.408,
+      "duration": 4.072
+    },
+    {
+      "text": "you something first, you feel a pull to",
+      "start": 297.44,
+      "duration": 4.16
+    },
+    {
+      "text": "return the favor. It's not rational.",
+      "start": 299.48,
+      "duration": 3.76
+    },
+    {
+      "text": "It's one of the deepest human instincts",
+      "start": 301.6,
+      "duration": 3.76
+    },
+    {
+      "text": "we have. Robert Cialdini spent his",
+      "start": 303.24,
+      "duration": 4.16
+    },
+    {
+      "text": "career studying persuasion and ranked",
+      "start": 305.36,
+      "duration": 4.6
+    },
+    {
+      "text": "this as the single most powerful driver",
+      "start": 307.4,
+      "duration": 4.88
+    },
+    {
+      "text": "of human behavior. It's why free samples",
+      "start": 309.96,
+      "duration": 4.4
+    },
+    {
+      "text": "at grocery stores increase purchases by",
+      "start": 312.28,
+      "duration": 4.088
+    },
+    {
+      "text": "up to 2,000%.",
+      "start": 314.36,
+      "duration": 2.12
+    },
+    {
+      "text": ">> [music]",
+      "start": 316.368,
+      "duration": 1.792
+    },
+    {
+      "text": ">> The sample isn't that good, but",
+      "start": 316.48,
+      "duration": 3.64
+    },
+    {
+      "text": "receiving it creates an unconscious",
+      "start": 318.16,
+      "duration": 4.759
+    },
+    {
+      "text": "debt. Every smart company uses this.",
+      "start": 320.12,
+      "duration": 5.0
+    },
+    {
+      "text": "Costco gives you free samples. Spotify",
+      "start": 322.919,
+      "duration": 4.321
+    },
+    {
+      "text": "gives you 30 days of premium. Notion",
+      "start": 325.12,
+      "duration": 4.08
+    },
+    {
+      "text": "lets you use the entire product before",
+      "start": 327.24,
+      "duration": 3.48
+    },
+    {
+      "text": "you ever pay. They're not being",
+      "start": 329.2,
+      "duration": 3.719
+    },
+    {
+      "text": "generous. They're being strategic. The",
+      "start": 330.72,
+      "duration": 3.96
+    },
+    {
+      "text": "sign up never feels like a wall because",
+      "start": 332.919,
+      "duration": 3.361
+    },
+    {
+      "text": "the user already got something worth",
+      "start": 334.68,
+      "duration": 3.56
+    },
+    {
+      "text": "coming back for. Have you ever spent an",
+      "start": 336.28,
+      "duration": 4.08
+    },
+    {
+      "text": "afternoon assembling IKEA furniture and",
+      "start": 338.24,
+      "duration": 4.24
+    },
+    {
+      "text": "then thought, \"Actually, this looks",
+      "start": 340.36,
+      "duration": 4.24
+    },
+    {
+      "text": "pretty good.\" It objectively doesn't",
+      "start": 342.48,
+      "duration": 3.68
+    },
+    {
+      "text": "look that different from what you'd buy",
+      "start": 344.6,
+      "duration": 3.96
+    },
+    {
+      "text": "pre-assembled, But, it feels different",
+      "start": 346.16,
+      "duration": 4.56
+    },
+    {
+      "text": "because you built it. You spent time on",
+      "start": 348.56,
+      "duration": 4.52
+    },
+    {
+      "text": "it, and that labor changed how you value",
+      "start": 350.72,
+      "duration": 4.48
+    },
+    {
+      "text": "it. Researchers actually studied this",
+      "start": 353.08,
+      "duration": 4.84
+    },
+    {
+      "text": "and gave it a name, the IKEA effect.",
+      "start": 355.2,
+      "duration": 4.72
+    },
+    {
+      "text": "When people build something themselves,",
+      "start": 357.92,
+      "duration": 3.92
+    },
+    {
+      "text": "they value it significantly more than an",
+      "start": 359.92,
+      "duration": 3.92
+    },
+    {
+      "text": "identical item someone else made.",
+      "start": 361.84,
+      "duration": 3.48
+    },
+    {
+      "text": "There's an even simpler version of this",
+      "start": 363.84,
+      "duration": 3.48
+    },
+    {
+      "text": "called the endowment effect. You don't",
+      "start": 365.32,
+      "duration": 3.76
+    },
+    {
+      "text": "even have to build something. Just",
+      "start": 367.32,
+      "duration": 3.96
+    },
+    {
+      "text": "feeling like you own it is enough. Now,",
+      "start": 369.08,
+      "duration": 4.44
+    },
+    {
+      "text": "think about what most sign-up pages do.",
+      "start": 371.28,
+      "duration": 4.52
+    },
+    {
+      "text": "Email, password, sign up. There's",
+      "start": 373.52,
+      "duration": 3.72
+    },
+    {
+      "text": "nothing on this screen that belongs to",
+      "start": 375.8,
+      "duration": 3.32
+    },
+    {
+      "text": "the user. They haven't created anything.",
+      "start": 377.24,
+      "duration": 3.36
+    },
+    {
+      "text": "They haven't chosen anything. Closing",
+      "start": 379.12,
+      "duration": 3.36
+    },
+    {
+      "text": "the tab is effortless because there's",
+      "start": 380.6,
+      "duration": 3.6
+    },
+    {
+      "text": "nothing to lose. Now, look at this",
+      "start": 382.48,
+      "duration": 3.8
+    },
+    {
+      "text": "approach. The user hasn't signed up yet,",
+      "start": 384.2,
+      "duration": 3.6
+    },
+    {
+      "text": "but they're already building. They're",
+      "start": 386.28,
+      "duration": 3.44
+    },
+    {
+      "text": "choosing their name, their title, their",
+      "start": 387.8,
+      "duration": 3.96
+    },
+    {
+      "text": "color palette, their card style. Every",
+      "start": 389.72,
+      "duration": 4.36
+    },
+    {
+      "text": "choice makes this feel more like theirs,",
+      "start": 391.76,
+      "duration": 4.2
+    },
+    {
+      "text": "and the button at the bottom doesn't say",
+      "start": 394.08,
+      "duration": 4.28
+    },
+    {
+      "text": "sign up, it says continue because by",
+      "start": 395.96,
+      "duration": 4.32
+    },
+    {
+      "text": "now, leaving doesn't feel like skipping",
+      "start": 398.36,
+      "duration": 3.48
+    },
+    {
+      "text": "a form. It feels like abandoning",
+      "start": 400.28,
+      "duration": 3.8
+    },
+    {
+      "text": "something they made. Duolingo does this",
+      "start": 401.84,
+      "duration": 4.28
+    },
+    {
+      "text": "brilliantly. Before you ever create an",
+      "start": 404.08,
+      "duration": 3.44
+    },
+    {
+      "text": "account, you've already picked your",
+      "start": 406.12,
+      "duration": 4.08
+    },
+    {
+      "text": "language, set your goal, and completed",
+      "start": 407.52,
+      "duration": 4.44
+    },
+    {
+      "text": "your first lesson. By the time the",
+      "start": 410.2,
+      "duration": 3.56
+    },
+    {
+      "text": "sign-up screen appears, you've invested",
+      "start": 411.96,
+      "duration": 3.2
+    },
+    {
+      "text": "10 minutes. You're not going to throw",
+      "start": 413.76,
+      "duration": 3.64
+    },
+    {
+      "text": "that away. That's not manipulation.",
+      "start": 415.16,
+      "duration": 3.84
+    },
+    {
+      "text": "That's smart design. You're giving",
+      "start": 417.4,
+      "duration": 3.6
+    },
+    {
+      "text": "people a reason to stay by letting them",
+      "start": 419.0,
+      "duration": 4.68
+    },
+    {
+      "text": "build something worth staying for.",
+      "start": 421.0,
+      "duration": 4.72
+    },
+    {
+      "text": "Most designers are still learning UX and",
+      "start": 423.68,
+      "duration": 3.68
+    },
+    {
+      "text": "UI the old way. They watch another",
+      "start": 425.72,
+      "duration": 3.72
+    },
+    {
+      "text": "tutorial on how to recreate a beautiful",
+      "start": 427.36,
+      "duration": 3.88
+    },
+    {
+      "text": "app screen, add a smooth Figma",
+      "start": 429.44,
+      "duration": 3.92
+    },
+    {
+      "text": "interaction, or create another glass",
+      "start": 431.24,
+      "duration": 4.339
+    },
+    {
+      "text": "effect. And yes, those things can",
+      "start": 433.36,
+      "duration": 3.76
+    },
+    {
+      "text": "[music] be useful, but they're not what",
+      "start": 435.579,
+      "duration": 3.061
+    },
+    {
+      "text": "gets you hired at serious product",
+      "start": 437.12,
+      "duration": 3.6
+    },
+    {
+      "text": "companies because interviewers are not",
+      "start": 438.64,
+      "duration": 3.8
+    },
+    {
+      "text": "just looking for someone who can make a",
+      "start": 440.72,
+      "duration": 3.8
+    },
+    {
+      "text": "screen look nice. They want to see how",
+      "start": 442.44,
+      "duration": 3.76
+    },
+    {
+      "text": "you think. They want to see if you",
+      "start": 444.52,
+      "duration": 4.64
+    },
+    {
+      "text": "understand user psychology, conversion,",
+      "start": 446.2,
+      "duration": 5.92
+    },
+    {
+      "text": "retention, business impact, and why",
+      "start": 449.16,
+      "duration": 5.8
+    },
+    {
+      "text": "certain design decisions actually work.",
+      "start": 452.12,
+      "duration": 5.799
+    },
+    {
+      "text": "That's why we created UX Peak Plus. UX",
+      "start": 454.96,
+      "duration": 5.2
+    },
+    {
+      "text": "Peak Plus teaches the advanced UX and UI",
+      "start": 457.919,
+      "duration": 4.241
+    },
+    {
+      "text": "skills most designers are missing. We",
+      "start": 460.16,
+      "duration": 3.76
+    },
+    {
+      "text": "break down how top companies design",
+      "start": 462.16,
+      "duration": 3.48
+    },
+    {
+      "text": "product pages,",
+      "start": 463.92,
+      "duration": 3.48
+    },
+    {
+      "text": "onboarding flows,",
+      "start": 465.64,
+      "duration": 3.56
+    },
+    {
+      "text": "pricing pages,",
+      "start": 467.4,
+      "duration": 3.96
+    },
+    {
+      "text": "mobile apps, SaaS products, and",
+      "start": 469.2,
+      "duration": 4.6
+    },
+    {
+      "text": "high-converting experiences. So, you can",
+      "start": 471.36,
+      "duration": 4.52
+    },
+    {
+      "text": "understand not just what looks good, but",
+      "start": 473.8,
+      "duration": 3.8
+    },
+    {
+      "text": "what actually works. It's the kind of",
+      "start": 475.88,
+      "duration": 2.84
+    },
+    {
+      "text": "knowledge you can use in your case",
+      "start": 477.6,
+      "duration": 4.36
+    },
+    {
+      "text": "studies, portfolio, interviews, and real",
+      "start": 478.72,
+      "duration": 5.24
+    },
+    {
+      "text": "product work. You can start for free at",
+      "start": 481.96,
+      "duration": 4.48
+    },
+    {
+      "text": "uxpeak.com with the free course. And if",
+      "start": 483.96,
+      "duration": 4.6
+    },
+    {
+      "text": "you decide to join UX Peak Plus, use",
+      "start": 486.44,
+      "duration": 5.0
+    },
+    {
+      "text": "code UX [music] Peak 20 to get 20% off",
+      "start": 488.56,
+      "duration": 4.64
+    },
+    {
+      "text": "with our launch offer. You also have a",
+      "start": 491.44,
+      "duration": 4.52
+    },
+    {
+      "text": "7-day money-back guarantee. So, there is",
+      "start": 493.2,
+      "duration": 5.04
+    },
+    {
+      "text": "no risk. Now, let's get into the next",
+      "start": 495.96,
+      "duration": 4.0
+    },
+    {
+      "text": "tip.",
+      "start": 498.24,
+      "duration": 3.52
+    },
+    {
+      "text": "All right, that was about making users",
+      "start": 499.96,
+      "duration": 3.32
+    },
+    {
+      "text": "feel invested. But, what about",
+      "start": 501.76,
+      "duration": 3.4
+    },
+    {
+      "text": "motivation? What makes someone actually",
+      "start": 503.28,
+      "duration": 4.36
+    },
+    {
+      "text": "act instead of tapping maybe later?",
+      "start": 505.16,
+      "duration": 4.64
+    },
+    {
+      "text": "Daniel Kahneman won a Nobel Prize for",
+      "start": 507.64,
+      "duration": 3.8
+    },
+    {
+      "text": "proving that the pain of losing",
+      "start": 509.8,
+      "duration": 4.32
+    },
+    {
+      "text": "something is psychologically twice as",
+      "start": 511.44,
+      "duration": 4.599
+    },
+    {
+      "text": "powerful as the pleasure of gaining the",
+      "start": 514.12,
+      "duration": 4.32
+    },
+    {
+      "text": "same thing. Twice. Think about what that",
+      "start": 516.039,
+      "duration": 4.44
+    },
+    {
+      "text": "means for product design. Every time you",
+      "start": 518.44,
+      "duration": 3.84
+    },
+    {
+      "text": "frame a feature as something users could",
+      "start": 520.479,
+      "duration": 4.241
+    },
+    {
+      "text": "gain, you're using the weaker motivator.",
+      "start": 522.28,
+      "duration": 4.0
+    },
+    {
+      "text": "Look at the screen, a storage app",
+      "start": 524.72,
+      "duration": 4.119
+    },
+    {
+      "text": "offering a premium upgrade. Nice icon,",
+      "start": 526.28,
+      "duration": 4.92
+    },
+    {
+      "text": "nice feature list, nice button, upgrade",
+      "start": 528.839,
+      "duration": 4.441
+    },
+    {
+      "text": "now. And below it, the world's easiest",
+      "start": 531.2,
+      "duration": 3.92
+    },
+    {
+      "text": "escape hatch, maybe later. There's",
+      "start": 533.28,
+      "duration": 3.72
+    },
+    {
+      "text": "nothing at stake, nothing changes if the",
+      "start": 535.12,
+      "duration": 3.8
+    },
+    {
+      "text": "user ignores this. The screen has zero",
+      "start": 537.0,
+      "duration": 4.4
+    },
+    {
+      "text": "psychological weight. Now, this version,",
+      "start": 538.92,
+      "duration": 4.2
+    },
+    {
+      "text": "same product, same goal. But, instead of",
+      "start": 541.4,
+      "duration": 3.439
+    },
+    {
+      "text": "selling what the user could have, it",
+      "start": 543.12,
+      "duration": 3.84
+    },
+    {
+      "text": "shows what the user is about to lose,",
+      "start": 544.839,
+      "duration": 4.681
+    },
+    {
+      "text": "their actual files, by name, with the",
+      "start": 546.96,
+      "duration": 4.48
+    },
+    {
+      "text": "countdown. And the dismiss option",
+      "start": 549.52,
+      "duration": 3.76
+    },
+    {
+      "text": "doesn't let you off easy, it says, \"I'll",
+      "start": 551.44,
+      "duration": 4.48
+    },
+    {
+      "text": "risk it.\" The first screen is a pitch,",
+      "start": 553.28,
+      "duration": 4.32
+    },
+    {
+      "text": "the second screen is a threat, and",
+      "start": 555.92,
+      "duration": 3.32
+    },
+    {
+      "text": "threat wins every time because of a",
+      "start": 557.6,
+      "duration": 4.396
+    },
+    {
+      "text": "concept called the status quo bias.",
+      "start": 559.24,
+      "duration": 4.72
+    },
+    {
+      "text": "[music] Humans are wired to protect what",
+      "start": 561.996,
+      "duration": 3.684
+    },
+    {
+      "text": "they already have. You need to make them",
+      "start": 563.96,
+      "duration": 3.8
+    },
+    {
+      "text": "feel the cost of inaction. So, here's",
+      "start": 565.68,
+      "duration": 2.8
+    },
+    {
+      "text": "the takeaway, [music]",
+      "start": 567.76,
+      "duration": 2.16
+    },
+    {
+      "text": "whenever you're designing a screen that",
+      "start": 568.48,
+      "duration": 3.52
+    },
+    {
+      "text": "asks users to act, flip the framing.",
+      "start": 569.92,
+      "duration": 3.76
+    },
+    {
+      "text": "Don't sell what they'll gain, show what",
+      "start": 572.0,
+      "duration": 4.68
+    },
+    {
+      "text": "they'll lose if they don't.",
+      "start": 573.68,
+      "duration": 4.96
+    },
+    {
+      "text": "Last one is a principle that why the",
+      "start": 576.68,
+      "duration": 4.56
+    },
+    {
+      "text": "exact same price can feel expensive or",
+      "start": 578.64,
+      "duration": 4.96
+    },
+    {
+      "text": "feel like nothing. Look at the screen. A",
+      "start": 581.24,
+      "duration": 4.6
+    },
+    {
+      "text": "protection plan shown on its own page,",
+      "start": 583.6,
+      "duration": 4.68
+    },
+    {
+      "text": "$50 a month. The user sees that number",
+      "start": 585.84,
+      "duration": 4.28
+    },
+    {
+      "text": "in isolation and does a quick mental",
+      "start": 588.28,
+      "duration": 4.48
+    },
+    {
+      "text": "calculation, $600",
+      "start": 590.12,
+      "duration": 5.28
+    },
+    {
+      "text": "a year. That's a lot. They hit no thanks",
+      "start": 592.76,
+      "duration": 3.76
+    },
+    {
+      "text": "and move on.",
+      "start": 595.4,
+      "duration": 2.4
+    },
+    {
+      "text": "Now look at the same offer in a",
+      "start": 596.52,
+      "duration": 3.36
+    },
+    {
+      "text": "different context. [music] The user just",
+      "start": 597.8,
+      "duration": 5.56
+    },
+    {
+      "text": "added a $1900 laptop to their cart and",
+      "start": 599.88,
+      "duration": 5.36
+    },
+    {
+      "text": "directly below the product, the",
+      "start": 603.36,
+      "duration": 5.04
+    },
+    {
+      "text": "protection plan appears. Same $50, but",
+      "start": 605.24,
+      "duration": 5.2
+    },
+    {
+      "text": "now there's a small label next to it,",
+      "start": 608.4,
+      "duration": 4.6
+    },
+    {
+      "text": "just 2.6%. Nothing changed about the",
+      "start": 610.44,
+      "duration": 4.8
+    },
+    {
+      "text": "offer. Everything changed about how it",
+      "start": 613.0,
+      "duration": 5.92
+    },
+    {
+      "text": "feels. After seeing $1900, $50 barely",
+      "start": 615.24,
+      "duration": 5.52
+    },
+    {
+      "text": "registers. Your brain isn't doing an",
+      "start": 618.92,
+      "duration": 4.16
+    },
+    {
+      "text": "absolute evaluation anymore. It's doing",
+      "start": 620.76,
+      "duration": 4.24
+    },
+    {
+      "text": "a relative one. And it's relative to the",
+      "start": 623.08,
+      "duration": 4.0
+    },
+    {
+      "text": "price you just processed, this is a",
+      "start": 625.0,
+      "duration": 4.68
+    },
+    {
+      "text": "rounding error. This is the contrast",
+      "start": 627.08,
+      "duration": 5.04
+    },
+    {
+      "text": "effect. Your brain evaluates every piece",
+      "start": 629.68,
+      "duration": 4.36
+    },
+    {
+      "text": "of information relative to the thing it",
+      "start": 632.12,
+      "duration": 4.24
+    },
+    {
+      "text": "saw immediately before. Restaurants use",
+      "start": 634.04,
+      "duration": 4.6
+    },
+    {
+      "text": "this constantly. They put a $90 Wagyu",
+      "start": 636.36,
+      "duration": 4.0
+    },
+    {
+      "text": "steak on the menu not because many",
+      "start": 638.64,
+      "duration": 3.48
+    },
+    {
+      "text": "people order it, but because it makes",
+      "start": 640.36,
+      "duration": 3.92
+    },
+    {
+      "text": "the $40 salmon look like a reasonable",
+      "start": 642.12,
+      "duration": 4.2
+    },
+    {
+      "text": "choice. Real estate agents show you a",
+      "start": 644.28,
+      "duration": 4.2
+    },
+    {
+      "text": "slightly overpriced house first so the",
+      "start": 646.32,
+      "duration": 3.92
+    },
+    {
+      "text": "one they actually want to sell feels",
+      "start": 648.48,
+      "duration": 2.597
+    },
+    {
+      "text": "like a deal.",
+      "start": 650.24,
+      "duration": 0.96
+    },
+    {
+      "text": ">> [music]",
+      "start": 651.077,
+      "duration": 2.643
+    },
+    {
+      "text": ">> For designers, the rule is don't show a",
+      "start": 651.2,
+      "duration": 5.16
+    },
+    {
+      "text": "cost in isolation. Always control what",
+      "start": 653.72,
+      "duration": 4.92
+    },
+    {
+      "text": "the user sees first because that first",
+      "start": 656.36,
+      "duration": 4.2
+    },
+    {
+      "text": "number becomes the ruler they measure",
+      "start": 658.64,
+      "duration": 4.0
+    },
+    {
+      "text": "everything else against.",
+      "start": 660.56,
+      "duration": 3.96
+    },
+    {
+      "text": "So those are the six UX psychology",
+      "start": 662.64,
+      "duration": 4.12
+    },
+    {
+      "text": "principles. And if you zoom out, they",
+      "start": 664.52,
+      "duration": 4.6
+    },
+    {
+      "text": "all share the same insight. Your users",
+      "start": 666.76,
+      "duration": 4.12
+    },
+    {
+      "text": "aren't making logical decisions.",
+      "start": 669.12,
+      "duration": 3.96
+    },
+    {
+      "text": "Defaults feel like recommendations. The",
+      "start": 670.88,
+      "duration": 4.44
+    },
+    {
+      "text": "first number sets the anchor. A gift",
+      "start": 673.08,
+      "duration": 4.48
+    },
+    {
+      "text": "creates a debt. Building something makes",
+      "start": 675.32,
+      "duration": 5.64
+    },
+    {
+      "text": "it yours. And progress, even a fake one,",
+      "start": 677.56,
+      "duration": 5.84
+    },
+    {
+      "text": "creates real momentum. The designers who",
+      "start": 680.96,
+      "duration": 4.44
+    },
+    {
+      "text": "get this build products people can't",
+      "start": 683.4,
+      "duration": 4.36
+    },
+    {
+      "text": "stop using. The ones who don't build",
+      "start": 685.4,
+      "duration": 5.08
+    },
+    {
+      "text": "products people forget exist. Thanks for",
+      "start": 687.76,
+      "duration": 6.64
+    },
+    {
+      "text": "watching. We'll see you in the next one.",
+      "start": 690.48,
+      "duration": 3.92
+    }
+  ]
+}

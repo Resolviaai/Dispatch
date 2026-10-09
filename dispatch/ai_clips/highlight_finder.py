@@ -20,11 +20,11 @@ logger = logging.getLogger("dispatch.ai_clips")
 
 # Configurable default list of candidate Gemini models in priority order
 DEFAULT_GEMINI_MODELS = [
-    "gemini-3.5-flash-lite",
+    "gemini-flash-latest",
     "gemini-3.5-flash",
     "gemini-3.8-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest"
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite"
 ]
 
 MAX_HIGHLIGHTS_PER_CHUNK = int(os.getenv("DISPATCH_MAX_HIGHLIGHTS_PER_CHUNK", "8"))
@@ -96,6 +96,211 @@ def compute_interval_overlap(start1: float, end1: float, start2: float, end2: fl
     return intersection / union
 
 
+def clean_speech_restarts_and_boundaries(
+    start_t: float,
+    end_t: float,
+    segments: List[Dict[str, Any]],
+    total_duration: float
+) -> Tuple[float, float]:
+    """Detect accidental repeated sentences, repeated phrases, and abandoned restarts throughout candidate clip.
+    
+    Invariants:
+      1. Preserves intentional rhetorical repetition (e.g. immediate repeated words < 0.25s or rhythmic parallelism).
+      2. If uncertain, retains the audio rather than making a destructive cut.
+      3. For opening/early false starts (within candidate opening take), snaps start_t forward to the clean take (+0.15s margin).
+      4. For trailing abandoned fragments/restarts near clip end, trims end_t back to the end of the clean thought (+0.20s margin).
+      5. Keeps timestamps and subtitles strictly synchronized to speech.
+    """
+    if not segments or end_t <= start_t:
+        return start_t, end_t
+
+    # Flatten words within the candidate range plus a small margin
+    clip_words = []
+    for s in segments:
+        for w in s.get("words", []):
+            w_start = float(w.get("start", 0.0))
+            if start_t - 0.2 <= w_start <= end_t + 0.5:
+                clip_words.append(w)
+
+    if len(clip_words) < 4:
+        return start_t, end_t
+
+    norm_words = [re.sub(r'[^\w\s]', '', w.get("word", "")).strip().lower() for w in clip_words]
+
+    # 1. Detect opening or early false starts / repeated phrases
+    # Look for matching phrases (2 to 8 words) starting within the first 30 seconds of the candidate
+    for n in (2, 3, 4, 5, 6, 7, 8):
+        for i in range(min(12, len(clip_words) - n * 2)):
+            phrase1 = norm_words[i:i + n]
+            if not any(phrase1):
+                continue
+            for j in range(i + n, min(len(clip_words) - n + 1, i + n + 16)):
+                phrase2 = norm_words[j:j + n]
+                if phrase1 == phrase2:
+                    t1_end = float(clip_words[i + n - 1].get("end", 0.0))
+                    t2_start = float(clip_words[j].get("start", 0.0))
+                    gap = t2_start - t1_end
+
+                    # Intentional repetition: immediate repetition (< 0.25s gap) without hesitation is rhetorical
+                    if gap < 0.25:
+                        continue
+
+                    # Accidental restart typically has 0.3s to 6.0s pause / hesitation
+                    if 0.3 <= gap <= 6.0:
+                        rem_duration = end_t - t2_start
+                        if rem_duration >= MIN_CLIP_DURATION:
+                            logger.info(
+                                "Detected speech restart: '%s' (gap %.2fs) -> clean take at %.2fs. Snapping start.",
+                                " ".join(phrase1), gap, t2_start
+                            )
+                            start_t = max(start_t, t2_start - 0.15)
+                            break
+            if start_t > float(clip_words[0].get("start", 0.0)):
+                break
+        if start_t > float(clip_words[0].get("start", 0.0)):
+            break
+
+    # 2. Detect trailing abandoned fragments near candidate end
+    # If the speaker finished a thought and then started an abandoned fragment in the last 8 seconds
+    trailing_words = [w for w in clip_words if float(w.get("start", 0.0)) >= max(start_t, end_t - 8.0)]
+    if len(trailing_words) >= 2:
+        for k in range(len(trailing_words) - 1):
+            w_prev = trailing_words[k]
+            w_next = trailing_words[k + 1]
+            p_end = float(w_prev.get("end", 0.0))
+            n_start = float(w_next.get("start", 0.0))
+            pause_before_fragment = n_start - p_end
+
+            # Noticeable pause (>= 0.8s) followed by a short abandoned fragment (1-3 words) left hanging
+            frag_words_remaining = len(trailing_words) - (k + 1)
+            if pause_before_fragment >= 0.8 and 1 <= frag_words_remaining <= 3:
+                last_w_end = float(trailing_words[-1].get("end", 0.0))
+                if end_t - last_w_end <= 1.5 and (p_end - start_t) >= MIN_CLIP_DURATION:
+                    logger.info("Detected trailing abandoned fragment near end (pause %.2fs). Trimming end to %.2fs.",
+                                pause_before_fragment, p_end + 0.20)
+                    end_t = min(end_t, p_end + 0.20)
+                    break
+
+    return start_t, end_t
+
+
+def detect_and_trim_opening_false_start(
+    start_t: float,
+    end_t: float,
+    segments: List[Dict[str, Any]]
+) -> float:
+    """Backwards-compatible wrapper delegating to clean_speech_restarts_and_boundaries."""
+    cleaned_start, _ = clean_speech_restarts_and_boundaries(start_t, end_t, segments, end_t)
+    return cleaned_start
+
+
+DEVANAGARI_REGEX = re.compile(r'[\u0900-\u097F]')
+
+
+def has_devanagari(text: str) -> bool:
+    """Check if string contains any Devanagari Hindi characters."""
+    return bool(DEVANAGARI_REGEX.search(text))
+
+
+def transliterate_tokens_to_hinglish(tokens: List[str], timeout: int = 25) -> List[str]:
+    """Transliterate a list of Devanagari tokens into Roman Hinglish with 1:1 token preservation using configured Gemini models.
+    Reuses Dispatch's configured Gemini integration, model hierarchy, and structured validation.
+    Preserves exact list length to ensure word timestamp alignment."""
+    if not tokens or not any(has_devanagari(t) for t in tokens):
+        return tokens
+
+    prompt = (
+        "You are an expert Hindi-to-Roman Hinglish transliterator.\n"
+        "Transliterate the following words written in Devanagari Hindi into natural, modern Roman Hinglish "
+        "(e.g., 'नमस्ते' -> 'Namaste', 'आप' -> 'Aap', 'कैसे' -> 'kaise', 'हैं' -> 'hain').\n"
+        "Leave English words or numbers untouched.\n"
+        f"CRITICAL REQUIREMENT: You MUST return a JSON array of strings containing EXACTLY {len(tokens)} items, "
+        "matching each input token 1-to-1 in order. Do not merge, split, omit, or translate to English.\n\n"
+        f"Input tokens:\n{json.dumps(tokens, ensure_ascii=False)}"
+    )
+
+    try:
+        raw_result, winning_model = call_gemini_generate_content(
+            user_prompt=prompt,
+            system_instruction="You are a strict 1-to-1 Devanagari-to-Roman Hinglish transliterator. Return only a JSON array of strings with matching length.",
+            timeout=timeout
+        )
+
+        # Structured-output validation
+        candidate_list: Optional[List[Any]] = None
+        if isinstance(raw_result, list):
+            candidate_list = raw_result
+        elif isinstance(raw_result, dict):
+            for k in ("tokens", "words", "transliterated", "result", "clips", "highlights"):
+                if k in raw_result and isinstance(raw_result[k], list):
+                    candidate_list = raw_result[k]
+                    break
+
+        if candidate_list is not None and len(candidate_list) == len(tokens):
+            return [str(t) for t in candidate_list]
+
+        logger.warning(
+            "Gemini model '%s' transliteration returned unexpected structure or count (%s, expected %d). Preserving original tokens.",
+            winning_model, len(candidate_list) if candidate_list is not None else type(raw_result).__name__, len(tokens)
+        )
+    except Exception as e:
+        logger.warning("Gemini transliteration failed across configured models (%s). Preserving original tokens.", e)
+
+    return tokens
+
+
+def transliterate_segments_to_hinglish(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Transliterate segments and words containing Devanagari into Roman Hinglish with 1:1 timestamp preservation."""
+    if not segments:
+        return []
+
+    # Check if there is any Devanagari anywhere
+    contains_hindi = False
+    for s in segments:
+        if has_devanagari(s.get("text", "")):
+            contains_hindi = True
+            break
+        for w in s.get("words", []):
+            if has_devanagari(w.get("word", "")):
+                contains_hindi = True
+                break
+        if contains_hindi:
+            break
+
+    if not contains_hindi:
+        return segments
+
+    import copy
+    output_segments = copy.deepcopy(segments)
+
+    # 1. Check if word-level timestamps are present
+    has_words = any(bool(s.get("words")) for s in output_segments)
+    if has_words:
+        all_words_meta = []
+        token_list = []
+        for s_idx, s in enumerate(output_segments):
+            for w_idx, w in enumerate(s.get("words", [])):
+                all_words_meta.append((s_idx, w_idx))
+                token_list.append(w.get("word", ""))
+
+        if token_list and any(has_devanagari(t) for t in token_list):
+            transliterated = transliterate_tokens_to_hinglish(token_list)
+            for (s_idx, w_idx), new_word in zip(all_words_meta, transliterated):
+                output_segments[s_idx]["words"][w_idx]["word"] = new_word
+            for s in output_segments:
+                if s.get("words"):
+                    s["text"] = " ".join(w["word"] for w in s["words"])
+    else:
+        # Segment-level text transliteration
+        seg_texts = [s.get("text", "") for s in output_segments]
+        if any(has_devanagari(t) for t in seg_texts):
+            transliterated_texts = transliterate_tokens_to_hinglish(seg_texts)
+            for s, new_text in zip(output_segments, transliterated_texts):
+                s["text"] = new_text
+
+    return output_segments
+
+
 def validate_and_filter_candidates(
     raw_candidates: List[Dict[str, Any]],
     segments: List[Dict[str, Any]],
@@ -107,8 +312,8 @@ def validate_and_filter_candidates(
     Rules:
       1. Schema validation via Pydantic HighlightCandidate.
       2. Timestamp clamping to [0.0, total_duration].
-      3. Word boundary snapping.
-      4. Strict duration constraint: 20.0s <= duration <= 90.0s. If invalid, REJECT. Never fabricate.
+      3. Word boundary snapping with false start detection & padding margins.
+      4. Strict duration constraint: MIN_CLIP_DURATION <= duration <= 180.0s.
       5. Deduplication: Suppress heavy overlapping clips (IoU > 0.5), keeping higher virality.
       6. Capped at max_clips (highest virality first).
     """
@@ -128,19 +333,34 @@ def validate_and_filter_candidates(
         start_t = max(0.0, min(total_duration, start_t))
         end_t = max(0.0, min(total_duration, end_t))
 
-        # Boundary snapping
+        # Clean speech restarts and false starts throughout candidate
         if segments:
-            start_t = max(0.0, snap_to_word_boundary(start_t, segments, prefer_start=True))
-            end_t = min(total_duration, snap_to_word_boundary(end_t, segments, prefer_start=False))
+            start_t, end_t = clean_speech_restarts_and_boundaries(start_t, end_t, segments, total_duration)
 
-        # Strict duration check: never artificially manufacture duration
+        # Boundary snapping with safe audio padding margin (0.15s start, 0.20s end)
+        if segments:
+            snapped_s = snap_to_word_boundary(start_t, segments, prefer_start=True)
+            snapped_e = snap_to_word_boundary(end_t, segments, prefer_start=False)
+            start_t = max(0.0, snapped_s - 0.15)
+            end_t = min(total_duration, snapped_e + 0.20)
+
+        # Enforce technical minimum positive interval and 180s hard maximum
         duration = round(end_t - start_t, 2)
         if duration < MIN_CLIP_DURATION:
             logger.info("Rejecting candidate '%s' (duration %.2fs < min %.2fs)", cand.title, duration, MIN_CLIP_DURATION)
             continue
         if duration > MAX_CLIP_DURATION:
-            logger.info("Rejecting candidate '%s' (duration %.2fs > max %.2fs)", cand.title, duration, MAX_CLIP_DURATION)
-            continue
+            # Enforce 180.0s hard maximum: prefer complete sentence or word boundary before 180s
+            max_allowed_end = start_t + MAX_CLIP_DURATION
+            if segments:
+                snapped_max = snap_to_word_boundary(max_allowed_end, segments, prefer_start=False)
+                if snapped_max > start_t and (snapped_max - start_t) <= MAX_CLIP_DURATION:
+                    end_t = min(total_duration, snapped_max + 0.15)
+                else:
+                    end_t = max_allowed_end
+            else:
+                end_t = max_allowed_end
+            duration = round(end_t - start_t, 2)
 
         # Clean layout recommendation
         layout = cand.layout_recommendation.lower()
@@ -252,9 +472,9 @@ def call_gemini_generate_content(
                 raw_text = parts[0]["text"].strip()
                 parsed = json.loads(raw_text)
 
-                # Can be a JSON list or dict with list under key "clips" / "highlights"
+                # Can be a JSON list or dict with list under key "clips", "highlights", "tokens", etc.
                 if isinstance(parsed, dict):
-                    for k in ("clips", "highlights", "candidates"):
+                    for k in ("clips", "highlights", "candidates", "tokens", "words", "transliterated", "result"):
                         if k in parsed and isinstance(parsed[k], list):
                             parsed = parsed[k]
                             break
@@ -321,13 +541,90 @@ def extract_clips_gemini(transcript_text: str, segments: List[Dict[str, Any]]) -
 
 
 def extract_clips_local_heuristic(segments: List[Dict[str, Any]], total_duration: float) -> List[Dict[str, Any]]:
-    """[LEGACY / UNUSED IN PILLAR 3]
-    Local autonomous heuristic highlight detector.
-    Retained solely for backward compatibility with offline standalone unit tests if needed.
-    Never invoked by the active Pillar 3 worker.
+    """Local autonomous heuristic highlight detector.
+    Retained for offline boundary and stress unit tests.
     """
-    logger.warning("[LEGACY / UNUSED] extract_clips_local_heuristic invoked.")
-    return []
+    if not segments:
+        return []
+
+    HOOK_KEYWORDS = [
+        "suno", "dekho", "basically", "problem yeh hai", "important", "secret", "kaise",
+        "agar aap", "solution", "sabse pehle", "trick", "automate", "system", "real reason"
+    ]
+
+    candidate_clips = []
+    current_block_segments = []
+    current_start = segments[0]["start"]
+
+    for seg in segments:
+        current_block_segments.append(seg)
+        current_duration = seg["end"] - current_start
+
+        if current_duration >= MIN_CLIP_DURATION:
+            if current_duration >= 45.0 or current_duration >= MAX_CLIP_DURATION:
+                block_text = " ".join(s.get("text", "") for s in current_block_segments).strip()
+                first_sentence = current_block_segments[0].get("text", "").strip()
+
+                virality = 60
+                text_lower = block_text.lower()
+                for kw in HOOK_KEYWORDS:
+                    if kw in text_lower:
+                        virality = min(95, virality + 8)
+
+                words = block_text.split()
+                title_words = words[:6]
+                title = " ".join(title_words)
+                if len(title) > 50:
+                    title = title[:47] + "..."
+                if not title.endswith(("?", "!")):
+                    title = f"{title} | Complete Guide"
+
+                candidate_clips.append({
+                    "start_time": round(current_start, 2),
+                    "end_time": round(seg["end"], 2),
+                    "title": title,
+                    "hook": first_sentence[:80],
+                    "description": f"Insight from session: {block_text[:120]}...",
+                    "hashtags": "#Shorts #Reels #Hinglish #Productivity #Dispatch",
+                    "virality_score": virality,
+                    "layout_recommendation": "fit_blur",
+                    "reason": "High semantic density complete thought block"
+                })
+
+                current_block_segments = []
+                current_start = seg["end"]
+
+    if current_block_segments:
+        rem_duration = current_block_segments[-1]["end"] - current_start
+        if rem_duration >= MIN_CLIP_DURATION:
+            block_text = " ".join(s.get("text", "") for s in current_block_segments).strip()
+            candidate_clips.append({
+                "start_time": round(current_start, 2),
+                "end_time": round(current_block_segments[-1]["end"], 2),
+                "title": f"{block_text[:40]}... Key Takeaway",
+                "hook": current_block_segments[0].get("text", "")[:80],
+                "description": f"Closing takeaway: {block_text[:120]}...",
+                "hashtags": "#Shorts #Reels #Hinglish #Takeaway",
+                "virality_score": 70,
+                "layout_recommendation": "fit_blur",
+                "reason": "Concluding thought segment"
+            })
+
+    if not candidate_clips and total_duration >= MIN_CLIP_DURATION:
+        full_text = " ".join(s.get("text", "") for s in segments).strip()
+        candidate_clips.append({
+            "start_time": 0.0,
+            "end_time": round(total_duration, 2),
+            "title": f"{full_text[:40]} | Quick Clip",
+            "hook": segments[0].get("text", "")[:80] if segments else "Quick highlight",
+            "description": full_text[:120],
+            "hashtags": "#Shorts #Reels #Tech #Dispatch",
+            "virality_score": 75,
+            "layout_recommendation": "fit_blur",
+            "reason": "Full session thought clip"
+        })
+
+    return candidate_clips
 
 
 def identify_and_save_highlights(
@@ -359,8 +656,13 @@ def identify_and_save_highlights(
     negative_context = get_negative_feedback_prompt()
     user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
 
-    # Gemini API call: strictly fails without silent heuristic fallback
-    raw_clips, model_used = call_gemini_generate_content(user_prompt)
+    # Gemini API call with local heuristic fallback when offline / rate-limited
+    try:
+        raw_clips, model_used = call_gemini_generate_content(user_prompt)
+    except Exception as e:
+        logger.warning("Gemini highlight extraction failed (%s). Falling back to local heuristic extractor.", e)
+        raw_clips = extract_clips_local_heuristic(segments, total_duration)
+        model_used = "heuristic_fallback"
 
     # Validate and filter
     validated_clips = validate_and_filter_candidates(

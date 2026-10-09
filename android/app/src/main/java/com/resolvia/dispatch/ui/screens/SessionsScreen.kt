@@ -1,24 +1,17 @@
 package com.resolvia.dispatch.ui.screens
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,6 +23,11 @@ import com.resolvia.dispatch.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Screen: Sessions & Per-Segment Upload State.
+ * Reads 100% real data from Room Database (segments, outbox).
+ * Zero hardcoded durations, zero mock file sizes, zero fake processing timelines.
+ */
 @Composable
 fun SessionsScreen(
     recentSegments: List<SegmentEntity>,
@@ -37,355 +35,254 @@ fun SessionsScreen(
     onNavigate: (NavigationTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scrollState = rememberScrollState()
-    val isRecording = recentSegments.any { it.status == "RECORDING" }
     val totalBytes = recentSegments.sumOf { it.fileSizeBytes }
-    val pendingCount = recentSegments.count { it.status == "QUEUED_FOR_UPLOAD" }
     val uploadedCount = recentSegments.count { it.status == "UPLOADED_TO_YOUTUBE" }
+    val queuedCount = recentSegments.count { it.status == "QUEUED_FOR_UPLOAD" || it.status == "WAITING_FOR_YOUTUBE" }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(CanvasBackground)
-            .padding(horizontal = 20.dp, vertical = 14.dp)
-            .verticalScroll(scrollState),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Top Saved / Processing Banner
+        // 1. Header Row
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.padding(top = 4.dp)
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .background(SemanticSuccess, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("✓", fontSize = 18.sp, color = Color.Black, fontWeight = FontWeight.Bold)
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column {
                 Text(
-                    text = if (isRecording) "Recording" else "Upload status",
+                    text = "Sessions & Uploads",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
                     color = TextPrimary
                 )
                 Text(
-                    text = "Phone uploads go to YouTube. Dispatch PC processes the upload independently.",
-                    fontSize = 12.sp,
+                    text = "${recentSegments.size} total recorded segments",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
                     color = TextSecondary
                 )
             }
+
+            if (queuedCount > 0) {
+                Button(
+                    onClick = onSyncNow,
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimarySky),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Upload Now", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
         }
 
-        // 2. Session Summary Card
-        val lastSeg = recentSegments.firstOrNull()
-        val dateStr = if (lastSeg != null) SimpleDateFormat("h:mm a", Locale.US).format(Date(lastSeg.createdAt)) else "9:12 AM"
-        val totalSec = recentSegments.sumOf { it.durationSeconds.toLong() }
-        val durationStr = "${totalSec / 60} min ${totalSec % 60} sec"
-        val segmentCountStr = "${recentSegments.size.coerceAtLeast(1)} segments"
-
+        // 2. Real Metrics Overview Card
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(CardSurface, RoundedCornerShape(14.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(14.dp))
+                .background(CardSurface, RoundedCornerShape(12.dp))
+                .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
                 .padding(14.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp, 48.dp)
-                            .background(InputBackground, RoundedCornerShape(8.dp))
-                            .border(1.dp, CardBorder, RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("🎬", fontSize = 20.sp)
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(text = "Today, $dateStr", fontSize = 11.sp, color = TextMuted)
-                        Text(
-                            text = durationStr,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = TextPrimary
-                        )
-                        Text(text = segmentCountStr, fontSize = 11.sp, color = TextSecondary)
-                    }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$uploadedCount",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = SemanticSuccess
+                    )
+                    Text("Uploaded", fontSize = 10.sp, color = TextMuted)
                 }
-
-                Text("›", fontSize = 22.sp, color = TextMuted)
+                Box(modifier = Modifier.width(1.dp).height(24.dp).background(CardBorder))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$queuedCount",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = if (queuedCount > 0) SemanticWarning else TextSecondary
+                    )
+                    Text("Queued", fontSize = 10.sp, color = TextMuted)
+                }
+                Box(modifier = Modifier.width(1.dp).height(24.dp).background(CardBorder))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    val mb = String.format(Locale.US, "%.1f MB", totalBytes / (1024.0 * 1024.0))
+                    Text(
+                        text = mb,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = TextPrimary
+                    )
+                    Text("Storage", fontSize = 10.sp, color = TextMuted)
+                }
             }
         }
 
-        // 3. Circular Uploading Progress Card (Screen 3)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(CardSurface, RoundedCornerShape(14.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(14.dp))
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+        // 3. Segment List or Honest Empty State
+        if (recentSegments.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
             ) {
-                // Circular Progress Indicator
-                val percent = if (pendingCount == 0 && uploadedCount > 0) 100 else 0
-                Box(
-                    modifier = Modifier.size(76.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val strokeWidth = 7.dp.toPx()
-                        drawArc(
-                            color = CardBorder,
-                            startAngle = -90f,
-                            sweepAngle = 360f,
-                            useCenter = false,
-                            style = Stroke(width = strokeWidth)
-                        )
-                        drawArc(
-                            color = PrimarySky,
-                            startAngle = -90f,
-                            sweepAngle = (percent / 100f) * 360f,
-                            useCenter = false,
-                            style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-                        )
-                    }
-                    Text(
-                        text = "$percent%",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = TextPrimary
-                    )
-                }
-
-                // Transfer Details
                 Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = when {
-                            pendingCount > 0 -> "Waiting to upload to YouTube"
-                            uploadedCount > 0 -> "Uploaded to YouTube"
-                            else -> "No uploads yet"
-                        },
+                        text = "No recordings yet",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Cloud inbox: YouTube",
-                        fontSize = 11.sp,
                         color = TextSecondary
                     )
-
-                    val totalMb = (totalBytes / (1024.0 * 1024.0)).toInt().coerceAtLeast(1)
                     Text(
-                        text = "$uploadedCount uploaded • $pendingCount queued • $totalMb MB on phone",
-                        fontFamily = FontFamily.Monospace,
+                        text = "Record video on the Record tab to start rolling 1080p segments.",
                         fontSize = 11.sp,
                         color = TextMuted
                     )
-
                 }
             }
-        }
-
-        // Action Trigger Button
-        Button(
-            onClick = onSyncNow,
-            enabled = pendingCount > 0,
-            modifier = Modifier.fillMaxWidth().height(46.dp),
-            shape = RoundedCornerShape(10.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
-        ) {
-            Text(
-                text = "RETRY YOUTUBE UPLOADS",
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                color = Color.White
-            )
-        }
-
-        // 4. Background Wi-Fi Notice Card
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(CardSurface, RoundedCornerShape(12.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
-                .padding(14.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("☁️", fontSize = 20.sp)
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = "Background YouTube upload",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Uploads continue while Dispatch is in the background.",
-                        fontSize = 11.sp,
-                        color = TextSecondary
-                    )
+                items(recentSegments, key = { it.segmentId }) { seg ->
+                    SegmentRowItem(segment = seg, onNavigate = onNavigate)
                 }
             }
         }
+    }
+}
 
-        // 5. Horizontal Pipeline Breadcrumbs (Saved -> Uploading -> Processing -> Clips ready)
+@Composable
+fun SegmentRowItem(
+    segment: SegmentEntity,
+    onNavigate: (NavigationTab) -> Unit
+) {
+    val dateStr = SimpleDateFormat("MMM d, h:mm a", Locale.US).format(Date(segment.createdAt))
+    val durationSec = segment.durationSeconds
+    val durStr = String.format(Locale.US, "%02d:%02d", durationSec / 60, durationSec % 60)
+    val mbStr = String.format(Locale.US, "%.1f MB", segment.fileSizeBytes / (1024.0 * 1024.0))
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CardSurface, RoundedCornerShape(10.dp))
+            .border(1.dp, CardBorder, RoundedCornerShape(10.dp))
+            .padding(12.dp)
+    ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(CardSurface, RoundedCornerShape(12.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
-                .padding(vertical = 12.dp, horizontal = 14.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PipelineStepIcon("✓", "Saved", isCompleted = true, isActive = false)
-            Text("—", color = CardBorder)
-            PipelineStepIcon("↑", "YouTube", isCompleted = uploadedCount > 0, isActive = pendingCount > 0)
-            Text("—", color = CardBorder)
-            PipelineStepIcon("✨", "PC processing", isCompleted = false, isActive = false)
-            Text("—", color = CardBorder)
-            PipelineStepIcon("▶", "Clips ready", isCompleted = false, isActive = false)
-        }
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.weight(1f)) {
+                Text(
+                    text = segment.filename,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    color = TextPrimary
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text = dateStr, fontSize = 10.sp, color = TextMuted)
+                    Text(text = "•", fontSize = 10.sp, color = TextMuted)
+                    Text(text = durStr, fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                    Text(text = "•", fontSize = 10.sp, color = TextMuted)
+                    Text(text = mbStr, fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                }
+            }
 
-        // 6. Vertical Processing Timeline (Screen 4)
-        Text(
-            text = "Processing stages",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextSecondary
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(CardSurface, RoundedCornerShape(14.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(14.dp))
-                .padding(16.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                TimelineStageItem(
-                    title = "Transcript complete",
-                    subtitle = "Finished a few moments ago",
-                    state = StageState.COMPLETED
-                )
-                TimelineStageItem(
-                    title = "Finding highlights",
-                    subtitle = "AI locating best hooks and points...",
-                    state = StageState.IN_PROGRESS
-                )
-                TimelineStageItem(
-                    title = "Rendering clips",
-                    subtitle = "FFmpeg 9:16 vertical render queued",
-                    state = StageState.QUEUED
-                )
-                TimelineStageItem(
-                    title = "Finalizing",
-                    subtitle = "Preparing clips for review",
-                    state = StageState.QUEUED
-                )
+            // Real status pill
+            when (segment.status) {
+                "UPLOADED_TO_YOUTUBE" -> {
+                    Text(
+                        text = "Uploaded",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SemanticSuccess,
+                        modifier = Modifier
+                            .background(SemanticSuccessBg, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                "UPLOADING" -> {
+                    Text(
+                        text = "Uploading...",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PrimarySky,
+                        modifier = Modifier
+                            .background(PrimarySky.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                "WAITING_FOR_YOUTUBE" -> {
+                    Text(
+                        text = "Connect YouTube",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SemanticWarning,
+                        modifier = Modifier
+                            .background(SemanticWarningBg, RoundedCornerShape(10.dp))
+                            .clickable { onNavigate(NavigationTab.SETTINGS) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                "QUEUED_FOR_UPLOAD" -> {
+                    Text(
+                        text = "Queued",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SemanticWarning,
+                        modifier = Modifier
+                            .background(SemanticWarningBg, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                "RECORDING" -> {
+                    Text(
+                        text = "Recording",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SemanticRecording,
+                        modifier = Modifier
+                            .background(SemanticRecordingBg, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "Failed",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SemanticRecording,
+                        modifier = Modifier
+                            .background(SemanticRecordingBg, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
             }
         }
-    }
-}
-
-enum class StageState { COMPLETED, IN_PROGRESS, QUEUED }
-
-@Composable
-fun TimelineStageItem(
-    title: String,
-    subtitle: String,
-    state: StageState
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        val (iconText, iconBg, iconColor) = when (state) {
-            StageState.COMPLETED -> Triple("✓", SemanticSuccess, Color.Black)
-            StageState.IN_PROGRESS -> Triple("●", PrimarySky, Color.Black)
-            StageState.QUEUED -> Triple("○", CardBorder, TextMuted)
-        }
-
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .background(iconBg, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(iconText, fontSize = 11.sp, color = iconColor, fontWeight = FontWeight.Bold)
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(
-                text = title,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (state == StageState.QUEUED) TextMuted else TextPrimary
-            )
-            Text(
-                text = subtitle,
-                fontSize = 10.sp,
-                color = TextSecondary
-            )
-        }
-    }
-}
-
-@Composable
-fun PipelineStepIcon(
-    symbol: String,
-    label: String,
-    isCompleted: Boolean,
-    isActive: Boolean
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        val bg = when {
-            isCompleted -> SemanticSuccess
-            isActive -> PrimarySky
-            else -> CardBorder
-        }
-        val textColor = if (isCompleted || isActive) Color.Black else TextMuted
-
-        Box(
-            modifier = Modifier.size(24.dp).background(bg, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(symbol, fontSize = 11.sp, color = textColor, fontWeight = FontWeight.Bold)
-        }
-        Text(label, fontSize = 9.sp, color = if (isActive || isCompleted) TextPrimary else TextMuted)
     }
 }

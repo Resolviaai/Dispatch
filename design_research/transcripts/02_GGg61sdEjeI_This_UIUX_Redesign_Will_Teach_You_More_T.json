@@ -1,0 +1,2000 @@
+{
+  "meta": {
+    "id": "GGg61sdEjeI",
+    "url": "https://www.youtube.com/watch?v=GGg61sdEjeI",
+    "title": "This UI/UX Redesign Will Teach You More Than 100 Tutorials Combined",
+    "uploader": "uxpeak",
+    "duration": 812,
+    "description": "👉 Try Mobbin for free and get 20% off: https://mobbin.com/uxpeak\n💎 Learn world-class UX/UI design with uxpeak+ platform: https://www.uxpeak.com\n\n(🎁 Use code REDESIGN25 to get 25% off Uxpeak+ Pro subscription.)\n\nIn this UX/UI redesign, we break down the biggest UX and UI mistakes on a real mobile product page, and show how to turn a messy interface into a clean, intuitive and conversion-focused e-commerce experience.\n\nYou’ll learn how professional UX/UI designers think about visual hierarchy, spa",
+    "slug": "This_UIUX_Redesign_Will_Teach_You_More_T",
+    "snippets_count": 397,
+    "total_words": 2567
+  },
+  "snippets": [
+    {
+      "text": "Take a look at this ugly product page. I",
+      "start": 0.96,
+      "duration": 4.24
+    },
+    {
+      "text": "want you to look at it carefully. How",
+      "start": 3.4,
+      "duration": 3.96
+    },
+    {
+      "text": "many UX and UI mistakes can you spot?",
+      "start": 5.2,
+      "duration": 3.64
+    },
+    {
+      "text": "Pause the video. Write your number in",
+      "start": 7.36,
+      "duration": 5.6
+    },
+    {
+      "text": "the comments. But, be honest, okay?",
+      "start": 8.84,
+      "duration": 4.12
+    },
+    {
+      "text": "Ready? If you found at least 10",
+      "start": 13.36,
+      "duration": 4.12
+    },
+    {
+      "text": "mistakes, congratulations, you are a",
+      "start": 15.28,
+      "duration": 3.64
+    },
+    {
+      "text": "great designer.",
+      "start": 17.48,
+      "duration": 4.0
+    },
+    {
+      "text": "I can see at least 15 major mistakes.",
+      "start": 18.92,
+      "duration": 4.64
+    },
+    {
+      "text": "Some are obvious. Some are much easier",
+      "start": 21.48,
+      "duration": 4.0
+    },
+    {
+      "text": "to miss. My goal is that by the end of",
+      "start": 23.56,
+      "duration": 3.56
+    },
+    {
+      "text": "this video, you'll know how to design",
+      "start": 25.48,
+      "duration": 3.28
+    },
+    {
+      "text": "the best product pages that users",
+      "start": 27.12,
+      "duration": 4.0
+    },
+    {
+      "text": "absolutely love. So, let's apply some of",
+      "start": 28.76,
+      "duration": 5.24
+    },
+    {
+      "text": "our UX peek magic and fix it one by one.",
+      "start": 31.12,
+      "duration": 4.48
+    },
+    {
+      "text": "The difference will be huge, and I'll",
+      "start": 34.0,
+      "duration": 3.8
+    },
+    {
+      "text": "reveal a few cool surprises as well.",
+      "start": 35.6,
+      "duration": 5.12
+    },
+    {
+      "text": "Mistake one, icons lost in the image.",
+      "start": 37.8,
+      "duration": 4.6
+    },
+    {
+      "text": "The product image goes all the way to",
+      "start": 40.72,
+      "duration": 3.68
+    },
+    {
+      "text": "the edge, and the navigation icons sit",
+      "start": 42.4,
+      "duration": 4.08
+    },
+    {
+      "text": "directly on top of it. At first, this",
+      "start": 44.4,
+      "duration": 4.28
+    },
+    {
+      "text": "might seem fine. The icons are visible,",
+      "start": 46.48,
+      "duration": 4.04
+    },
+    {
+      "text": "but they're only visible because this",
+      "start": 48.68,
+      "duration": 4.08
+    },
+    {
+      "text": "specific image is dark enough. Now,",
+      "start": 50.52,
+      "duration": 3.64
+    },
+    {
+      "text": "watch what happens when we switch the",
+      "start": 52.76,
+      "duration": 3.2
+    },
+    {
+      "text": "product image to something brighter,",
+      "start": 54.16,
+      "duration": 3.72
+    },
+    {
+      "text": "like pineapple. The icons almost",
+      "start": 55.96,
+      "duration": 4.08
+    },
+    {
+      "text": "disappear. And this is a very common UI",
+      "start": 57.88,
+      "duration": 4.4
+    },
+    {
+      "text": "problem. Product pages don't have one",
+      "start": 60.04,
+      "duration": 3.8
+    },
+    {
+      "text": "image forever. They need to work with",
+      "start": 62.28,
+      "duration": 4.88
+    },
+    {
+      "text": "dark images, bright images, busy images,",
+      "start": 63.84,
+      "duration": 5.96
+    },
+    {
+      "text": "simple images, lifestyle photos, and",
+      "start": 67.16,
+      "duration": 4.8
+    },
+    {
+      "text": "clean product shots. So, the fix is",
+      "start": 69.8,
+      "duration": 3.68
+    },
+    {
+      "text": "simple. We add a subtle background",
+      "start": 71.96,
+      "duration": 3.96
+    },
+    {
+      "text": "container behind the icons. We give the",
+      "start": 73.48,
+      "duration": 4.48
+    },
+    {
+      "text": "icons enough contrast, and we add a thin",
+      "start": 75.92,
+      "duration": 3.56
+    },
+    {
+      "text": "outline so they stay readable on",
+      "start": 77.96,
+      "duration": 3.24
+    },
+    {
+      "text": "different backgrounds. Now, the icons",
+      "start": 79.48,
+      "duration": 3.2
+    },
+    {
+      "text": "work no matter what product image is",
+      "start": 81.2,
+      "duration": 3.32
+    },
+    {
+      "text": "used. This is the difference between",
+      "start": 82.68,
+      "duration": 3.8
+    },
+    {
+      "text": "designing for one screen and designing",
+      "start": 84.52,
+      "duration": 4.0
+    },
+    {
+      "text": "for a real product system. And one of",
+      "start": 86.48,
+      "duration": 3.84
+    },
+    {
+      "text": "the best ways to do that is to study how",
+      "start": 88.52,
+      "duration": 3.36
+    },
+    {
+      "text": "great products already solve similar",
+      "start": 90.32,
+      "duration": 3.64
+    },
+    {
+      "text": "problems. That's why I use Mobbin. With",
+      "start": 91.88,
+      "duration": 3.72
+    },
+    {
+      "text": "Mobbin, you can explore real product",
+      "start": 93.96,
+      "duration": 3.16
+    },
+    {
+      "text": "flows from some of the best apps in the",
+      "start": 95.6,
+      "duration": 3.28
+    },
+    {
+      "text": "world. So, if you are designing an",
+      "start": 97.12,
+      "duration": 3.56
+    },
+    {
+      "text": "e-commerce experience, you can look at",
+      "start": 98.88,
+      "duration": 4.52
+    },
+    {
+      "text": "product pages, checkout flows, order",
+      "start": 100.68,
+      "duration": 4.16
+    },
+    {
+      "text": "confirmations,",
+      "start": 103.4,
+      "duration": 4.0
+    },
+    {
+      "text": "saved items, and so many other patterns.",
+      "start": 104.84,
+      "duration": 4.12
+    },
+    {
+      "text": "It helps you see how strong products",
+      "start": 107.4,
+      "duration": 3.32
+    },
+    {
+      "text": "guide users through the full journey,",
+      "start": 108.96,
+      "duration": 3.8
+    },
+    {
+      "text": "from discovering a product to buying it",
+      "start": 110.72,
+      "duration": 4.16
+    },
+    {
+      "text": "and tracking the order afterwards. And",
+      "start": 112.76,
+      "duration": 3.48
+    },
+    {
+      "text": "because we partnered with Mobbin for",
+      "start": 114.88,
+      "duration": 3.28
+    },
+    {
+      "text": "this video, you can get 20% off your",
+      "start": 116.24,
+      "duration": 3.6
+    },
+    {
+      "text": "first year subscription using our link",
+      "start": 118.16,
+      "duration": 2.76
+    },
+    {
+      "text": "below.",
+      "start": 119.84,
+      "duration": 3.56
+    },
+    {
+      "text": "Mistake two, the product image. Product",
+      "start": 120.92,
+      "duration": 4.12
+    },
+    {
+      "text": "images are one of the most important",
+      "start": 123.4,
+      "duration": 3.96
+    },
+    {
+      "text": "parts of any e-commerce page. They",
+      "start": 125.04,
+      "duration": 4.76
+    },
+    {
+      "text": "create emotion. They build trust. And in",
+      "start": 127.36,
+      "duration": 4.52
+    },
+    {
+      "text": "many cases, they take up the largest",
+      "start": 129.8,
+      "duration": 3.64
+    },
+    {
+      "text": "part of the screen.",
+      "start": 131.88,
+      "duration": 6.8
+    },
+    {
+      "text": "Here we have six options. A, B, C, D, E,",
+      "start": 133.44,
+      "duration": 7.64
+    },
+    {
+      "text": "and F. Pause the video and pick the one",
+      "start": 138.68,
+      "duration": 5.12
+    },
+    {
+      "text": "you think works best.",
+      "start": 141.08,
+      "duration": 5.28
+    },
+    {
+      "text": "Okay, if you picked F, you're right. But",
+      "start": 143.8,
+      "duration": 4.44
+    },
+    {
+      "text": "not just because it looks clean. Here's",
+      "start": 146.36,
+      "duration": 4.28
+    },
+    {
+      "text": "why. Option A is too busy. The",
+      "start": 148.24,
+      "duration": 4.24
+    },
+    {
+      "text": "strawberries filled the entire frame.",
+      "start": 150.64,
+      "duration": 4.08
+    },
+    {
+      "text": "So, there's no clear focal point. Option",
+      "start": 152.48,
+      "duration": 4.56
+    },
+    {
+      "text": "B has a focal point, but the focus is",
+      "start": 154.72,
+      "duration": 4.12
+    },
+    {
+      "text": "the hands, not the product. It feels",
+      "start": 157.04,
+      "duration": 4.0
+    },
+    {
+      "text": "more like a lifestyle photo than a clean",
+      "start": 158.84,
+      "duration": 4.44
+    },
+    {
+      "text": "product image. Option C looks simple,",
+      "start": 161.04,
+      "duration": 4.08
+    },
+    {
+      "text": "but it shows one strawberry while the",
+      "start": 163.28,
+      "duration": 3.84
+    },
+    {
+      "text": "product is sold by weight. That creates",
+      "start": 165.12,
+      "duration": 4.16
+    },
+    {
+      "text": "a small mismatch in the user's mind.",
+      "start": 167.12,
+      "duration": 4.4
+    },
+    {
+      "text": "Option D is styled nicely, but the pink",
+      "start": 169.28,
+      "duration": 4.52
+    },
+    {
+      "text": "background feels a bit artificial. For",
+      "start": 171.52,
+      "duration": 4.0
+    },
+    {
+      "text": "fresh organic food, the image should",
+      "start": 173.8,
+      "duration": 4.44
+    },
+    {
+      "text": "feel natural, honest, and real. Option E",
+      "start": 175.52,
+      "duration": 4.52
+    },
+    {
+      "text": "is actually strong. The strawberries",
+      "start": 178.24,
+      "duration": 3.92
+    },
+    {
+      "text": "look fresh, natural, and high-quality.",
+      "start": 180.04,
+      "duration": 4.56
+    },
+    {
+      "text": "But there's one problem. This image will",
+      "start": 182.16,
+      "duration": 4.2
+    },
+    {
+      "text": "not live alone. It will sit inside a",
+      "start": 184.6,
+      "duration": 3.44
+    },
+    {
+      "text": "product grid next to many other",
+      "start": 186.36,
+      "duration": 3.48
+    },
+    {
+      "text": "products. If every product has a",
+      "start": 188.04,
+      "duration": 3.04
+    },
+    {
+      "text": "different background, different",
+      "start": 189.84,
+      "duration": 2.88
+    },
+    {
+      "text": "lighting, different props, and different",
+      "start": 191.08,
+      "duration": 3.879
+    },
+    {
+      "text": "colors, the full catalog starts to feel",
+      "start": 192.72,
+      "duration": 4.84
+    },
+    {
+      "text": "messy. That's why F wins. It keeps the",
+      "start": 194.959,
+      "duration": 4.201
+    },
+    {
+      "text": "natural feeling of the strawberries,",
+      "start": 197.56,
+      "duration": 3.64
+    },
+    {
+      "text": "places them on a clean background. The",
+      "start": 199.16,
+      "duration": 3.68
+    },
+    {
+      "text": "product becomes the focus, and the",
+      "start": 201.2,
+      "duration": 3.6
+    },
+    {
+      "text": "entire catalog can follow the same",
+      "start": 202.84,
+      "duration": 3.92
+    },
+    {
+      "text": "visual system. This is an important",
+      "start": 204.8,
+      "duration": 4.24
+    },
+    {
+      "text": "principle. A good product image is not",
+      "start": 206.76,
+      "duration": 4.479
+    },
+    {
+      "text": "just beautiful by itself. It also has to",
+      "start": 209.04,
+      "duration": 3.56
+    },
+    {
+      "text": "work inside the full shopping",
+      "start": 211.239,
+      "duration": 2.841
+    },
+    {
+      "text": "experience.",
+      "start": 212.6,
+      "duration": 3.76
+    },
+    {
+      "text": "Mistake three, alignment. This one is",
+      "start": 214.08,
+      "duration": 4.439
+    },
+    {
+      "text": "simple, but it makes a huge difference.",
+      "start": 216.36,
+      "duration": 5.2
+    },
+    {
+      "text": "In professional UI design, text, icons,",
+      "start": 218.519,
+      "duration": 5.881
+    },
+    {
+      "text": "prices, buttons, and sections should",
+      "start": 221.56,
+      "duration": 5.16
+    },
+    {
+      "text": "follow a clear layout grid. Right now,",
+      "start": 224.4,
+      "duration": 4.559
+    },
+    {
+      "text": "some elements are slightly too far left.",
+      "start": 226.72,
+      "duration": 4.36
+    },
+    {
+      "text": "Others are slightly too far right. And",
+      "start": 228.959,
+      "duration": 4.521
+    },
+    {
+      "text": "the spacing feels inconsistent. When",
+      "start": 231.08,
+      "duration": 4.16
+    },
+    {
+      "text": "alignment is off, users may not",
+      "start": 233.48,
+      "duration": 3.84
+    },
+    {
+      "text": "consciously notice it, but they feel it.",
+      "start": 235.24,
+      "duration": 3.88
+    },
+    {
+      "text": "The screen feels less calm, less",
+      "start": 237.32,
+      "duration": 4.32
+    },
+    {
+      "text": "structured, less trustworthy. So, we",
+      "start": 239.12,
+      "duration": 4.56
+    },
+    {
+      "text": "clean it up. We define consistent",
+      "start": 241.64,
+      "duration": 4.16
+    },
+    {
+      "text": "margins. For example, if the content",
+      "start": 243.68,
+      "duration": 4.279
+    },
+    {
+      "text": "starts 24 pixels from the left, it",
+      "start": 245.8,
+      "duration": 3.72
+    },
+    {
+      "text": "should follow the same structure across",
+      "start": 247.959,
+      "duration": 3.321
+    },
+    {
+      "text": "the screen. Once everything snaps into",
+      "start": 249.52,
+      "duration": 3.84
+    },
+    {
+      "text": "the same grid, the page instantly feels",
+      "start": 251.28,
+      "duration": 4.2
+    },
+    {
+      "text": "more balanced, more intentional, and",
+      "start": 253.36,
+      "duration": 3.719
+    },
+    {
+      "text": "more professional.",
+      "start": 255.48,
+      "duration": 4.0
+    },
+    {
+      "text": "Mistake four, color. The colors in this",
+      "start": 257.079,
+      "duration": 5.361
+    },
+    {
+      "text": "design are too bright, too saturated,",
+      "start": 259.48,
+      "duration": 4.56
+    },
+    {
+      "text": "and they emphasize the wrong things.",
+      "start": 262.44,
+      "duration": 3.76
+    },
+    {
+      "text": "That creates two problems. First, the",
+      "start": 264.04,
+      "duration": 4.6
+    },
+    {
+      "text": "screen becomes harder to read. Second,",
+      "start": 266.2,
+      "duration": 4.16
+    },
+    {
+      "text": "the hierarchy becomes weaker because too",
+      "start": 268.64,
+      "duration": 2.96
+    },
+    {
+      "text": "many elements are competing for",
+      "start": 270.36,
+      "duration": 3.16
+    },
+    {
+      "text": "attention. On a fresh organic food",
+      "start": 271.6,
+      "duration": 3.76
+    },
+    {
+      "text": "product page, the color should support",
+      "start": 273.52,
+      "duration": 3.88
+    },
+    {
+      "text": "the product. They should not overpower",
+      "start": 275.36,
+      "duration": 4.4
+    },
+    {
+      "text": "it. So, we switch to a softer, more",
+      "start": 277.4,
+      "duration": 4.84
+    },
+    {
+      "text": "natural palette. The interface now feels",
+      "start": 279.76,
+      "duration": 5.4
+    },
+    {
+      "text": "calmer, cleaner. This is what good color",
+      "start": 282.24,
+      "duration": 4.92
+    },
+    {
+      "text": "does. It sets the mood, supports the",
+      "start": 285.16,
+      "duration": 4.24
+    },
+    {
+      "text": "product, and helps users focus on what",
+      "start": 287.16,
+      "duration": 3.88
+    },
+    {
+      "text": "matters.",
+      "start": 289.4,
+      "duration": 4.24
+    },
+    {
+      "text": "Mistake five, typography. Fonts can",
+      "start": 291.04,
+      "duration": 5.0
+    },
+    {
+      "text": "completely change how a design feels.",
+      "start": 293.64,
+      "duration": 4.4
+    },
+    {
+      "text": "Right now, the screen uses too many font",
+      "start": 296.04,
+      "duration": 3.879
+    },
+    {
+      "text": "styles, and the type doesn't feel fully",
+      "start": 298.04,
+      "duration": 4.2
+    },
+    {
+      "text": "consistent. A good product page doesn't",
+      "start": 299.919,
+      "duration": 4.841
+    },
+    {
+      "text": "need many fonts. In most cases, one",
+      "start": 302.24,
+      "duration": 4.92
+    },
+    {
+      "text": "strong font family is enough. You can",
+      "start": 304.76,
+      "duration": 5.08
+    },
+    {
+      "text": "create hierarchy using size, weight,",
+      "start": 307.16,
+      "duration": 5.68
+    },
+    {
+      "text": "color, and line height. So, we simplify",
+      "start": 309.84,
+      "duration": 5.079
+    },
+    {
+      "text": "the typography. We use Lato, [music] a",
+      "start": 312.84,
+      "duration": 4.8
+    },
+    {
+      "text": "cleaner font. Now, the design has a much",
+      "start": 314.919,
+      "duration": 5.321
+    },
+    {
+      "text": "stronger foundation. Mistake six,",
+      "start": 317.64,
+      "duration": 5.279
+    },
+    {
+      "text": "labels. Now, let's look at the labels.",
+      "start": 320.24,
+      "duration": 4.84
+    },
+    {
+      "text": "The fruits label feels cramped because",
+      "start": 322.919,
+      "duration": 3.961
+    },
+    {
+      "text": "the letters are too close together. For",
+      "start": 325.08,
+      "duration": 3.68
+    },
+    {
+      "text": "small uppercase labels, adding a little",
+      "start": 326.88,
+      "duration": 3.64
+    },
+    {
+      "text": "letter spacing usually helps the text",
+      "start": 328.76,
+      "duration": 4.12
+    },
+    {
+      "text": "breathe. But, the bigger issue is the",
+      "start": 330.52,
+      "duration": 5.0
+    },
+    {
+      "text": "discount badge. Right now, it says 20%",
+      "start": 332.88,
+      "duration": 4.8
+    },
+    {
+      "text": "off discount and also includes an icon.",
+      "start": 335.52,
+      "duration": 4.2
+    },
+    {
+      "text": "That's too much for a small label. In UI",
+      "start": 337.68,
+      "duration": 4.08
+    },
+    {
+      "text": "design, badges should be quick to scan.",
+      "start": 339.72,
+      "duration": 3.16
+    },
+    {
+      "text": "The user should understand them",
+      "start": 341.76,
+      "duration": 3.2
+    },
+    {
+      "text": "instantly. Something like 20% off is",
+      "start": 342.88,
+      "duration": 4.039
+    },
+    {
+      "text": "enough. It still communicates the offer,",
+      "start": 344.96,
+      "duration": 3.48
+    },
+    {
+      "text": "but it's no longer stealing too much",
+      "start": 346.919,
+      "duration": 3.481
+    },
+    {
+      "text": "attention from the product itself.",
+      "start": 348.44,
+      "duration": 4.8
+    },
+    {
+      "text": "Mistake seven, the title. The title is",
+      "start": 350.4,
+      "duration": 4.4
+    },
+    {
+      "text": "one of the most important pieces of",
+      "start": 353.24,
+      "duration": 3.68
+    },
+    {
+      "text": "information on the page. It tells the",
+      "start": 354.8,
+      "duration": 3.72
+    },
+    {
+      "text": "user what they're buying, so it needs to",
+      "start": 356.92,
+      "duration": 3.92
+    },
+    {
+      "text": "be clear, readable, and easy to scan.",
+      "start": 358.52,
+      "duration": 4.04
+    },
+    {
+      "text": "Right now, the title feels slightly",
+      "start": 360.84,
+      "duration": 3.8
+    },
+    {
+      "text": "unbalanced. It's bold, but the size and",
+      "start": 362.56,
+      "duration": 3.32
+    },
+    {
+      "text": "weight do not create the right",
+      "start": 364.64,
+      "duration": 3.36
+    },
+    {
+      "text": "hierarchy. A product title should stand",
+      "start": 365.88,
+      "duration": 4.04
+    },
+    {
+      "text": "out without shouting. So, we adjust the",
+      "start": 368.0,
+      "duration": 4.16
+    },
+    {
+      "text": "size, we adjust the weight, and we make",
+      "start": 369.92,
+      "duration": 4.4
+    },
+    {
+      "text": "it feel more natural inside the layout.",
+      "start": 372.16,
+      "duration": 3.88
+    },
+    {
+      "text": "Now, the title is easier to read, easier",
+      "start": 374.32,
+      "duration": 3.84
+    },
+    {
+      "text": "to scan, and much better balanced with",
+      "start": 376.04,
+      "duration": 4.4
+    },
+    {
+      "text": "the rest of the page. Mistake eight,",
+      "start": 378.16,
+      "duration": 4.8
+    },
+    {
+      "text": "paragraph text. Now, let's fix the",
+      "start": 380.44,
+      "duration": 4.56
+    },
+    {
+      "text": "paragraph text. The lines are too close",
+      "start": 382.96,
+      "duration": 3.76
+    },
+    {
+      "text": "together, which makes the description",
+      "start": 385.0,
+      "duration": 4.16
+    },
+    {
+      "text": "feel tight and harder to read. Paragraph",
+      "start": 386.72,
+      "duration": 4.76
+    },
+    {
+      "text": "text should not fight for attention. It",
+      "start": 389.16,
+      "duration": 3.72
+    },
+    {
+      "text": "should help the user understand the",
+      "start": 391.48,
+      "duration": 3.6
+    },
+    {
+      "text": "product comfortably. So, we increase the",
+      "start": 392.88,
+      "duration": 4.08
+    },
+    {
+      "text": "line height, we slightly reduce the",
+      "start": 395.08,
+      "duration": 3.839
+    },
+    {
+      "text": "contrast of the body text. This will",
+      "start": 396.96,
+      "duration": 4.08
+    },
+    {
+      "text": "make the paragraph feel easier to scan.",
+      "start": 398.919,
+      "duration": 4.081
+    },
+    {
+      "text": "A simple typography rule is this,",
+      "start": 401.04,
+      "duration": 4.56
+    },
+    {
+      "text": "headlines attract attention, paragraphs",
+      "start": 403.0,
+      "duration": 4.08
+    },
+    {
+      "text": "support understanding. When the",
+      "start": 405.6,
+      "duration": 3.2
+    },
+    {
+      "text": "paragraph is easier to read, the whole",
+      "start": 407.08,
+      "duration": 4.04
+    },
+    {
+      "text": "page feels calmer and more trustworthy.",
+      "start": 408.8,
+      "duration": 5.32
+    },
+    {
+      "text": "Mistake nine, review placement. Now,",
+      "start": 411.12,
+      "duration": 5.36
+    },
+    {
+      "text": "we're getting deeper into UX thinking.",
+      "start": 414.12,
+      "duration": 4.04
+    },
+    {
+      "text": "The rating is currently too far away",
+      "start": 416.48,
+      "duration": 3.439
+    },
+    {
+      "text": "from the product title. That's a problem",
+      "start": 418.16,
+      "duration": 3.64
+    },
+    {
+      "text": "because reviews are one of the strongest",
+      "start": 419.919,
+      "duration": 3.921
+    },
+    {
+      "text": "trust signals in e-commerce. When users",
+      "start": 421.8,
+      "duration": 3.52
+    },
+    {
+      "text": "see the product name, they should also",
+      "start": 423.84,
+      "duration": 3.8
+    },
+    {
+      "text": "quickly see how well it's rated. What is",
+      "start": 425.32,
+      "duration": 4.64
+    },
+    {
+      "text": "it and can I trust it? So, we move the",
+      "start": 427.64,
+      "duration": 4.52
+    },
+    {
+      "text": "rating closer to the title. Now, users",
+      "start": 429.96,
+      "duration": 4.08
+    },
+    {
+      "text": "immediately understand three important",
+      "start": 432.16,
+      "duration": 4.0
+    },
+    {
+      "text": "things, what the product is, how it's",
+      "start": 434.04,
+      "duration": 4.12
+    },
+    {
+      "text": "rated, and whether other people trust",
+      "start": 436.16,
+      "duration": 4.32
+    },
+    {
+      "text": "it. This makes the buying decision feel",
+      "start": 438.16,
+      "duration": 4.52
+    },
+    {
+      "text": "easier. Good UI is not just about",
+      "start": 440.48,
+      "duration": 3.84
+    },
+    {
+      "text": "arranging elements. It's about placing",
+      "start": 442.68,
+      "duration": 3.16
+    },
+    {
+      "text": "information where the user needs it",
+      "start": 444.32,
+      "duration": 2.395
+    },
+    {
+      "text": "most.",
+      "start": 445.84,
+      "duration": 1.2
+    },
+    {
+      "text": ">> [music]",
+      "start": 446.715,
+      "duration": 2.204
+    },
+    {
+      "text": ">> We're still far from a great design, but",
+      "start": 447.04,
+      "duration": 3.76
+    },
+    {
+      "text": "if you compare it with where we started,",
+      "start": 448.919,
+      "duration": 3.961
+    },
+    {
+      "text": "you can already see a big improvement.",
+      "start": 450.8,
+      "duration": 4.04
+    },
+    {
+      "text": "And you'll love what's coming next. This",
+      "start": 452.88,
+      "duration": 3.36
+    },
+    {
+      "text": "is the part of design that most",
+      "start": 454.84,
+      "duration": 3.2
+    },
+    {
+      "text": "tutorials skip. They show you how to",
+      "start": 456.24,
+      "duration": 3.48
+    },
+    {
+      "text": "make the screen look nicer, but they",
+      "start": 458.04,
+      "duration": 3.76
+    },
+    {
+      "text": "don't always explain why one decision",
+      "start": 459.72,
+      "duration": 4.36
+    },
+    {
+      "text": "makes the product easier to use, easier",
+      "start": 461.8,
+      "duration": 4.76
+    },
+    {
+      "text": "to trust, or easier to buy from. And",
+      "start": 464.08,
+      "duration": 4.12
+    },
+    {
+      "text": "that's really the whole idea behind the",
+      "start": 466.56,
+      "duration": 4.2
+    },
+    {
+      "text": "UX Peak Plus platform. Inside UX Peak",
+      "start": 468.2,
+      "duration": 4.6
+    },
+    {
+      "text": "Plus, we break down real UX and UI",
+      "start": 470.76,
+      "duration": 4.0
+    },
+    {
+      "text": "decisions like this. Not just what looks",
+      "start": 472.8,
+      "duration": 4.36
+    },
+    {
+      "text": "great, but why it works, how it affects",
+      "start": 474.76,
+      "duration": 4.36
+    },
+    {
+      "text": "the user, and how you can apply the same",
+      "start": 477.16,
+      "duration": 3.76
+    },
+    {
+      "text": "thinking to your own designs to build",
+      "start": 479.12,
+      "duration": 2.965
+    },
+    {
+      "text": "the best websites,",
+      "start": 480.92,
+      "duration": 1.44
+    },
+    {
+      "text": ">> [music]",
+      "start": 482.085,
+      "duration": 1.315
+    },
+    {
+      "text": ">> apps,",
+      "start": 482.36,
+      "duration": 2.88
+    },
+    {
+      "text": "or software application. If you want to",
+      "start": 483.4,
+      "duration": 3.84
+    },
+    {
+      "text": "grow as a designer or product person,",
+      "start": 485.24,
+      "duration": 3.36
+    },
+    {
+      "text": "you need to understand the thinking",
+      "start": 487.24,
+      "duration": 3.48
+    },
+    {
+      "text": "behind strong product design. So, if you",
+      "start": 488.6,
+      "duration": 4.24
+    },
+    {
+      "text": "want to go after this video, use code",
+      "start": 490.72,
+      "duration": 6.32
+    },
+    {
+      "text": "redesign 25 to get 25% off UX Peak Plus.",
+      "start": 492.84,
+      "duration": 6.92
+    },
+    {
+      "text": "You can find everything on our website.",
+      "start": 497.04,
+      "duration": 4.48
+    },
+    {
+      "text": "Now, let's continue with the redesign.",
+      "start": 499.76,
+      "duration": 4.6
+    },
+    {
+      "text": "Mistake 10, feature icons. At first",
+      "start": 501.52,
+      "duration": 4.84
+    },
+    {
+      "text": "glance, this section might seem fine. It",
+      "start": 504.36,
+      "duration": 3.96
+    },
+    {
+      "text": "communicates useful product benefits,",
+      "start": 506.36,
+      "duration": 3.76
+    },
+    {
+      "text": "but visually, there are several",
+      "start": 508.32,
+      "duration": 4.399
+    },
+    {
+      "text": "problems. There are too many colors. The",
+      "start": 510.12,
+      "duration": 5.24
+    },
+    {
+      "text": "icon styles are inconsistent. Some icons",
+      "start": 512.719,
+      "duration": 5.081
+    },
+    {
+      "text": "feel heavy, some feel light, some are",
+      "start": 515.36,
+      "duration": 4.799
+    },
+    {
+      "text": "filled, some are outlined. In good UI",
+      "start": 517.8,
+      "duration": 4.119
+    },
+    {
+      "text": "design, icons should share the same",
+      "start": 520.159,
+      "duration": 3.921
+    },
+    {
+      "text": "visual logic. So, we simplify the",
+      "start": 521.919,
+      "duration": 4.121
+    },
+    {
+      "text": "colors. We make the icon style more",
+      "start": 524.08,
+      "duration": 4.56
+    },
+    {
+      "text": "consistent, and we tighten the spacing.",
+      "start": 526.04,
+      "duration": 4.24
+    },
+    {
+      "text": "Now, the section still communicates the",
+      "start": 528.64,
+      "duration": 3.56
+    },
+    {
+      "text": "benefits, but it no longer dominates the",
+      "start": 530.28,
+      "duration": 3.76
+    },
+    {
+      "text": "screen. You can use different colors in",
+      "start": 532.2,
+      "duration": 3.68
+    },
+    {
+      "text": "UI design, but they need to be used",
+      "start": 534.04,
+      "duration": 4.16
+    },
+    {
+      "text": "intentionally. Mistake 11, divider",
+      "start": 535.88,
+      "duration": 4.12
+    },
+    {
+      "text": "lines. Now, let's look at the divider",
+      "start": 538.2,
+      "duration": 4.0
+    },
+    {
+      "text": "lines. They are extremely dark and",
+      "start": 540.0,
+      "duration": 4.04
+    },
+    {
+      "text": "heavy. They pull too much attention.",
+      "start": 542.2,
+      "duration": 3.72
+    },
+    {
+      "text": "Divider lines are meant to separate",
+      "start": 544.04,
+      "duration": 4.24
+    },
+    {
+      "text": "sections. When dividers are this strong,",
+      "start": 545.92,
+      "duration": 4.2
+    },
+    {
+      "text": "the page starts to feel divided into",
+      "start": 548.28,
+      "duration": 3.88
+    },
+    {
+      "text": "harsh blocks instead of one smooth",
+      "start": 550.12,
+      "duration": 4.52
+    },
+    {
+      "text": "experience. So, we soften them. Now, it",
+      "start": 552.16,
+      "duration": 5.16
+    },
+    {
+      "text": "feels subtle, clean, and more elegant.",
+      "start": 554.64,
+      "duration": 4.72
+    },
+    {
+      "text": "This is a small detail, but small",
+      "start": 557.32,
+      "duration": 4.24
+    },
+    {
+      "text": "details are often what make an interface",
+      "start": 559.36,
+      "duration": 5.04
+    },
+    {
+      "text": "feel premium. Mistake 12, spacing",
+      "start": 561.56,
+      "duration": 4.72
+    },
+    {
+      "text": "balance. The spacing between some",
+      "start": 564.4,
+      "duration": 4.36
+    },
+    {
+      "text": "sections is too large. White space is",
+      "start": 566.28,
+      "duration": 4.559
+    },
+    {
+      "text": "important, but too much white space in",
+      "start": 568.76,
+      "duration": 3.8
+    },
+    {
+      "text": "the wrong place can make the layout feel",
+      "start": 570.839,
+      "duration": 3.921
+    },
+    {
+      "text": "disconnected. So, we tighten the spacing",
+      "start": 572.56,
+      "duration": 4.2
+    },
+    {
+      "text": "slightly. Now, the sections sit closer",
+      "start": 574.76,
+      "duration": 4.4
+    },
+    {
+      "text": "together, the flow is easier to scan and",
+      "start": 576.76,
+      "duration": 4.48
+    },
+    {
+      "text": "the whole interface feels more cohesive.",
+      "start": 579.16,
+      "duration": 3.92
+    },
+    {
+      "text": "Good spacing is not just about adding",
+      "start": 581.24,
+      "duration": 3.4
+    },
+    {
+      "text": "more empty space. It's about creating",
+      "start": 583.08,
+      "duration": 4.16
+    },
+    {
+      "text": "the right relationship between elements.",
+      "start": 584.64,
+      "duration": 5.48
+    },
+    {
+      "text": "Mistake 13, redundant price label. Now",
+      "start": 587.24,
+      "duration": 4.84
+    },
+    {
+      "text": "let's move to the price area. We can see",
+      "start": 590.12,
+      "duration": 3.68
+    },
+    {
+      "text": "the word price before the number, but in",
+      "start": 592.08,
+      "duration": 4.12
+    },
+    {
+      "text": "this context, it's unnecessary. When",
+      "start": 593.8,
+      "duration": 4.04
+    },
+    {
+      "text": "users see a number with a currency",
+      "start": 596.2,
+      "duration": 3.12
+    },
+    {
+      "text": "symbol, they already understand that",
+      "start": 597.84,
+      "duration": 4.08
+    },
+    {
+      "text": "this is the price. And if you want to be",
+      "start": 599.32,
+      "duration": 4.96
+    },
+    {
+      "text": "super accessible and label the price,",
+      "start": 601.92,
+      "duration": 4.36
+    },
+    {
+      "text": "then logically we should also label the",
+      "start": 604.28,
+      "duration": 4.6
+    },
+    {
+      "text": "quantity selector next to it. Otherwise,",
+      "start": 606.28,
+      "duration": 4.72
+    },
+    {
+      "text": "the interface becomes inconsistent. So",
+      "start": 608.88,
+      "duration": 3.84
+    },
+    {
+      "text": "the cleaner solution is simple. Remove",
+      "start": 611.0,
+      "duration": 3.68
+    },
+    {
+      "text": "the label completely. Let the price",
+      "start": 612.72,
+      "duration": 3.6
+    },
+    {
+      "text": "speak for itself.",
+      "start": 614.68,
+      "duration": 4.32
+    },
+    {
+      "text": "Mistake 14, product quantity and price",
+      "start": 616.32,
+      "duration": 5.12
+    },
+    {
+      "text": "placement. The product title includes 1",
+      "start": 619.0,
+      "duration": 5.28
+    },
+    {
+      "text": "kg, but this creates a problem. Why?",
+      "start": 621.44,
+      "duration": 4.44
+    },
+    {
+      "text": "Because the user can already change the",
+      "start": 624.28,
+      "duration": 3.32
+    },
+    {
+      "text": "quantity using the selector. So the",
+      "start": 625.88,
+      "duration": 3.92
+    },
+    {
+      "text": "product is no longer fixed to 1 kg. That",
+      "start": 627.6,
+      "duration": 4.08
+    },
+    {
+      "text": "makes the title misleading. Instead, the",
+      "start": 629.8,
+      "duration": 3.08
+    },
+    {
+      "text": "title should describe the product",
+      "start": 631.68,
+      "duration": 3.16
+    },
+    {
+      "text": "itself. The quantity should be handled",
+      "start": 632.88,
+      "duration": 3.92
+    },
+    {
+      "text": "separately in the buying area. There's",
+      "start": 634.84,
+      "duration": 3.64
+    },
+    {
+      "text": "also another improvement we can make.",
+      "start": 636.8,
+      "duration": 3.36
+    },
+    {
+      "text": "The price is currently placed quite far",
+      "start": 638.48,
+      "duration": 3.44
+    },
+    {
+      "text": "down the screen. There are different",
+      "start": 640.16,
+      "duration": 3.4
+    },
+    {
+      "text": "ways to handle pricing depending on the",
+      "start": 641.92,
+      "duration": 4.04
+    },
+    {
+      "text": "product, the audience, and the buying",
+      "start": 643.56,
+      "duration": 5.24
+    },
+    {
+      "text": "context. But in this case, users should",
+      "start": 645.96,
+      "duration": 4.64
+    },
+    {
+      "text": "see the price much earlier. Now when",
+      "start": 648.8,
+      "duration": 3.6
+    },
+    {
+      "text": "users see the product, they immediately",
+      "start": 650.6,
+      "duration": 4.4
+    },
+    {
+      "text": "understand what it is, how good it is,",
+      "start": 652.4,
+      "duration": 5.12
+    },
+    {
+      "text": "and how much it costs. Mistake 15, the",
+      "start": 655.0,
+      "duration": 4.839
+    },
+    {
+      "text": "purchase action. The add to cart button",
+      "start": 657.52,
+      "duration": 3.96
+    },
+    {
+      "text": "should be the most important action on",
+      "start": 659.839,
+      "duration": 3.641
+    },
+    {
+      "text": "the screen, but right now it feels too",
+      "start": 661.48,
+      "duration": 4.56
+    },
+    {
+      "text": "aggressive. The text is all caps, the",
+      "start": 663.48,
+      "duration": 4.28
+    },
+    {
+      "text": "size is large, the button feels like",
+      "start": 666.04,
+      "duration": 4.16
+    },
+    {
+      "text": "it's shouting. So, we soften it. We make",
+      "start": 667.76,
+      "duration": 4.52
+    },
+    {
+      "text": "it feel more refined. But there's",
+      "start": 670.2,
+      "duration": 4.36
+    },
+    {
+      "text": "another issue. The quantity selector is",
+      "start": 672.28,
+      "duration": 3.8
+    },
+    {
+      "text": "too far away from the add to cart",
+      "start": 674.56,
+      "duration": 3.48
+    },
+    {
+      "text": "button. When users buy something, they",
+      "start": 676.08,
+      "duration": 3.52
+    },
+    {
+      "text": "choose how much they want, then they add",
+      "start": 678.04,
+      "duration": 3.6
+    },
+    {
+      "text": "it to the cart. So, we place them next",
+      "start": 679.6,
+      "duration": 3.68
+    },
+    {
+      "text": "to each other. We also add the unit,",
+      "start": 681.64,
+      "duration": 4.04
+    },
+    {
+      "text": "kilograms, directly inside the selector.",
+      "start": 683.28,
+      "duration": 4.28
+    },
+    {
+      "text": "And finally, we add the total price",
+      "start": 685.68,
+      "duration": 3.84
+    },
+    {
+      "text": "inside the add to cart button. Now the",
+      "start": 687.56,
+      "duration": 3.279
+    },
+    {
+      "text": "user knows what they're about to pay",
+      "start": 689.52,
+      "duration": 3.08
+    },
+    {
+      "text": "before they click. That removes",
+      "start": 690.839,
+      "duration": 3.841
+    },
+    {
+      "text": "uncertainty. But, this is where many",
+      "start": 692.6,
+      "duration": 4.24
+    },
+    {
+      "text": "redesigns stop. The mistakes are fixed,",
+      "start": 694.68,
+      "duration": 3.92
+    },
+    {
+      "text": "the page looks cleaner, but strong",
+      "start": 696.84,
+      "duration": 3.64
+    },
+    {
+      "text": "product design is not just about fixing",
+      "start": 698.6,
+      "duration": 3.24
+    },
+    {
+      "text": "what is broken. It's about making the",
+      "start": 700.48,
+      "duration": 3.52
+    },
+    {
+      "text": "whole experience feel easier. Now, let's",
+      "start": 701.84,
+      "duration": 4.24
+    },
+    {
+      "text": "take this redesign one step further.",
+      "start": 704.0,
+      "duration": 4.48
+    },
+    {
+      "text": "Improvement one, turn the content into a",
+      "start": 706.08,
+      "duration": 4.6
+    },
+    {
+      "text": "scrollable card. First, we turn the",
+      "start": 708.48,
+      "duration": 4.68
+    },
+    {
+      "text": "content area into a soft scrollable card",
+      "start": 710.68,
+      "duration": 4.08
+    },
+    {
+      "text": "with rounded corners and a subtle",
+      "start": 713.16,
+      "duration": 3.36
+    },
+    {
+      "text": "shadow. The product image has its own",
+      "start": 714.76,
+      "duration": 3.68
+    },
+    {
+      "text": "space. The product details have their",
+      "start": 716.52,
+      "duration": 4.6
+    },
+    {
+      "text": "own space. As the user scrolls, the card",
+      "start": 718.44,
+      "duration": 4.64
+    },
+    {
+      "text": "slides up over the product image,",
+      "start": 721.12,
+      "duration": 3.28
+    },
+    {
+      "text": "keeping the product visible for the",
+      "start": 723.08,
+      "duration": 3.76
+    },
+    {
+      "text": "first part of the experience. Then, once",
+      "start": 724.4,
+      "duration": 4.32
+    },
+    {
+      "text": "the image is no longer the main focus,",
+      "start": 726.84,
+      "duration": 3.52
+    },
+    {
+      "text": "the product title transitions into the",
+      "start": 728.72,
+      "duration": 3.72
+    },
+    {
+      "text": "top navigation and stays sticky. So,",
+      "start": 730.36,
+      "duration": 3.72
+    },
+    {
+      "text": "even when the user scrolls deeper into",
+      "start": 732.44,
+      "duration": 3.8
+    },
+    {
+      "text": "the page, they never lose context.",
+      "start": 734.08,
+      "duration": 4.2
+    },
+    {
+      "text": "Improvement two, add a sticky bottom",
+      "start": 736.24,
+      "duration": 4.44
+    },
+    {
+      "text": "action area. Now, the quantity selector",
+      "start": 738.28,
+      "duration": 4.28
+    },
+    {
+      "text": "and add to cart buttons stay visible",
+      "start": 740.68,
+      "duration": 3.92
+    },
+    {
+      "text": "while the user scrolls. This is powerful",
+      "start": 742.56,
+      "duration": 4.08
+    },
+    {
+      "text": "because users don't always decide to buy",
+      "start": 744.6,
+      "duration": 3.76
+    },
+    {
+      "text": "at the top of the page. Sometimes, they",
+      "start": 746.64,
+      "duration": 3.96
+    },
+    {
+      "text": "scroll. They read more details. They",
+      "start": 748.36,
+      "duration": 4.4
+    },
+    {
+      "text": "look at related products. And when they",
+      "start": 750.6,
+      "duration": 4.08
+    },
+    {
+      "text": "finally feel ready, they can act",
+      "start": 752.76,
+      "duration": 3.44
+    },
+    {
+      "text": "immediately. And this is where the",
+      "start": 754.68,
+      "duration": 3.64
+    },
+    {
+      "text": "design becomes much stronger because we",
+      "start": 756.2,
+      "duration": 3.76
+    },
+    {
+      "text": "are no longer just making the screen",
+      "start": 758.32,
+      "duration": 3.32
+    },
+    {
+      "text": "look better. We are making the buying",
+      "start": 759.96,
+      "duration": 3.2
+    },
+    {
+      "text": "experience easier.",
+      "start": 761.64,
+      "duration": 3.4
+    },
+    {
+      "text": "Improvement three, add predefined",
+      "start": 763.16,
+      "duration": 3.52
+    },
+    {
+      "text": "quantity options.",
+      "start": 765.04,
+      "duration": 6.2
+    },
+    {
+      "text": "For example, 500 g, 1 kg, 2 kg. Instead",
+      "start": 766.68,
+      "duration": 6.36
+    },
+    {
+      "text": "of forcing users to tap the quantity",
+      "start": 771.24,
+      "duration": 3.56
+    },
+    {
+      "text": "selector multiple times, they can choose",
+      "start": 773.04,
+      "duration": 3.64
+    },
+    {
+      "text": "a common option with one tap. And these",
+      "start": 774.8,
+      "duration": 3.48
+    },
+    {
+      "text": "options can be based on real purchase",
+      "start": 776.68,
+      "duration": 4.08
+    },
+    {
+      "text": "data. If most customers buy 1 kg or 2",
+      "start": 778.28,
+      "duration": 4.72
+    },
+    {
+      "text": "kg, those should be easy to select. We",
+      "start": 780.76,
+      "duration": 4.28
+    },
+    {
+      "text": "still keep the custom quantity selector",
+      "start": 783.0,
+      "duration": 4.16
+    },
+    {
+      "text": "for flexibility. This is a small UX",
+      "start": 785.04,
+      "duration": 4.24
+    },
+    {
+      "text": "improvement with a real business impact.",
+      "start": 787.16,
+      "duration": 3.52
+    },
+    {
+      "text": "And now, we have a design that scales",
+      "start": 789.28,
+      "duration": 3.4
+    },
+    {
+      "text": "beautifully across different products.",
+      "start": 790.68,
+      "duration": 3.8
+    },
+    {
+      "text": "The images feel consistent. The layout",
+      "start": 792.68,
+      "duration": 3.36
+    },
+    {
+      "text": "feels predictable. The product",
+      "start": 794.48,
+      "duration": 4.04
+    },
+    {
+      "text": "information is easy to scan. This is",
+      "start": 796.04,
+      "duration": 4.32
+    },
+    {
+      "text": "what strong UI design looks like. So,",
+      "start": 798.52,
+      "duration": 3.4
+    },
+    {
+      "text": "what do you think? Is this new version",
+      "start": 800.36,
+      "duration": 3.16
+    },
+    {
+      "text": "better than the original? How many of",
+      "start": 801.92,
+      "duration": 3.64
+    },
+    {
+      "text": "the 15 mistakes did you spot before I",
+      "start": 803.52,
+      "duration": 3.16
+    },
+    {
+      "text": "revealed them? Let me know in the",
+      "start": 805.56,
+      "duration": 2.68
+    },
+    {
+      "text": "comments. I'm genuinely curious to see",
+      "start": 806.68,
+      "duration": 2.84
+    },
+    {
+      "text": "how many you found. Thank you for",
+      "start": 808.24,
+      "duration": 5.04
+    },
+    {
+      "text": "watching, and see you in the next video.",
+      "start": 809.52,
+      "duration": 3.76
+    }
+  ]
+}

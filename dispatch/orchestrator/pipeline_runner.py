@@ -121,7 +121,7 @@ class PipelineStageRunner:
         if filepath.stat().st_size == 0:
             raise ValueError(f"Source video file {filepath} is 0 bytes")
 
-        is_valid, meta, err = probe_video(filepath)
+        is_valid, meta, err = probe_video(filepath, chunk_id=chunk["id"])
         if not is_valid:
             raise ValueError(f"Corrupt or invalid media file: {err}")
 
@@ -216,8 +216,9 @@ class PipelineStageRunner:
                 cid = clip["id"]
                 rendered_path = Path(clip["video_path"]) if clip["video_path"] else None
 
-                # Skip if already rendered and file is valid
-                if rendered_path and rendered_path.exists() and rendered_path.stat().st_size > 0:
+                # Skip if already rendered and file is valid AND rendered_layout_mode matches
+                if (rendered_path and rendered_path.exists() and rendered_path.stat().st_size > 0
+                        and clip.get("rendered_layout_mode") == clip.get("layout_mode")):
                     logger.info("Render checkpoint: Clip %s already rendered at %s", cid, rendered_path.name)
                     continue
 

@@ -9,14 +9,18 @@ import json
 import time
 import logging
 import threading
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
-from dispatch.config import DEFAULT_PUBLISH_MODE, GEMINI_API_KEY
+from dispatch.config import DEFAULT_PUBLISH_MODE, GEMINI_API_KEY, PROCESSING_DIR
+from dispatch.video_engine.renderer import render_clip
+from dispatch.captions import group_words_into_captions, export_to_ass
 from dispatch.ai_clips.highlight_finder import (
     call_gemini_generate_content,
     validate_and_filter_candidates,
+    transliterate_segments_to_hinglish,
     MAX_HIGHLIGHTS_PER_CHUNK,
 )
 from dispatch.ai_clips.prompt_templates import HIGHLIGHT_SYSTEM_PROMPT, build_highlight_user_prompt
@@ -105,7 +109,7 @@ class HighlightWorker:
                 logger.error("Error in highlight worker cycle: %s", e)
 
     def process_pending(self) -> List[Dict[str, Any]]:
-        """Scan DB for items requiring highlight extraction."""
+        """Scan DB for items requiring highlight extraction or unrendered clips."""
         with self._lock:
             processed = []
             pending_items = db.list_youtube_inbox(status="TRANSCRIBED", limit=20)
@@ -129,6 +133,33 @@ class HighlightWorker:
                 except Exception as e:
                     logger.error("Error processing highlights for %s: %s", video_id, e)
 
+            # Also verify and auto-render any existing CLIPS_DEFINED items
+            defined_items = db.list_youtube_inbox(status="CLIPS_DEFINED", limit=10)
+            for item in defined_items:
+                video_id = item["video_id"]
+                try:
+                    chunk_id, session_id, segments, duration = self._resolve_chunk_and_transcript(video_id, item)
+                    with db.get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT id FROM clips WHERE chunk_id = ?", (chunk_id,))
+                        rows = cursor.fetchall()
+                        clip_ids = [r["id"] for r in rows] if rows else []
+
+                    local_path_str = item.get("local_video_path")
+                    src_path = Path(local_path_str) if local_path_str else None
+                    if not src_path or not src_path.exists():
+                        if chunk_id:
+                            chk = db.get_chunk_by_id(chunk_id)
+                            if chk and chk.get("filepath"):
+                                cp = Path(chk["filepath"])
+                                if cp.exists():
+                                    src_path = cp
+
+                    self._render_clips_for_video(video_id, clip_ids, segments, src_path)
+                    db.update_youtube_video(video_id=video_id, status="COMPLETED")
+                except Exception as e:
+                    logger.error("Error rendering CLIPS_DEFINED item %s: %s", video_id, e)
+
             return processed
 
     def _resolve_chunk_and_transcript(self, video_id: str, item: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], List[Dict[str, Any]], float]:
@@ -136,7 +167,7 @@ class HighlightWorker:
         file_hash = f"yt_{video_id}"
         chunk = db.get_chunk_by_file_hash(file_hash)
         chunk_id = chunk["id"] if chunk else None
-        session_id = chunk.get("session_id") if chunk else None
+        session_id = (chunk.get("session_id") if chunk else None) or item.get("session_id")
         duration = float(item.get("duration", 0.0) or 0.0)
 
         if chunk and chunk.get("duration"):
@@ -165,6 +196,70 @@ class HighlightWorker:
 
         return chunk_id, session_id, segments, duration
 
+    def _render_clips_for_video(
+        self,
+        video_id: str,
+        saved_ids: List[str],
+        segments: List[Dict[str, Any]],
+        source_video_path: Optional[Path]
+    ):
+        """Render candidate clips with Roman Hinglish subtitles and FFmpeg."""
+        if not saved_ids:
+            return
+
+        for clip_id in saved_ids:
+            clip = db.get_clip_by_id(clip_id)
+            if not clip:
+                continue
+
+            c_start = float(clip["start_time"])
+            c_end = float(clip["end_time"])
+            c_layout = clip.get("layout_mode", "fit_blur")
+
+            # Check if clip is already rendered and non-empty
+            if clip.get("video_path"):
+                vp = Path(clip["video_path"])
+                if vp.exists() and vp.stat().st_size > 0:
+                    logger.debug("Clip %s already rendered (%s). Skipping duplicate render.", clip_id, vp.name)
+                    continue
+
+            # Filter segments covering this clip
+            clip_segs = [s for s in segments if s.get("end", 0.0) > c_start and s.get("start", 0.0) < c_end]
+            clean_segs = transliterate_segments_to_hinglish(clip_segs)
+
+            # Generate and cache canonical CaptionTrack
+            try:
+                track = group_words_into_captions(
+                    raw_segments=clean_segs,
+                    clip_start=c_start,
+                    clip_end=c_end,
+                    clip_id=clip_id,
+                    preset_id="yellow_pop"
+                )
+                db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
+                ass_path = PROCESSING_DIR / f"{clip_id}.ass"
+                export_to_ass(track, ass_path)
+            except Exception as e:
+                logger.warning("Failed to prepare captions for clip %s: %s", clip_id, e)
+
+            # FFmpeg render
+            if source_video_path and source_video_path.exists():
+                try:
+                    logger.info("Auto-rendering clip %s (%.1fs - %.1fs) with FFmpeg...", clip_id, c_start, c_end)
+                    render_clip(
+                        source_video=source_video_path,
+                        clip_id=clip_id,
+                        start_time=c_start,
+                        end_time=c_end,
+                        aspect_ratio=None,
+                        layout_mode=c_layout,
+                        segments=clean_segs
+                    )
+                except Exception as e:
+                    logger.error("Auto-render failed for clip %s: %s", clip_id, e)
+            else:
+                logger.warning("Source video file not found on disk for auto-rendering clip %s", clip_id)
+
     def process_video_highlights(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Run Pillar 3 highlight analysis pipeline for a single video.
         
@@ -173,15 +268,15 @@ class HighlightWorker:
           2. Zero-speech: marks CLIPS_DEFINED with 0 clips directly.
           3. Call Gemini (strictly fails on error, never silent heuristic).
           4. Candidate validation and deduplication.
-          5. Save clip definitions and transition to CLIPS_DEFINED in single transaction.
+          5. Save clip definitions, transliterate to Roman Hinglish, and auto-render with FFmpeg -> COMPLETED.
         """
         item = db.get_youtube_video(video_id)
         if not item:
             logger.warning("Video %s not found in inbox. Skipping.", video_id)
             return None
 
-        if item.get("status") != "TRANSCRIBED":
-            logger.info("Video %s is in status '%s', expected 'TRANSCRIBED'. Skipping.",
+        if item.get("status") not in ("TRANSCRIBED", "CLIPS_DEFINED"):
+            logger.info("Video %s is in status '%s', expected 'TRANSCRIBED' or 'CLIPS_DEFINED'. Skipping.",
                         video_id, item.get("status"))
             return None
 
@@ -193,26 +288,37 @@ class HighlightWorker:
 
         # Handle zero-speech / empty transcript immediately
         if not segments or not any(s.get("text", "").strip() for s in segments):
-            logger.info("No speech detected for %s. Marking CLIPS_DEFINED with 0 clips.", video_id)
+            logger.info("No speech detected for %s. Marking COMPLETED with 0 clips.", video_id)
             db.save_clip_definitions(
                 chunk_id=chunk_id,
                 session_id=session_id,
                 video_id=video_id,
                 clip_defs=[]
             )
+            db.update_youtube_video(video_id=video_id, status="COMPLETED")
             return {
                 "video_id": video_id,
-                "status": "CLIPS_DEFINED",
+                "status": "COMPLETED",
                 "clips_count": 0,
                 "model_used": None
             }
 
-        # Format transcript lines with timestamps for LLM
+        # Format transcript lines with timestamps and pause markers for LLM
         transcript_lines = []
+        prev_end = 0.0
         for s in segments:
-            start_m, start_s = divmod(s.get("start", 0.0), 60)
-            end_m, end_s = divmod(s.get("end", 0.0), 60)
+            s_start = float(s.get("start", 0.0))
+            s_end = float(s.get("end", 0.0))
+            if prev_end > 0.0:
+                pause_gap = s_start - prev_end
+                if pause_gap >= 0.5:
+                    transcript_lines.append(f"[PAUSE: {pause_gap:.1f}s]")
+
+            start_m, start_s = divmod(s_start, 60)
+            end_m, end_s = divmod(s_end, 60)
             transcript_lines.append(f"[{int(start_m):02d}:{start_s:05.2f} -> {int(end_m):02d}:{end_s:05.2f}] {s.get('text', '')}")
+            prev_end = max(prev_end, s_end)
+
         transcript_text = "\n".join(transcript_lines)
 
         negative_context = get_negative_feedback_prompt()
@@ -243,23 +349,37 @@ class HighlightWorker:
                 publish_mode=publish_mode
             )
 
-            # Reset error fields on success
+            # Resolve source video file path for auto-rendering
+            local_path_str = item.get("local_video_path")
+            src_path = Path(local_path_str) if local_path_str else None
+            if not src_path or not src_path.exists():
+                if chunk_id:
+                    chk = db.get_chunk_by_id(chunk_id)
+                    if chk and chk.get("filepath"):
+                        cp = Path(chk["filepath"])
+                        if cp.exists():
+                            src_path = cp
+
+            # Automatic FFmpeg rendering with Roman Hinglish subtitles
+            self._render_clips_for_video(video_id, saved_ids, segments, src_path)
+
+            # Reset error fields on success and transition to COMPLETED
             db.update_youtube_video(
                 video_id=video_id,
-                status="CLIPS_DEFINED",
+                status="COMPLETED",
                 ai_attempt_count=0,
                 next_ai_attempt_at="",
                 last_ai_error=""
             )
 
             logger.info(
-                "Pillar 3 Highlight SUCCESS for %s -> CLIPS_DEFINED (Model: %s, Raw: %d, Accepted: %d, ClipIDs: %s)",
+                "Pillar 3 Highlight SUCCESS for %s -> COMPLETED (Model: %s, Raw: %d, Accepted/Rendered: %d, ClipIDs: %s)",
                 video_id, model_used, len(raw_clips), len(saved_ids), saved_ids
             )
 
             return {
                 "video_id": video_id,
-                "status": "CLIPS_DEFINED",
+                "status": "COMPLETED",
                 "clips_count": len(saved_ids),
                 "clip_ids": saved_ids,
                 "model_used": model_used

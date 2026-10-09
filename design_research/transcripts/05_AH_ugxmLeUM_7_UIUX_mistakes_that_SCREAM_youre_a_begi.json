@@ -1,0 +1,1045 @@
+{
+  "meta": {
+    "id": "AH_ugxmLeUM",
+    "url": "https://www.youtube.com/watch?v=AH_ugxmLeUM",
+    "title": "7 UI/UX mistakes that SCREAM you’re a beginner",
+    "uploader": "Kole Jain",
+    "duration": 437,
+    "description": "If you're just getting into design, these are the 7 mistakes you'll want to avoid at all costs. We'll go through what those UI mistakes look like, and how to fix them, without changing your entire design.\n\nEnjoyed? Subscribe for more!\n\nFigma Link:\nhttps://www.kolejain.com/resources?scrollTo=beginner-ui\n\nTimestamps:\n0:00 Intro\n0:23 User Flow\n1:06 Overusing Effects\n1:55 Spacing\n2:48 Inconsistent Components\n3:34 Icons\n4:56 Redundant Elements\n5:32 Interactive Feedback\n6:22 Charts\n6:58 Outro",
+    "slug": "7_UIUX_mistakes_that_SCREAM_youre_a_begi",
+    "snippets_count": 206,
+    "total_words": 1380
+  },
+  "snippets": [
+    {
+      "text": "I've spent years making bad designs, so",
+      "start": 0.24,
+      "duration": 3.679
+    },
+    {
+      "text": "I can tell you exactly what makes",
+      "start": 2.399,
+      "duration": 3.201
+    },
+    {
+      "text": "something look like it was made by a",
+      "start": 3.919,
+      "duration": 3.121
+    },
+    {
+      "text": "beginner. By the end of this video,",
+      "start": 5.6,
+      "duration": 3.2
+    },
+    {
+      "text": "you'll be able to spot those mistakes",
+      "start": 7.04,
+      "duration": 4.4
+    },
+    {
+      "text": "instantly and fix them just as fast.",
+      "start": 8.8,
+      "duration": 4.48
+    },
+    {
+      "text": "We'll look at real examples, before and",
+      "start": 11.44,
+      "duration": 4.079
+    },
+    {
+      "text": "afters, and easy ways to improve a UI",
+      "start": 13.28,
+      "duration": 4.079
+    },
+    {
+      "text": "without starting from scratch. We're",
+      "start": 15.519,
+      "duration": 4.161
+    },
+    {
+      "text": "going to redesign this simple recipe app",
+      "start": 17.359,
+      "duration": 4.08
+    },
+    {
+      "text": "one mistake at a time until it looks",
+      "start": 19.68,
+      "duration": 4.08
+    },
+    {
+      "text": "polished and production ready. Mistake",
+      "start": 21.439,
+      "duration": 4.641
+    },
+    {
+      "text": "number one, user flow. Let's start with",
+      "start": 23.76,
+      "duration": 4.72
+    },
+    {
+      "text": "something that quietly ruins your UX,",
+      "start": 26.08,
+      "duration": 4.72
+    },
+    {
+      "text": "user flow. Here's our allergy screen",
+      "start": 28.48,
+      "duration": 4.8
+    },
+    {
+      "text": "with six preset options, but no search",
+      "start": 30.8,
+      "duration": 4.08
+    },
+    {
+      "text": "bar if someone's allergic to something",
+      "start": 33.28,
+      "duration": 4.0
+    },
+    {
+      "text": "else. We also don't have a skip button",
+      "start": 34.88,
+      "duration": 4.16
+    },
+    {
+      "text": "either. What if the user doesn't have",
+      "start": 37.28,
+      "duration": 3.84
+    },
+    {
+      "text": "any allergies? These are things you will",
+      "start": 39.04,
+      "duration": 3.679
+    },
+    {
+      "text": "miss if you don't plan out your flow,",
+      "start": 41.12,
+      "duration": 4.08
+    },
+    {
+      "text": "but users, they'll feel it instantly.",
+      "start": 42.719,
+      "duration": 4.0
+    },
+    {
+      "text": "So, even something as simple as",
+      "start": 45.2,
+      "duration": 3.519
+    },
+    {
+      "text": "sketching boxes on paper helps you catch",
+      "start": 46.719,
+      "duration": 4.401
+    },
+    {
+      "text": "major gaps early on. And it's not just",
+      "start": 48.719,
+      "duration": 4.561
+    },
+    {
+      "text": "all about big stuff. Little touches like",
+      "start": 51.12,
+      "duration": 4.48
+    },
+    {
+      "text": "a filter icon on the search bar or a",
+      "start": 53.28,
+      "duration": 4.88
+    },
+    {
+      "text": "save button up top go a long way. The",
+      "start": 55.6,
+      "duration": 4.24
+    },
+    {
+      "text": "most commonly missed elements,",
+      "start": 58.16,
+      "duration": 3.6
+    },
+    {
+      "text": "navigation links, hidden states, and",
+      "start": 59.84,
+      "duration": 4.399
+    },
+    {
+      "text": "dynamic interactions like button hovers",
+      "start": 61.76,
+      "duration": 4.88
+    },
+    {
+      "text": "or micro interactions. Mistake number",
+      "start": 64.239,
+      "duration": 5.441
+    },
+    {
+      "text": "two, overusing effects. Early on, I was",
+      "start": 66.64,
+      "duration": 5.68
+    },
+    {
+      "text": "addicted to visual effects. Shadows,",
+      "start": 69.68,
+      "duration": 5.2
+    },
+    {
+      "text": "glows, gradients, you name it. But the",
+      "start": 72.32,
+      "duration": 4.159
+    },
+    {
+      "text": "truth, overusing them can make your",
+      "start": 74.88,
+      "duration": 3.919
+    },
+    {
+      "text": "designs feel cluttered and amateur.",
+      "start": 76.479,
+      "duration": 4.161
+    },
+    {
+      "text": "Let's start with the gradient here. It's",
+      "start": 78.799,
+      "duration": 4.561
+    },
+    {
+      "text": "blue and green, and it's just not",
+      "start": 80.64,
+      "duration": 4.72
+    },
+    {
+      "text": "working. If you really need a gradient,",
+      "start": 83.36,
+      "duration": 4.16
+    },
+    {
+      "text": "stick to variations of the same color,",
+      "start": 85.36,
+      "duration": 4.32
+    },
+    {
+      "text": "like a darker or lighter green. But",
+      "start": 87.52,
+      "duration": 4.08
+    },
+    {
+      "text": "honestly, this would look way cleaner",
+      "start": 89.68,
+      "duration": 3.92
+    },
+    {
+      "text": "with no gradient at all. And that's",
+      "start": 91.6,
+      "duration": 4.32
+    },
+    {
+      "text": "usually the case. Now, let's talk drop",
+      "start": 93.6,
+      "duration": 4.159
+    },
+    {
+      "text": "shadows for a second. These Figma",
+      "start": 95.92,
+      "duration": 4.239
+    },
+    {
+      "text": "defaults are way too harsh. Instead of",
+      "start": 97.759,
+      "duration": 4.4
+    },
+    {
+      "text": "just lowering opacity, I change the",
+      "start": 100.159,
+      "duration": 4.241
+    },
+    {
+      "text": "entire shadow color, usually to a light",
+      "start": 102.159,
+      "duration": 4.28
+    },
+    {
+      "text": "gray, and increase the blur",
+      "start": 104.4,
+      "duration": 5.039
+    },
+    {
+      "text": "significantly. Or once again, remove the",
+      "start": 106.439,
+      "duration": 5.401
+    },
+    {
+      "text": "shadow completely. Because most of the",
+      "start": 109.439,
+      "duration": 4.881
+    },
+    {
+      "text": "time, less visual noise equals a better",
+      "start": 111.84,
+      "duration": 5.44
+    },
+    {
+      "text": "design. Mistake number three, spacing.",
+      "start": 114.32,
+      "duration": 5.2
+    },
+    {
+      "text": "Most beginner UIs are packed way too",
+      "start": 117.28,
+      "duration": 4.24
+    },
+    {
+      "text": "tight, like my old app design. So, I'll",
+      "start": 119.52,
+      "duration": 4.239
+    },
+    {
+      "text": "use two tools here, grids and auto",
+      "start": 121.52,
+      "duration": 4.4
+    },
+    {
+      "text": "layout to make it so much better. First,",
+      "start": 123.759,
+      "duration": 3.761
+    },
+    {
+      "text": "we'll set up a three column grid for",
+      "start": 125.92,
+      "duration": 3.52
+    },
+    {
+      "text": "this screen and two column grid here",
+      "start": 127.52,
+      "duration": 4.16
+    },
+    {
+      "text": "with these measurements. Now, just align",
+      "start": 129.44,
+      "duration": 4.0
+    },
+    {
+      "text": "elements to the grid as closely as",
+      "start": 131.68,
+      "duration": 3.68
+    },
+    {
+      "text": "possible. If something needs to break",
+      "start": 133.44,
+      "duration": 3.92
+    },
+    {
+      "text": "the grid slightly, like these elements,",
+      "start": 135.36,
+      "duration": 3.84
+    },
+    {
+      "text": "just leave it as is if it still feels",
+      "start": 137.36,
+      "duration": 4.239
+    },
+    {
+      "text": "balanced. Next, for stack content like",
+      "start": 139.2,
+      "duration": 4.32
+    },
+    {
+      "text": "this, increase the vertical spacing to",
+      "start": 141.599,
+      "duration": 3.921
+    },
+    {
+      "text": "let things breathe and group naturally,",
+      "start": 143.52,
+      "duration": 3.6
+    },
+    {
+      "text": "especially on mobile screens, you'll",
+      "start": 145.52,
+      "duration": 3.68
+    },
+    {
+      "text": "need more space than you think. Now,",
+      "start": 147.12,
+      "duration": 3.92
+    },
+    {
+      "text": "check out these cards and chips. The",
+      "start": 149.2,
+      "duration": 4.399
+    },
+    {
+      "text": "layouts are pretty wonky. Perfect time",
+      "start": 151.04,
+      "duration": 4.96
+    },
+    {
+      "text": "to use auto layout. Turn off vertical",
+      "start": 153.599,
+      "duration": 4.72
+    },
+    {
+      "text": "trim for pixel perfect control and",
+      "start": 156.0,
+      "duration": 4.64
+    },
+    {
+      "text": "adjust spacing like this. Repeat this",
+      "start": 158.319,
+      "duration": 4.0
+    },
+    {
+      "text": "across your UI to keep spacing",
+      "start": 160.64,
+      "duration": 4.56
+    },
+    {
+      "text": "consistent and clean, which is a perfect",
+      "start": 162.319,
+      "duration": 4.881
+    },
+    {
+      "text": "segue into the next mistake most",
+      "start": 165.2,
+      "duration": 4.16
+    },
+    {
+      "text": "designers make. Mistake number four,",
+      "start": 167.2,
+      "duration": 4.8
+    },
+    {
+      "text": "inconsistent components like spacing.",
+      "start": 169.36,
+      "duration": 4.72
+    },
+    {
+      "text": "This one kills me since it's just so",
+      "start": 172.0,
+      "duration": 3.92
+    },
+    {
+      "text": "easy to fix. You'll notice throughout",
+      "start": 174.08,
+      "duration": 3.68
+    },
+    {
+      "text": "our design, we have all sorts of",
+      "start": 175.92,
+      "duration": 4.08
+    },
+    {
+      "text": "different corner radiuses and components",
+      "start": 177.76,
+      "duration": 4.72
+    },
+    {
+      "text": "like this back and skip button that are",
+      "start": 180.0,
+      "duration": 4.08
+    },
+    {
+      "text": "exactly the same but designed",
+      "start": 182.48,
+      "duration": 3.6
+    },
+    {
+      "text": "differently, which just makes the design",
+      "start": 184.08,
+      "duration": 4.879
+    },
+    {
+      "text": "feel amateur. Instead, let's make a few",
+      "start": 186.08,
+      "duration": 4.56
+    },
+    {
+      "text": "changes. First, we'll make the two",
+      "start": 188.959,
+      "duration": 3.681
+    },
+    {
+      "text": "search bars identical other than the",
+      "start": 190.64,
+      "duration": 4.0
+    },
+    {
+      "text": "prompting text. We'll set the corner",
+      "start": 192.64,
+      "duration": 4.08
+    },
+    {
+      "text": "radius of all smaller components to be",
+      "start": 194.64,
+      "duration": 4.319
+    },
+    {
+      "text": "10 pixels. This is an important one that",
+      "start": 196.72,
+      "duration": 4.32
+    },
+    {
+      "text": "most designers miss. And of course,",
+      "start": 198.959,
+      "duration": 3.761
+    },
+    {
+      "text": "we'll update the skip button and back",
+      "start": 201.04,
+      "duration": 3.919
+    },
+    {
+      "text": "button to match in size, corner radius,",
+      "start": 202.72,
+      "duration": 4.799
+    },
+    {
+      "text": "and style. Being consistent means using",
+      "start": 204.959,
+      "duration": 4.481
+    },
+    {
+      "text": "styles for colors, variables for",
+      "start": 207.519,
+      "duration": 3.681
+    },
+    {
+      "text": "measurements, and components for UI",
+      "start": 209.44,
+      "duration": 3.439
+    },
+    {
+      "text": "elements to really bring your design",
+      "start": 211.2,
+      "duration": 5.36
+    },
+    {
+      "text": "together. Mistake number five, icons. I",
+      "start": 212.879,
+      "duration": 5.92
+    },
+    {
+      "text": "think people underestimate how much good",
+      "start": 216.56,
+      "duration": 4.399
+    },
+    {
+      "text": "icons do for a design and how",
+      "start": 218.799,
+      "duration": 5.041
+    },
+    {
+      "text": "detrimental bad icons are. First of all,",
+      "start": 220.959,
+      "duration": 5.36
+    },
+    {
+      "text": "we have no icons on these cards here,",
+      "start": 223.84,
+      "duration": 4.56
+    },
+    {
+      "text": "which forces users to read more and",
+      "start": 226.319,
+      "duration": 4.241
+    },
+    {
+      "text": "slows down the browsing process. Let's",
+      "start": 228.4,
+      "duration": 4.24
+    },
+    {
+      "text": "add in some good icons and replace the",
+      "start": 230.56,
+      "duration": 5.039
+    },
+    {
+      "text": "save text. Then up above, we have icons,",
+      "start": 232.64,
+      "duration": 4.879
+    },
+    {
+      "text": "but they're mismatched in fill, line",
+      "start": 235.599,
+      "duration": 4.321
+    },
+    {
+      "text": "width, and style. We can fix this by",
+      "start": 237.519,
+      "duration": 4.561
+    },
+    {
+      "text": "using the same library of icons like",
+      "start": 239.92,
+      "duration": 4.56
+    },
+    {
+      "text": "flat icons. On their website, select",
+      "start": 242.08,
+      "duration": 4.56
+    },
+    {
+      "text": "interface icons and then sort by stroke,",
+      "start": 244.48,
+      "duration": 4.399
+    },
+    {
+      "text": "width, and corner to get some consistent",
+      "start": 246.64,
+      "duration": 4.08
+    },
+    {
+      "text": "results. Make sure when you download to",
+      "start": 248.879,
+      "duration": 4.401
+    },
+    {
+      "text": "grab SVG for the best results. If you",
+      "start": 250.72,
+      "duration": 4.96
+    },
+    {
+      "text": "want to choose a Figma plugin instead, I",
+      "start": 253.28,
+      "duration": 5.12
+    },
+    {
+      "text": "like feather icons and phosphor icons.",
+      "start": 255.68,
+      "duration": 4.559
+    },
+    {
+      "text": "Finally, we have a fair amount of icons",
+      "start": 258.4,
+      "duration": 4.079
+    },
+    {
+      "text": "down here without labels. If the icons",
+      "start": 260.239,
+      "duration": 4.001
+    },
+    {
+      "text": "are wellknown enough, like the house,",
+      "start": 262.479,
+      "duration": 3.921
+    },
+    {
+      "text": "bookmark, and user, then you don't need",
+      "start": 264.24,
+      "duration": 4.239
+    },
+    {
+      "text": "to have anything, but for these two, a",
+      "start": 266.4,
+      "duration": 3.6
+    },
+    {
+      "text": "tool tip pop-up could make the",
+      "start": 268.479,
+      "duration": 3.841
+    },
+    {
+      "text": "onboarding process much smoother. Just",
+      "start": 270.0,
+      "duration": 4.0
+    },
+    {
+      "text": "try not to have bizarre icons",
+      "start": 272.32,
+      "duration": 4.48
+    },
+    {
+      "text": "everywhere. Finally, this is a very pro",
+      "start": 274.0,
+      "duration": 5.28
+    },
+    {
+      "text": "tip, but interestingly, it is okay to",
+      "start": 276.8,
+      "duration": 4.32
+    },
+    {
+      "text": "have different styles of icons in the",
+      "start": 279.28,
+      "duration": 3.68
+    },
+    {
+      "text": "same design, but only if they're",
+      "start": 281.12,
+      "duration": 3.76
+    },
+    {
+      "text": "visually separate. For example, these",
+      "start": 282.96,
+      "duration": 4.08
+    },
+    {
+      "text": "navbar icons are slightly different than",
+      "start": 284.88,
+      "duration": 4.0
+    },
+    {
+      "text": "the food icons, and those are different",
+      "start": 287.04,
+      "duration": 4.159
+    },
+    {
+      "text": "than our recipe icons, but it all works",
+      "start": 288.88,
+      "duration": 3.84
+    },
+    {
+      "text": "together since they're in separate areas",
+      "start": 291.199,
+      "duration": 3.601
+    },
+    {
+      "text": "of our design and used for different",
+      "start": 292.72,
+      "duration": 4.479
+    },
+    {
+      "text": "things. Mistake number six, redundant",
+      "start": 294.8,
+      "duration": 4.8
+    },
+    {
+      "text": "elements. Having redundant elements is",
+      "start": 297.199,
+      "duration": 4.081
+    },
+    {
+      "text": "actually a really common mistake,",
+      "start": 299.6,
+      "duration": 3.68
+    },
+    {
+      "text": "especially as the trend of having stuff",
+      "start": 301.28,
+      "duration": 4.08
+    },
+    {
+      "text": "everywhere takes over. Looking at this",
+      "start": 303.28,
+      "duration": 3.84
+    },
+    {
+      "text": "screen, we can get rid of this arrow",
+      "start": 305.36,
+      "duration": 3.92
+    },
+    {
+      "text": "since we'll be able to swipe on mobile.",
+      "start": 307.12,
+      "duration": 4.24
+    },
+    {
+      "text": "And same idea down below. We can also",
+      "start": 309.28,
+      "duration": 4.0
+    },
+    {
+      "text": "get rid of this arrow since it's really",
+      "start": 311.36,
+      "duration": 3.839
+    },
+    {
+      "text": "just visual clutter and dim down the",
+      "start": 313.28,
+      "duration": 3.68
+    },
+    {
+      "text": "color of the button. You could probably",
+      "start": 315.199,
+      "duration": 3.601
+    },
+    {
+      "text": "argue that these arrows aren't needed",
+      "start": 316.96,
+      "duration": 3.92
+    },
+    {
+      "text": "either, but we are going to keep those.",
+      "start": 318.8,
+      "duration": 4.0
+    },
+    {
+      "text": "Finally, the stroke on these elements is",
+      "start": 320.88,
+      "duration": 3.92
+    },
+    {
+      "text": "really not needed. If you are worried",
+      "start": 322.8,
+      "duration": 4.08
+    },
+    {
+      "text": "about contrast ratios, dimming it down",
+      "start": 324.8,
+      "duration": 4.32
+    },
+    {
+      "text": "significantly is a good option, too, but",
+      "start": 326.88,
+      "duration": 3.84
+    },
+    {
+      "text": "we'll just rip them straight out.",
+      "start": 329.12,
+      "duration": 3.519
+    },
+    {
+      "text": "Mistake number seven, interactive",
+      "start": 330.72,
+      "duration": 3.919
+    },
+    {
+      "text": "feedback. We've covered overusing",
+      "start": 332.639,
+      "duration": 3.601
+    },
+    {
+      "text": "effects. So, now let's cover the",
+      "start": 334.639,
+      "duration": 3.441
+    },
+    {
+      "text": "underuse of different interactive",
+      "start": 336.24,
+      "duration": 3.519
+    },
+    {
+      "text": "effects. For example, if we're",
+      "start": 338.08,
+      "duration": 3.2
+    },
+    {
+      "text": "navigating through our flow, but it",
+      "start": 339.759,
+      "duration": 3.28
+    },
+    {
+      "text": "takes a split second longer for the next",
+      "start": 341.28,
+      "duration": 3.759
+    },
+    {
+      "text": "screen to load, it looks like we haven't",
+      "start": 343.039,
+      "duration": 4.16
+    },
+    {
+      "text": "even clicked on the button at all. But",
+      "start": 345.039,
+      "duration": 3.761
+    },
+    {
+      "text": "if we make it grayed out when we click",
+      "start": 347.199,
+      "duration": 3.601
+    },
+    {
+      "text": "on it, we've added some interaction and",
+      "start": 348.8,
+      "duration": 3.92
+    },
+    {
+      "text": "it shows the user that the next screen",
+      "start": 350.8,
+      "duration": 4.239
+    },
+    {
+      "text": "is coming. Even better, we could add a",
+      "start": 352.72,
+      "duration": 4.24
+    },
+    {
+      "text": "loading wheel if it's really taking a",
+      "start": 355.039,
+      "duration": 3.921
+    },
+    {
+      "text": "long time. Another good example is",
+      "start": 356.96,
+      "duration": 4.079
+    },
+    {
+      "text": "clicking on this save icon. Filling it",
+      "start": 358.96,
+      "duration": 3.92
+    },
+    {
+      "text": "in is a great first step, but we could",
+      "start": 361.039,
+      "duration": 4.481
+    },
+    {
+      "text": "also add a red dot to our save tab. So,",
+      "start": 362.88,
+      "duration": 4.319
+    },
+    {
+      "text": "when we click on the icon, we get it",
+      "start": 365.52,
+      "duration": 3.519
+    },
+    {
+      "text": "filled in and it's clear to the user",
+      "start": 367.199,
+      "duration": 3.681
+    },
+    {
+      "text": "that there's a new recipe added to the",
+      "start": 369.039,
+      "duration": 4.241
+    },
+    {
+      "text": "save tab. We've actually made an entire",
+      "start": 370.88,
+      "duration": 4.72
+    },
+    {
+      "text": "video just about interactive feedback",
+      "start": 373.28,
+      "duration": 4.479
+    },
+    {
+      "text": "and micro interactions, so check out",
+      "start": 375.6,
+      "duration": 4.24
+    },
+    {
+      "text": "that video afterwards to see some really",
+      "start": 377.759,
+      "duration": 4.72
+    },
+    {
+      "text": "smooth animations. Bonus mistake number",
+      "start": 379.84,
+      "duration": 5.199
+    },
+    {
+      "text": "eight, charts. This is a bonus tip since",
+      "start": 382.479,
+      "duration": 4.481
+    },
+    {
+      "text": "it has nothing to do with our recipe",
+      "start": 385.039,
+      "duration": 4.321
+    },
+    {
+      "text": "app, but charts are so often messed up",
+      "start": 386.96,
+      "duration": 4.239
+    },
+    {
+      "text": "by overdesigning the thing that I",
+      "start": 389.36,
+      "duration": 3.36
+    },
+    {
+      "text": "thought I should make a point to mention",
+      "start": 391.199,
+      "duration": 3.84
+    },
+    {
+      "text": "it. I have two charts here. Which one do",
+      "start": 392.72,
+      "duration": 4.0
+    },
+    {
+      "text": "you think I got from Dribble? The one on",
+      "start": 395.039,
+      "duration": 3.841
+    },
+    {
+      "text": "the right. Yes. And it's basically",
+      "start": 396.72,
+      "duration": 4.24
+    },
+    {
+      "text": "impossible to read without any vertical",
+      "start": 398.88,
+      "duration": 4.159
+    },
+    {
+      "text": "axis. And even if we had a vertical",
+      "start": 400.96,
+      "duration": 3.92
+    },
+    {
+      "text": "axis, it's hard to tell where the bar",
+      "start": 403.039,
+      "duration": 3.921
+    },
+    {
+      "text": "ends with a rounded top. And then there",
+      "start": 404.88,
+      "duration": 4.56
+    },
+    {
+      "text": "are 16 bars here, but only 7 days of the",
+      "start": 406.96,
+      "duration": 4.799
+    },
+    {
+      "text": "week. Why would you do that? Whereas the",
+      "start": 409.44,
+      "duration": 4.24
+    },
+    {
+      "text": "one on the left is simple, definitely",
+      "start": 411.759,
+      "duration": 4.401
+    },
+    {
+      "text": "less aesthetic, but conveys so much more",
+      "start": 413.68,
+      "duration": 4.959
+    },
+    {
+      "text": "useful information to the user. And that",
+      "start": 416.16,
+      "duration": 4.159
+    },
+    {
+      "text": "is everything you'll need to start",
+      "start": 418.639,
+      "duration": 3.521
+    },
+    {
+      "text": "spotting and correcting beginner",
+      "start": 420.319,
+      "duration": 3.681
+    },
+    {
+      "text": "mistakes. The Figma file with the",
+      "start": 422.16,
+      "duration": 4.08
+    },
+    {
+      "text": "mistakes and the full app is in the link",
+      "start": 424.0,
+      "duration": 4.16
+    },
+    {
+      "text": "in description. Other than that, thank",
+      "start": 426.24,
+      "duration": 3.44
+    },
+    {
+      "text": "you so much for watching and I'll see",
+      "start": 428.16,
+      "duration": 3.38
+    },
+    {
+      "text": "you in the next one.",
+      "start": 429.68,
+      "duration": 8.79
+    },
+    {
+      "text": "[Music]",
+      "start": 431.54,
+      "duration": 6.93
+    }
+  ]
+}

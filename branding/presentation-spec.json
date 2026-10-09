@@ -1,0 +1,30 @@
+{
+  "brand": "Dispatch",
+  "tagline": "Autonomous Personal Content Engine",
+  "brief": "Continuous mobile camera capture with instant cloud/LAN sync, automated faster-whisper transcription, Gemini AI highlight extraction, 9:16 vertical re-framing with karaoke captions, and autonomous multi-platform publishing.",
+  "adjectives": ["swift", "autonomous", "precision", "engineered"],
+  "industry": "software",
+  "mockups": ["app-icon", "website", "terminal", "readme", "social", "favicon-tab"],
+  "brand_color": "#2563EB",
+  "tile_color": "#070A0F",
+  "greyscale": false,
+  "final": true,
+  "round": 1,
+  "concepts": [
+    {
+      "name": "Velocity D",
+      "symbol": "master/dispatch-symbol.svg",
+      "lockup": "master/dispatch-lockup-horizontal.svg",
+      "avatar": "dist/dispatch-symbol-app-icon.svg",
+      "symbol_on_dark": "dist/dispatch-symbol-white.svg",
+      "lockup_on_dark": "dist/dispatch-lockup-horizontal-white.svg",
+      "idea": "Muscular architectural capital D with an embedded forward play / dispatch chevron in negative space.",
+      "rationale": [
+        "Immediate letterform recognition combined with universal video play signifier",
+        "Engineered with 30-degree isometric angles and 100/100 production-readiness geometry",
+        "Robust 44px walls that scale effortlessly from 16px favicons to high-definition launcher icons"
+      ]
+    }
+  ],
+  "recommendation": "Velocity D is the definitive brand mark for Dispatch: bold, unmistakably engineered, and built to anchor both mobile capture and PC media pipeline experiences."
+}

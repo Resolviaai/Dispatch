@@ -1,0 +1,3145 @@
+{
+  "meta": {
+    "id": "wLJ40GV2XEc",
+    "url": "https://www.youtube.com/watch?v=wLJ40GV2XEc",
+    "title": "Top UI/UX Design Tips - How to Design a Great Bottom Mobile Navigation Bar",
+    "uploader": "uxpeak",
+    "duration": 1426,
+    "description": "💎 Get the UI/UX Playbook: https://www.uxpeak.com/pages/playbook\n\nHello and welcome back to our series of “Top UI/UX Tips & Tricks Every UI Designer Needs to Know About.” Today's lesson will be focused on how to design a great mobile navigation bar. 🔥 This is the best video that exists on on this topic. You will learn the best UI design tips that you can apply instantly to design a great mobile navigation bar.\n\nWhether you’re a seasoned pro or just starting out in UI/UX design, these UI and UX de",
+    "slug": "Top_UIUX_Design_Tips_-_How_to_Design_a_G",
+    "snippets_count": 626,
+    "total_words": 4003
+  },
+  "snippets": [
+    {
+      "text": "If your bottom navigation looks like",
+      "start": 0.08,
+      "duration": 5.52
+    },
+    {
+      "text": "this or this or even this, you need to",
+      "start": 1.76,
+      "duration": 6.159
+    },
+    {
+      "text": "watch this video because right now your",
+      "start": 5.6,
+      "duration": 5.28
+    },
+    {
+      "text": "users are probably suffering. Every time",
+      "start": 7.919,
+      "duration": 5.441
+    },
+    {
+      "text": "they open your app, they feel like this.",
+      "start": 10.88,
+      "duration": 4.639
+    },
+    {
+      "text": "A bad bottom navigation doesn't just",
+      "start": 13.36,
+      "duration": 4.4
+    },
+    {
+      "text": "look messy and unappealing. It makes",
+      "start": 15.519,
+      "duration": 4.161
+    },
+    {
+      "text": "your app frustrating to use and",
+      "start": 17.76,
+      "duration": 4.16
+    },
+    {
+      "text": "confusing to navigate. And when that",
+      "start": 19.68,
+      "duration": 4.8
+    },
+    {
+      "text": "happens, users don't just get annoyed,",
+      "start": 21.92,
+      "duration": 4.88
+    },
+    {
+      "text": "they leave and find something better.",
+      "start": 24.48,
+      "duration": 4.559
+    },
+    {
+      "text": "But here's the good news. Fixing this is",
+      "start": 26.8,
+      "duration": 4.319
+    },
+    {
+      "text": "easier than you think if you know the",
+      "start": 29.039,
+      "duration": 4.401
+    },
+    {
+      "text": "right UI design principles. And today",
+      "start": 31.119,
+      "duration": 4.321
+    },
+    {
+      "text": "I'm going to show you exactly how to",
+      "start": 33.44,
+      "duration": 4.08
+    },
+    {
+      "text": "design a bottom navigation bar that's",
+      "start": 35.44,
+      "duration": 4.639
+    },
+    {
+      "text": "not just good, but so intuitive and",
+      "start": 37.52,
+      "duration": 4.96
+    },
+    {
+      "text": "smooth that people will love using your",
+      "start": 40.079,
+      "duration": 4.32
+    },
+    {
+      "text": "app. These are the same design",
+      "start": 42.48,
+      "duration": 4.16
+    },
+    {
+      "text": "principles used by the best apps in the",
+      "start": 44.399,
+      "duration": 4.401
+    },
+    {
+      "text": "world. And by the end of this video,",
+      "start": 46.64,
+      "duration": 3.919
+    },
+    {
+      "text": "you'll know exactly how to design a",
+      "start": 48.8,
+      "duration": 5.2
+    },
+    {
+      "text": "bottom navbar that feels amazing. Oh,",
+      "start": 50.559,
+      "duration": 5.041
+    },
+    {
+      "text": "and stick around till the end because",
+      "start": 54.0,
+      "duration": 4.079
+    },
+    {
+      "text": "there's one big mistake that even pro",
+      "start": 55.6,
+      "duration": 5.119
+    },
+    {
+      "text": "designers keep making. And trust me, you",
+      "start": 58.079,
+      "duration": 5.921
+    },
+    {
+      "text": "don't want to be that designer. Now, one",
+      "start": 60.719,
+      "duration": 4.8
+    },
+    {
+      "text": "thing that can really take your bottom",
+      "start": 64.0,
+      "duration": 3.84
+    },
+    {
+      "text": "navigation to the next level is adding",
+      "start": 65.519,
+      "duration": 5.121
+    },
+    {
+      "text": "subtle micro interactions like this.",
+      "start": 67.84,
+      "duration": 5.04
+    },
+    {
+      "text": "Looks great, right? It's those small",
+      "start": 70.64,
+      "duration": 4.32
+    },
+    {
+      "text": "details that make an app feel polished",
+      "start": 72.88,
+      "duration": 4.879
+    },
+    {
+      "text": "and responsive. But before you get too",
+      "start": 74.96,
+      "duration": 4.88
+    },
+    {
+      "text": "excited about animations, there's",
+      "start": 77.759,
+      "duration": 5.0
+    },
+    {
+      "text": "something even more important. the",
+      "start": 79.84,
+      "duration": 4.88
+    },
+    {
+      "text": "fundamentals because if you don't get",
+      "start": 82.759,
+      "duration": 4.281
+    },
+    {
+      "text": "the basics right, no amount of fancy",
+      "start": 84.72,
+      "duration": 4.28
+    },
+    {
+      "text": "micro interactions will save your",
+      "start": 87.04,
+      "duration": 4.56
+    },
+    {
+      "text": "navigation. So, let's start from the",
+      "start": 89.0,
+      "duration": 4.84
+    },
+    {
+      "text": "ground up. When you open a mobile app,",
+      "start": 91.6,
+      "duration": 4.24
+    },
+    {
+      "text": "you'll usually see two types of",
+      "start": 93.84,
+      "duration": 4.4
+    },
+    {
+      "text": "navigation. Top navigation, which sits",
+      "start": 95.84,
+      "duration": 5.04
+    },
+    {
+      "text": "at the top, and bottom navigation, which",
+      "start": 98.24,
+      "duration": 4.559
+    },
+    {
+      "text": "sits at the bottom of your screen. They",
+      "start": 100.88,
+      "duration": 4.48
+    },
+    {
+      "text": "look similar on both iOS and Android.",
+      "start": 102.799,
+      "duration": 4.241
+    },
+    {
+      "text": "But here's something that confuses a lot",
+      "start": 105.36,
+      "duration": 4.96
+    },
+    {
+      "text": "of designers. On iOS, it's called a tab",
+      "start": 107.04,
+      "duration": 5.6
+    },
+    {
+      "text": "bar. On Android, it's called bottom",
+      "start": 110.32,
+      "duration": 4.56
+    },
+    {
+      "text": "navigation. Throughout this video, I'll",
+      "start": 112.64,
+      "duration": 4.0
+    },
+    {
+      "text": "just call it the bottom navigation bar",
+      "start": 114.88,
+      "duration": 3.919
+    },
+    {
+      "text": "to keep it simple. Now, a lot of",
+      "start": 116.64,
+      "duration": 3.759
+    },
+    {
+      "text": "designers think the bottom navigation",
+      "start": 118.799,
+      "duration": 4.081
+    },
+    {
+      "text": "bar is just buttons at the bottom, but",
+      "start": 120.399,
+      "duration": 5.121
+    },
+    {
+      "text": "the truth is it's so much more. It's",
+      "start": 122.88,
+      "duration": 4.48
+    },
+    {
+      "text": "actually the backbone of your app's",
+      "start": 125.52,
+      "duration": 4.239
+    },
+    {
+      "text": "usability. Here's why. Your bottom",
+      "start": 127.36,
+      "duration": 4.64
+    },
+    {
+      "text": "navigation bar represents the top level",
+      "start": 129.759,
+      "duration": 4.321
+    },
+    {
+      "text": "structure of your app. It tells users",
+      "start": 132.0,
+      "duration": 3.76
+    },
+    {
+      "text": "what's important and helps them move",
+      "start": 134.08,
+      "duration": 3.68
+    },
+    {
+      "text": "quickly between the core sections. And",
+      "start": 135.76,
+      "duration": 3.6
+    },
+    {
+      "text": "here's something you really need to",
+      "start": 137.76,
+      "duration": 5.36
+    },
+    {
+      "text": "understand. This is prime real estate.",
+      "start": 139.36,
+      "duration": 5.44
+    },
+    {
+      "text": "Your bottom navigation is one of the",
+      "start": 143.12,
+      "duration": 4.08
+    },
+    {
+      "text": "most tapped, most used areas in your",
+      "start": 144.8,
+      "duration": 6.32
+    },
+    {
+      "text": "entire app. So, every icon, every label,",
+      "start": 147.2,
+      "duration": 6.56
+    },
+    {
+      "text": "every micro interaction, you have to be",
+      "start": 151.12,
+      "duration": 4.88
+    },
+    {
+      "text": "strategic because a well-designed bottom",
+      "start": 153.76,
+      "duration": 4.24
+    },
+    {
+      "text": "navigation can make your app feel",
+      "start": 156.0,
+      "duration": 5.28
+    },
+    {
+      "text": "effortless. A bad one, it drives people",
+      "start": 158.0,
+      "duration": 6.0
+    },
+    {
+      "text": "away. So, how do you decide what to put",
+      "start": 161.28,
+      "duration": 4.72
+    },
+    {
+      "text": "in your bottom navigation bar? Let's",
+      "start": 164.0,
+      "duration": 4.8
+    },
+    {
+      "text": "break it down step by step. Tip:",
+      "start": 166.0,
+      "duration": 4.879
+    },
+    {
+      "text": "Prioritize the most important and",
+      "start": 168.8,
+      "duration": 4.48
+    },
+    {
+      "text": "frequently used screens or actions. The",
+      "start": 170.879,
+      "duration": 4.481
+    },
+    {
+      "text": "bottom navigation should only contain",
+      "start": 173.28,
+      "duration": 4.16
+    },
+    {
+      "text": "the most essential destinations in your",
+      "start": 175.36,
+      "duration": 4.64
+    },
+    {
+      "text": "app. The core features users interact",
+      "start": 177.44,
+      "duration": 5.079
+    },
+    {
+      "text": "with most often. Good candidates for",
+      "start": 180.0,
+      "duration": 5.599
+    },
+    {
+      "text": "bottomnav. Home, main feed, dashboard,",
+      "start": 182.519,
+      "duration": 5.72
+    },
+    {
+      "text": "or landing screen. Search, discover, if",
+      "start": 185.599,
+      "duration": 4.241
+    },
+    {
+      "text": "users frequently search or browse",
+      "start": 188.239,
+      "duration": 4.801
+    },
+    {
+      "text": "content. Add, create, if users regularly",
+      "start": 189.84,
+      "duration": 5.679
+    },
+    {
+      "text": "add posts, messages, or content.",
+      "start": 193.04,
+      "duration": 4.72
+    },
+    {
+      "text": "Messages, notifications. If social",
+      "start": 195.519,
+      "duration": 4.72
+    },
+    {
+      "text": "interaction is a big part of the app,",
+      "start": 197.76,
+      "duration": 4.88
+    },
+    {
+      "text": "profile, user account settings, history,",
+      "start": 200.239,
+      "duration": 5.321
+    },
+    {
+      "text": "and saved content. Bad candidates for",
+      "start": 202.64,
+      "duration": 5.84
+    },
+    {
+      "text": "bottomnav. Help. Fact. It needs to be in",
+      "start": 205.56,
+      "duration": 5.959
+    },
+    {
+      "text": "profile or side menu. Log out. No one",
+      "start": 208.48,
+      "duration": 4.56
+    },
+    {
+      "text": "logs out that frequently. Keep it",
+      "start": 211.519,
+      "duration": 4.481
+    },
+    {
+      "text": "elsewhere. Legal pages, privacy policy,",
+      "start": 213.04,
+      "duration": 5.36
+    },
+    {
+      "text": "terms, etc. Nobody needs these at their",
+      "start": 216.0,
+      "duration": 4.72
+    },
+    {
+      "text": "fingertips. Introducing elements like a",
+      "start": 218.4,
+      "duration": 4.559
+    },
+    {
+      "text": "back or forward button or even logos",
+      "start": 220.72,
+      "duration": 3.84
+    },
+    {
+      "text": "which are traditionally part of the top",
+      "start": 222.959,
+      "duration": 3.761
+    },
+    {
+      "text": "navigation in the bottom navigation bar",
+      "start": 224.56,
+      "duration": 4.64
+    },
+    {
+      "text": "is a practice best avoided. This",
+      "start": 226.72,
+      "duration": 4.72
+    },
+    {
+      "text": "approach aligns with Jacob's law which",
+      "start": 229.2,
+      "duration": 4.16
+    },
+    {
+      "text": "suggests that users spend most of their",
+      "start": 231.44,
+      "duration": 4.0
+    },
+    {
+      "text": "time on other websites or apps.",
+      "start": 233.36,
+      "duration": 4.079
+    },
+    {
+      "text": "Therefore, they prefer your site or app",
+      "start": 235.44,
+      "duration": 3.68
+    },
+    {
+      "text": "to work the same way as others they",
+      "start": 237.439,
+      "duration": 3.36
+    },
+    {
+      "text": "already know. Cluttering the bottom",
+      "start": 239.12,
+      "duration": 3.44
+    },
+    {
+      "text": "navigation with elements typically found",
+      "start": 240.799,
+      "duration": 4.481
+    },
+    {
+      "text": "at the top can confuse users as it goes",
+      "start": 242.56,
+      "duration": 4.64
+    },
+    {
+      "text": "against the familiar navigation patterns",
+      "start": 245.28,
+      "duration": 3.76
+    },
+    {
+      "text": "they're accustomed to. On the other",
+      "start": 247.2,
+      "duration": 5.119
+    },
+    {
+      "text": "hand, including a call toaction CTA",
+      "start": 249.04,
+      "duration": 5.279
+    },
+    {
+      "text": "button in the bottom navigation is a",
+      "start": 252.319,
+      "duration": 4.32
+    },
+    {
+      "text": "smart move. These buttons are usually",
+      "start": 254.319,
+      "duration": 4.16
+    },
+    {
+      "text": "placed in the center of prominence and",
+      "start": 256.639,
+      "duration": 4.641
+    },
+    {
+      "text": "ease of access. CTAs like create an",
+      "start": 258.479,
+      "duration": 6.081
+    },
+    {
+      "text": "order or post serve a dual purpose. They",
+      "start": 261.28,
+      "duration": 5.04
+    },
+    {
+      "text": "stand out to the user, encouraging",
+      "start": 264.56,
+      "duration": 3.76
+    },
+    {
+      "text": "action, and their central positioning",
+      "start": 266.32,
+      "duration": 4.08
+    },
+    {
+      "text": "makes them easily reachable, especially",
+      "start": 268.32,
+      "duration": 5.04
+    },
+    {
+      "text": "on larger devices. Tip: Understand who",
+      "start": 270.4,
+      "duration": 5.519
+    },
+    {
+      "text": "are your users before you design",
+      "start": 273.36,
+      "duration": 4.32
+    },
+    {
+      "text": "anything, especially your bottom",
+      "start": 275.919,
+      "duration": 3.681
+    },
+    {
+      "text": "navigation. You need to know who your",
+      "start": 277.68,
+      "duration": 4.079
+    },
+    {
+      "text": "users are, who's your target audience",
+      "start": 279.6,
+      "duration": 4.159
+    },
+    {
+      "text": "because this will shape everything about",
+      "start": 281.759,
+      "duration": 4.401
+    },
+    {
+      "text": "your design choices. Ask yourself, how",
+      "start": 283.759,
+      "duration": 4.16
+    },
+    {
+      "text": "comfortable are they with technology?",
+      "start": 286.16,
+      "duration": 3.84
+    },
+    {
+      "text": "How old are they? What problems are you",
+      "start": 287.919,
+      "duration": 4.321
+    },
+    {
+      "text": "helping them solve? What devices do they",
+      "start": 290.0,
+      "duration": 5.199
+    },
+    {
+      "text": "use? Why does this matter? Because even",
+      "start": 292.24,
+      "duration": 5.12
+    },
+    {
+      "text": "small decisions like adding labels to",
+      "start": 295.199,
+      "duration": 5.521
+    },
+    {
+      "text": "your icons depend on your users. If your",
+      "start": 297.36,
+      "duration": 5.6
+    },
+    {
+      "text": "audience is younger and techsavvy, you",
+      "start": 300.72,
+      "duration": 4.0
+    },
+    {
+      "text": "might get away with minimalist approach",
+      "start": 302.96,
+      "duration": 4.32
+    },
+    {
+      "text": "and show just icons. But if your users",
+      "start": 304.72,
+      "duration": 5.039
+    },
+    {
+      "text": "are older and less familiar with apps,",
+      "start": 307.28,
+      "duration": 4.96
+    },
+    {
+      "text": "labels below icons can make navigation",
+      "start": 309.759,
+      "duration": 4.081
+    },
+    {
+      "text": "clearer and help them feel more",
+      "start": 312.24,
+      "duration": 4.08
+    },
+    {
+      "text": "confident using your app. Tip: Choose",
+      "start": 313.84,
+      "duration": 5.28
+    },
+    {
+      "text": "the right sizes, padding, and margins.",
+      "start": 316.32,
+      "duration": 4.4
+    },
+    {
+      "text": "Creating the right autonomy for your",
+      "start": 319.12,
+      "duration": 3.84
+    },
+    {
+      "text": "bottom navigation is like crafting a",
+      "start": 320.72,
+      "duration": 4.56
+    },
+    {
+      "text": "tailorade suit. It needs to fit",
+      "start": 322.96,
+      "duration": 4.0
+    },
+    {
+      "text": "perfectly with the device it's designed",
+      "start": 325.28,
+      "duration": 4.479
+    },
+    {
+      "text": "for. In the image, you can see detailed",
+      "start": 326.96,
+      "duration": 4.799
+    },
+    {
+      "text": "properties for navigation on the iPhone",
+      "start": 329.759,
+      "duration": 4.961
+    },
+    {
+      "text": "14 and iPhone 15 Pro. But these are",
+      "start": 331.759,
+      "duration": 5.761
+    },
+    {
+      "text": "guidelines, not rigid rules. The key is",
+      "start": 334.72,
+      "duration": 5.199
+    },
+    {
+      "text": "to adapt and experiment to find what",
+      "start": 337.52,
+      "duration": 4.48
+    },
+    {
+      "text": "works best for each device. Why does",
+      "start": 339.919,
+      "duration": 4.801
+    },
+    {
+      "text": "this matter? Well, on smaller devices, a",
+      "start": 342.0,
+      "duration": 4.88
+    },
+    {
+      "text": "more compact navigation bar might be",
+      "start": 344.72,
+      "duration": 4.8
+    },
+    {
+      "text": "more appropriate. A bulky bar can eat up",
+      "start": 346.88,
+      "duration": 4.72
+    },
+    {
+      "text": "valuable screen space, making the app",
+      "start": 349.52,
+      "duration": 4.16
+    },
+    {
+      "text": "feel cramped. The goal is to find the",
+      "start": 351.6,
+      "duration": 4.08
+    },
+    {
+      "text": "right balance between visibility and",
+      "start": 353.68,
+      "duration": 4.48
+    },
+    {
+      "text": "accessibility without overshadowing the",
+      "start": 355.68,
+      "duration": 5.44
+    },
+    {
+      "text": "main content. Generally, an icon size of",
+      "start": 358.16,
+      "duration": 5.68
+    },
+    {
+      "text": "24 pixels strikes a good balance. It's",
+      "start": 361.12,
+      "duration": 4.48
+    },
+    {
+      "text": "large enough to be recognizable but",
+      "start": 363.84,
+      "duration": 3.76
+    },
+    {
+      "text": "doesn't dominate the screen. The home",
+      "start": 365.6,
+      "duration": 4.319
+    },
+    {
+      "text": "indicator, that dark bar at the bottom,",
+      "start": 367.6,
+      "duration": 4.719
+    },
+    {
+      "text": "typically takes up around 34 pixels.",
+      "start": 369.919,
+      "duration": 4.481
+    },
+    {
+      "text": "When it comes to labels, the sweet spot",
+      "start": 372.319,
+      "duration": 5.201
+    },
+    {
+      "text": "is around 10 to 12 pixels. Smaller text",
+      "start": 374.4,
+      "duration": 5.28
+    },
+    {
+      "text": "can cause accessibility issues, making",
+      "start": 377.52,
+      "duration": 4.399
+    },
+    {
+      "text": "it hard for some users to read. On the",
+      "start": 379.68,
+      "duration": 4.32
+    },
+    {
+      "text": "flip side, larger text can create",
+      "start": 381.919,
+      "duration": 3.921
+    },
+    {
+      "text": "clutter and draw attention away from the",
+      "start": 384.0,
+      "duration": 4.479
+    },
+    {
+      "text": "main content. Remember, labels are there",
+      "start": 385.84,
+      "duration": 5.28
+    },
+    {
+      "text": "to guide, not to overshadow. Designing",
+      "start": 388.479,
+      "duration": 4.881
+    },
+    {
+      "text": "for two to three mobile device widths is",
+      "start": 391.12,
+      "duration": 4.16
+    },
+    {
+      "text": "a good practice. It ensures your",
+      "start": 393.36,
+      "duration": 3.92
+    },
+    {
+      "text": "navigation bar looks great and functions",
+      "start": 395.28,
+      "duration": 4.32
+    },
+    {
+      "text": "well across a range of devices. If",
+      "start": 397.28,
+      "duration": 4.32
+    },
+    {
+      "text": "you're designing a bottom navigation bar",
+      "start": 399.6,
+      "duration": 4.08
+    },
+    {
+      "text": "for modern smartphones, especially on",
+      "start": 401.6,
+      "duration": 3.76
+    },
+    {
+      "text": "iPhones and Android devices without",
+      "start": 403.68,
+      "duration": 4.079
+    },
+    {
+      "text": "physical buttons, there's one detail",
+      "start": 405.36,
+      "duration": 5.04
+    },
+    {
+      "text": "that many junior designers forget. the",
+      "start": 407.759,
+      "duration": 5.28
+    },
+    {
+      "text": "home indicator. That thin line at the",
+      "start": 410.4,
+      "duration": 4.639
+    },
+    {
+      "text": "bottom of the screen, that's the home",
+      "start": 413.039,
+      "duration": 4.641
+    },
+    {
+      "text": "indicator. It lets users swipe up to go",
+      "start": 415.039,
+      "duration": 4.88
+    },
+    {
+      "text": "back to the home screen, and it sits",
+      "start": 417.68,
+      "duration": 5.12
+    },
+    {
+      "text": "right below your bottom navigation bar.",
+      "start": 419.919,
+      "duration": 4.801
+    },
+    {
+      "text": "So, here's what you need to know. You",
+      "start": 422.8,
+      "duration": 4.88
+    },
+    {
+      "text": "should not modify or hide the home",
+      "start": 424.72,
+      "duration": 5.599
+    },
+    {
+      "text": "indicator. You should not overlap your",
+      "start": 427.68,
+      "duration": 4.72
+    },
+    {
+      "text": "navigation bar onto it. Why does this",
+      "start": 430.319,
+      "duration": 3.921
+    },
+    {
+      "text": "matter? Because if your bottom",
+      "start": 432.4,
+      "duration": 4.4
+    },
+    {
+      "text": "navigation is too low or feels cramped",
+      "start": 434.24,
+      "duration": 5.12
+    },
+    {
+      "text": "against the home indicator, users might",
+      "start": 436.8,
+      "duration": 4.32
+    },
+    {
+      "text": "accidentally trigger the home indicator",
+      "start": 439.36,
+      "duration": 4.239
+    },
+    {
+      "text": "when trying to tap your nav icons. Find",
+      "start": 441.12,
+      "duration": 4.4
+    },
+    {
+      "text": "your app harder to use, especially",
+      "start": 443.599,
+      "duration": 4.16
+    },
+    {
+      "text": "one-handed. Feel like your design is",
+      "start": 445.52,
+      "duration": 4.72
+    },
+    {
+      "text": "broken or unfinished. What to do",
+      "start": 447.759,
+      "duration": 5.84
+    },
+    {
+      "text": "instead? Respect the devices safe area,",
+      "start": 450.24,
+      "duration": 5.44
+    },
+    {
+      "text": "also called the safe zone. Make sure",
+      "start": 453.599,
+      "duration": 4.16
+    },
+    {
+      "text": "your bottom navigation sits above the",
+      "start": 455.68,
+      "duration": 3.6
+    },
+    {
+      "text": "home indicator so there's enough",
+      "start": 457.759,
+      "duration": 5.041
+    },
+    {
+      "text": "spacing. Test it on a real device. Use",
+      "start": 459.28,
+      "duration": 5.68
+    },
+    {
+      "text": "Figma Mirror to see your design directly",
+      "start": 462.8,
+      "duration": 4.399
+    },
+    {
+      "text": "on your phone. What looks good in Figma",
+      "start": 464.96,
+      "duration": 4.16
+    },
+    {
+      "text": "on your screen can feel completely",
+      "start": 467.199,
+      "duration": 3.521
+    },
+    {
+      "text": "different when you're actually tapping",
+      "start": 469.12,
+      "duration": 4.4
+    },
+    {
+      "text": "it on a real phone. Tip: Limit the",
+      "start": 470.72,
+      "duration": 5.44
+    },
+    {
+      "text": "number of tabs to five. Having too many",
+      "start": 473.52,
+      "duration": 4.64
+    },
+    {
+      "text": "tabs in the bottom navigation can lead",
+      "start": 476.16,
+      "duration": 4.08
+    },
+    {
+      "text": "to a cluttered and confusing user",
+      "start": 478.16,
+      "duration": 4.479
+    },
+    {
+      "text": "experience. Overloading the space with",
+      "start": 480.24,
+      "duration": 4.56
+    },
+    {
+      "text": "excessive options not only makes each",
+      "start": 482.639,
+      "duration": 4.161
+    },
+    {
+      "text": "tab smaller and harder to accurately",
+      "start": 484.8,
+      "duration": 4.64
+    },
+    {
+      "text": "tap, especially on mobile devices, but",
+      "start": 486.8,
+      "duration": 4.56
+    },
+    {
+      "text": "also overwhelms users with too many",
+      "start": 489.44,
+      "duration": 3.92
+    },
+    {
+      "text": "choices. This can lead to what's known",
+      "start": 491.36,
+      "duration": 4.88
+    },
+    {
+      "text": "as choice paralysis, where users find it",
+      "start": 493.36,
+      "duration": 4.559
+    },
+    {
+      "text": "difficult to make a decision because of",
+      "start": 496.24,
+      "duration": 3.84
+    },
+    {
+      "text": "the sheer number of options presented to",
+      "start": 497.919,
+      "duration": 5.041
+    },
+    {
+      "text": "them. The golden rule, aim for three to",
+      "start": 500.08,
+      "duration": 5.92
+    },
+    {
+      "text": "five tabs, max six tabs. This range is",
+      "start": 502.96,
+      "duration": 5.44
+    },
+    {
+      "text": "the sweet spot for bottom navigation. It",
+      "start": 506.0,
+      "duration": 4.16
+    },
+    {
+      "text": "gives users enough options without",
+      "start": 508.4,
+      "duration": 4.24
+    },
+    {
+      "text": "crowding the space. With fewer tabs,",
+      "start": 510.16,
+      "duration": 4.799
+    },
+    {
+      "text": "each one has more breathing room, making",
+      "start": 512.64,
+      "duration": 4.16
+    },
+    {
+      "text": "them easier to tap and reducing",
+      "start": 514.959,
+      "duration": 3.921
+    },
+    {
+      "text": "accidental clicks. This also makes your",
+      "start": 516.8,
+      "duration": 4.32
+    },
+    {
+      "text": "app feel more organized and easier to",
+      "start": 518.88,
+      "duration": 4.959
+    },
+    {
+      "text": "navigate. Focus on what matters most.",
+      "start": 521.12,
+      "duration": 4.56
+    },
+    {
+      "text": "Choose tabs that are essential to your",
+      "start": 523.839,
+      "duration": 3.841
+    },
+    {
+      "text": "app's core functions and what users",
+      "start": 525.68,
+      "duration": 4.96
+    },
+    {
+      "text": "access most often. This way, your users",
+      "start": 527.68,
+      "duration": 4.4
+    },
+    {
+      "text": "have everything they need at their",
+      "start": 530.64,
+      "duration": 4.0
+    },
+    {
+      "text": "fingertip without the extra clutter.",
+      "start": 532.08,
+      "duration": 5.92
+    },
+    {
+      "text": "Tip: Design thumb friendly tap areas. A",
+      "start": 534.64,
+      "duration": 5.44
+    },
+    {
+      "text": "common convention is to use a tap area",
+      "start": 538.0,
+      "duration": 4.16
+    },
+    {
+      "text": "that is large enough to be easily tapped",
+      "start": 540.08,
+      "duration": 4.08
+    },
+    {
+      "text": "with a thumb. This usually means having",
+      "start": 542.16,
+      "duration": 5.2
+    },
+    {
+      "text": "a tap area of at least 44 pixels x 44",
+      "start": 544.16,
+      "duration": 5.6
+    },
+    {
+      "text": "pixels. This size is not just a random",
+      "start": 547.36,
+      "duration": 4.56
+    },
+    {
+      "text": "choice. It's based on the average size",
+      "start": 549.76,
+      "duration": 4.16
+    },
+    {
+      "text": "of a human thumb, which ensures that",
+      "start": 551.92,
+      "duration": 3.919
+    },
+    {
+      "text": "most users can comfortably and",
+      "start": 553.92,
+      "duration": 3.919
+    },
+    {
+      "text": "accurately tap the navigation items",
+      "start": 555.839,
+      "duration": 3.521
+    },
+    {
+      "text": "without accidentally hitting the wrong",
+      "start": 557.839,
+      "duration": 4.56
+    },
+    {
+      "text": "one. Why is this important? First, it",
+      "start": 559.36,
+      "duration": 4.88
+    },
+    {
+      "text": "improves the overall usability of your",
+      "start": 562.399,
+      "duration": 4.161
+    },
+    {
+      "text": "app. Users are likely to navigate using",
+      "start": 564.24,
+      "duration": 4.32
+    },
+    {
+      "text": "their thumbs, especially on smaller",
+      "start": 566.56,
+      "duration": 4.959
+    },
+    {
+      "text": "devices. A larger tap area reduces the",
+      "start": 568.56,
+      "duration": 5.04
+    },
+    {
+      "text": "chance of errors and frustration, making",
+      "start": 571.519,
+      "duration": 4.721
+    },
+    {
+      "text": "the app more userfriendly. Second, it",
+      "start": 573.6,
+      "duration": 5.28
+    },
+    {
+      "text": "enhances accessibility. Not all users",
+      "start": 576.24,
+      "duration": 4.96
+    },
+    {
+      "text": "have the same level of dexterity, and a",
+      "start": 578.88,
+      "duration": 4.639
+    },
+    {
+      "text": "generous tap area ensures that the app",
+      "start": 581.2,
+      "duration": 3.759
+    },
+    {
+      "text": "is more accessible to people with",
+      "start": 583.519,
+      "duration": 4.401
+    },
+    {
+      "text": "varying motor abilities. In contrast, a",
+      "start": 584.959,
+      "duration": 6.241
+    },
+    {
+      "text": "smaller tap area, like 24 pixels x 24",
+      "start": 587.92,
+      "duration": 5.84
+    },
+    {
+      "text": "pixels, might lead to frequent mistaps",
+      "start": 591.2,
+      "duration": 5.44
+    },
+    {
+      "text": "and a poor user experience. Enjoying the",
+      "start": 593.76,
+      "duration": 5.199
+    },
+    {
+      "text": "tips so far? That's awesome. But let's",
+      "start": 596.64,
+      "duration": 4.48
+    },
+    {
+      "text": "be real, watching a few tips is great,",
+      "start": 598.959,
+      "duration": 3.601
+    },
+    {
+      "text": "but what is really going to make a",
+      "start": 601.12,
+      "duration": 3.2
+    },
+    {
+      "text": "difference is knowing how to put it all",
+      "start": 602.56,
+      "duration": 3.6
+    },
+    {
+      "text": "together. That's where a lot of",
+      "start": 604.32,
+      "duration": 3.92
+    },
+    {
+      "text": "designers get stuck. You pick up bits",
+      "start": 606.16,
+      "duration": 3.92
+    },
+    {
+      "text": "and pieces, but when you sit down to",
+      "start": 608.24,
+      "duration": 4.4
+    },
+    {
+      "text": "design, something still feels off.",
+      "start": 610.08,
+      "duration": 4.96
+    },
+    {
+      "text": "That's exactly why we created the UIUX",
+      "start": 612.64,
+      "duration": 4.8
+    },
+    {
+      "text": "playbook to give you clear, practical",
+      "start": 615.04,
+      "duration": 4.4
+    },
+    {
+      "text": "techniques and real examples that show",
+      "start": 617.44,
+      "duration": 4.399
+    },
+    {
+      "text": "you how to design UIs that look clean,",
+      "start": 619.44,
+      "duration": 4.72
+    },
+    {
+      "text": "modern, and professional so your work",
+      "start": 621.839,
+      "duration": 4.961
+    },
+    {
+      "text": "stands out and looks right every time.",
+      "start": 624.16,
+      "duration": 4.56
+    },
+    {
+      "text": "We've had so much amazing feedback from",
+      "start": 626.8,
+      "duration": 3.52
+    },
+    {
+      "text": "designers who said that after reading",
+      "start": 628.72,
+      "duration": 3.6
+    },
+    {
+      "text": "the playbook, they went from struggling",
+      "start": 630.32,
+      "duration": 4.079
+    },
+    {
+      "text": "with designs that just didn't look right",
+      "start": 632.32,
+      "duration": 4.959
+    },
+    {
+      "text": "to creating work that looks amazing and",
+      "start": 634.399,
+      "duration": 4.721
+    },
+    {
+      "text": "that they're finally proud to share. If",
+      "start": 637.279,
+      "duration": 3.12
+    },
+    {
+      "text": "you want to check it out, there's a",
+      "start": 639.12,
+      "duration": 3.6
+    },
+    {
+      "text": "special discount for you. Use level up",
+      "start": 640.399,
+      "duration": 4.801
+    },
+    {
+      "text": "40 at checkout to get 40% off. And if",
+      "start": 642.72,
+      "duration": 4.72
+    },
+    {
+      "text": "you're curious, you can also download a",
+      "start": 645.2,
+      "duration": 4.079
+    },
+    {
+      "text": "free preview first. You'll find",
+      "start": 647.44,
+      "duration": 3.56
+    },
+    {
+      "text": "everything linked in the description",
+      "start": 649.279,
+      "duration": 4.721
+    },
+    {
+      "text": "below. Tip: Differentiate active and",
+      "start": 651.0,
+      "duration": 5.48
+    },
+    {
+      "text": "inactive states. Differentiating the",
+      "start": 654.0,
+      "duration": 4.8
+    },
+    {
+      "text": "active state in bottom navigation is",
+      "start": 656.48,
+      "duration": 4.4
+    },
+    {
+      "text": "essential for creating a clean user",
+      "start": 658.8,
+      "duration": 4.0
+    },
+    {
+      "text": "experience. It's about making it",
+      "start": 660.88,
+      "duration": 3.76
+    },
+    {
+      "text": "immediately obvious to the user where",
+      "start": 662.8,
+      "duration": 3.84
+    },
+    {
+      "text": "they are in the app. A smart way to do",
+      "start": 664.64,
+      "duration": 4.0
+    },
+    {
+      "text": "this is to change the style and color of",
+      "start": 666.64,
+      "duration": 4.56
+    },
+    {
+      "text": "the active icon. Imagine an icon that",
+      "start": 668.64,
+      "duration": 4.48
+    },
+    {
+      "text": "shifts from an outline to a filled",
+      "start": 671.2,
+      "duration": 3.68
+    },
+    {
+      "text": "version along with a noticeable change",
+      "start": 673.12,
+      "duration": 4.32
+    },
+    {
+      "text": "in color. This visual cue instantly",
+      "start": 674.88,
+      "duration": 4.16
+    },
+    {
+      "text": "draws the user's attention to their",
+      "start": 677.44,
+      "duration": 3.839
+    },
+    {
+      "text": "current location. To further enhance",
+      "start": 679.04,
+      "duration": 4.32
+    },
+    {
+      "text": "this distinction, you can also make the",
+      "start": 681.279,
+      "duration": 4.481
+    },
+    {
+      "text": "labeled text for the active icon darker",
+      "start": 683.36,
+      "duration": 4.64
+    },
+    {
+      "text": "and thicker. This simple adjustment",
+      "start": 685.76,
+      "duration": 4.079
+    },
+    {
+      "text": "reinforces the user's focus on the",
+      "start": 688.0,
+      "duration": 4.079
+    },
+    {
+      "text": "active state. The combination of a",
+      "start": 689.839,
+      "duration": 4.401
+    },
+    {
+      "text": "transformed icon style, a standout",
+      "start": 692.079,
+      "duration": 4.961
+    },
+    {
+      "text": "color, and bolder text works effectively",
+      "start": 694.24,
+      "duration": 5.039
+    },
+    {
+      "text": "to differentiate the active tab from the",
+      "start": 697.04,
+      "duration": 4.96
+    },
+    {
+      "text": "inactive ones. Conversely, a design that",
+      "start": 699.279,
+      "duration": 5.24
+    },
+    {
+      "text": "only alters the text, leaving the icon",
+      "start": 702.0,
+      "duration": 5.279
+    },
+    {
+      "text": "unchanged, might not be distinct enough.",
+      "start": 704.519,
+      "duration": 5.0
+    },
+    {
+      "text": "In such cases, users might take longer",
+      "start": 707.279,
+      "duration": 4.081
+    },
+    {
+      "text": "to identify their current position in",
+      "start": 709.519,
+      "duration": 4.32
+    },
+    {
+      "text": "the app, potentially leading to a slower",
+      "start": 711.36,
+      "duration": 4.24
+    },
+    {
+      "text": "and more frustrating navigation",
+      "start": 713.839,
+      "duration": 3.921
+    },
+    {
+      "text": "experience. It's important to strike a",
+      "start": 715.6,
+      "duration": 4.08
+    },
+    {
+      "text": "balance and ensure that the active state",
+      "start": 717.76,
+      "duration": 3.639
+    },
+    {
+      "text": "stands out clearly for effortless",
+      "start": 719.68,
+      "duration": 4.08
+    },
+    {
+      "text": "navigation. It's also perfectly",
+      "start": 721.399,
+      "duration": 4.361
+    },
+    {
+      "text": "acceptable to keep the icon outlined",
+      "start": 723.76,
+      "duration": 3.84
+    },
+    {
+      "text": "instead of filling it in as long as you",
+      "start": 725.76,
+      "duration": 4.0
+    },
+    {
+      "text": "change its color. The key is to apply at",
+      "start": 727.6,
+      "duration": 4.72
+    },
+    {
+      "text": "least two visual changes, such as",
+      "start": 729.76,
+      "duration": 4.56
+    },
+    {
+      "text": "adjusting the icon's color and making",
+      "start": 732.32,
+      "duration": 4.4
+    },
+    {
+      "text": "the text bolder. This dual change",
+      "start": 734.32,
+      "duration": 4.319
+    },
+    {
+      "text": "ensures users can effortlessly",
+      "start": 736.72,
+      "duration": 4.08
+    },
+    {
+      "text": "distinguish between active and inactive",
+      "start": 738.639,
+      "duration": 4.161
+    },
+    {
+      "text": "tabs, enhancing their navigation",
+      "start": 740.8,
+      "duration": 5.039
+    },
+    {
+      "text": "experience in your app. Tip: Choose",
+      "start": 742.8,
+      "duration": 5.44
+    },
+    {
+      "text": "simple and familiar icons. When",
+      "start": 745.839,
+      "duration": 4.0
+    },
+    {
+      "text": "selecting icons for your bottom",
+      "start": 748.24,
+      "duration": 4.08
+    },
+    {
+      "text": "navigation bar, the best approach is to",
+      "start": 749.839,
+      "duration": 5.361
+    },
+    {
+      "text": "prioritize familiarity and simplicity.",
+      "start": 752.32,
+      "duration": 4.959
+    },
+    {
+      "text": "Choose icons that users can instantly",
+      "start": 755.2,
+      "duration": 4.16
+    },
+    {
+      "text": "recognize and that accurately represent",
+      "start": 757.279,
+      "duration": 4.321
+    },
+    {
+      "text": "their function. A classic example is",
+      "start": 759.36,
+      "duration": 4.08
+    },
+    {
+      "text": "using a magnifying glass for the search",
+      "start": 761.6,
+      "duration": 4.479
+    },
+    {
+      "text": "function. It's a universally understood",
+      "start": 763.44,
+      "duration": 4.72
+    },
+    {
+      "text": "symbol, making it far more effective",
+      "start": 766.079,
+      "duration": 3.961
+    },
+    {
+      "text": "than less familiar options like",
+      "start": 768.16,
+      "duration": 4.479
+    },
+    {
+      "text": "binoculars. The simplicity of each icon",
+      "start": 770.04,
+      "duration": 5.56
+    },
+    {
+      "text": "is also key. Complex designs or overly",
+      "start": 772.639,
+      "duration": 5.2
+    },
+    {
+      "text": "artistic interpretations can confuse",
+      "start": 775.6,
+      "duration": 4.72
+    },
+    {
+      "text": "users. The goal is to enable users to",
+      "start": 777.839,
+      "duration": 4.56
+    },
+    {
+      "text": "understand and navigate your app with",
+      "start": 780.32,
+      "duration": 4.56
+    },
+    {
+      "text": "minimal effort or thought. Simple icons",
+      "start": 782.399,
+      "duration": 4.56
+    },
+    {
+      "text": "achieve this by being easy to identify",
+      "start": 784.88,
+      "duration": 5.68
+    },
+    {
+      "text": "at a glance. Tip: Keep navigation labels",
+      "start": 786.959,
+      "duration": 5.601
+    },
+    {
+      "text": "short and sweet. When it comes to",
+      "start": 790.56,
+      "duration": 4.079
+    },
+    {
+      "text": "designing your bottom navigation bar,",
+      "start": 792.56,
+      "duration": 5.279
+    },
+    {
+      "text": "less is often more. Opt for concise",
+      "start": 794.639,
+      "duration": 5.361
+    },
+    {
+      "text": "single line labels to keep the design",
+      "start": 797.839,
+      "duration": 4.641
+    },
+    {
+      "text": "neat and effective. Avoid long labels",
+      "start": 800.0,
+      "duration": 5.04
+    },
+    {
+      "text": "that spill over into two lines. They can",
+      "start": 802.48,
+      "duration": 4.72
+    },
+    {
+      "text": "clutter the screen and overwhelm your",
+      "start": 805.04,
+      "duration": 4.08
+    },
+    {
+      "text": "users. They also tend to make the",
+      "start": 807.2,
+      "duration": 4.16
+    },
+    {
+      "text": "navigation bar too big, which can throw",
+      "start": 809.12,
+      "duration": 4.32
+    },
+    {
+      "text": "off the balance of your app's layout.",
+      "start": 811.36,
+      "duration": 4.479
+    },
+    {
+      "text": "Short labels keep things simple, helping",
+      "start": 813.44,
+      "duration": 4.399
+    },
+    {
+      "text": "users make quicker, more instinctive",
+      "start": 815.839,
+      "duration": 4.161
+    },
+    {
+      "text": "choices. They also contribute to a",
+      "start": 817.839,
+      "duration": 4.721
+    },
+    {
+      "text": "clean, contemporary aesthetic, ensuring",
+      "start": 820.0,
+      "duration": 5.68
+    },
+    {
+      "text": "your app is both stylish and functional.",
+      "start": 822.56,
+      "duration": 5.839
+    },
+    {
+      "text": "Tip: Keep it clean and simple. A",
+      "start": 825.68,
+      "duration": 4.64
+    },
+    {
+      "text": "cluttered or overwhelming design can",
+      "start": 828.399,
+      "duration": 4.401
+    },
+    {
+      "text": "hurt the user experience. Avoid adding",
+      "start": 830.32,
+      "duration": 4.639
+    },
+    {
+      "text": "unnecessary elements like boxes around",
+      "start": 832.8,
+      "duration": 4.56
+    },
+    {
+      "text": "your tabs as these can create visual",
+      "start": 834.959,
+      "duration": 5.361
+    },
+    {
+      "text": "noise. Instead, strive for a clean,",
+      "start": 837.36,
+      "duration": 4.8
+    },
+    {
+      "text": "minimalist look that guides users",
+      "start": 840.32,
+      "duration": 3.84
+    },
+    {
+      "text": "effortlessly through your app. The goal",
+      "start": 842.16,
+      "duration": 3.919
+    },
+    {
+      "text": "is to design a navigation bar that's",
+      "start": 844.16,
+      "duration": 4.479
+    },
+    {
+      "text": "intuitive and unobtrusive, allowing",
+      "start": 846.079,
+      "duration": 4.961
+    },
+    {
+      "text": "users to focus on what matters most, the",
+      "start": 848.639,
+      "duration": 5.281
+    },
+    {
+      "text": "content of your app. Tip: Stick to one",
+      "start": 851.04,
+      "duration": 4.799
+    },
+    {
+      "text": "icon style except for the selected",
+      "start": 853.92,
+      "duration": 4.32
+    },
+    {
+      "text": "state. Mixing filled and outline icons",
+      "start": 855.839,
+      "duration": 4.24
+    },
+    {
+      "text": "in the same navigation bar is like",
+      "start": 858.24,
+      "duration": 3.92
+    },
+    {
+      "text": "inviting guests to a black tie event",
+      "start": 860.079,
+      "duration": 3.521
+    },
+    {
+      "text": "only to have someone show up in",
+      "start": 862.16,
+      "duration": 3.28
+    },
+    {
+      "text": "beachwear. To avoid this visual",
+      "start": 863.6,
+      "duration": 4.4
+    },
+    {
+      "text": "mismatch, stick to a consistent style of",
+      "start": 865.44,
+      "duration": 4.399
+    },
+    {
+      "text": "icons throughout your navigation. If you",
+      "start": 868.0,
+      "duration": 3.92
+    },
+    {
+      "text": "decide on outline icons, use them",
+      "start": 869.839,
+      "duration": 4.321
+    },
+    {
+      "text": "consistently across all tabs. This",
+      "start": 871.92,
+      "duration": 4.08
+    },
+    {
+      "text": "creates a harmonious and visually",
+      "start": 874.16,
+      "duration": 4.479
+    },
+    {
+      "text": "balanced look. However, there's a clever",
+      "start": 876.0,
+      "duration": 5.6
+    },
+    {
+      "text": "exception, the selected state. here.",
+      "start": 878.639,
+      "duration": 5.041
+    },
+    {
+      "text": "Switching an outline icon to a filled",
+      "start": 881.6,
+      "duration": 4.16
+    },
+    {
+      "text": "version is a fantastic way to highlight",
+      "start": 883.68,
+      "duration": 4.08
+    },
+    {
+      "text": "the active tab. It's like giving that",
+      "start": 885.76,
+      "duration": 4.639
+    },
+    {
+      "text": "tab a special badge of honor, making it",
+      "start": 887.76,
+      "duration": 5.519
+    },
+    {
+      "text": "stand out in a subtle yet effective way.",
+      "start": 890.399,
+      "duration": 5.361
+    },
+    {
+      "text": "Also, be mindful of the complexity of",
+      "start": 893.279,
+      "duration": 5.201
+    },
+    {
+      "text": "your icons. Consistency isn't just about",
+      "start": 895.76,
+      "duration": 5.519
+    },
+    {
+      "text": "style, it's also about complexity. If",
+      "start": 898.48,
+      "duration": 5.44
+    },
+    {
+      "text": "one icon is simple and clean, the others",
+      "start": 901.279,
+      "duration": 4.961
+    },
+    {
+      "text": "should follow suit. Mixing a minimal",
+      "start": 903.92,
+      "duration": 4.479
+    },
+    {
+      "text": "icon with a more detailed one can throw",
+      "start": 906.24,
+      "duration": 3.68
+    },
+    {
+      "text": "off the visual harmony of your",
+      "start": 908.399,
+      "duration": 4.88
+    },
+    {
+      "text": "navigation bar. Tip: Avoid using too",
+      "start": 909.92,
+      "duration": 5.68
+    },
+    {
+      "text": "many colors. Using too many colors in",
+      "start": 913.279,
+      "duration": 4.481
+    },
+    {
+      "text": "your bottom navigation or giving each",
+      "start": 915.6,
+      "duration": 4.799
+    },
+    {
+      "text": "tab its own color may seem like a fun",
+      "start": 917.76,
+      "duration": 5.04
+    },
+    {
+      "text": "idea, but it usually does more harm than",
+      "start": 920.399,
+      "duration": 4.961
+    },
+    {
+      "text": "good. Instead of helping users, it",
+      "start": 922.8,
+      "duration": 5.12
+    },
+    {
+      "text": "creates visual chaos. Suddenly,",
+      "start": 925.36,
+      "duration": 4.4
+    },
+    {
+      "text": "navigation becomes a guessing game of",
+      "start": 927.92,
+      "duration": 3.68
+    },
+    {
+      "text": "colors rather than something that feels",
+      "start": 929.76,
+      "duration": 4.24
+    },
+    {
+      "text": "natural and easy. Here's the thing. You",
+      "start": 931.6,
+      "duration": 4.239
+    },
+    {
+      "text": "want your navigation to feel like part",
+      "start": 934.0,
+      "duration": 4.639
+    },
+    {
+      "text": "of the app, seamless, not loud. When",
+      "start": 935.839,
+      "duration": 4.961
+    },
+    {
+      "text": "every tab is a different color, it pulls",
+      "start": 938.639,
+      "duration": 3.76
+    },
+    {
+      "text": "attention away from what actually",
+      "start": 940.8,
+      "duration": 4.08
+    },
+    {
+      "text": "matters, the content. It can even mess",
+      "start": 942.399,
+      "duration": 4.641
+    },
+    {
+      "text": "with your brand's look, making your app",
+      "start": 944.88,
+      "duration": 4.16
+    },
+    {
+      "text": "feel less polished and harder to",
+      "start": 947.04,
+      "duration": 4.56
+    },
+    {
+      "text": "recognize. The better approach, stick to",
+      "start": 949.04,
+      "duration": 4.799
+    },
+    {
+      "text": "your brand's color palette. Keep it",
+      "start": 951.6,
+      "duration": 4.4
+    },
+    {
+      "text": "simple and consistent. That way, your",
+      "start": 953.839,
+      "duration": 4.481
+    },
+    {
+      "text": "navigation feels clean, your app feels",
+      "start": 956.0,
+      "duration": 4.639
+    },
+    {
+      "text": "professional, and your brand stays",
+      "start": 958.32,
+      "duration": 5.759
+    },
+    {
+      "text": "strong. Tip: Use notification badges in",
+      "start": 960.639,
+      "duration": 5.921
+    },
+    {
+      "text": "bottom navigation to highlight updates.",
+      "start": 964.079,
+      "duration": 4.481
+    },
+    {
+      "text": "Using notification badges in your bottom",
+      "start": 966.56,
+      "duration": 4.399
+    },
+    {
+      "text": "navigation bar is a great way to signal",
+      "start": 968.56,
+      "duration": 4.639
+    },
+    {
+      "text": "new updates or messages to users. These",
+      "start": 970.959,
+      "duration": 5.12
+    },
+    {
+      "text": "badges can be simple colored circles, or",
+      "start": 973.199,
+      "duration": 4.721
+    },
+    {
+      "text": "they can include numbers to indicate the",
+      "start": 976.079,
+      "duration": 4.241
+    },
+    {
+      "text": "quantity of new updates. Badges should",
+      "start": 977.92,
+      "duration": 4.24
+    },
+    {
+      "text": "be small enough to stay subtle, but",
+      "start": 980.32,
+      "duration": 3.84
+    },
+    {
+      "text": "large enough to be noticeable. Placing",
+      "start": 982.16,
+      "duration": 4.08
+    },
+    {
+      "text": "them in the top right corner of the icon",
+      "start": 984.16,
+      "duration": 4.679
+    },
+    {
+      "text": "is a common practice, as it's naturally",
+      "start": 986.24,
+      "duration": 4.959
+    },
+    {
+      "text": "eye-catching. Here's a pro tip. Adding",
+      "start": 988.839,
+      "duration": 4.281
+    },
+    {
+      "text": "an outline around the badge can make it",
+      "start": 991.199,
+      "duration": 4.0
+    },
+    {
+      "text": "stand out even more and give it a",
+      "start": 993.12,
+      "duration": 4.079
+    },
+    {
+      "text": "polished look. If you're using numbers",
+      "start": 995.199,
+      "duration": 3.681
+    },
+    {
+      "text": "within the badge to indicate the count",
+      "start": 997.199,
+      "duration": 4.481
+    },
+    {
+      "text": "of new updates, ensure they are easy to",
+      "start": 998.88,
+      "duration": 5.519
+    },
+    {
+      "text": "read. Avoid overly small or stylized",
+      "start": 1001.68,
+      "duration": 4.8
+    },
+    {
+      "text": "fonts that might be hard to decipher at",
+      "start": 1004.399,
+      "duration": 4.321
+    },
+    {
+      "text": "a glance. Choose a badge color that",
+      "start": 1006.48,
+      "duration": 4.159
+    },
+    {
+      "text": "stands out against the navigation bar",
+      "start": 1008.72,
+      "duration": 4.479
+    },
+    {
+      "text": "and icon colors, yet still feels",
+      "start": 1010.639,
+      "duration": 5.041
+    },
+    {
+      "text": "consistent with the overall app design.",
+      "start": 1013.199,
+      "duration": 5.241
+    },
+    {
+      "text": "Finally, only use badges for essential",
+      "start": 1015.68,
+      "duration": 5.12
+    },
+    {
+      "text": "notifications. Overloading users with",
+      "start": 1018.44,
+      "duration": 4.6
+    },
+    {
+      "text": "badges for every minor update can lead",
+      "start": 1020.8,
+      "duration": 4.72
+    },
+    {
+      "text": "to notification fatigue, reducing the",
+      "start": 1023.04,
+      "duration": 4.96
+    },
+    {
+      "text": "effectiveness of this feature. Tip:",
+      "start": 1025.52,
+      "duration": 4.72
+    },
+    {
+      "text": "Experiment with creative layouts, but",
+      "start": 1028.0,
+      "duration": 4.64
+    },
+    {
+      "text": "with usability being your priority.",
+      "start": 1030.24,
+      "duration": 4.319
+    },
+    {
+      "text": "While standard layouts are tried and",
+      "start": 1032.64,
+      "duration": 4.24
+    },
+    {
+      "text": "tested for usability, stepping outside",
+      "start": 1034.559,
+      "duration": 4.24
+    },
+    {
+      "text": "the box with a creative and beautiful",
+      "start": 1036.88,
+      "duration": 4.0
+    },
+    {
+      "text": "design can give your app a distinctive",
+      "start": 1038.799,
+      "duration": 4.561
+    },
+    {
+      "text": "edge. The key is to strike a balance",
+      "start": 1040.88,
+      "duration": 5.039
+    },
+    {
+      "text": "between aesthetics and usability. You",
+      "start": 1043.36,
+      "duration": 4.0
+    },
+    {
+      "text": "can add value to your app by",
+      "start": 1045.919,
+      "duration": 3.361
+    },
+    {
+      "text": "experimenting with different shapes,",
+      "start": 1047.36,
+      "duration": 4.24
+    },
+    {
+      "text": "positions, or even dynamic interactions",
+      "start": 1049.28,
+      "duration": 4.48
+    },
+    {
+      "text": "for your bottom navigation. Maybe you're",
+      "start": 1051.6,
+      "duration": 4.0
+    },
+    {
+      "text": "thinking about a unique icon arrangement",
+      "start": 1053.76,
+      "duration": 4.24
+    },
+    {
+      "text": "or an unconventional bar shape. These",
+      "start": 1055.6,
+      "duration": 4.4
+    },
+    {
+      "text": "creative touches can make your app",
+      "start": 1058.0,
+      "duration": 4.4
+    },
+    {
+      "text": "memorable. However, here's a word of",
+      "start": 1060.0,
+      "duration": 5.12
+    },
+    {
+      "text": "caution. Never sacrifice usability for",
+      "start": 1062.4,
+      "duration": 4.8
+    },
+    {
+      "text": "aesthetics. For instance, while an",
+      "start": 1065.12,
+      "duration": 4.64
+    },
+    {
+      "text": "unconventional layout may look stunning,",
+      "start": 1067.2,
+      "duration": 4.88
+    },
+    {
+      "text": "if it confuses users or makes navigation",
+      "start": 1069.76,
+      "duration": 4.48
+    },
+    {
+      "text": "harder, it can do more harm than good.",
+      "start": 1072.08,
+      "duration": 3.76
+    },
+    {
+      "text": "All right, let's make this a little bit",
+      "start": 1074.24,
+      "duration": 3.6
+    },
+    {
+      "text": "more interactive. I want you to pause",
+      "start": 1075.84,
+      "duration": 3.839
+    },
+    {
+      "text": "the video right now and head to the",
+      "start": 1077.84,
+      "duration": 3.68
+    },
+    {
+      "text": "comment section. Tell me which bottom",
+      "start": 1079.679,
+      "duration": 4.081
+    },
+    {
+      "text": "navigation design you like the most. Is",
+      "start": 1081.52,
+      "duration": 5.519
+    },
+    {
+      "text": "it option A, clean and simple? Option B,",
+      "start": 1083.76,
+      "duration": 5.2
+    },
+    {
+      "text": "with that sleek line above the active",
+      "start": 1087.039,
+      "duration": 4.88
+    },
+    {
+      "text": "tab, option C, minimalist with a smooth,",
+      "start": 1088.96,
+      "duration": 5.68
+    },
+    {
+      "text": "interactive feel, or option D with a",
+      "start": 1091.919,
+      "duration": 5.281
+    },
+    {
+      "text": "more distinctive custom look. Drop your",
+      "start": 1094.64,
+      "duration": 5.2
+    },
+    {
+      "text": "favorites in the comments, A, B, C, or",
+      "start": 1097.2,
+      "duration": 4.719
+    },
+    {
+      "text": "D, and tell me why. I'm curious to see",
+      "start": 1099.84,
+      "duration": 4.079
+    },
+    {
+      "text": "which style you prefer.",
+      "start": 1101.919,
+      "duration": 4.481
+    },
+    {
+      "text": "Tip: Separate bottom navigation from",
+      "start": 1103.919,
+      "duration": 4.64
+    },
+    {
+      "text": "main content. Remember when I mentioned",
+      "start": 1106.4,
+      "duration": 3.68
+    },
+    {
+      "text": "you should stick around till the end",
+      "start": 1108.559,
+      "duration": 3.12
+    },
+    {
+      "text": "because there's one big mistake that",
+      "start": 1110.08,
+      "duration": 3.92
+    },
+    {
+      "text": "even pro designers keep making? Well,",
+      "start": 1111.679,
+      "duration": 4.561
+    },
+    {
+      "text": "here it is. Not separating the bottom",
+      "start": 1114.0,
+      "duration": 4.96
+    },
+    {
+      "text": "navigation from the main content. Adding",
+      "start": 1116.24,
+      "duration": 5.439
+    },
+    {
+      "text": "a subtle soft outline or a one pixel",
+      "start": 1118.96,
+      "duration": 4.56
+    },
+    {
+      "text": "border around the navigation bar can",
+      "start": 1121.679,
+      "duration": 4.641
+    },
+    {
+      "text": "create a gentle but clear separation.",
+      "start": 1123.52,
+      "duration": 5.2
+    },
+    {
+      "text": "This method is unobtrusive yet effective",
+      "start": 1126.32,
+      "duration": 3.84
+    },
+    {
+      "text": "at visually distinguishing the",
+      "start": 1128.72,
+      "duration": 4.48
+    },
+    {
+      "text": "navigation area as a distinct element.",
+      "start": 1130.16,
+      "duration": 5.04
+    },
+    {
+      "text": "Tip: You can use background color to",
+      "start": 1133.2,
+      "duration": 3.76
+    },
+    {
+      "text": "separate bottom navigation from main",
+      "start": 1135.2,
+      "duration": 3.76
+    },
+    {
+      "text": "content. Another approach is to",
+      "start": 1136.96,
+      "duration": 3.68
+    },
+    {
+      "text": "differentiate the background colors of",
+      "start": 1138.96,
+      "duration": 3.44
+    },
+    {
+      "text": "the bottom navigation and the main",
+      "start": 1140.64,
+      "duration": 3.68
+    },
+    {
+      "text": "screen. For instance, if your main",
+      "start": 1142.4,
+      "duration": 4.24
+    },
+    {
+      "text": "screen is white, consider using a light",
+      "start": 1144.32,
+      "duration": 4.32
+    },
+    {
+      "text": "gray for the navigation bar. This",
+      "start": 1146.64,
+      "duration": 4.08
+    },
+    {
+      "text": "contrast creates a sense of depth,",
+      "start": 1148.64,
+      "duration": 4.159
+    },
+    {
+      "text": "making the navigation area feel like a",
+      "start": 1150.72,
+      "duration": 5.28
+    },
+    {
+      "text": "distinct interactive element of the app.",
+      "start": 1152.799,
+      "duration": 5.441
+    },
+    {
+      "text": "Using a shadow is also a great way to",
+      "start": 1156.0,
+      "duration": 4.72
+    },
+    {
+      "text": "achieve this separation. A small soft",
+      "start": 1158.24,
+      "duration": 4.48
+    },
+    {
+      "text": "shadow above the navigation bar can",
+      "start": 1160.72,
+      "duration": 4.319
+    },
+    {
+      "text": "create an elevated effect, giving the",
+      "start": 1162.72,
+      "duration": 3.92
+    },
+    {
+      "text": "impression that the navigation is",
+      "start": 1165.039,
+      "duration": 3.601
+    },
+    {
+      "text": "floating above the rest of the content.",
+      "start": 1166.64,
+      "duration": 3.68
+    },
+    {
+      "text": "However, it's important to keep the",
+      "start": 1168.64,
+      "duration": 4.56
+    },
+    {
+      "text": "shadow subtle. An overly large or harsh",
+      "start": 1170.32,
+      "duration": 4.88
+    },
+    {
+      "text": "shadow can draw attention away from the",
+      "start": 1173.2,
+      "duration": 3.76
+    },
+    {
+      "text": "content and detract from the sleekness",
+      "start": 1175.2,
+      "duration": 4.56
+    },
+    {
+      "text": "of your design. Tip: Choose neutral",
+      "start": 1176.96,
+      "duration": 4.8
+    },
+    {
+      "text": "colors and avoid using too many colors",
+      "start": 1179.76,
+      "duration": 4.48
+    },
+    {
+      "text": "in both your top and bottom navigation.",
+      "start": 1181.76,
+      "duration": 4.32
+    },
+    {
+      "text": "It's best to keep the navigation colors",
+      "start": 1184.24,
+      "duration": 4.48
+    },
+    {
+      "text": "neutral, such as white, gray, or dark",
+      "start": 1186.08,
+      "duration": 4.8
+    },
+    {
+      "text": "tones. This approach ensures that the",
+      "start": 1188.72,
+      "duration": 4.0
+    },
+    {
+      "text": "navigation doesn't distract from the",
+      "start": 1190.88,
+      "duration": 4.08
+    },
+    {
+      "text": "main content of the app. By reserving",
+      "start": 1192.72,
+      "duration": 4.319
+    },
+    {
+      "text": "brighter or primary colors for key",
+      "start": 1194.96,
+      "duration": 4.24
+    },
+    {
+      "text": "actions on the main screen, you help",
+      "start": 1197.039,
+      "duration": 4.0
+    },
+    {
+      "text": "those elements stand out and draw",
+      "start": 1199.2,
+      "duration": 3.92
+    },
+    {
+      "text": "attention to what matters most. It's",
+      "start": 1201.039,
+      "duration": 4.161
+    },
+    {
+      "text": "also important to avoid using too many",
+      "start": 1203.12,
+      "duration": 3.76
+    },
+    {
+      "text": "different colors between the top and",
+      "start": 1205.2,
+      "duration": 4.0
+    },
+    {
+      "text": "bottom navigation bars. This can lead to",
+      "start": 1206.88,
+      "duration": 4.48
+    },
+    {
+      "text": "a disjointed visual experience and",
+      "start": 1209.2,
+      "duration": 4.24
+    },
+    {
+      "text": "distract users from the app's content.",
+      "start": 1211.36,
+      "duration": 3.84
+    },
+    {
+      "text": "Keeping a consistent color palette",
+      "start": 1213.44,
+      "duration": 3.68
+    },
+    {
+      "text": "between these two elements creates a",
+      "start": 1215.2,
+      "duration": 4.479
+    },
+    {
+      "text": "cohesive and harmonous design. When",
+      "start": 1217.12,
+      "duration": 4.48
+    },
+    {
+      "text": "choosing colors for your navigation,",
+      "start": 1219.679,
+      "duration": 3.761
+    },
+    {
+      "text": "it's crucial to consider how they",
+      "start": 1221.6,
+      "duration": 3.92
+    },
+    {
+      "text": "complement your app's overall theme and",
+      "start": 1223.44,
+      "duration": 4.239
+    },
+    {
+      "text": "branding. While neutral colors like",
+      "start": 1225.52,
+      "duration": 4.32
+    },
+    {
+      "text": "white, gray, or dark shades are",
+      "start": 1227.679,
+      "duration": 3.681
+    },
+    {
+      "text": "generally recommended for their",
+      "start": 1229.84,
+      "duration": 4.079
+    },
+    {
+      "text": "versatility and subtlety, it's perfectly",
+      "start": 1231.36,
+      "duration": 4.559
+    },
+    {
+      "text": "fine to opt for a different color if it",
+      "start": 1233.919,
+      "duration": 4.561
+    },
+    {
+      "text": "enhances your brand's identity. However,",
+      "start": 1235.919,
+      "duration": 4.561
+    },
+    {
+      "text": "the color should not be so bright or",
+      "start": 1238.48,
+      "duration": 4.319
+    },
+    {
+      "text": "overpowering that it overwhelms the main",
+      "start": 1240.48,
+      "duration": 4.72
+    },
+    {
+      "text": "content or disrupts the user's focus. It",
+      "start": 1242.799,
+      "duration": 4.161
+    },
+    {
+      "text": "should complement the primary colors",
+      "start": 1245.2,
+      "duration": 4.0
+    },
+    {
+      "text": "used on the main screen, enhancing key",
+      "start": 1246.96,
+      "duration": 3.92
+    },
+    {
+      "text": "actions and content rather than",
+      "start": 1249.2,
+      "duration": 4.0
+    },
+    {
+      "text": "competing with them. By the way,",
+      "start": 1250.88,
+      "duration": 3.76
+    },
+    {
+      "text": "everything that you have learned so far",
+      "start": 1253.2,
+      "duration": 3.92
+    },
+    {
+      "text": "here is from our UX UI design mastery",
+      "start": 1254.64,
+      "duration": 4.56
+    },
+    {
+      "text": "course, where we have more than 50",
+      "start": 1257.12,
+      "duration": 4.24
+    },
+    {
+      "text": "lessons like this one, all designed to",
+      "start": 1259.2,
+      "duration": 4.8
+    },
+    {
+      "text": "take you from a beginner to a UX UI",
+      "start": 1261.36,
+      "duration": 4.72
+    },
+    {
+      "text": "design pro. If you want to know more,",
+      "start": 1264.0,
+      "duration": 4.559
+    },
+    {
+      "text": "the link's in the description. Tip:",
+      "start": 1266.08,
+      "duration": 5.44
+    },
+    {
+      "text": "Avoid poor contrast for inactive states.",
+      "start": 1268.559,
+      "duration": 5.681
+    },
+    {
+      "text": "A common pitfall is using poor contrast",
+      "start": 1271.52,
+      "duration": 5.039
+    },
+    {
+      "text": "for inactive icons and labels, making",
+      "start": 1274.24,
+      "duration": 4.4
+    },
+    {
+      "text": "them difficult to see or understand,",
+      "start": 1276.559,
+      "duration": 3.681
+    },
+    {
+      "text": "especially for users with visual",
+      "start": 1278.64,
+      "duration": 3.84
+    },
+    {
+      "text": "impairments. It's important to strike a",
+      "start": 1280.24,
+      "duration": 4.0
+    },
+    {
+      "text": "balance between visibility and",
+      "start": 1282.48,
+      "duration": 3.92
+    },
+    {
+      "text": "distinction. Instead of opting for",
+      "start": 1284.24,
+      "duration": 4.48
+    },
+    {
+      "text": "drastically different colors, consider",
+      "start": 1286.4,
+      "duration": 4.0
+    },
+    {
+      "text": "slightly reducing the opacity of",
+      "start": 1288.72,
+      "duration": 3.76
+    },
+    {
+      "text": "inactive elements. This approach",
+      "start": 1290.4,
+      "duration": 4.399
+    },
+    {
+      "text": "maintains a cohesive color scheme while",
+      "start": 1292.48,
+      "duration": 4.319
+    },
+    {
+      "text": "clearly differentiating active and",
+      "start": 1294.799,
+      "duration": 4.24
+    },
+    {
+      "text": "inactive states. A good starting point",
+      "start": 1296.799,
+      "duration": 4.401
+    },
+    {
+      "text": "is to aim for an opacity level that is",
+      "start": 1299.039,
+      "duration": 5.12
+    },
+    {
+      "text": "noticeable yet not too faint. The web",
+      "start": 1301.2,
+      "duration": 4.88
+    },
+    {
+      "text": "content accessibility guidelines",
+      "start": 1304.159,
+      "duration": 4.161
+    },
+    {
+      "text": "recommend a minimum contrast ratio of",
+      "start": 1306.08,
+      "duration": 4.56
+    },
+    {
+      "text": "3:1 for graphical elements and user",
+      "start": 1308.32,
+      "duration": 4.4
+    },
+    {
+      "text": "interface components. To make sure your",
+      "start": 1310.64,
+      "duration": 3.76
+    },
+    {
+      "text": "color choices meet accessibility",
+      "start": 1312.72,
+      "duration": 4.319
+    },
+    {
+      "text": "standards, use tools like the web aim",
+      "start": 1314.4,
+      "duration": 6.68
+    },
+    {
+      "text": "contrast checker. Tip: Add sleek micro",
+      "start": 1317.039,
+      "duration": 6.401
+    },
+    {
+      "text": "interactions. Now that you mastered all",
+      "start": 1321.08,
+      "duration": 4.2
+    },
+    {
+      "text": "important fundamentals and your bottom",
+      "start": 1323.44,
+      "duration": 4.56
+    },
+    {
+      "text": "navigation bar has a solid base, it's",
+      "start": 1325.28,
+      "duration": 4.72
+    },
+    {
+      "text": "time to take it completely to the next",
+      "start": 1328.0,
+      "duration": 4.32
+    },
+    {
+      "text": "level to absolutely delight your users",
+      "start": 1330.0,
+      "duration": 4.88
+    },
+    {
+      "text": "and make them go, \"Wow!\" A lot of",
+      "start": 1332.32,
+      "duration": 4.32
+    },
+    {
+      "text": "beginner designers skip this. Their",
+      "start": 1334.88,
+      "duration": 4.64
+    },
+    {
+      "text": "bottom navigation is just static. You",
+      "start": 1336.64,
+      "duration": 5.12
+    },
+    {
+      "text": "tap and it changes, but there's no",
+      "start": 1339.52,
+      "duration": 4.08
+    },
+    {
+      "text": "feeling. It's like pressing a light",
+      "start": 1341.76,
+      "duration": 4.56
+    },
+    {
+      "text": "switch with no click. Micro interactions",
+      "start": 1343.6,
+      "duration": 4.72
+    },
+    {
+      "text": "and smooth transitions make your bottom",
+      "start": 1346.32,
+      "duration": 4.479
+    },
+    {
+      "text": "navigation feel responsive, polished,",
+      "start": 1348.32,
+      "duration": 5.12
+    },
+    {
+      "text": "and honestly just more fun to use. Tip",
+      "start": 1350.799,
+      "duration": 5.601
+    },
+    {
+      "text": "one, tap feedback. When a user taps an",
+      "start": 1353.44,
+      "duration": 5.52
+    },
+    {
+      "text": "icon, show a quick visual response like",
+      "start": 1356.4,
+      "duration": 4.96
+    },
+    {
+      "text": "a color change, scale up, or a ripple",
+      "start": 1358.96,
+      "duration": 5.12
+    },
+    {
+      "text": "effect. Tip two, when switching between",
+      "start": 1361.36,
+      "duration": 5.28
+    },
+    {
+      "text": "tabs, don't just snap to the next one.",
+      "start": 1364.08,
+      "duration": 4.719
+    },
+    {
+      "text": "Add a small sliding underline or animate",
+      "start": 1366.64,
+      "duration": 5.36
+    },
+    {
+      "text": "the icon smoothly into place. Tip three,",
+      "start": 1368.799,
+      "duration": 5.76
+    },
+    {
+      "text": "transitions between screens. When a user",
+      "start": 1372.0,
+      "duration": 4.559
+    },
+    {
+      "text": "switches screens, don't make it feel",
+      "start": 1374.559,
+      "duration": 4.48
+    },
+    {
+      "text": "like they teleported, add a soft fade,",
+      "start": 1376.559,
+      "duration": 4.801
+    },
+    {
+      "text": "or a sides slide transition. It makes",
+      "start": 1379.039,
+      "duration": 5.041
+    },
+    {
+      "text": "navigation feel connected. These little",
+      "start": 1381.36,
+      "duration": 4.88
+    },
+    {
+      "text": "details, they're what separating boring",
+      "start": 1384.08,
+      "duration": 5.839
+    },
+    {
+      "text": "designs from apps that feel amazing. So,",
+      "start": 1386.24,
+      "duration": 5.04
+    },
+    {
+      "text": "next time you design a bottom",
+      "start": 1389.919,
+      "duration": 4.081
+    },
+    {
+      "text": "navigation, don't just make it work,",
+      "start": 1391.28,
+      "duration": 5.36
+    },
+    {
+      "text": "make it feel great. If you made it all",
+      "start": 1394.0,
+      "duration": 5.28
+    },
+    {
+      "text": "the way to the end, congratulations. You",
+      "start": 1396.64,
+      "duration": 5.12
+    },
+    {
+      "text": "now know how to design a perfect bottom",
+      "start": 1399.28,
+      "duration": 4.8
+    },
+    {
+      "text": "navigation bar. and hopefully your",
+      "start": 1401.76,
+      "duration": 4.96
+    },
+    {
+      "text": "navigation will never look like this",
+      "start": 1404.08,
+      "duration": 5.12
+    },
+    {
+      "text": "ever again. I really hope you enjoyed",
+      "start": 1406.72,
+      "duration": 4.64
+    },
+    {
+      "text": "this video. If you did, it would mean a",
+      "start": 1409.2,
+      "duration": 4.16
+    },
+    {
+      "text": "lot if you shared it with others. Let's",
+      "start": 1411.36,
+      "duration": 3.76
+    },
+    {
+      "text": "make every bottom navigation bar out",
+      "start": 1413.36,
+      "duration": 4.0
+    },
+    {
+      "text": "there awesome. Also, let me know in the",
+      "start": 1415.12,
+      "duration": 4.16
+    },
+    {
+      "text": "comments which tip was your favorite.",
+      "start": 1417.36,
+      "duration": 3.6
+    },
+    {
+      "text": "I'd love to hear what you found most",
+      "start": 1419.28,
+      "duration": 3.6
+    },
+    {
+      "text": "helpful. Thanks for watching and I'll",
+      "start": 1420.96,
+      "duration": 6.079
+    },
+    {
+      "text": "see you in the next one. Have an amazing",
+      "start": 1422.88,
+      "duration": 4.159
+    }
+  ]
+}

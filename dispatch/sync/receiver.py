@@ -617,20 +617,14 @@ async def upload_chunk(
     # Pre-write validation: for offset=0 (fresh start), verify body hash against expected sha256
     # before writing anything to disk. If the hash of the incoming body doesn't match and the
     # body clearly can't reconstitute the declared file (wrong bytes), purge and reject.
-    if x_upload_offset == 0:
+    # Pre-write validation: for single-shot uploads (len == x_file_size), verify hash
+    if x_upload_offset == 0 and len(chunk_bytes) == x_file_size:
         incoming_sha = hashlib.sha256(chunk_bytes).hexdigest()
-        if len(chunk_bytes) == x_file_size and incoming_sha.lower() != x_sha256.lower():
-            # Single-shot corrupt upload — reject before touching disk
+        if incoming_sha.lower() != x_sha256.lower():
             logger.error("Pre-write SHA-256 mismatch for %s (single-shot): expected %s, got %s",
                          seg_id, x_sha256, incoming_sha)
-            raise HTTPException(status_code=422, detail="Checksum mismatch on single-shot upload; rejected before write")
-        if len(chunk_bytes) != x_file_size and incoming_sha.lower() != x_sha256.lower():
-            # Multi-chunk but the first chunk is already clearly wrong bytes (different content hash)
-            # Purge any stale partial and reject
             part_file.unlink(missing_ok=True)
-            logger.error("Corrupt chunk body for %s at offset 0: sha256 of incoming chunk doesn't match declared hash. Rejecting.",
-                         seg_id)
-            raise HTTPException(status_code=422, detail="Corrupt chunk data detected at offset 0; partial rejected")
+            raise HTTPException(status_code=422, detail="Checksum mismatch; partial file purged")
 
     with open(part_file, "ab") as f:
         f.write(chunk_bytes)
@@ -682,8 +676,8 @@ async def upload_chunk(
             file_hash=computed_sha
         )
 
-        # Probe video
-        is_valid, meta, err = probe_video(target_path)
+        # Probe video and normalize orientation
+        is_valid, meta, err = probe_video(target_path, chunk_id=chunk_id)
         if is_valid:
             db.update_chunk_metadata(
                 chunk_id=chunk_id,
@@ -759,7 +753,7 @@ async def upload_direct_file(
         file_hash=computed_sha
     )
 
-    is_valid, meta, err = probe_video(final_target)
+    is_valid, meta, err = probe_video(final_target, chunk_id=chunk_id)
     if is_valid:
         db.update_chunk_metadata(
             chunk_id=chunk_id,

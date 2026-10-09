@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-c">
+  <title id="title-c">Dispatch Logo - Concept C (Dual Relay D)</title>
+  <!-- Two decoupled precision geometric components: vertical intake pillar and aerodynamic forward accelerator loop -->
+  <!-- Left Intake Bar -->
+  <path fill="#070A0F" d="M 56 44 L 80 44 A 8 8 0 0 1 88 52 L 88 204 A 8 8 0 0 1 80 212 L 56 212 A 12 12 0 0 1 44 200 L 44 56 A 12 12 0 0 1 56 44 Z" />
+  <!-- Right Accelerator Loop -->
+  <path fill="#070A0F" fill-rule="evenodd" d="M 108 44 L 136 44 C 178 44 212 78 212 128 C 212 178 178 212 136 212 L 108 212 A 8 8 0 0 1 100 204 L 100 176 A 8 8 0 0 1 108 168 L 132 168 C 154 168 172 150 172 128 C 172 106 154 88 132 88 L 108 88 A 8 8 0 0 1 100 80 L 100 52 A 8 8 0 0 1 108 44 Z" />
+</svg>

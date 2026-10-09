@@ -18,7 +18,7 @@ class DispatchApplication : Application() {
 
     private fun schedulePeriodicYouTubeUpload() {
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiredNetworkType(NetworkType.UNMETERED)
             .build()
 
         val periodicUpload = PeriodicWorkRequestBuilder<YouTubeDirectUploadWorker>(15, TimeUnit.MINUTES)

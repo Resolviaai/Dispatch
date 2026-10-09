@@ -41,6 +41,8 @@ class SegmenterEngine(
     private var segmentRollJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    private var activeFinalizeDeferred: CompletableDeferred<Unit>? = null
+
     suspend fun startSession(
         cameraManager: CameraCaptureManager,
         notes: String = ""
@@ -53,8 +55,15 @@ class SegmenterEngine(
         currentSequenceNumber = 0
         isSessionActive = true
 
-        // Start Android Foreground Service for camera/mic immunity
-        RecordingForegroundService.start(context)
+        // Bind CameraX directly to Foreground Service lifecycle so recording survives screen lock
+        val bound = withTimeoutOrNull(10000L) {
+            RecordingForegroundService.startAndAwaitBind(context, cameraManager)
+        } ?: false
+
+        if (!bound) {
+            isSessionActive = false
+            throw IllegalStateException("Failed to bind camera capture to foreground service")
+        }
 
         withContext(Dispatchers.Main) {
             startNextSegment(cameraManager)
@@ -86,13 +95,27 @@ class SegmenterEngine(
             dao.insertSegment(segment)
         }
 
-        // Start hardware CameraX recording
         cameraManager.startSegmentRecording(
             targetTmpFile = tmpFile,
             onError = { errorCode, cause ->
                 android.util.Log.e("SegmenterEngine", "Hardware recording error on $segId: code $errorCode", cause)
+                segmentRollJob?.cancel()
+                activeFinalizeDeferred?.complete(Unit)
                 scope.launch(Dispatchers.IO) {
-                    dao.updateSegmentStatus(segId, "ERROR_$errorCode")
+                    if (errorCode == -2) {
+                        dao.deleteSegment(segId)
+                    } else {
+                        dao.updateSegmentStatus(segId, "ERROR_$errorCode")
+                    }
+                    if (errorCode == -1) {
+                        // Uninitialized hardware: abort session instead of infinite error loop
+                        isSessionActive = false
+                        android.util.Log.e("SegmenterEngine", "Hardware capture uninitialized; aborting session")
+                    } else if (isSessionActive) {
+                        withContext(Dispatchers.Main) {
+                            startNextSegment(cameraManager)
+                        }
+                    }
                 }
             },
             onFinalized = { finalizedFile, durationMs ->
@@ -123,8 +146,10 @@ class SegmenterEngine(
         tmpFile: File,
         durationMs: Long
     ) = withContext(Dispatchers.IO) {
-        if (!tmpFile.exists() || tmpFile.length() == 0L) {
+        if (!tmpFile.exists() || tmpFile.length() == 0L || durationMs < 1000L) {
             tmpFile.delete()
+            dao.deleteSegment(segId)
+            activeFinalizeDeferred?.complete(Unit)
             return@withContext
         }
 
@@ -135,6 +160,7 @@ class SegmenterEngine(
         // Atomic commit: .tmp -> .mp4
         tmpFile.renameTo(finalMp4)
 
+        val now = System.currentTimeMillis()
         val updatedSegment = SegmentEntity(
             segmentId = segId,
             sessionId = sessId,
@@ -144,7 +170,8 @@ class SegmenterEngine(
             fileSizeBytes = fileSize,
             sha256Hash = sha256,
             status = "QUEUED_FOR_UPLOAD",
-            finalizedAt = System.currentTimeMillis()
+            createdAt = now - durationMs,
+            finalizedAt = now
         )
         dao.updateSegment(updatedSegment)
 
@@ -160,6 +187,8 @@ class SegmenterEngine(
 
         // Trigger WorkManager background sync immediately
         triggerYouTubeUpload()
+
+        activeFinalizeDeferred?.complete(Unit)
     }
 
     suspend fun stopSession(cameraManager: CameraCaptureManager) = withContext(Dispatchers.Main) {
@@ -167,8 +196,18 @@ class SegmenterEngine(
         segmentRollJob?.cancel()
         segmentRollJob = null
 
-        // Stop camera and foreground service
-        cameraManager.stopActiveRecording()
+        // Await active recording finalization to ensure tail segment is committed
+        if (cameraManager.isRecording) {
+            val deferred = CompletableDeferred<Unit>()
+            activeFinalizeDeferred = deferred
+            cameraManager.stopActiveRecording()
+            withTimeoutOrNull(6000L) {
+                deferred.await()
+            }
+            activeFinalizeDeferred = null
+        }
+
+        // Stop foreground service after final segment is safely committed
         RecordingForegroundService.stop(context)
 
         withContext(Dispatchers.IO) {
@@ -186,8 +225,10 @@ class SegmenterEngine(
     }
 
     fun triggerYouTubeUpload() {
+        val pairing = PairingManager(context)
+        val networkType = if (pairing.isWifiOnlyEnabled) NetworkType.UNMETERED else NetworkType.CONNECTED
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiredNetworkType(networkType)
             .build()
 
         // Recordings leave the phone only through the YouTube cloud inbox.

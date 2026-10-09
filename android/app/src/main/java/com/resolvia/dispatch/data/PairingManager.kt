@@ -3,7 +3,7 @@ package com.resolvia.dispatch.data
 import android.content.Context
 import android.content.SharedPreferences
 
-/** Stores only the YouTube credentials needed for direct phone-to-YouTube uploads. */
+/** Stores YouTube credentials for direct phone-to-YouTube cloud uploads. Starts empty on fresh install. */
 class PairingManager(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("dispatch_youtube", Context.MODE_PRIVATE)
 
@@ -27,14 +27,20 @@ class PairingManager(context: Context) {
         get() = youtubeRefreshToken.isNotBlank() &&
             youtubeClientId.isNotBlank() && youtubeClientSecret.isNotBlank()
 
+    var isWifiOnlyEnabled: Boolean
+        get() = prefs.getBoolean("wifi_only", false)
+        set(value) = prefs.edit().putBoolean("wifi_only", value).apply()
+
     fun saveYouTubeCredentials(refreshToken: String, clientId: String, clientSecret: String) {
-        youtubeRefreshToken = refreshToken.trim()
-        youtubeClientId = clientId.trim()
-        youtubeClientSecret = clientSecret.trim()
-        youtubeAccessToken = ""
+        prefs.edit()
+            .putString("refresh_token", refreshToken.trim())
+            .putString("client_id", clientId.trim())
+            .putString("client_secret", clientSecret.trim())
+            .putString("access_token", "")
+            .apply()
     }
 
-    fun clearYouTubeCredentials() {
+    fun clearCredentials() {
         prefs.edit().clear().apply()
     }
 }

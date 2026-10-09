@@ -1,0 +1,285 @@
+Title: Top 5 Advanced UX/UI Design Tips and Tricks Every Designer Needs to Know About – Part 3
+Uploader: uxpeak
+URL: https://www.youtube.com/watch?v=Xzh8xjimmp8
+Duration: 612s
+
+[000.56] Most UXUI advice out there teaches you
+[003.20] the same surface level stuff. Use white
+[005.84] space, align your text, pick better
+[008.08] colors. But if you want to actually
+[010.32] become a great designer, the kind who
+[012.80] creates interfaces people love to use
+[015.12] and remember, you need more than that.
+[017.60] In this video, we'll be sharing five
+[020.00] advanced UXUI design tips you won't hear
+[022.88] in most courses or tutorials. Let's get
+[025.12] into it. One, personalize the experience
+[028.32] based on user behavior. When you're
+[030.64] designing a product, it's important to
+[032.56] remember that not all users are the
+[034.40] same. Some are brand new, some are
+[036.72] coming back after a few uses, and others
+[039.20] are deeply engaged. But what many
+[041.60] beginner designers do is show everyone
+[043.84] the same screen, no matter where they
+[045.84] are in their journey. That's a missed
+[048.16] opportunity. Designing experiences that
+[050.72] adapt to different types of users can
+[052.72] make your products feel smarter, more
+[054.64] personal, and way more useful. Let me
+[057.20] show you what this looks like using a
+[058.88] fitness app. The first screen is for a
+[061.36] new user. They've just signed up, so the
+[063.92] app keeps things really simple. It
+[066.08] welcomes them and encourages them to set
+[068.08] their weekly goals. Underneath, there
+[070.32] are a few trending programs and some
+[072.08] easy categories. It's just enough to
+[074.64] explore, but not overwhelming, which is
+[076.88] exactly what a firsttime user needs.
+[079.28] Next, we've got a repeat user. This
+[081.68] person has used the app before and is
+[083.52] starting to build a routine. Instead of
+[085.44] onboarding content, they get a clear
+[087.36] workout plan for the day with helpful
+[089.36] details like duration and calories
+[091.28] burned. Now, here's a super user,
+[094.08] someone who's fully engaged and
+[095.60] committed to their fitness goals. The
+[097.36] app experience becomes more advanced. We
+[100.16] start with useful stats like daily
+[101.84] steps, calories burned, and heart rate.
+[104.40] Then it moves into their workout plan
+[106.16] and personalized diet suggestions. At
+[108.72] this stage, it's not about helping them
+[110.72] get started. It's about helping them
+[112.56] optimize and stay on track. Great design
+[115.60] meets people where they are. Instead of
+[118.00] creating one generic experience for
+[120.08] everyone, think about how your interface
+[122.24] can adapt to what the user needs right
+[124.00] now. Small changes like personalized
+[126.64] messages, tailored content, or progress
+[129.20] tracking can make your product feel more
+[131.36] human, more helpful, and more valuable.
+[134.56] Two, design smarter search. Search is
+[137.52] one of the most critical features in any
+[139.52] product. But it's also one of the most
+[141.60] overlooked in design. Most designers
+[144.08] just drop in a search bar and move on.
+[146.40] But good search design isn't just about
+[148.56] function. It's about how it feels, how
+[150.80] fast it helps users get what they need,
+[152.80] and how much effort it saves them. Think
+[155.44] about what happens when a user taps into
+[157.20] a search bar. That's a moment of intent.
+[160.24] They're looking for something, but they
+[161.76] may not know exactly what. That's where
+[164.32] your design can do one of two things.
+[166.32] Give them a blank screen and expect them
+[168.08] to do all the work. Or offer helpful
+[171.04] suggestions that make the experience
+[172.80] easier, faster, and smarter. Let's look
+[175.52] at the first version, the standard blank
+[177.60] screen search. Technically, it works,
+[179.84] but there's no guidance. It's a dead end
+[182.64] unless they know exactly what they want.
+[184.88] Now, let's look at a smarter version of
+[186.48] the same screen. The search bar is still
+[188.72] there, ready to use, but underneath it,
+[191.12] the interface offers subtle, useful
+[193.44] suggestions. Things like recent
+[195.60] searches, so the user can quickly pick
+[197.52] up where they left off. Popular items,
+[200.00] which gives them a sense of what others
+[201.52] are finding useful. Personalized
+[203.52] recommendations based on their past
+[205.68] behavior or interest. These suggestions
+[208.24] don't get in the way. They quietly
+[210.24] support the user. And if they already
+[212.08] know what they want, they can ignore
+[213.60] them and just type. But if they're
+[215.52] unsure, these small hints reduce
+[217.60] friction and give them somewhere to
+[219.36] start. Three, smarter order tracking
+[222.40] design. Here's something a lot of
+[224.32] designers overlook. Post-purchase
+[226.32] experiences matter just as much as the
+[228.40] purchase itself. Think about it. When
+[230.48] someone places an order, they've already
+[232.40] made a decision. They've paid,
+[234.40] committed, and now they're waiting. That
+[236.64] moment between payment and delivery is
+[239.04] full of expectation and uncertainty. And
+[241.60] how you design for that moment says a
+[243.68] lot about your product. Now, let's take
+[246.00] a look at a very basic order screen. It
+[248.40] shows the order number, a plain list of
+[250.32] items, some courier info, and a timeline
+[253.84] made up of simple dates. Technically,
+[255.84] the information is there, but visually
+[258.64] there's no structure, no prioritization,
+[261.28] no guidance, just data dumped onto a
+[263.84] screen. The user has to scan, interpret,
+[266.56] and piece everything together
+[268.00] themselves. Now, compare that to this
+[270.56] upgraded design. From the very first
+[272.80] glance, this screen makes you feel like
+[275.12] everything is under control. It opens
+[277.36] with a confident message. Your order is
+[279.36] on the way, paired with clear delivery
+[281.36] details and visual icons that help
+[283.44] communicate the time window and address
+[285.20] instantly. The courier section is no
+[287.44] longer just a name and number. It's
+[289.52] human. There's a photo, a name, and
+[292.08] quick access buttons to call or message,
+[294.48] which not only adds trust, but makes the
+[297.04] experience feel more personal and
+[298.96] responsive. The items, no more long text
+[301.76] lists. And one of the best touches, the
+[304.16] order history is now a visual timeline.
+[307.04] Instead of scanning a block of text and
+[308.96] dates, users can instantly see what
+[311.44] stage the order is in. This isn't just a
+[314.48] UI upgrade. It's a completely different
+[317.28] experience because great design doesn't
+[319.76] just display information. It reduces
+[322.16] stress and answers questions before
+[324.40] they're asked. Speaking of great
+[326.72] designs, a lot of people ask us, "How do
+[329.36] I make my UI designs actually look good?
+[332.48] Not just functional, not just okay, but
+[335.04] clean, modern, and something people
+[337.04] actually want to use." If you're trying
+[338.88] to figure that out, I really recommend
+[340.72] checking out our UX UI design playbook.
+[343.04] It's packed with the exact principles,
+[344.96] visual tips, and layout rules that
+[347.04] helped thousands of new designers, and
+[349.44] also developers finally understand how
+[351.84] to design great UI designs. You'll find
+[354.24] real examples, prolevel shortcuts, and
+[356.48] simple things you can apply right away
+[358.16] to make your designs feel way more
+[360.00] polished and confident. In fact, a lot
+[361.92] of our students said this was the best
+[363.84] UI design ebook that finally helped them
+[366.08] to improve their UI designs. We just
+[368.16] crossed 17,000 downloads of the free
+[370.24] preview and full version, which is
+[372.00] honestly amazing. The price may go up
+[374.32] soon, but right now you can get 40% off
+[376.56] with the code love peak 40. So, if you
+[379.12] haven't grabbed your copy yet, this is
+[380.56] the perfect time. Links in the
+[382.08] description. And when you try it, I'd
+[383.92] love to hear how it helped your designs.
+[385.84] We've already seen some amazing
+[387.12] transformations.
+[388.29] [Music]
+[390.32] Four, category screens. Category screens
+[393.12] might seem simple, just a list of
+[395.20] options, right? but they actually play a
+[397.36] huge role in how users move through your
+[399.20] product. Let's look at three different
+[400.88] versions of this screen and how the
+[402.64] design affects the experience. The first
+[404.96] version is very basic, just a list of
+[407.44] category names and C selection links.
+[409.84] There's nothing wrong with it. It's
+[411.12] clean and minimal. But the problem is it
+[413.52] puts all the effort on the user. Every
+[415.76] line looks the same. There's no visual
+[417.76] rhythm, no hierarchy, and no cues that
+[420.24] help guide the eye. You have to read
+[421.92] through every label to find what you
+[423.44] want. Now, the second version is
+[425.36] something we see a lot from junior
+[426.88] designers. It looks more designed and
+[429.12] might even seem impressive at first
+[430.80] glance, but here's the thing. It focuses
+[433.04] more on appearance than on usability.
+[435.04] Even though there's a dark overlay to
+[436.64] help with some text readability, it
+[438.40] doesn't fully fix the contrast issue.
+[440.48] Some of the text is still hard to read.
+[442.48] On top of that, the images don't match.
+[444.64] One is bright, another is moody, another
+[446.80] feels like a magazine photo. There's no
+[448.96] visual consistency. It doesn't feel like
+[451.12] these images belong to the same product
+[452.88] or brand, more like a random mix of
+[455.28] stock photos. And because every block is
+[457.44] so visually busy, it takes longer for
+[459.68] users to understand what they're looking
+[461.20] at. Now, let's look at the third
+[463.44] version. And this is where things come
+[465.28] together in a much more thoughtful,
+[466.96] professional way. This design uses
+[468.96] color-coded charts, each with a soft,
+[471.20] solid background and a clean, isolated
+[473.60] image that represents the category.
+[475.52] Because the images are stylistically
+[477.36] unified and the background colors are
+[479.04] well balanced, the whole screen feels
+[481.20] cohesive and branded. There's a rhythm
+[483.76] to the layout that makes scanning
+[485.28] effortless. You can glance at the screen
+[487.76] and understand the options in just
+[489.60] seconds. Five, choose the right input
+[492.08] method for the moment, not just the
+[494.00] data. Not all number inputs are created
+[496.56] equal, and they shouldn't be treated the
+[498.56] same. Entering your weight, age,
+[500.64] calories, or daily steps might seem
+[502.72] similar on the surface, but the way
+[504.56] those values are entered can completely
+[506.64] change how smooth or frustrating the
+[508.88] experience feels. Let's walk through a
+[511.04] few real examples and break down what
+[512.96] works best and why. First, consider the
+[516.16] type of input. There are two kinds of
+[518.16] numeric input scenarios. onetime setup
+[520.88] like entering your weight when first
+[522.24] signing up or setting your age, height
+[524.40] or weight and frequent repeated entry
+[527.92] like locking food to track calories or
+[529.92] macros. These are completely different
+[532.08] use cases and they require completely
+[534.64] different UI patterns. Let's look at the
+[536.80] screen where the user is asked to enter
+[538.48] personal details like weight or height.
+[540.64] In these cases, scroll wheels and
+[542.64] sliders work beautifully. Why? Because
+[545.36] users aren't entering this data often.
+[547.52] They just want to get through the setup
+[548.88] quickly and these values usually fall
+[550.64] within a known range. And most
+[552.72] importantly, they are low effort. Users
+[555.68] don't need to type or think too much.
+[557.68] Now, let's compare that to logging your
+[559.44] food every day to track calories or
+[561.12] macros. This is where sliders and scroll
+[563.52] wheels break down. They're too slow, too
+[566.00] fiddly, and don't offer the kind of
+[567.92] control users need. If you want to log
+[570.24] food quantity like 350 g, I don't want
+[573.12] to scroll endlessly or try to drag a
+[575.20] slider to the perfect number. Text
+[577.20] fields are better here because they're
+[578.72] faster, more precise, and less
+[580.80] frustrating when used repeatedly. So,
+[583.20] how do you choose? Here is a simple rule
+[585.68] of thumb. Use sliders or scroll wheels
+[587.76] for casual one-time inputs where
+[589.68] precision isn't critical. Use text
+[591.84] fields, steppers, or number inputs for
+[594.32] frequent, precise, or repetitive tasks.
+[597.28] It's not about which component looks
+[598.80] nicer. It's about reducing friction and
+[601.36] matching the input method to the
+[602.96] context. That's all for today. We hope
+[605.52] you found these tips helpful. Let us
+[607.36] know in the comments which one was your
+[608.72] favorite. We'll see you on the next one.

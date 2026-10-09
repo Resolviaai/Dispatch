@@ -15,7 +15,8 @@ data class SegmentEntity(
     val sha256Hash: String = "",
     val status: String = "RECORDING", // RECORDING, FINALIZED, QUEUED_FOR_UPLOAD, VERIFIED_BY_LAPTOP
     val createdAt: Long = System.currentTimeMillis(),
-    val finalizedAt: Long? = null
+    val finalizedAt: Long? = null,
+    val youtubeVideoId: String? = null
 )
 
 val SegmentEntity.durationSeconds: Long

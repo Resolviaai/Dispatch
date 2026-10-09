@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-b">
+  <title id="title-b">Dispatch Logo - Concept B (Viewfinder D)</title>
+  <!-- Modernist capital D framing a 9:16 mobile viewfinder screen and a precision recording focal dot -->
+  <path fill="#070A0F" fill-rule="evenodd" d="M 56 44 L 136 44 C 178 44 212 78 212 128 C 212 178 178 212 136 212 L 56 212 A 12 12 0 0 1 44 200 L 44 56 A 12 12 0 0 1 56 44 Z M 96 80 L 126 80 A 12 12 0 0 1 138 92 L 138 164 A 12 12 0 0 1 126 176 L 96 176 A 12 12 0 0 1 84 164 L 84 92 A 12 12 0 0 1 96 80 Z M 186 128 A 14 14 0 1 0 158 128 A 14 14 0 1 0 186 128 Z" />
+</svg>

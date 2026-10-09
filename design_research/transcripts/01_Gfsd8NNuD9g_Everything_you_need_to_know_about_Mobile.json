@@ -1,0 +1,1140 @@
+{
+  "meta": {
+    "id": "Gfsd8NNuD9g",
+    "url": "https://www.youtube.com/watch?v=Gfsd8NNuD9g",
+    "title": "Everything you need to know about Mobile App UI’s in 8 minutes (beginner friendly)",
+    "uploader": "Kole Jain",
+    "duration": 456,
+    "description": "Design like a professional using Mobbin and get 20% off: https://mobbin.com/kole\n\nLearn how to design a mobile app UI from scratch in this beginner friendly, breakdown. In under 8 minutes, I'll walk through the core principles of mobile UI design, like navigation, content and gestures for a solid foundation to start building your own app interfaces.\n\nEnjoying the content? Subscribe for more!\n @KoleJain  \n\nFigma files:\nhttps://www.kolejain.com/resources?scrollTo=mobile-app-ui\n\nTimestamps:\n0:00 In",
+    "slug": "Everything_you_need_to_know_about_Mobile",
+    "snippets_count": 225,
+    "total_words": 1572
+  },
+  "snippets": [
+    {
+      "text": "When it comes to UI, mobile is just so",
+      "start": 0.0,
+      "duration": 3.88
+    },
+    {
+      "text": "different from desktop that it results",
+      "start": 2.36,
+      "duration": 3.8
+    },
+    {
+      "text": "in some pretty questionable designs. So,",
+      "start": 3.88,
+      "duration": 3.4
+    },
+    {
+      "text": "in this video, I'm going to show you how",
+      "start": 6.16,
+      "duration": 3.2
+    },
+    {
+      "text": "to design your very first mobile UI",
+      "start": 7.28,
+      "duration": 3.84
+    },
+    {
+      "text": "completely from scratch in a way that's",
+      "start": 9.36,
+      "duration": 4.24
+    },
+    {
+      "text": "dynamic, purposeful, and effortless to",
+      "start": 11.12,
+      "duration": 4.64
+    },
+    {
+      "text": "use. And by the end, you won't just have",
+      "start": 13.6,
+      "duration": 3.52
+    },
+    {
+      "text": "a stunning mobile design. You'll",
+      "start": 15.76,
+      "duration": 3.0
+    },
+    {
+      "text": "understand why the best apps are",
+      "start": 17.12,
+      "duration": 3.8
+    },
+    {
+      "text": "designed the way they are. The first",
+      "start": 18.76,
+      "duration": 4.24
+    },
+    {
+      "text": "difference of desktop to mobile is",
+      "start": 20.92,
+      "duration": 3.88
+    },
+    {
+      "text": "obviously the navigation. Where we had",
+      "start": 23.0,
+      "duration": 4.04
+    },
+    {
+      "text": "an expansive sidebar, we now definitely",
+      "start": 24.8,
+      "duration": 5.16
+    },
+    {
+      "text": "do not. So, we have two options. If we",
+      "start": 27.04,
+      "duration": 4.68
+    },
+    {
+      "text": "can consolidate our sidebar links down",
+      "start": 29.96,
+      "duration": 4.0
+    },
+    {
+      "text": "to just a few key icons, we can go with",
+      "start": 31.72,
+      "duration": 4.12
+    },
+    {
+      "text": "a nice bottom bar, which nowadays is",
+      "start": 33.96,
+      "duration": 3.52
+    },
+    {
+      "text": "typically floating with the important",
+      "start": 35.84,
+      "duration": 4.0
+    },
+    {
+      "text": "action broken out just like this. Five",
+      "start": 37.48,
+      "duration": 3.76
+    },
+    {
+      "text": "links down here is pretty much the",
+      "start": 39.84,
+      "duration": 3.56
+    },
+    {
+      "text": "definite limit, and three or four is",
+      "start": 41.24,
+      "duration": 4.0
+    },
+    {
+      "text": "much more ideal. But, either way, this",
+      "start": 43.4,
+      "duration": 3.6
+    },
+    {
+      "text": "means that we'll always maintain over a",
+      "start": 45.24,
+      "duration": 4.48
+    },
+    {
+      "text": "44-pixel target since people do have fat",
+      "start": 47.0,
+      "duration": 4.6
+    },
+    {
+      "text": "fingers. It's important to note too that",
+      "start": 49.72,
+      "duration": 3.64
+    },
+    {
+      "text": "depending on the context you're in,",
+      "start": 51.6,
+      "duration": 4.08
+    },
+    {
+      "text": "these actions can and do change, which",
+      "start": 53.36,
+      "duration": 3.6
+    },
+    {
+      "text": "we'll touch on when we start building",
+      "start": 55.68,
+      "duration": 3.6
+    },
+    {
+      "text": "out a few pages. That typically is the",
+      "start": 56.96,
+      "duration": 4.4
+    },
+    {
+      "text": "standard. However, sometimes you just",
+      "start": 59.28,
+      "duration": 3.56
+    },
+    {
+      "text": "have too many important things in the",
+      "start": 61.36,
+      "duration": 3.56
+    },
+    {
+      "text": "sidebar to really fit things in here, in",
+      "start": 62.84,
+      "duration": 3.52
+    },
+    {
+      "text": "which case another valid form of",
+      "start": 64.92,
+      "duration": 3.56
+    },
+    {
+      "text": "navigation is to take the sidebar and",
+      "start": 66.36,
+      "duration": 4.16
+    },
+    {
+      "text": "turn that into a whole page that sort of",
+      "start": 68.48,
+      "duration": 4.32
+    },
+    {
+      "text": "becomes the home page. In this case,",
+      "start": 70.52,
+      "duration": 3.84
+    },
+    {
+      "text": "we'll add in some recent notes to the",
+      "start": 72.8,
+      "duration": 3.64
+    },
+    {
+      "text": "top and actions and counts to the right",
+      "start": 74.36,
+      "duration": 4.84
+    },
+    {
+      "text": "side, so it doesn't feel so lopsided. It",
+      "start": 76.44,
+      "duration": 4.56
+    },
+    {
+      "text": "also conveniently clears up the bottom",
+      "start": 79.2,
+      "duration": 3.68
+    },
+    {
+      "text": "for a nice big search bar or action",
+      "start": 81.0,
+      "duration": 3.6
+    },
+    {
+      "text": "button, which is what apps like Notion",
+      "start": 82.88,
+      "duration": 3.88
+    },
+    {
+      "text": "do. Moving up to the top, a bell and",
+      "start": 84.6,
+      "duration": 4.12
+    },
+    {
+      "text": "more menu is a good place to start, but",
+      "start": 86.76,
+      "duration": 4.04
+    },
+    {
+      "text": "these actions are also highly contextual",
+      "start": 88.72,
+      "duration": 3.8
+    },
+    {
+      "text": "based on the page. Now, when it comes",
+      "start": 90.8,
+      "duration": 3.16
+    },
+    {
+      "text": "time to actually start building,",
+      "start": 92.52,
+      "duration": 3.28
+    },
+    {
+      "text": "squishing things down and trying to fit",
+      "start": 93.96,
+      "duration": 3.72
+    },
+    {
+      "text": "as much on the screen as possible is",
+      "start": 95.8,
+      "duration": 3.96
+    },
+    {
+      "text": "pretty natural. This all looks fairly",
+      "start": 97.68,
+      "duration": 4.12
+    },
+    {
+      "text": "normal, actually, until I zoom out and",
+      "start": 99.76,
+      "duration": 4.12
+    },
+    {
+      "text": "show you the other normal-sized apps for",
+      "start": 101.8,
+      "duration": 4.2
+    },
+    {
+      "text": "comparison. Despite our screen getting",
+      "start": 103.88,
+      "duration": 4.36
+    },
+    {
+      "text": "much, much smaller, the type scale and",
+      "start": 106.0,
+      "duration": 4.04
+    },
+    {
+      "text": "spacing remains relatively similar to",
+      "start": 108.24,
+      "duration": 4.44
+    },
+    {
+      "text": "desktop, even getting a bit larger. iOS",
+      "start": 110.04,
+      "duration": 4.96
+    },
+    {
+      "text": "actually has a base font size of 17",
+      "start": 112.68,
+      "duration": 4.72
+    },
+    {
+      "text": "pixels, while macOS has a base of only",
+      "start": 115.0,
+      "duration": 4.72
+    },
+    {
+      "text": "13 pixels. So, more often than not,",
+      "start": 117.4,
+      "duration": 3.96
+    },
+    {
+      "text": "things actually get larger on these",
+      "start": 119.72,
+      "duration": 3.56
+    },
+    {
+      "text": "smaller screens. And it's a tough",
+      "start": 121.36,
+      "duration": 3.52
+    },
+    {
+      "text": "realization that on desktop, where you",
+      "start": 123.28,
+      "duration": 3.52
+    },
+    {
+      "text": "could have had an action bar, a gallery",
+      "start": 124.88,
+      "duration": 4.68
+    },
+    {
+      "text": "of recent notes, a full calendar, tasks,",
+      "start": 126.8,
+      "duration": 4.96
+    },
+    {
+      "text": "and a scratch pad, now you can pick one",
+      "start": 129.56,
+      "duration": 4.08
+    },
+    {
+      "text": "of those things. And because we have to",
+      "start": 131.76,
+      "duration": 4.0
+    },
+    {
+      "text": "pick just one, the way we start to lay",
+      "start": 133.64,
+      "duration": 4.16
+    },
+    {
+      "text": "out content starts to change a little.",
+      "start": 135.76,
+      "duration": 3.96
+    },
+    {
+      "text": "Dashboards and desktop designs can lay",
+      "start": 137.8,
+      "duration": 3.88
+    },
+    {
+      "text": "out content in two directions at the",
+      "start": 139.72,
+      "duration": 3.68
+    },
+    {
+      "text": "same time. What that means is this",
+      "start": 141.68,
+      "duration": 4.24
+    },
+    {
+      "text": "layout has two columns and three rows,",
+      "start": 143.4,
+      "duration": 4.84
+    },
+    {
+      "text": "obviously extending in both directions.",
+      "start": 145.92,
+      "duration": 4.12
+    },
+    {
+      "text": "However, on mobile, you can choose one",
+      "start": 148.24,
+      "duration": 3.92
+    },
+    {
+      "text": "direction to move in per section. Either",
+      "start": 150.04,
+      "duration": 4.2
+    },
+    {
+      "text": "you can stack each note vertically, or",
+      "start": 152.16,
+      "duration": 3.84
+    },
+    {
+      "text": "you can make it horizontal off the page,",
+      "start": 154.24,
+      "duration": 3.68
+    },
+    {
+      "text": "but of course, you can't have both like",
+      "start": 156.0,
+      "duration": 4.2
+    },
+    {
+      "text": "you reasonably could on desktop. This is",
+      "start": 157.92,
+      "duration": 4.0
+    },
+    {
+      "text": "a useful guideline when taking content",
+      "start": 160.2,
+      "duration": 3.32
+    },
+    {
+      "text": "from dashboards and making it",
+      "start": 161.92,
+      "duration": 4.24
+    },
+    {
+      "text": "mobile-optimized. And if you understand",
+      "start": 163.52,
+      "duration": 4.32
+    },
+    {
+      "text": "that concept, things really start to",
+      "start": 166.16,
+      "duration": 3.52
+    },
+    {
+      "text": "become a piece of cake. In addition,",
+      "start": 167.84,
+      "duration": 4.0
+    },
+    {
+      "text": "ignoring our floating menus and actions,",
+      "start": 169.68,
+      "duration": 3.8
+    },
+    {
+      "text": "there's really only four types of",
+      "start": 171.84,
+      "duration": 3.6
+    },
+    {
+      "text": "building blocks for an app. The biggest",
+      "start": 173.48,
+      "duration": 4.12
+    },
+    {
+      "text": "and most important are cards. Basically,",
+      "start": 175.44,
+      "duration": 4.08
+    },
+    {
+      "text": "everything on here is a card in some way",
+      "start": 177.6,
+      "duration": 3.24
+    },
+    {
+      "text": "or another because it allows us to",
+      "start": 179.52,
+      "duration": 3.56
+    },
+    {
+      "text": "flexibly group content in place of white",
+      "start": 180.84,
+      "duration": 3.76
+    },
+    {
+      "text": "space, which we don't typically have a",
+      "start": 183.08,
+      "duration": 3.68
+    },
+    {
+      "text": "lot of here. The others are text or",
+      "start": 184.6,
+      "duration": 4.84
+    },
+    {
+      "text": "links, of course, images, and inputs.",
+      "start": 186.76,
+      "duration": 4.52
+    },
+    {
+      "text": "And of course, any of those can be put",
+      "start": 189.44,
+      "duration": 4.4
+    },
+    {
+      "text": "into cards as well. One important note",
+      "start": 191.28,
+      "duration": 4.44
+    },
+    {
+      "text": "about cards is to try and avoid",
+      "start": 193.84,
+      "duration": 4.12
+    },
+    {
+      "text": "double-nesting them, kind of like this.",
+      "start": 195.72,
+      "duration": 3.84
+    },
+    {
+      "text": "It's not always avoidable, but it",
+      "start": 197.96,
+      "duration": 3.6
+    },
+    {
+      "text": "creates padding on padding, which really",
+      "start": 199.56,
+      "duration": 4.0
+    },
+    {
+      "text": "restricts the space you have and ends up",
+      "start": 201.56,
+      "duration": 3.8
+    },
+    {
+      "text": "cramping things. Often, you can group",
+      "start": 203.56,
+      "duration": 3.76
+    },
+    {
+      "text": "with white space instead of a container",
+      "start": 205.36,
+      "duration": 4.32
+    },
+    {
+      "text": "and somewhat alleviate this problem.",
+      "start": 207.32,
+      "duration": 4.44
+    },
+    {
+      "text": "Because we are so space-constrained on",
+      "start": 209.68,
+      "duration": 3.72
+    },
+    {
+      "text": "mobile apps, I'd like to introduce the",
+      "start": 211.76,
+      "duration": 4.44
+    },
+    {
+      "text": "important idea that one screen does one",
+      "start": 213.4,
+      "duration": 5.24
+    },
+    {
+      "text": "thing, and that's it. Obviously, the",
+      "start": 216.2,
+      "duration": 4.24
+    },
+    {
+      "text": "very notable exception is our home",
+      "start": 218.64,
+      "duration": 4.04
+    },
+    {
+      "text": "screen, but otherwise, the settings is",
+      "start": 220.44,
+      "duration": 4.12
+    },
+    {
+      "text": "just settings, and the notes editor is",
+      "start": 222.68,
+      "duration": 3.6
+    },
+    {
+      "text": "just a notes editor. We don't throw in",
+      "start": 224.56,
+      "duration": 3.96
+    },
+    {
+      "text": "clutter like recent notes or suggested",
+      "start": 226.28,
+      "duration": 4.32
+    },
+    {
+      "text": "templates at the top. Instead, whenever",
+      "start": 228.52,
+      "duration": 3.6
+    },
+    {
+      "text": "you need to add something new, don't",
+      "start": 230.6,
+      "duration": 3.04
+    },
+    {
+      "text": "reach for a different layout, reach for",
+      "start": 232.12,
+      "duration": 3.48
+    },
+    {
+      "text": "a different page altogether. Though,",
+      "start": 233.64,
+      "duration": 3.84
+    },
+    {
+      "text": "this example about templates brings up",
+      "start": 235.6,
+      "duration": 4.12
+    },
+    {
+      "text": "an interesting point about context.",
+      "start": 237.48,
+      "duration": 3.72
+    },
+    {
+      "text": "We're editing a note, so we don't want",
+      "start": 239.72,
+      "duration": 3.16
+    },
+    {
+      "text": "to be ripped away to a new page to",
+      "start": 241.2,
+      "duration": 3.32
+    },
+    {
+      "text": "select a template, but we don't have",
+      "start": 242.88,
+      "duration": 3.76
+    },
+    {
+      "text": "enough room on screen. This is where",
+      "start": 244.52,
+      "duration": 5.2
+    },
+    {
+      "text": "bottom sheets become super useful. This",
+      "start": 246.64,
+      "duration": 4.56
+    },
+    {
+      "text": "is a bottom sheet. You've probably seen",
+      "start": 249.72,
+      "duration": 3.72
+    },
+    {
+      "text": "it a bunch, and now we can simply add in",
+      "start": 251.2,
+      "duration": 4.84
+    },
+    {
+      "text": "a title, search bar, and a check and X,",
+      "start": 253.44,
+      "duration": 4.4
+    },
+    {
+      "text": "and all of our templates, too. These can",
+      "start": 256.04,
+      "duration": 3.88
+    },
+    {
+      "text": "be any height, but they keep the user in",
+      "start": 257.84,
+      "duration": 3.92
+    },
+    {
+      "text": "context and are easy to navigate with",
+      "start": 259.92,
+      "duration": 4.08
+    },
+    {
+      "text": "gestures, which we'll talk about in just",
+      "start": 261.76,
+      "duration": 4.0
+    },
+    {
+      "text": "a second. Another good example is the",
+      "start": 264.0,
+      "duration": 3.96
+    },
+    {
+      "text": "typical use of this plus button, which",
+      "start": 265.76,
+      "duration": 4.92
+    },
+    {
+      "text": "either opens a little menu or opens with",
+      "start": 267.96,
+      "duration": 4.6
+    },
+    {
+      "text": "an input to just immediately start",
+      "start": 270.68,
+      "duration": 4.24
+    },
+    {
+      "text": "typing. But, before we get to gestures,",
+      "start": 272.56,
+      "duration": 3.6
+    },
+    {
+      "text": "sometimes when you're designing, you",
+      "start": 274.92,
+      "duration": 3.4
+    },
+    {
+      "text": "need some inspiration. So, a tool I use",
+      "start": 276.16,
+      "duration": 4.0
+    },
+    {
+      "text": "all the time and actually used to make",
+      "start": 278.32,
+      "duration": 3.92
+    },
+    {
+      "text": "this video is Mobbin, the sponsor of",
+      "start": 280.16,
+      "duration": 4.4
+    },
+    {
+      "text": "today's video. Mobbin curates hundreds",
+      "start": 282.24,
+      "duration": 4.76
+    },
+    {
+      "text": "of thousands of videos, images, and user",
+      "start": 284.56,
+      "duration": 4.92
+    },
+    {
+      "text": "flows, all from top apps like Notion,",
+      "start": 287.0,
+      "duration": 5.0
+    },
+    {
+      "text": "Craft, Headspace, and many more. It",
+      "start": 289.48,
+      "duration": 4.32
+    },
+    {
+      "text": "often helps me to see how top teams",
+      "start": 292.0,
+      "duration": 4.2
+    },
+    {
+      "text": "design flows like onboarding or to check",
+      "start": 293.8,
+      "duration": 4.24
+    },
+    {
+      "text": "out specific UI elements just like",
+      "start": 296.2,
+      "duration": 3.4
+    },
+    {
+      "text": "bottom sheets. You can filter by",
+      "start": 298.04,
+      "duration": 3.68
+    },
+    {
+      "text": "categories, screens, UI elements, and",
+      "start": 299.6,
+      "duration": 4.2
+    },
+    {
+      "text": "user flows, so you can always find",
+      "start": 301.72,
+      "duration": 3.64
+    },
+    {
+      "text": "what's relevant to you. If you're",
+      "start": 303.8,
+      "duration": 3.24
+    },
+    {
+      "text": "interested, you can check out Mobbin",
+      "start": 305.36,
+      "duration": 3.92
+    },
+    {
+      "text": "using my link in description to get 20%",
+      "start": 307.04,
+      "duration": 4.48
+    },
+    {
+      "text": "off. Now, back to the video. Now,",
+      "start": 309.28,
+      "duration": 4.12
+    },
+    {
+      "text": "gestures is where mobile apps start to",
+      "start": 311.52,
+      "duration": 3.84
+    },
+    {
+      "text": "get really interesting. One of the most",
+      "start": 313.4,
+      "duration": 4.24
+    },
+    {
+      "text": "common is swiping right to go back like",
+      "start": 315.36,
+      "duration": 3.92
+    },
+    {
+      "text": "this. But, if we move the background",
+      "start": 317.64,
+      "duration": 4.68
+    },
+    {
+      "text": "left by about 35% and then also animate",
+      "start": 319.28,
+      "duration": 4.72
+    },
+    {
+      "text": "it right, we get a super smooth",
+      "start": 322.32,
+      "duration": 3.76
+    },
+    {
+      "text": "transition. Same idea with our bottom",
+      "start": 324.0,
+      "duration": 4.12
+    },
+    {
+      "text": "sheets. As the bottom sheet comes up, we",
+      "start": 326.08,
+      "duration": 4.2
+    },
+    {
+      "text": "often zoom out the background and zoom",
+      "start": 328.12,
+      "duration": 4.44
+    },
+    {
+      "text": "back in on swipe down. Swipes are",
+      "start": 330.28,
+      "duration": 4.48
+    },
+    {
+      "text": "everywhere in modern mobile apps, so as",
+      "start": 332.56,
+      "duration": 4.0
+    },
+    {
+      "text": "long as you educate the user on how to",
+      "start": 334.76,
+      "duration": 3.56
+    },
+    {
+      "text": "use them, they can be relied on pretty",
+      "start": 336.56,
+      "duration": 4.12
+    },
+    {
+      "text": "heavily. A good example is a handy swipe",
+      "start": 338.32,
+      "duration": 4.64
+    },
+    {
+      "text": "up to search, which is used by Slack as",
+      "start": 340.68,
+      "duration": 4.48
+    },
+    {
+      "text": "well as sort of by Apple, too. And I'd",
+      "start": 342.96,
+      "duration": 4.04
+    },
+    {
+      "text": "be remiss if I didn't mention the long",
+      "start": 345.16,
+      "duration": 3.8
+    },
+    {
+      "text": "press, the mobile equivalent of the",
+      "start": 347.0,
+      "duration": 4.12
+    },
+    {
+      "text": "right click. It's typical to blur the",
+      "start": 348.96,
+      "duration": 3.84
+    },
+    {
+      "text": "rest of the screen and just show the",
+      "start": 351.12,
+      "duration": 3.92
+    },
+    {
+      "text": "actions in addition to some slight zoom",
+      "start": 352.8,
+      "duration": 4.12
+    },
+    {
+      "text": "on the element itself. Or, we can take",
+      "start": 355.04,
+      "duration": 3.56
+    },
+    {
+      "text": "it even a step further and turn this",
+      "start": 356.92,
+      "duration": 4.2
+    },
+    {
+      "text": "into a more dynamic preview like how iOS",
+      "start": 358.6,
+      "duration": 4.44
+    },
+    {
+      "text": "does it. Now, also because of our",
+      "start": 361.12,
+      "duration": 4.2
+    },
+    {
+      "text": "limited space, actions need to come and",
+      "start": 363.04,
+      "duration": 4.28
+    },
+    {
+      "text": "go as needed. They can't always be",
+      "start": 365.32,
+      "duration": 3.88
+    },
+    {
+      "text": "persistent. For example, clicking into",
+      "start": 367.32,
+      "duration": 3.8
+    },
+    {
+      "text": "one of our notes hides our navbar and",
+      "start": 369.2,
+      "duration": 3.88
+    },
+    {
+      "text": "reveals other actions specific to note",
+      "start": 371.12,
+      "duration": 3.72
+    },
+    {
+      "text": "editing, such as text formatting or",
+      "start": 373.08,
+      "duration": 3.72
+    },
+    {
+      "text": "sharing up at the top. Or, when we go to",
+      "start": 374.84,
+      "duration": 3.72
+    },
+    {
+      "text": "select templates, all of that is hidden",
+      "start": 376.8,
+      "duration": 3.44
+    },
+    {
+      "text": "for really just two actions, a",
+      "start": 378.56,
+      "duration": 4.2
+    },
+    {
+      "text": "confirmation button and an X. And of",
+      "start": 380.24,
+      "duration": 4.76
+    },
+    {
+      "text": "course, how these actions animate in and",
+      "start": 382.76,
+      "duration": 4.96
+    },
+    {
+      "text": "out is half the fun, too. Finally, what",
+      "start": 385.0,
+      "duration": 5.2
+    },
+    {
+      "text": "we've designed here is an ideal state.",
+      "start": 387.72,
+      "duration": 4.12
+    },
+    {
+      "text": "The app is filled with content, but",
+      "start": 390.2,
+      "duration": 3.32
+    },
+    {
+      "text": "don't forget what the user sees the",
+      "start": 391.84,
+      "duration": 3.48
+    },
+    {
+      "text": "first time they log in when there is no",
+      "start": 393.52,
+      "duration": 4.0
+    },
+    {
+      "text": "content. We could have cards inviting",
+      "start": 395.32,
+      "duration": 4.52
+    },
+    {
+      "text": "user to start adding in events, tasks,",
+      "start": 397.52,
+      "duration": 4.16
+    },
+    {
+      "text": "and notes, but instead, let's draw",
+      "start": 399.84,
+      "duration": 3.8
+    },
+    {
+      "text": "attention to the plus button, which is",
+      "start": 401.68,
+      "duration": 3.92
+    },
+    {
+      "text": "our main action, and add in a",
+      "start": 403.64,
+      "duration": 4.04
+    },
+    {
+      "text": "full-screen empty state to simplify",
+      "start": 405.6,
+      "duration": 4.36
+    },
+    {
+      "text": "things. Then, we have a simple popover",
+      "start": 407.68,
+      "duration": 4.32
+    },
+    {
+      "text": "instructing them on how things actually",
+      "start": 409.96,
+      "duration": 4.52
+    },
+    {
+      "text": "work. But, there is also another type of",
+      "start": 412.0,
+      "duration": 4.28
+    },
+    {
+      "text": "empty state, which is when we search for",
+      "start": 414.48,
+      "duration": 4.4
+    },
+    {
+      "text": "a note, for example, and get no results.",
+      "start": 416.28,
+      "duration": 4.4
+    },
+    {
+      "text": "Instead of just an instruction, we",
+      "start": 418.88,
+      "duration": 3.32
+    },
+    {
+      "text": "should have some nice imagery, and we",
+      "start": 420.68,
+      "duration": 3.24
+    },
+    {
+      "text": "need to acknowledge that there are no",
+      "start": 422.2,
+      "duration": 3.92
+    },
+    {
+      "text": "notes matching the existing keywords,",
+      "start": 423.92,
+      "duration": 3.56
+    },
+    {
+      "text": "and then perhaps give them a few",
+      "start": 426.12,
+      "duration": 3.4
+    },
+    {
+      "text": "suggestions in case of a typo, and an",
+      "start": 427.48,
+      "duration": 4.52
+    },
+    {
+      "text": "action to exit the empty state. There is",
+      "start": 429.52,
+      "duration": 4.44
+    },
+    {
+      "text": "a ton of different apps and mobile",
+      "start": 432.0,
+      "duration": 3.64
+    },
+    {
+      "text": "designs you could build, but this should",
+      "start": 433.96,
+      "duration": 3.4
+    },
+    {
+      "text": "give you the foundation to start",
+      "start": 435.64,
+      "duration": 3.76
+    },
+    {
+      "text": "creating some really pro-level app",
+      "start": 437.36,
+      "duration": 3.84
+    },
+    {
+      "text": "designs super easily. If you're",
+      "start": 439.4,
+      "duration": 3.6
+    },
+    {
+      "text": "interested in checking out Mobbin, it'll",
+      "start": 441.2,
+      "duration": 3.64
+    },
+    {
+      "text": "be the very first link down below, and",
+      "start": 443.0,
+      "duration": 3.88
+    },
+    {
+      "text": "the link to all of the Figma assets used",
+      "start": 444.84,
+      "duration": 3.76
+    },
+    {
+      "text": "in this video will be down there, too.",
+      "start": 446.88,
+      "duration": 3.4
+    },
+    {
+      "text": "Thank you so much for watching, and I'll",
+      "start": 448.6,
+      "duration": 4.6
+    },
+    {
+      "text": "see you in the next one.",
+      "start": 450.28,
+      "duration": 2.92
+    }
+  ]
+}

@@ -1,0 +1,1415 @@
+{
+  "meta": {
+    "id": "Xzh8xjimmp8",
+    "url": "https://www.youtube.com/watch?v=Xzh8xjimmp8",
+    "title": "Top 5 Advanced UX/UI Design Tips and Tricks Every Designer Needs to Know About – Part 3",
+    "uploader": "uxpeak",
+    "duration": 612,
+    "description": "✨ Learn how to design beautiful UI designs: https://www.uxpeak.com/pages/playbook}\n💎 Try Mobbin for free and get 20% off for your first year's subscription: https://mobbin.com/uxpeak\n\nA lot of you ask us — how do I make my UI designs actually look good?\n\nNot just functional. Not just “okay.” But clean, modern, and something people actually want to use.\n\nIf you’re trying to figure that out — I really recommend checking out our UX/UI Design Playbook.\n\nYou’ll find real examples, pro-level shortcuts",
+    "slug": "Top_5_Advanced_UXUI_Design_Tips_and_Tric",
+    "snippets_count": 280,
+    "total_words": 1826
+  },
+  "snippets": [
+    {
+      "text": "Most UXUI advice out there teaches you",
+      "start": 0.56,
+      "duration": 5.279
+    },
+    {
+      "text": "the same surface level stuff. Use white",
+      "start": 3.2,
+      "duration": 4.88
+    },
+    {
+      "text": "space, align your text, pick better",
+      "start": 5.839,
+      "duration": 4.481
+    },
+    {
+      "text": "colors. But if you want to actually",
+      "start": 8.08,
+      "duration": 4.72
+    },
+    {
+      "text": "become a great designer, the kind who",
+      "start": 10.32,
+      "duration": 4.8
+    },
+    {
+      "text": "creates interfaces people love to use",
+      "start": 12.8,
+      "duration": 4.8
+    },
+    {
+      "text": "and remember, you need more than that.",
+      "start": 15.12,
+      "duration": 4.88
+    },
+    {
+      "text": "In this video, we'll be sharing five",
+      "start": 17.6,
+      "duration": 5.28
+    },
+    {
+      "text": "advanced UXUI design tips you won't hear",
+      "start": 20.0,
+      "duration": 5.119
+    },
+    {
+      "text": "in most courses or tutorials. Let's get",
+      "start": 22.88,
+      "duration": 5.44
+    },
+    {
+      "text": "into it. One, personalize the experience",
+      "start": 25.119,
+      "duration": 5.521
+    },
+    {
+      "text": "based on user behavior. When you're",
+      "start": 28.32,
+      "duration": 4.239
+    },
+    {
+      "text": "designing a product, it's important to",
+      "start": 30.64,
+      "duration": 3.759
+    },
+    {
+      "text": "remember that not all users are the",
+      "start": 32.559,
+      "duration": 4.16
+    },
+    {
+      "text": "same. Some are brand new, some are",
+      "start": 34.399,
+      "duration": 4.801
+    },
+    {
+      "text": "coming back after a few uses, and others",
+      "start": 36.719,
+      "duration": 4.881
+    },
+    {
+      "text": "are deeply engaged. But what many",
+      "start": 39.2,
+      "duration": 4.64
+    },
+    {
+      "text": "beginner designers do is show everyone",
+      "start": 41.6,
+      "duration": 4.24
+    },
+    {
+      "text": "the same screen, no matter where they",
+      "start": 43.84,
+      "duration": 4.32
+    },
+    {
+      "text": "are in their journey. That's a missed",
+      "start": 45.84,
+      "duration": 4.879
+    },
+    {
+      "text": "opportunity. Designing experiences that",
+      "start": 48.16,
+      "duration": 4.559
+    },
+    {
+      "text": "adapt to different types of users can",
+      "start": 50.719,
+      "duration": 3.921
+    },
+    {
+      "text": "make your products feel smarter, more",
+      "start": 52.719,
+      "duration": 4.48
+    },
+    {
+      "text": "personal, and way more useful. Let me",
+      "start": 54.64,
+      "duration": 4.239
+    },
+    {
+      "text": "show you what this looks like using a",
+      "start": 57.199,
+      "duration": 4.16
+    },
+    {
+      "text": "fitness app. The first screen is for a",
+      "start": 58.879,
+      "duration": 5.041
+    },
+    {
+      "text": "new user. They've just signed up, so the",
+      "start": 61.359,
+      "duration": 4.721
+    },
+    {
+      "text": "app keeps things really simple. It",
+      "start": 63.92,
+      "duration": 4.16
+    },
+    {
+      "text": "welcomes them and encourages them to set",
+      "start": 66.08,
+      "duration": 4.24
+    },
+    {
+      "text": "their weekly goals. Underneath, there",
+      "start": 68.08,
+      "duration": 4.0
+    },
+    {
+      "text": "are a few trending programs and some",
+      "start": 70.32,
+      "duration": 4.32
+    },
+    {
+      "text": "easy categories. It's just enough to",
+      "start": 72.08,
+      "duration": 4.8
+    },
+    {
+      "text": "explore, but not overwhelming, which is",
+      "start": 74.64,
+      "duration": 4.64
+    },
+    {
+      "text": "exactly what a firsttime user needs.",
+      "start": 76.88,
+      "duration": 4.8
+    },
+    {
+      "text": "Next, we've got a repeat user. This",
+      "start": 79.28,
+      "duration": 4.24
+    },
+    {
+      "text": "person has used the app before and is",
+      "start": 81.68,
+      "duration": 3.759
+    },
+    {
+      "text": "starting to build a routine. Instead of",
+      "start": 83.52,
+      "duration": 3.84
+    },
+    {
+      "text": "onboarding content, they get a clear",
+      "start": 85.439,
+      "duration": 3.921
+    },
+    {
+      "text": "workout plan for the day with helpful",
+      "start": 87.36,
+      "duration": 3.92
+    },
+    {
+      "text": "details like duration and calories",
+      "start": 89.36,
+      "duration": 4.719
+    },
+    {
+      "text": "burned. Now, here's a super user,",
+      "start": 91.28,
+      "duration": 4.32
+    },
+    {
+      "text": "someone who's fully engaged and",
+      "start": 94.079,
+      "duration": 3.281
+    },
+    {
+      "text": "committed to their fitness goals. The",
+      "start": 95.6,
+      "duration": 4.559
+    },
+    {
+      "text": "app experience becomes more advanced. We",
+      "start": 97.36,
+      "duration": 4.48
+    },
+    {
+      "text": "start with useful stats like daily",
+      "start": 100.159,
+      "duration": 4.241
+    },
+    {
+      "text": "steps, calories burned, and heart rate.",
+      "start": 101.84,
+      "duration": 4.319
+    },
+    {
+      "text": "Then it moves into their workout plan",
+      "start": 104.4,
+      "duration": 4.32
+    },
+    {
+      "text": "and personalized diet suggestions. At",
+      "start": 106.159,
+      "duration": 4.561
+    },
+    {
+      "text": "this stage, it's not about helping them",
+      "start": 108.72,
+      "duration": 3.84
+    },
+    {
+      "text": "get started. It's about helping them",
+      "start": 110.72,
+      "duration": 4.88
+    },
+    {
+      "text": "optimize and stay on track. Great design",
+      "start": 112.56,
+      "duration": 5.44
+    },
+    {
+      "text": "meets people where they are. Instead of",
+      "start": 115.6,
+      "duration": 4.479
+    },
+    {
+      "text": "creating one generic experience for",
+      "start": 118.0,
+      "duration": 4.24
+    },
+    {
+      "text": "everyone, think about how your interface",
+      "start": 120.079,
+      "duration": 3.921
+    },
+    {
+      "text": "can adapt to what the user needs right",
+      "start": 122.24,
+      "duration": 4.4
+    },
+    {
+      "text": "now. Small changes like personalized",
+      "start": 124.0,
+      "duration": 5.2
+    },
+    {
+      "text": "messages, tailored content, or progress",
+      "start": 126.64,
+      "duration": 4.72
+    },
+    {
+      "text": "tracking can make your product feel more",
+      "start": 129.2,
+      "duration": 5.36
+    },
+    {
+      "text": "human, more helpful, and more valuable.",
+      "start": 131.36,
+      "duration": 6.16
+    },
+    {
+      "text": "Two, design smarter search. Search is",
+      "start": 134.56,
+      "duration": 4.96
+    },
+    {
+      "text": "one of the most critical features in any",
+      "start": 137.52,
+      "duration": 4.079
+    },
+    {
+      "text": "product. But it's also one of the most",
+      "start": 139.52,
+      "duration": 4.56
+    },
+    {
+      "text": "overlooked in design. Most designers",
+      "start": 141.599,
+      "duration": 4.801
+    },
+    {
+      "text": "just drop in a search bar and move on.",
+      "start": 144.08,
+      "duration": 4.48
+    },
+    {
+      "text": "But good search design isn't just about",
+      "start": 146.4,
+      "duration": 4.4
+    },
+    {
+      "text": "function. It's about how it feels, how",
+      "start": 148.56,
+      "duration": 4.24
+    },
+    {
+      "text": "fast it helps users get what they need,",
+      "start": 150.8,
+      "duration": 4.64
+    },
+    {
+      "text": "and how much effort it saves them. Think",
+      "start": 152.8,
+      "duration": 4.4
+    },
+    {
+      "text": "about what happens when a user taps into",
+      "start": 155.44,
+      "duration": 4.799
+    },
+    {
+      "text": "a search bar. That's a moment of intent.",
+      "start": 157.2,
+      "duration": 4.56
+    },
+    {
+      "text": "They're looking for something, but they",
+      "start": 160.239,
+      "duration": 4.08
+    },
+    {
+      "text": "may not know exactly what. That's where",
+      "start": 161.76,
+      "duration": 4.559
+    },
+    {
+      "text": "your design can do one of two things.",
+      "start": 164.319,
+      "duration": 3.761
+    },
+    {
+      "text": "Give them a blank screen and expect them",
+      "start": 166.319,
+      "duration": 4.721
+    },
+    {
+      "text": "to do all the work. Or offer helpful",
+      "start": 168.08,
+      "duration": 4.72
+    },
+    {
+      "text": "suggestions that make the experience",
+      "start": 171.04,
+      "duration": 4.479
+    },
+    {
+      "text": "easier, faster, and smarter. Let's look",
+      "start": 172.8,
+      "duration": 4.799
+    },
+    {
+      "text": "at the first version, the standard blank",
+      "start": 175.519,
+      "duration": 4.321
+    },
+    {
+      "text": "screen search. Technically, it works,",
+      "start": 177.599,
+      "duration": 5.041
+    },
+    {
+      "text": "but there's no guidance. It's a dead end",
+      "start": 179.84,
+      "duration": 5.039
+    },
+    {
+      "text": "unless they know exactly what they want.",
+      "start": 182.64,
+      "duration": 3.84
+    },
+    {
+      "text": "Now, let's look at a smarter version of",
+      "start": 184.879,
+      "duration": 3.841
+    },
+    {
+      "text": "the same screen. The search bar is still",
+      "start": 186.48,
+      "duration": 4.64
+    },
+    {
+      "text": "there, ready to use, but underneath it,",
+      "start": 188.72,
+      "duration": 4.72
+    },
+    {
+      "text": "the interface offers subtle, useful",
+      "start": 191.12,
+      "duration": 4.479
+    },
+    {
+      "text": "suggestions. Things like recent",
+      "start": 193.44,
+      "duration": 4.079
+    },
+    {
+      "text": "searches, so the user can quickly pick",
+      "start": 195.599,
+      "duration": 4.401
+    },
+    {
+      "text": "up where they left off. Popular items,",
+      "start": 197.519,
+      "duration": 4.0
+    },
+    {
+      "text": "which gives them a sense of what others",
+      "start": 200.0,
+      "duration": 3.519
+    },
+    {
+      "text": "are finding useful. Personalized",
+      "start": 201.519,
+      "duration": 4.161
+    },
+    {
+      "text": "recommendations based on their past",
+      "start": 203.519,
+      "duration": 4.72
+    },
+    {
+      "text": "behavior or interest. These suggestions",
+      "start": 205.68,
+      "duration": 4.559
+    },
+    {
+      "text": "don't get in the way. They quietly",
+      "start": 208.239,
+      "duration": 3.841
+    },
+    {
+      "text": "support the user. And if they already",
+      "start": 210.239,
+      "duration": 3.36
+    },
+    {
+      "text": "know what they want, they can ignore",
+      "start": 212.08,
+      "duration": 3.439
+    },
+    {
+      "text": "them and just type. But if they're",
+      "start": 213.599,
+      "duration": 4.0
+    },
+    {
+      "text": "unsure, these small hints reduce",
+      "start": 215.519,
+      "duration": 3.841
+    },
+    {
+      "text": "friction and give them somewhere to",
+      "start": 217.599,
+      "duration": 4.801
+    },
+    {
+      "text": "start. Three, smarter order tracking",
+      "start": 219.36,
+      "duration": 4.959
+    },
+    {
+      "text": "design. Here's something a lot of",
+      "start": 222.4,
+      "duration": 3.919
+    },
+    {
+      "text": "designers overlook. Post-purchase",
+      "start": 224.319,
+      "duration": 4.081
+    },
+    {
+      "text": "experiences matter just as much as the",
+      "start": 226.319,
+      "duration": 4.161
+    },
+    {
+      "text": "purchase itself. Think about it. When",
+      "start": 228.4,
+      "duration": 4.0
+    },
+    {
+      "text": "someone places an order, they've already",
+      "start": 230.48,
+      "duration": 3.92
+    },
+    {
+      "text": "made a decision. They've paid,",
+      "start": 232.4,
+      "duration": 4.24
+    },
+    {
+      "text": "committed, and now they're waiting. That",
+      "start": 234.4,
+      "duration": 4.64
+    },
+    {
+      "text": "moment between payment and delivery is",
+      "start": 236.64,
+      "duration": 4.959
+    },
+    {
+      "text": "full of expectation and uncertainty. And",
+      "start": 239.04,
+      "duration": 4.64
+    },
+    {
+      "text": "how you design for that moment says a",
+      "start": 241.599,
+      "duration": 4.401
+    },
+    {
+      "text": "lot about your product. Now, let's take",
+      "start": 243.68,
+      "duration": 4.72
+    },
+    {
+      "text": "a look at a very basic order screen. It",
+      "start": 246.0,
+      "duration": 4.319
+    },
+    {
+      "text": "shows the order number, a plain list of",
+      "start": 248.4,
+      "duration": 5.44
+    },
+    {
+      "text": "items, some courier info, and a timeline",
+      "start": 250.319,
+      "duration": 5.521
+    },
+    {
+      "text": "made up of simple dates. Technically,",
+      "start": 253.84,
+      "duration": 4.799
+    },
+    {
+      "text": "the information is there, but visually",
+      "start": 255.84,
+      "duration": 5.44
+    },
+    {
+      "text": "there's no structure, no prioritization,",
+      "start": 258.639,
+      "duration": 5.201
+    },
+    {
+      "text": "no guidance, just data dumped onto a",
+      "start": 261.28,
+      "duration": 5.28
+    },
+    {
+      "text": "screen. The user has to scan, interpret,",
+      "start": 263.84,
+      "duration": 4.16
+    },
+    {
+      "text": "and piece everything together",
+      "start": 266.56,
+      "duration": 4.0
+    },
+    {
+      "text": "themselves. Now, compare that to this",
+      "start": 268.0,
+      "duration": 4.8
+    },
+    {
+      "text": "upgraded design. From the very first",
+      "start": 270.56,
+      "duration": 4.56
+    },
+    {
+      "text": "glance, this screen makes you feel like",
+      "start": 272.8,
+      "duration": 4.56
+    },
+    {
+      "text": "everything is under control. It opens",
+      "start": 275.12,
+      "duration": 4.24
+    },
+    {
+      "text": "with a confident message. Your order is",
+      "start": 277.36,
+      "duration": 4.0
+    },
+    {
+      "text": "on the way, paired with clear delivery",
+      "start": 279.36,
+      "duration": 4.08
+    },
+    {
+      "text": "details and visual icons that help",
+      "start": 281.36,
+      "duration": 3.839
+    },
+    {
+      "text": "communicate the time window and address",
+      "start": 283.44,
+      "duration": 4.0
+    },
+    {
+      "text": "instantly. The courier section is no",
+      "start": 285.199,
+      "duration": 4.321
+    },
+    {
+      "text": "longer just a name and number. It's",
+      "start": 287.44,
+      "duration": 4.64
+    },
+    {
+      "text": "human. There's a photo, a name, and",
+      "start": 289.52,
+      "duration": 4.959
+    },
+    {
+      "text": "quick access buttons to call or message,",
+      "start": 292.08,
+      "duration": 4.96
+    },
+    {
+      "text": "which not only adds trust, but makes the",
+      "start": 294.479,
+      "duration": 4.481
+    },
+    {
+      "text": "experience feel more personal and",
+      "start": 297.04,
+      "duration": 4.719
+    },
+    {
+      "text": "responsive. The items, no more long text",
+      "start": 298.96,
+      "duration": 5.2
+    },
+    {
+      "text": "lists. And one of the best touches, the",
+      "start": 301.759,
+      "duration": 5.28
+    },
+    {
+      "text": "order history is now a visual timeline.",
+      "start": 304.16,
+      "duration": 4.8
+    },
+    {
+      "text": "Instead of scanning a block of text and",
+      "start": 307.039,
+      "duration": 4.401
+    },
+    {
+      "text": "dates, users can instantly see what",
+      "start": 308.96,
+      "duration": 5.519
+    },
+    {
+      "text": "stage the order is in. This isn't just a",
+      "start": 311.44,
+      "duration": 5.84
+    },
+    {
+      "text": "UI upgrade. It's a completely different",
+      "start": 314.479,
+      "duration": 5.28
+    },
+    {
+      "text": "experience because great design doesn't",
+      "start": 317.28,
+      "duration": 4.88
+    },
+    {
+      "text": "just display information. It reduces",
+      "start": 319.759,
+      "duration": 4.641
+    },
+    {
+      "text": "stress and answers questions before",
+      "start": 322.16,
+      "duration": 4.56
+    },
+    {
+      "text": "they're asked. Speaking of great",
+      "start": 324.4,
+      "duration": 4.96
+    },
+    {
+      "text": "designs, a lot of people ask us, \"How do",
+      "start": 326.72,
+      "duration": 5.759
+    },
+    {
+      "text": "I make my UI designs actually look good?",
+      "start": 329.36,
+      "duration": 5.679
+    },
+    {
+      "text": "Not just functional, not just okay, but",
+      "start": 332.479,
+      "duration": 4.56
+    },
+    {
+      "text": "clean, modern, and something people",
+      "start": 335.039,
+      "duration": 3.841
+    },
+    {
+      "text": "actually want to use.\" If you're trying",
+      "start": 337.039,
+      "duration": 3.681
+    },
+    {
+      "text": "to figure that out, I really recommend",
+      "start": 338.88,
+      "duration": 4.159
+    },
+    {
+      "text": "checking out our UX UI design playbook.",
+      "start": 340.72,
+      "duration": 4.24
+    },
+    {
+      "text": "It's packed with the exact principles,",
+      "start": 343.039,
+      "duration": 4.0
+    },
+    {
+      "text": "visual tips, and layout rules that",
+      "start": 344.96,
+      "duration": 4.48
+    },
+    {
+      "text": "helped thousands of new designers, and",
+      "start": 347.039,
+      "duration": 4.801
+    },
+    {
+      "text": "also developers finally understand how",
+      "start": 349.44,
+      "duration": 4.8
+    },
+    {
+      "text": "to design great UI designs. You'll find",
+      "start": 351.84,
+      "duration": 4.639
+    },
+    {
+      "text": "real examples, prolevel shortcuts, and",
+      "start": 354.24,
+      "duration": 3.92
+    },
+    {
+      "text": "simple things you can apply right away",
+      "start": 356.479,
+      "duration": 3.521
+    },
+    {
+      "text": "to make your designs feel way more",
+      "start": 358.16,
+      "duration": 3.759
+    },
+    {
+      "text": "polished and confident. In fact, a lot",
+      "start": 360.0,
+      "duration": 3.84
+    },
+    {
+      "text": "of our students said this was the best",
+      "start": 361.919,
+      "duration": 4.161
+    },
+    {
+      "text": "UI design ebook that finally helped them",
+      "start": 363.84,
+      "duration": 4.32
+    },
+    {
+      "text": "to improve their UI designs. We just",
+      "start": 366.08,
+      "duration": 4.16
+    },
+    {
+      "text": "crossed 17,000 downloads of the free",
+      "start": 368.16,
+      "duration": 3.84
+    },
+    {
+      "text": "preview and full version, which is",
+      "start": 370.24,
+      "duration": 4.079
+    },
+    {
+      "text": "honestly amazing. The price may go up",
+      "start": 372.0,
+      "duration": 4.56
+    },
+    {
+      "text": "soon, but right now you can get 40% off",
+      "start": 374.319,
+      "duration": 4.801
+    },
+    {
+      "text": "with the code love peak 40. So, if you",
+      "start": 376.56,
+      "duration": 4.0
+    },
+    {
+      "text": "haven't grabbed your copy yet, this is",
+      "start": 379.12,
+      "duration": 2.96
+    },
+    {
+      "text": "the perfect time. Links in the",
+      "start": 380.56,
+      "duration": 3.359
+    },
+    {
+      "text": "description. And when you try it, I'd",
+      "start": 382.08,
+      "duration": 3.76
+    },
+    {
+      "text": "love to hear how it helped your designs.",
+      "start": 383.919,
+      "duration": 3.201
+    },
+    {
+      "text": "We've already seen some amazing",
+      "start": 385.84,
+      "duration": 2.45
+    },
+    {
+      "text": "transformations.",
+      "start": 387.12,
+      "duration": 3.199
+    },
+    {
+      "text": "[Music]",
+      "start": 388.29,
+      "duration": 4.83
+    },
+    {
+      "text": "Four, category screens. Category screens",
+      "start": 390.319,
+      "duration": 4.88
+    },
+    {
+      "text": "might seem simple, just a list of",
+      "start": 393.12,
+      "duration": 4.24
+    },
+    {
+      "text": "options, right? but they actually play a",
+      "start": 395.199,
+      "duration": 4.0
+    },
+    {
+      "text": "huge role in how users move through your",
+      "start": 397.36,
+      "duration": 3.52
+    },
+    {
+      "text": "product. Let's look at three different",
+      "start": 399.199,
+      "duration": 3.44
+    },
+    {
+      "text": "versions of this screen and how the",
+      "start": 400.88,
+      "duration": 4.08
+    },
+    {
+      "text": "design affects the experience. The first",
+      "start": 402.639,
+      "duration": 4.801
+    },
+    {
+      "text": "version is very basic, just a list of",
+      "start": 404.96,
+      "duration": 4.88
+    },
+    {
+      "text": "category names and C selection links.",
+      "start": 407.44,
+      "duration": 3.68
+    },
+    {
+      "text": "There's nothing wrong with it. It's",
+      "start": 409.84,
+      "duration": 3.68
+    },
+    {
+      "text": "clean and minimal. But the problem is it",
+      "start": 411.12,
+      "duration": 4.639
+    },
+    {
+      "text": "puts all the effort on the user. Every",
+      "start": 413.52,
+      "duration": 4.239
+    },
+    {
+      "text": "line looks the same. There's no visual",
+      "start": 415.759,
+      "duration": 4.481
+    },
+    {
+      "text": "rhythm, no hierarchy, and no cues that",
+      "start": 417.759,
+      "duration": 4.16
+    },
+    {
+      "text": "help guide the eye. You have to read",
+      "start": 420.24,
+      "duration": 3.2
+    },
+    {
+      "text": "through every label to find what you",
+      "start": 421.919,
+      "duration": 3.441
+    },
+    {
+      "text": "want. Now, the second version is",
+      "start": 423.44,
+      "duration": 3.44
+    },
+    {
+      "text": "something we see a lot from junior",
+      "start": 425.36,
+      "duration": 3.76
+    },
+    {
+      "text": "designers. It looks more designed and",
+      "start": 426.88,
+      "duration": 3.92
+    },
+    {
+      "text": "might even seem impressive at first",
+      "start": 429.12,
+      "duration": 3.919
+    },
+    {
+      "text": "glance, but here's the thing. It focuses",
+      "start": 430.8,
+      "duration": 4.239
+    },
+    {
+      "text": "more on appearance than on usability.",
+      "start": 433.039,
+      "duration": 3.6
+    },
+    {
+      "text": "Even though there's a dark overlay to",
+      "start": 435.039,
+      "duration": 3.361
+    },
+    {
+      "text": "help with some text readability, it",
+      "start": 436.639,
+      "duration": 3.84
+    },
+    {
+      "text": "doesn't fully fix the contrast issue.",
+      "start": 438.4,
+      "duration": 4.079
+    },
+    {
+      "text": "Some of the text is still hard to read.",
+      "start": 440.479,
+      "duration": 4.16
+    },
+    {
+      "text": "On top of that, the images don't match.",
+      "start": 442.479,
+      "duration": 4.321
+    },
+    {
+      "text": "One is bright, another is moody, another",
+      "start": 444.639,
+      "duration": 4.321
+    },
+    {
+      "text": "feels like a magazine photo. There's no",
+      "start": 446.8,
+      "duration": 4.32
+    },
+    {
+      "text": "visual consistency. It doesn't feel like",
+      "start": 448.96,
+      "duration": 3.92
+    },
+    {
+      "text": "these images belong to the same product",
+      "start": 451.12,
+      "duration": 4.16
+    },
+    {
+      "text": "or brand, more like a random mix of",
+      "start": 452.88,
+      "duration": 4.56
+    },
+    {
+      "text": "stock photos. And because every block is",
+      "start": 455.28,
+      "duration": 4.4
+    },
+    {
+      "text": "so visually busy, it takes longer for",
+      "start": 457.44,
+      "duration": 3.759
+    },
+    {
+      "text": "users to understand what they're looking",
+      "start": 459.68,
+      "duration": 3.76
+    },
+    {
+      "text": "at. Now, let's look at the third",
+      "start": 461.199,
+      "duration": 4.081
+    },
+    {
+      "text": "version. And this is where things come",
+      "start": 463.44,
+      "duration": 3.52
+    },
+    {
+      "text": "together in a much more thoughtful,",
+      "start": 465.28,
+      "duration": 3.68
+    },
+    {
+      "text": "professional way. This design uses",
+      "start": 466.96,
+      "duration": 4.239
+    },
+    {
+      "text": "color-coded charts, each with a soft,",
+      "start": 468.96,
+      "duration": 4.639
+    },
+    {
+      "text": "solid background and a clean, isolated",
+      "start": 471.199,
+      "duration": 4.321
+    },
+    {
+      "text": "image that represents the category.",
+      "start": 473.599,
+      "duration": 3.761
+    },
+    {
+      "text": "Because the images are stylistically",
+      "start": 475.52,
+      "duration": 3.519
+    },
+    {
+      "text": "unified and the background colors are",
+      "start": 477.36,
+      "duration": 3.839
+    },
+    {
+      "text": "well balanced, the whole screen feels",
+      "start": 479.039,
+      "duration": 4.72
+    },
+    {
+      "text": "cohesive and branded. There's a rhythm",
+      "start": 481.199,
+      "duration": 4.081
+    },
+    {
+      "text": "to the layout that makes scanning",
+      "start": 483.759,
+      "duration": 4.0
+    },
+    {
+      "text": "effortless. You can glance at the screen",
+      "start": 485.28,
+      "duration": 4.319
+    },
+    {
+      "text": "and understand the options in just",
+      "start": 487.759,
+      "duration": 4.321
+    },
+    {
+      "text": "seconds. Five, choose the right input",
+      "start": 489.599,
+      "duration": 4.401
+    },
+    {
+      "text": "method for the moment, not just the",
+      "start": 492.08,
+      "duration": 4.48
+    },
+    {
+      "text": "data. Not all number inputs are created",
+      "start": 494.0,
+      "duration": 4.56
+    },
+    {
+      "text": "equal, and they shouldn't be treated the",
+      "start": 496.56,
+      "duration": 4.079
+    },
+    {
+      "text": "same. Entering your weight, age,",
+      "start": 498.56,
+      "duration": 4.16
+    },
+    {
+      "text": "calories, or daily steps might seem",
+      "start": 500.639,
+      "duration": 3.921
+    },
+    {
+      "text": "similar on the surface, but the way",
+      "start": 502.72,
+      "duration": 3.919
+    },
+    {
+      "text": "those values are entered can completely",
+      "start": 504.56,
+      "duration": 4.319
+    },
+    {
+      "text": "change how smooth or frustrating the",
+      "start": 506.639,
+      "duration": 4.4
+    },
+    {
+      "text": "experience feels. Let's walk through a",
+      "start": 508.879,
+      "duration": 4.08
+    },
+    {
+      "text": "few real examples and break down what",
+      "start": 511.039,
+      "duration": 5.12
+    },
+    {
+      "text": "works best and why. First, consider the",
+      "start": 512.959,
+      "duration": 5.2
+    },
+    {
+      "text": "type of input. There are two kinds of",
+      "start": 516.159,
+      "duration": 4.721
+    },
+    {
+      "text": "numeric input scenarios. onetime setup",
+      "start": 518.159,
+      "duration": 4.081
+    },
+    {
+      "text": "like entering your weight when first",
+      "start": 520.88,
+      "duration": 3.519
+    },
+    {
+      "text": "signing up or setting your age, height",
+      "start": 522.24,
+      "duration": 5.68
+    },
+    {
+      "text": "or weight and frequent repeated entry",
+      "start": 524.399,
+      "duration": 5.521
+    },
+    {
+      "text": "like locking food to track calories or",
+      "start": 527.92,
+      "duration": 4.16
+    },
+    {
+      "text": "macros. These are completely different",
+      "start": 529.92,
+      "duration": 4.72
+    },
+    {
+      "text": "use cases and they require completely",
+      "start": 532.08,
+      "duration": 4.72
+    },
+    {
+      "text": "different UI patterns. Let's look at the",
+      "start": 534.64,
+      "duration": 3.84
+    },
+    {
+      "text": "screen where the user is asked to enter",
+      "start": 536.8,
+      "duration": 3.84
+    },
+    {
+      "text": "personal details like weight or height.",
+      "start": 538.48,
+      "duration": 4.16
+    },
+    {
+      "text": "In these cases, scroll wheels and",
+      "start": 540.64,
+      "duration": 4.72
+    },
+    {
+      "text": "sliders work beautifully. Why? Because",
+      "start": 542.64,
+      "duration": 4.879
+    },
+    {
+      "text": "users aren't entering this data often.",
+      "start": 545.36,
+      "duration": 3.52
+    },
+    {
+      "text": "They just want to get through the setup",
+      "start": 547.519,
+      "duration": 3.121
+    },
+    {
+      "text": "quickly and these values usually fall",
+      "start": 548.88,
+      "duration": 3.84
+    },
+    {
+      "text": "within a known range. And most",
+      "start": 550.64,
+      "duration": 5.04
+    },
+    {
+      "text": "importantly, they are low effort. Users",
+      "start": 552.72,
+      "duration": 4.96
+    },
+    {
+      "text": "don't need to type or think too much.",
+      "start": 555.68,
+      "duration": 3.76
+    },
+    {
+      "text": "Now, let's compare that to logging your",
+      "start": 557.68,
+      "duration": 3.44
+    },
+    {
+      "text": "food every day to track calories or",
+      "start": 559.44,
+      "duration": 4.079
+    },
+    {
+      "text": "macros. This is where sliders and scroll",
+      "start": 561.12,
+      "duration": 4.88
+    },
+    {
+      "text": "wheels break down. They're too slow, too",
+      "start": 563.519,
+      "duration": 4.401
+    },
+    {
+      "text": "fiddly, and don't offer the kind of",
+      "start": 566.0,
+      "duration": 4.24
+    },
+    {
+      "text": "control users need. If you want to log",
+      "start": 567.92,
+      "duration": 5.2
+    },
+    {
+      "text": "food quantity like 350 g, I don't want",
+      "start": 570.24,
+      "duration": 4.96
+    },
+    {
+      "text": "to scroll endlessly or try to drag a",
+      "start": 573.12,
+      "duration": 4.08
+    },
+    {
+      "text": "slider to the perfect number. Text",
+      "start": 575.2,
+      "duration": 3.52
+    },
+    {
+      "text": "fields are better here because they're",
+      "start": 577.2,
+      "duration": 3.6
+    },
+    {
+      "text": "faster, more precise, and less",
+      "start": 578.72,
+      "duration": 4.48
+    },
+    {
+      "text": "frustrating when used repeatedly. So,",
+      "start": 580.8,
+      "duration": 4.88
+    },
+    {
+      "text": "how do you choose? Here is a simple rule",
+      "start": 583.2,
+      "duration": 4.56
+    },
+    {
+      "text": "of thumb. Use sliders or scroll wheels",
+      "start": 585.68,
+      "duration": 4.0
+    },
+    {
+      "text": "for casual one-time inputs where",
+      "start": 587.76,
+      "duration": 4.079
+    },
+    {
+      "text": "precision isn't critical. Use text",
+      "start": 589.68,
+      "duration": 4.64
+    },
+    {
+      "text": "fields, steppers, or number inputs for",
+      "start": 591.839,
+      "duration": 5.44
+    },
+    {
+      "text": "frequent, precise, or repetitive tasks.",
+      "start": 594.32,
+      "duration": 4.48
+    },
+    {
+      "text": "It's not about which component looks",
+      "start": 597.279,
+      "duration": 4.081
+    },
+    {
+      "text": "nicer. It's about reducing friction and",
+      "start": 598.8,
+      "duration": 4.159
+    },
+    {
+      "text": "matching the input method to the",
+      "start": 601.36,
+      "duration": 4.159
+    },
+    {
+      "text": "context. That's all for today. We hope",
+      "start": 602.959,
+      "duration": 4.401
+    },
+    {
+      "text": "you found these tips helpful. Let us",
+      "start": 605.519,
+      "duration": 3.201
+    },
+    {
+      "text": "know in the comments which one was your",
+      "start": 607.36,
+      "duration": 5.919
+    },
+    {
+      "text": "favorite. We'll see you on the next one.",
+      "start": 608.72,
+      "duration": 4.559
+    }
+  ]
+}

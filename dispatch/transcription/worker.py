@@ -338,6 +338,10 @@ class TranscriptionWorker:
         """
         full_text = " ".join(seg.get("text", "").strip() for seg in segments if seg.get("text")).strip()
 
+        # Resolve session_id from youtube_inbox if present
+        yt_record = db.get_youtube_video(video_id)
+        session_id = yt_record.get("session_id") if yt_record else None
+
         # 1. Resolve or create chunk record preserving REAL source media metadata
         file_hash = f"yt_{video_id}"
         chunk = db.get_chunk_by_file_hash(file_hash)
@@ -347,7 +351,7 @@ class TranscriptionWorker:
                 local_video_path, duration
             )
             chunk_id = db.register_chunk(
-                session_id=None,
+                session_id=session_id,
                 filename=vpath.name,
                 filepath=str(vpath),
                 file_hash=file_hash
@@ -362,6 +366,10 @@ class TranscriptionWorker:
             )
         elif chunk:
             chunk_id = chunk["id"]
+            if session_id and not chunk.get("session_id"):
+                with db.get_db_connection() as conn:
+                    conn.cursor().execute("UPDATE chunks SET session_id = ? WHERE id = ?", (session_id, chunk_id))
+                    conn.commit()
         else:
             chunk_id = f"chk_yt_{video_id}"
 
@@ -369,7 +377,7 @@ class TranscriptionWorker:
         try:
             transcript_id = db.save_transcript(
                 chunk_id=chunk_id,
-                session_id=None,
+                session_id=session_id,
                 full_text=full_text,
                 segments=segments
             )

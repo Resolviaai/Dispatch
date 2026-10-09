@@ -1,0 +1,227 @@
+Title: 11 Micro Animations That Will Instantly Level Up Your UI (free figma file)
+Uploader: Kole Jain
+URL: https://www.youtube.com/watch?v=ld1zhQMXxXU
+Duration: 505s
+
+[000.08] If you're like me and don't have the
+[001.60] talent or patience to make crazy stuff
+[004.16] like this, then let me show you how to
+[006.00] create sleek, satisfying interactions
+[008.08] that make your designs feel high-end and
+[010.08] actually fun to use. As always, the
+[012.08] Figma files in the description. Let's do
+[014.32] this one. Simple button hover effect.
+[017.76] First, if you're as unprepared as I am,
+[019.92] then this one is perfect for you. I'd
+[022.16] create a nice button, but of course,
+[024.08] forget the hover and click state. So,
+[026.32] I'd just end up frantically picking some
+[028.00] random colors. Instead of that, do this.
+[030.88] Check out what this agency does with the
+[032.56] text that slides up as we hover on it
+[034.64] and the buttons that get smaller when we
+[036.64] click on them. To do that on Figma, it's
+[038.96] actually really simple. All we have is a
+[041.28] mask here with two sets of text that I
+[043.44] hope you can see. We've got a simple
+[045.04] hover effect for the first one. And then
+[046.96] for our click animation, we have a while
+[048.88] pressing effect here. It works really
+[050.72] well. And then you don't have to mess
+[052.24] around with all sorts of different
+[053.60] colors. You could even mix it up with
+[055.44] some horizontal or diagonal movement
+[057.52] like this micro interaction library
+[059.36] built for Web Flow. Two, keyboard
+[062.28] shortcuts. Now, you probably aren't
+[064.80] designing a whole lot of interfaces that
+[066.56] require keyboard shortcuts, but one
+[068.80] thing's for sure, they're really easy to
+[070.72] forget. Something like this little micro
+[072.64] animation from Rainbow Wallet makes it a
+[074.64] little harder for them to completely
+[076.16] escape from memory. Here's what we've
+[078.40] mocked up in Figma. And for the most
+[081.12] part, I think it looks really cool. Now,
+[083.76] unfortunately, it's not possible to bind
+[086.16] the command or shift key. So, we had to
+[088.48] use X and A as our substitutes instead.
+[091.60] But once we've got those bound and press
+[093.36] them all at the same time, we get a
+[095.20] fantastic little success message, too.
+[098.00] Three, toast
+[100.04] notifications. Toast. Something you eat
+[102.48] in the morning, something you do at a
+[104.00] wedding, and something very important
+[105.76] for UX. Versel has some pretty good
+[108.40] toast notifications, though I like
+[110.40] linears a little bit more. But I think
+[112.72] we can do even better. Besides the
+[114.40] obvious animation of it sliding up, we
+[116.48] can add a lot of interactive bits to
+[118.40] these cute little cards. From simple
+[120.08] loading animations to celebratory
+[122.08] success messages with some sexy particle
+[124.72] animations. All of this is just some
+[126.80] simple delay triggers with a single
+[128.72] click trigger in here and we're pretty
+[130.88] much good to go. Four. Name tag on
+[133.84] hover. If you're displaying any sort of
+[136.32] small headsh shot on your website, then
+[138.40] when users hover on it, have a teeny
+[140.48] name tag pop up. Huddle has this effect,
+[143.20] and typically so do agencies with teams
+[145.84] of creatives on them. And the best part
+[147.60] is this is super simple to put together
+[149.36] in Figma. All we need is these two
+[151.68] frames here. The first is exactly how
+[153.68] you'd expect it to be, and the second is
+[155.92] where the name tag actually pops out.
+[157.92] We've just used auto layout here by
+[159.60] hitting shift A, rounding out the
+[161.68] corners all the way and then adjusting
+[164.56] the spacings ever so slightly and
+[166.96] finally adding a fill, changing it to
+[169.52] black, and then changing our text color
+[171.92] to white. After adding a little bit of
+[174.88] tilt and getting it positioned well, we
+[177.60] can come back to our first frame here
+[179.68] where I have the exact same name tag,
+[181.60] just move down a little bit and set the
+[183.60] opacity to zero. To connect these, we
+[186.00] just add a hover animation with smart
+[188.24] animate and some custom easing that
+[190.32] takes 500 milliseconds, has a stiffness
+[192.40] of 636, and a dampening of 24. This is
+[195.84] important and creates the difference
+[197.36] between these two
+[199.32] animations. Five, shimmer stroke. The
+[202.96] shimmer stroke or gradient stroke is a
+[205.44] really modern animation and sites like
+[207.44] this
+[208.60] microinteraction.co and this Wix site do
+[210.88] it really well.
+[212.88] This is what it ends up looking like in
+[214.72] Figma. And we had to use a couple tricks
+[216.72] to get this to work, but I think it ends
+[218.96] up looking really nice. The basic idea
+[221.84] is we create an outline of our stroke
+[224.48] using a subtract with two rectangles in
+[226.80] it. Then we create an angular gradient
+[229.52] on a circle like this. We can then put
+[231.84] these two together and mask them so that
+[235.28] we get this stroke effect. Lastly, we
+[238.88] animate this angular gradient rotating
+[241.76] and we get the shimmer effect. Because
+[244.64] of the way we do things, we get a
+[246.16] shimmer that moves faster on the edges
+[248.48] here than it does on the top and bottom.
+[250.64] Personally, I don't mind it, but some
+[252.56] people might. So, we added in a pause
+[254.64] and play button here, so the user can
+[256.88] toggle that whenever they like. Six,
+[260.00] delayed tool tips. This is both a micro
+[263.28] interaction and a massively helpful UX
+[265.84] tip. When we hover on any icon in this
+[268.80] note-taking app, Obsidian, for more than
+[270.96] a second, we get a popup to explain what
+[273.92] the icon actually does. This is really
+[276.24] nice when you have a lot of icons, but
+[278.32] not a lot of space to actually label
+[279.92] them all. Implementing this is very
+[281.84] simple if you know what you're doing.
+[283.28] All we have is a trigger on mouse enter,
+[286.24] which you might not have used before,
+[288.16] and then a trigger on mouse leave to
+[290.24] bring us back to our original frame. We
+[292.48] add a th00and millisecond delay. So only
+[295.04] if we hover on it for a full second do
+[297.44] we actually get the animation pop up.
+[299.76] We've also used a custom easing with
+[301.84] these settings to get a bit more bounce
+[304.08] to it. Seven text hover pop out. Next up
+[307.68] is text hovers. And Figma's community
+[310.00] page is just an awesome example of this.
+[312.64] It's a really great way to show what
+[314.24] you're actually talking about without
+[316.08] writing more words or taking up more
+[318.00] space with images. Ace Studio actually
+[320.24] does something very similar, although
+[322.16] their images are a touch more playful
+[324.24] than Figma's. Regardless, this is a
+[326.40] really easy thing to set up in Figma.
+[328.72] All we have are some hover interactions
+[330.64] with our frames with the elements that
+[332.80] pop out when we hover. And I'm going to
+[334.80] be honest, this one might just be my
+[336.40] favorite of the whole list. It's just so
+[338.40] fun to play with. Eight. Progress bar.
+[342.56] Let's be honest, forms are boring, but
+[345.52] sometimes they're unavoidable. And
+[347.12] that's why tools like Linear have used
+[348.96] some super smooth micro interactions for
+[351.44] their progress bar to keep the user
+[353.12] engaged. We can create a really nice
+[355.36] animation in Figma by taking our stroke
+[357.60] here and masking it to a purple
+[359.68] rectangle so that we can slide along our
+[362.32] purple rectangle and it looks like we're
+[364.56] drawing in the stroke. It works really
+[367.28] well around the circles and pretty much
+[369.60] everything else is just fading in or out
+[371.52] the elements. Nine. Card
+[374.92] swipe. This one by dub.co is just such a
+[378.88] cool UI idea. It kind of reminds me of
+[382.56] iMessage images. I do like where they
+[385.20] have it in the sidebar here, but for
+[387.04] ours, we're going to have it in the
+[388.56] bottom right as kind of a notification
+[391.12] center. Once you've got all of your
+[393.12] cards like so, we can stack them one on
+[395.52] top the other just like this. And then
+[398.24] it's as simple as rotating the card out
+[401.04] of the way and setting the opacity to
+[403.64] 0%. And then scaling up the cards in
+[406.40] behind and shifting them down. One
+[408.56] important detail is to make sure that as
+[410.80] you're dragging this card, the other
+[412.80] cards move down to fill the space where
+[415.44] the first card was. That's what really
+[417.92] completes this effect and makes it feel
+[419.76] like they're moving forward. 10. Search
+[423.04] bar
+[424.52] expansion. Search bars. They're large,
+[427.44] clunky, and definitely can get in the
+[429.52] way. So, we pack them down into the
+[431.60] universally accepted search icon, the
+[433.92] magnifying glass. And by doing that, we
+[436.32] have a great opportunity to add some
+[438.56] interaction when the user clicks on it.
+[441.04] Apple themselves have a pretty good
+[443.04] interaction when you click on the search
+[445.12] icon. All we have is this in Figma. It's
+[447.52] just three frames with a click
+[449.20] interaction on the first one and then a
+[451.52] little bit of delay that takes us to the
+[453.44] last one here. If we try it out, it
+[455.52] looks a little something like this. And
+[457.12] I really like how the magnifying glass
+[459.60] disappears into the circle here. 11.
+[462.32] Hover for upgrade
+[464.52] details. This is just another fantastic
+[467.68] micro interaction by Dub. When we hover
+[470.08] on this, we get to see the limits if we
+[472.32] upgrade to Pro. Although I'm not a big
+[474.48] fan of the crossed out text there. So
+[476.80] we're going to do things a little
+[477.76] differently. Moving that over to Figma.
+[480.32] All we've done is when we hover on this,
+[482.64] we get a nice slide in effect instead of
+[484.96] that cross out and the 20 disappears.
+[487.92] Very simple interaction, but definitely
+[490.08] a thoughtful one. And that is it. If you
+[493.04] enjoyed, consider subscribing. The Figma
+[495.28] file with all the micro interactions
+[496.64] will be in the first link in the
+[497.84] description down below. And I'll see you
+[499.44] in the next one.

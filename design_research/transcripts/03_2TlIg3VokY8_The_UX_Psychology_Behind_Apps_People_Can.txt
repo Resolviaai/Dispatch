@@ -1,0 +1,338 @@
+Title: The UX Psychology Behind Apps People Can’t Stop Using
+Uploader: uxpeak
+URL: https://www.youtube.com/watch?v=2TlIg3VokY8
+Duration: 694s
+
+[000.00] Most apps fail not because they look
+[001.84] bad, but because they ignore how people
+[004.04] actually think. The best designers in
+[006.32] the world don't just push pixels. They
+[008.36] understand psychology. And today, I'm
+[010.72] going to show you six psychology
+[012.48] principles that will completely change
+[014.80] the way you design. Every single one
+[016.80] comes with a real before and after, so
+[018.76] you can see exactly what to do
+[020.32] differently. Let's go. Here's something
+[022.88] that sounds obvious, but almost nobody
+[025.04] does. Stop giving users blank forms.
+[028.28] Look at this booking screen. Five
+[030.16] completely empty fields. Every single
+[032.60] one is a decision the user has to make
+[034.64] before anything happens. Psychologists
+[036.88] call this decision fatigue. The more
+[039.40] choices you stack on someone at once,
+[041.56] the more likely they are to make no
+[043.08] choice at all and just leave. A study
+[045.52] from Columbia University found that when
+[047.44] a grocery store displayed 24 jam
+[050.08] flavors, only 3% of people bought one.
+[053.00] When they showed just six, the purchase
+[055.20] rate jumped to 30%. More choices doesn't
+[058.48] mean better. It means harder.
+[060.60] Now look at this version. Same screen,
+[062.23] [music]
+[062.76] same fields, but everything is
+[064.52] pre-filled with the most common choices.
+[066.80] And the button doesn't just say search.
+[068.76] It tells you there are already 12
+[070.32] results waiting. Here's why this works
+[072.12] so well. 70 to 90% of users in most
+[075.32] products never change the default
+[076.96] values. That's not laziness. It's trust.
+[080.16] When you provide a smart default, users
+[082.52] read it as a recommendation. You're
+[084.24] saying, "This is what most people pick."
+[086.48] And that's incredibly persuasive. The
+[088.56] user's job shifts from "Fill this out
+[090.48] from scratch." to "Scan and adjust what
+[092.68] doesn't fit." That's a fundamentally
+[094.64] easier task. So, the principle is called
+[096.96] smart defaults. And the rule is simple.
+[099.48] Pre-select the most common choice for
+[101.40] every field. Don't make users think when
+[103.36] you already know the answer.
+[105.76] This tip will change the way you think
+[107.40] about onboarding entirely. Researchers
+[109.76] at Columbia ran a study at a car wash.
+[111.96] One group of customers got a loyalty
+[113.56] card with eight empty stamps. Fill all
+[116.04] eight, get a free wash. The second group
+[118.40] got a card with 10 stamps, but two were
+[120.76] already filled in. Same eight washes
+[122.88] needed, but the group that started with
+[124.72] two stamps completed the card at nearly
+[127.00] double the rate. That's the goal
+[129.24] gradient effect. The closer people feel
+[131.56] to finishing something, the faster they
+[133.52] move toward it. And the critical insight
+[135.48] is this, you can choose where the
+[137.68] starting line is. Look at this
+[139.56] onboarding screen. 0% complete, five
+[142.72] empty stamps. It's telling the user you
+[145.28] haven't started and there's a lot ahead.
+[147.52] That's deflating, even if the actual
+[149.68] work is minimal. Now, this version. Same
+[152.04] form, same fields, but progress already
+[154.68] shows 20%. The first step is checked
+[156.92] off. The user can see exactly where they
+[159.12] are and how close the finish line is.
+[161.48] They didn't do any extra work. You just
+[163.52] reframed account creation as step one
+[165.88] instead of treating it as a separate
+[167.48] event. 0% feels like standing still. 20%
+[171.44] feels like momentum. And that feeling is
+[173.72] what separates the users who finish
+[175.40] onboarding from the ones who drop off at
+[177.24] the second screen. LinkedIn does this
+[179.28] brilliantly. They show you a profile
+[181.24] strength meter from the moment you sign
+[182.84] up, and it's never at zero. The rule,
+[185.37] [music] never start a user at zero. Find
+[187.96] something they've already done and count
+[189.44] it. That artificial head start creates
+[191.52] real motivation. If you want to get
+[193.36] better at designing onboarding that
+[194.88] actually works,
+[195.85] >> [music]
+[195.96] >> Mobbin is genuinely the best resource
+[197.76] for it. You can study how top teams
+[199.52] design onboarding, upgrades, checkouts,
+[202.16] and other key flows. So, instead of
+[203.80] guessing what good UX looks [music]
+[205.16] like, you can actually see it. In fact,
+[207.64] one of the first things we do before
+[209.04] designing any onboarding flow is go to
+[211.16] Mobbin and search for onboarding.
+[213.04] Instantly, you can see real examples
+[214.92] from top products, which makes it much
+[216.60] easier to find inspiration and see what
+[218.72] good patterns look like in practice.
+[220.80] It's a simple trick that helps you
+[222.00] design better and faster. And if you
+[224.00] want to try it, too, you can get 20% off
+[226.24] using the special link in the
+[227.20] description. So far, we've talked about
+[229.40] making things easier or making things
+[231.80] urgent. But if the user doesn't trust
+[234.04] you yet, none of it matters. Most apps
+[236.56] ask for something before they give
+[237.96] anything. Sign up to see your results.
+[240.32] Create an account to continue. Enter
+[242.24] your email to unlock. The user hasn't
+[244.32] received a single thing of value and
+[246.20] already the app wants something from
+[247.68] them. Look at the screen. The user
+[249.84] entered their URL, hit analyze, waited
+[252.64] for the scan, and now the results are
+[254.48] blurred out behind a lock. Create an
+[256.72] account to see your report. Think about
+[259.16] what that communicates. You're holding
+[261.36] the results hostage. It's like a
+[263.24] restaurant asking for your credit card
+[265.20] before they show you the menu. You'd
+[267.28] walk out, and that's exactly what users
+[269.48] do here. Now this approach. The user
+[272.08] hits analyze and actually gets a real
+[274.40] report. Not the full thing, but enough
+[277.04] to be genuinely useful. Their score,
+[280.00] their top issues, what passed. They can
+[282.52] already see what's wrong with their site
+[284.16] and start thinking about fixes. And then
+[286.28] at the bottom, a simple [music] prompt.
+[288.28] Want the complete breakdown with
+[289.64] step-by- step instructions? Save your
+[291.68] report. The difference in conversion is
+[293.76] massive because of a principle called
+[295.41] [music] reciprocity. When someone gives
+[297.44] you something first, you feel a pull to
+[299.48] return the favor. It's not rational.
+[301.60] It's one of the deepest human instincts
+[303.24] we have. Robert Cialdini spent his
+[305.36] career studying persuasion and ranked
+[307.40] this as the single most powerful driver
+[309.96] of human behavior. It's why free samples
+[312.28] at grocery stores increase purchases by
+[314.36] up to 2,000%.
+[316.37] >> [music]
+[316.48] >> The sample isn't that good, but
+[318.16] receiving it creates an unconscious
+[320.12] debt. Every smart company uses this.
+[322.92] Costco gives you free samples. Spotify
+[325.12] gives you 30 days of premium. Notion
+[327.24] lets you use the entire product before
+[329.20] you ever pay. They're not being
+[330.72] generous. They're being strategic. The
+[332.92] sign up never feels like a wall because
+[334.68] the user already got something worth
+[336.28] coming back for. Have you ever spent an
+[338.24] afternoon assembling IKEA furniture and
+[340.36] then thought, "Actually, this looks
+[342.48] pretty good." It objectively doesn't
+[344.60] look that different from what you'd buy
+[346.16] pre-assembled, But, it feels different
+[348.56] because you built it. You spent time on
+[350.72] it, and that labor changed how you value
+[353.08] it. Researchers actually studied this
+[355.20] and gave it a name, the IKEA effect.
+[357.92] When people build something themselves,
+[359.92] they value it significantly more than an
+[361.84] identical item someone else made.
+[363.84] There's an even simpler version of this
+[365.32] called the endowment effect. You don't
+[367.32] even have to build something. Just
+[369.08] feeling like you own it is enough. Now,
+[371.28] think about what most sign-up pages do.
+[373.52] Email, password, sign up. There's
+[375.80] nothing on this screen that belongs to
+[377.24] the user. They haven't created anything.
+[379.12] They haven't chosen anything. Closing
+[380.60] the tab is effortless because there's
+[382.48] nothing to lose. Now, look at this
+[384.20] approach. The user hasn't signed up yet,
+[386.28] but they're already building. They're
+[387.80] choosing their name, their title, their
+[389.72] color palette, their card style. Every
+[391.76] choice makes this feel more like theirs,
+[394.08] and the button at the bottom doesn't say
+[395.96] sign up, it says continue because by
+[398.36] now, leaving doesn't feel like skipping
+[400.28] a form. It feels like abandoning
+[401.84] something they made. Duolingo does this
+[404.08] brilliantly. Before you ever create an
+[406.12] account, you've already picked your
+[407.52] language, set your goal, and completed
+[410.20] your first lesson. By the time the
+[411.96] sign-up screen appears, you've invested
+[413.76] 10 minutes. You're not going to throw
+[415.16] that away. That's not manipulation.
+[417.40] That's smart design. You're giving
+[419.00] people a reason to stay by letting them
+[421.00] build something worth staying for.
+[423.68] Most designers are still learning UX and
+[425.72] UI the old way. They watch another
+[427.36] tutorial on how to recreate a beautiful
+[429.44] app screen, add a smooth Figma
+[431.24] interaction, or create another glass
+[433.36] effect. And yes, those things can
+[435.58] [music] be useful, but they're not what
+[437.12] gets you hired at serious product
+[438.64] companies because interviewers are not
+[440.72] just looking for someone who can make a
+[442.44] screen look nice. They want to see how
+[444.52] you think. They want to see if you
+[446.20] understand user psychology, conversion,
+[449.16] retention, business impact, and why
+[452.12] certain design decisions actually work.
+[454.96] That's why we created UX Peak Plus. UX
+[457.92] Peak Plus teaches the advanced UX and UI
+[460.16] skills most designers are missing. We
+[462.16] break down how top companies design
+[463.92] product pages,
+[465.64] onboarding flows,
+[467.40] pricing pages,
+[469.20] mobile apps, SaaS products, and
+[471.36] high-converting experiences. So, you can
+[473.80] understand not just what looks good, but
+[475.88] what actually works. It's the kind of
+[477.60] knowledge you can use in your case
+[478.72] studies, portfolio, interviews, and real
+[481.96] product work. You can start for free at
+[483.96] uxpeak.com with the free course. And if
+[486.44] you decide to join UX Peak Plus, use
+[488.56] code UX [music] Peak 20 to get 20% off
+[491.44] with our launch offer. You also have a
+[493.20] 7-day money-back guarantee. So, there is
+[495.96] no risk. Now, let's get into the next
+[498.24] tip.
+[499.96] All right, that was about making users
+[501.76] feel invested. But, what about
+[503.28] motivation? What makes someone actually
+[505.16] act instead of tapping maybe later?
+[507.64] Daniel Kahneman won a Nobel Prize for
+[509.80] proving that the pain of losing
+[511.44] something is psychologically twice as
+[514.12] powerful as the pleasure of gaining the
+[516.04] same thing. Twice. Think about what that
+[518.44] means for product design. Every time you
+[520.48] frame a feature as something users could
+[522.28] gain, you're using the weaker motivator.
+[524.72] Look at the screen, a storage app
+[526.28] offering a premium upgrade. Nice icon,
+[528.84] nice feature list, nice button, upgrade
+[531.20] now. And below it, the world's easiest
+[533.28] escape hatch, maybe later. There's
+[535.12] nothing at stake, nothing changes if the
+[537.00] user ignores this. The screen has zero
+[538.92] psychological weight. Now, this version,
+[541.40] same product, same goal. But, instead of
+[543.12] selling what the user could have, it
+[544.84] shows what the user is about to lose,
+[546.96] their actual files, by name, with the
+[549.52] countdown. And the dismiss option
+[551.44] doesn't let you off easy, it says, "I'll
+[553.28] risk it." The first screen is a pitch,
+[555.92] the second screen is a threat, and
+[557.60] threat wins every time because of a
+[559.24] concept called the status quo bias.
+[562.00] [music] Humans are wired to protect what
+[563.96] they already have. You need to make them
+[565.68] feel the cost of inaction. So, here's
+[567.76] the takeaway, [music]
+[568.48] whenever you're designing a screen that
+[569.92] asks users to act, flip the framing.
+[572.00] Don't sell what they'll gain, show what
+[573.68] they'll lose if they don't.
+[576.68] Last one is a principle that why the
+[578.64] exact same price can feel expensive or
+[581.24] feel like nothing. Look at the screen. A
+[583.60] protection plan shown on its own page,
+[585.84] $50 a month. The user sees that number
+[588.28] in isolation and does a quick mental
+[590.12] calculation, $600
+[592.76] a year. That's a lot. They hit no thanks
+[595.40] and move on.
+[596.52] Now look at the same offer in a
+[597.80] different context. [music] The user just
+[599.88] added a $1900 laptop to their cart and
+[603.36] directly below the product, the
+[605.24] protection plan appears. Same $50, but
+[608.40] now there's a small label next to it,
+[610.44] just 2.6%. Nothing changed about the
+[613.00] offer. Everything changed about how it
+[615.24] feels. After seeing $1900, $50 barely
+[618.92] registers. Your brain isn't doing an
+[620.76] absolute evaluation anymore. It's doing
+[623.08] a relative one. And it's relative to the
+[625.00] price you just processed, this is a
+[627.08] rounding error. This is the contrast
+[629.68] effect. Your brain evaluates every piece
+[632.12] of information relative to the thing it
+[634.04] saw immediately before. Restaurants use
+[636.36] this constantly. They put a $90 Wagyu
+[638.64] steak on the menu not because many
+[640.36] people order it, but because it makes
+[642.12] the $40 salmon look like a reasonable
+[644.28] choice. Real estate agents show you a
+[646.32] slightly overpriced house first so the
+[648.48] one they actually want to sell feels
+[650.24] like a deal.
+[651.08] >> [music]
+[651.20] >> For designers, the rule is don't show a
+[653.72] cost in isolation. Always control what
+[656.36] the user sees first because that first
+[658.64] number becomes the ruler they measure
+[660.56] everything else against.
+[662.64] So those are the six UX psychology
+[664.52] principles. And if you zoom out, they
+[666.76] all share the same insight. Your users
+[669.12] aren't making logical decisions.
+[670.88] Defaults feel like recommendations. The
+[673.08] first number sets the anchor. A gift
+[675.32] creates a debt. Building something makes
+[677.56] it yours. And progress, even a fake one,
+[680.96] creates real momentum. The designers who
+[683.40] get this build products people can't
+[685.40] stop using. The ones who don't build
+[687.76] products people forget exist. Thanks for
+[690.48] watching. We'll see you in the next one.

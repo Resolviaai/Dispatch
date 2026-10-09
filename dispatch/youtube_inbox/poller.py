@@ -83,7 +83,7 @@ class YouTubeInboxPoller:
             # Authenticated uploads are required to see private/unlisted videos from
             # the account's uploads playlist.
             try:
-                auth_uploads = list_authenticated_user_uploads(max_results=15)
+                auth_uploads = list_authenticated_user_uploads(max_results_per_page=15)
                 for item in auth_uploads:
                     discovered_videos.append(item)
             except Exception as e:
@@ -100,6 +100,8 @@ class YouTubeInboxPoller:
                 video_id = item["video_id"]
                 title = item.get("title", f"Dispatch Video {video_id}")
                 dispatch_id = item.get("dispatch_id")
+                session_id = item.get("session_id")
+                sequence_number = item.get("sequence_number")
                 pub_time = item.get("published_at")
 
                 # Idempotency check: Skip if already finished
@@ -108,21 +110,25 @@ class YouTubeInboxPoller:
 
                 existing = db.get_youtube_video(video_id)
                 if not existing:
-                    logger.info("Discovered NEW phone upload on YouTube: ID=%s, DispatchID=%s, Title='%s'",
-                                video_id, dispatch_id, title)
+                    logger.info("Discovered NEW phone upload on YouTube: ID=%s, DispatchID=%s, SessionID=%s, Seq=%s, Title='%s'",
+                                video_id, dispatch_id, session_id, sequence_number, title)
                     db.register_youtube_video(
                         video_id=video_id,
                         title=title,
                         upload_time=pub_time,
-                        dispatch_id=dispatch_id
+                        dispatch_id=dispatch_id,
+                        session_id=session_id,
+                        sequence_number=sequence_number
                     )
 
                 # Pillar 1 Ingestion: Discover -> Download -> Validate -> DOWNLOADED
                 try:
-                    logger.info("Starting Pillar 1 Ingestion for YouTube video %s (%s)", video_id, dispatch_id)
+                    logger.info("Starting Pillar 1 Ingestion for YouTube video %s (%s, session %s)", video_id, dispatch_id, session_id)
                     result = self.catcher.ingest_video(
                         url_or_id=video_id,
-                        dispatch_id=dispatch_id
+                        dispatch_id=dispatch_id,
+                        session_id=session_id,
+                        sequence_number=sequence_number
                     )
                     processed_items.append(result)
                 except Exception as e:

@@ -1,0 +1,1125 @@
+{
+  "meta": {
+    "id": "ld1zhQMXxXU",
+    "url": "https://www.youtube.com/watch?v=ld1zhQMXxXU",
+    "title": "11 Micro Animations That Will Instantly Level Up Your UI (free figma file)",
+    "uploader": "Kole Jain",
+    "duration": 505,
+    "description": "Free Figma file down here! With 11 prototyped micro animations to improve your UI designs. Clean, simple, and super beginner-friendly, perfect for smooth micro interactions and modern web designs.\n\nFigma file: https://www.kolejain.com/resources?scrollTo=microanimations\n\nJoin my design community with 14k designers\nhttps://www.newform.community/challenge?referrer=youtube\n\nTimestamps:\n0:00 Intro\n0:14 Button hover effect\n1:02 Keyboard shortcuts\n1:39 Toast notifications\n2:13 Name tag on hover\n3:22 Sh",
+    "slug": "11_Micro_Animations_That_Will_Instantly",
+    "snippets_count": 222,
+    "total_words": 1565
+  },
+  "snippets": [
+    {
+      "text": "If you're like me and don't have the",
+      "start": 0.08,
+      "duration": 4.08
+    },
+    {
+      "text": "talent or patience to make crazy stuff",
+      "start": 1.6,
+      "duration": 4.4
+    },
+    {
+      "text": "like this, then let me show you how to",
+      "start": 4.16,
+      "duration": 3.92
+    },
+    {
+      "text": "create sleek, satisfying interactions",
+      "start": 6.0,
+      "duration": 4.08
+    },
+    {
+      "text": "that make your designs feel high-end and",
+      "start": 8.08,
+      "duration": 4.0
+    },
+    {
+      "text": "actually fun to use. As always, the",
+      "start": 10.08,
+      "duration": 4.24
+    },
+    {
+      "text": "Figma files in the description. Let's do",
+      "start": 12.08,
+      "duration": 5.68
+    },
+    {
+      "text": "this one. Simple button hover effect.",
+      "start": 14.32,
+      "duration": 5.6
+    },
+    {
+      "text": "First, if you're as unprepared as I am,",
+      "start": 17.76,
+      "duration": 4.4
+    },
+    {
+      "text": "then this one is perfect for you. I'd",
+      "start": 19.92,
+      "duration": 4.16
+    },
+    {
+      "text": "create a nice button, but of course,",
+      "start": 22.16,
+      "duration": 4.16
+    },
+    {
+      "text": "forget the hover and click state. So,",
+      "start": 24.08,
+      "duration": 3.92
+    },
+    {
+      "text": "I'd just end up frantically picking some",
+      "start": 26.32,
+      "duration": 4.56
+    },
+    {
+      "text": "random colors. Instead of that, do this.",
+      "start": 28.0,
+      "duration": 4.559
+    },
+    {
+      "text": "Check out what this agency does with the",
+      "start": 30.88,
+      "duration": 3.76
+    },
+    {
+      "text": "text that slides up as we hover on it",
+      "start": 32.559,
+      "duration": 4.081
+    },
+    {
+      "text": "and the buttons that get smaller when we",
+      "start": 34.64,
+      "duration": 4.32
+    },
+    {
+      "text": "click on them. To do that on Figma, it's",
+      "start": 36.64,
+      "duration": 4.64
+    },
+    {
+      "text": "actually really simple. All we have is a",
+      "start": 38.96,
+      "duration": 4.48
+    },
+    {
+      "text": "mask here with two sets of text that I",
+      "start": 41.28,
+      "duration": 3.76
+    },
+    {
+      "text": "hope you can see. We've got a simple",
+      "start": 43.44,
+      "duration": 3.52
+    },
+    {
+      "text": "hover effect for the first one. And then",
+      "start": 45.04,
+      "duration": 3.839
+    },
+    {
+      "text": "for our click animation, we have a while",
+      "start": 46.96,
+      "duration": 3.759
+    },
+    {
+      "text": "pressing effect here. It works really",
+      "start": 48.879,
+      "duration": 3.36
+    },
+    {
+      "text": "well. And then you don't have to mess",
+      "start": 50.719,
+      "duration": 2.881
+    },
+    {
+      "text": "around with all sorts of different",
+      "start": 52.239,
+      "duration": 3.201
+    },
+    {
+      "text": "colors. You could even mix it up with",
+      "start": 53.6,
+      "duration": 3.92
+    },
+    {
+      "text": "some horizontal or diagonal movement",
+      "start": 55.44,
+      "duration": 3.919
+    },
+    {
+      "text": "like this micro interaction library",
+      "start": 57.52,
+      "duration": 4.76
+    },
+    {
+      "text": "built for Web Flow. Two, keyboard",
+      "start": 59.359,
+      "duration": 5.44
+    },
+    {
+      "text": "shortcuts. Now, you probably aren't",
+      "start": 62.28,
+      "duration": 4.28
+    },
+    {
+      "text": "designing a whole lot of interfaces that",
+      "start": 64.799,
+      "duration": 4.0
+    },
+    {
+      "text": "require keyboard shortcuts, but one",
+      "start": 66.56,
+      "duration": 4.16
+    },
+    {
+      "text": "thing's for sure, they're really easy to",
+      "start": 68.799,
+      "duration": 3.841
+    },
+    {
+      "text": "forget. Something like this little micro",
+      "start": 70.72,
+      "duration": 3.92
+    },
+    {
+      "text": "animation from Rainbow Wallet makes it a",
+      "start": 72.64,
+      "duration": 3.519
+    },
+    {
+      "text": "little harder for them to completely",
+      "start": 74.64,
+      "duration": 3.76
+    },
+    {
+      "text": "escape from memory. Here's what we've",
+      "start": 76.159,
+      "duration": 4.96
+    },
+    {
+      "text": "mocked up in Figma. And for the most",
+      "start": 78.4,
+      "duration": 5.359
+    },
+    {
+      "text": "part, I think it looks really cool. Now,",
+      "start": 81.119,
+      "duration": 5.04
+    },
+    {
+      "text": "unfortunately, it's not possible to bind",
+      "start": 83.759,
+      "duration": 4.72
+    },
+    {
+      "text": "the command or shift key. So, we had to",
+      "start": 86.159,
+      "duration": 5.441
+    },
+    {
+      "text": "use X and A as our substitutes instead.",
+      "start": 88.479,
+      "duration": 4.881
+    },
+    {
+      "text": "But once we've got those bound and press",
+      "start": 91.6,
+      "duration": 3.6
+    },
+    {
+      "text": "them all at the same time, we get a",
+      "start": 93.36,
+      "duration": 4.64
+    },
+    {
+      "text": "fantastic little success message, too.",
+      "start": 95.2,
+      "duration": 4.84
+    },
+    {
+      "text": "Three, toast",
+      "start": 98.0,
+      "duration": 4.479
+    },
+    {
+      "text": "notifications. Toast. Something you eat",
+      "start": 100.04,
+      "duration": 3.96
+    },
+    {
+      "text": "in the morning, something you do at a",
+      "start": 102.479,
+      "duration": 3.28
+    },
+    {
+      "text": "wedding, and something very important",
+      "start": 104.0,
+      "duration": 4.399
+    },
+    {
+      "text": "for UX. Versel has some pretty good",
+      "start": 105.759,
+      "duration": 4.64
+    },
+    {
+      "text": "toast notifications, though I like",
+      "start": 108.399,
+      "duration": 4.321
+    },
+    {
+      "text": "linears a little bit more. But I think",
+      "start": 110.399,
+      "duration": 4.0
+    },
+    {
+      "text": "we can do even better. Besides the",
+      "start": 112.72,
+      "duration": 3.759
+    },
+    {
+      "text": "obvious animation of it sliding up, we",
+      "start": 114.399,
+      "duration": 4.0
+    },
+    {
+      "text": "can add a lot of interactive bits to",
+      "start": 116.479,
+      "duration": 3.6
+    },
+    {
+      "text": "these cute little cards. From simple",
+      "start": 118.399,
+      "duration": 3.68
+    },
+    {
+      "text": "loading animations to celebratory",
+      "start": 120.079,
+      "duration": 4.64
+    },
+    {
+      "text": "success messages with some sexy particle",
+      "start": 122.079,
+      "duration": 4.72
+    },
+    {
+      "text": "animations. All of this is just some",
+      "start": 124.719,
+      "duration": 4.001
+    },
+    {
+      "text": "simple delay triggers with a single",
+      "start": 126.799,
+      "duration": 4.08
+    },
+    {
+      "text": "click trigger in here and we're pretty",
+      "start": 128.72,
+      "duration": 5.12
+    },
+    {
+      "text": "much good to go. Four. Name tag on",
+      "start": 130.879,
+      "duration": 5.44
+    },
+    {
+      "text": "hover. If you're displaying any sort of",
+      "start": 133.84,
+      "duration": 4.56
+    },
+    {
+      "text": "small headsh shot on your website, then",
+      "start": 136.319,
+      "duration": 4.161
+    },
+    {
+      "text": "when users hover on it, have a teeny",
+      "start": 138.4,
+      "duration": 4.8
+    },
+    {
+      "text": "name tag pop up. Huddle has this effect,",
+      "start": 140.48,
+      "duration": 5.36
+    },
+    {
+      "text": "and typically so do agencies with teams",
+      "start": 143.2,
+      "duration": 4.399
+    },
+    {
+      "text": "of creatives on them. And the best part",
+      "start": 145.84,
+      "duration": 3.52
+    },
+    {
+      "text": "is this is super simple to put together",
+      "start": 147.599,
+      "duration": 4.081
+    },
+    {
+      "text": "in Figma. All we need is these two",
+      "start": 149.36,
+      "duration": 4.32
+    },
+    {
+      "text": "frames here. The first is exactly how",
+      "start": 151.68,
+      "duration": 4.24
+    },
+    {
+      "text": "you'd expect it to be, and the second is",
+      "start": 153.68,
+      "duration": 4.24
+    },
+    {
+      "text": "where the name tag actually pops out.",
+      "start": 155.92,
+      "duration": 3.679
+    },
+    {
+      "text": "We've just used auto layout here by",
+      "start": 157.92,
+      "duration": 3.76
+    },
+    {
+      "text": "hitting shift A, rounding out the",
+      "start": 159.599,
+      "duration": 4.961
+    },
+    {
+      "text": "corners all the way and then adjusting",
+      "start": 161.68,
+      "duration": 5.279
+    },
+    {
+      "text": "the spacings ever so slightly and",
+      "start": 164.56,
+      "duration": 4.959
+    },
+    {
+      "text": "finally adding a fill, changing it to",
+      "start": 166.959,
+      "duration": 4.961
+    },
+    {
+      "text": "black, and then changing our text color",
+      "start": 169.519,
+      "duration": 5.36
+    },
+    {
+      "text": "to white. After adding a little bit of",
+      "start": 171.92,
+      "duration": 5.679
+    },
+    {
+      "text": "tilt and getting it positioned well, we",
+      "start": 174.879,
+      "duration": 4.801
+    },
+    {
+      "text": "can come back to our first frame here",
+      "start": 177.599,
+      "duration": 4.0
+    },
+    {
+      "text": "where I have the exact same name tag,",
+      "start": 179.68,
+      "duration": 3.919
+    },
+    {
+      "text": "just move down a little bit and set the",
+      "start": 181.599,
+      "duration": 4.401
+    },
+    {
+      "text": "opacity to zero. To connect these, we",
+      "start": 183.599,
+      "duration": 4.64
+    },
+    {
+      "text": "just add a hover animation with smart",
+      "start": 186.0,
+      "duration": 4.319
+    },
+    {
+      "text": "animate and some custom easing that",
+      "start": 188.239,
+      "duration": 4.161
+    },
+    {
+      "text": "takes 500 milliseconds, has a stiffness",
+      "start": 190.319,
+      "duration": 5.521
+    },
+    {
+      "text": "of 636, and a dampening of 24. This is",
+      "start": 192.4,
+      "duration": 4.96
+    },
+    {
+      "text": "important and creates the difference",
+      "start": 195.84,
+      "duration": 3.479
+    },
+    {
+      "text": "between these two",
+      "start": 197.36,
+      "duration": 5.599
+    },
+    {
+      "text": "animations. Five, shimmer stroke. The",
+      "start": 199.319,
+      "duration": 6.121
+    },
+    {
+      "text": "shimmer stroke or gradient stroke is a",
+      "start": 202.959,
+      "duration": 4.481
+    },
+    {
+      "text": "really modern animation and sites like",
+      "start": 205.44,
+      "duration": 3.159
+    },
+    {
+      "text": "this",
+      "start": 207.44,
+      "duration": 3.439
+    },
+    {
+      "text": "microinteraction.co and this Wix site do",
+      "start": 208.599,
+      "duration": 4.28
+    },
+    {
+      "text": "it really well.",
+      "start": 210.879,
+      "duration": 3.841
+    },
+    {
+      "text": "This is what it ends up looking like in",
+      "start": 212.879,
+      "duration": 3.841
+    },
+    {
+      "text": "Figma. And we had to use a couple tricks",
+      "start": 214.72,
+      "duration": 4.239
+    },
+    {
+      "text": "to get this to work, but I think it ends",
+      "start": 216.72,
+      "duration": 5.12
+    },
+    {
+      "text": "up looking really nice. The basic idea",
+      "start": 218.959,
+      "duration": 5.521
+    },
+    {
+      "text": "is we create an outline of our stroke",
+      "start": 221.84,
+      "duration": 4.959
+    },
+    {
+      "text": "using a subtract with two rectangles in",
+      "start": 224.48,
+      "duration": 5.039
+    },
+    {
+      "text": "it. Then we create an angular gradient",
+      "start": 226.799,
+      "duration": 5.041
+    },
+    {
+      "text": "on a circle like this. We can then put",
+      "start": 229.519,
+      "duration": 5.761
+    },
+    {
+      "text": "these two together and mask them so that",
+      "start": 231.84,
+      "duration": 7.039
+    },
+    {
+      "text": "we get this stroke effect. Lastly, we",
+      "start": 235.28,
+      "duration": 6.48
+    },
+    {
+      "text": "animate this angular gradient rotating",
+      "start": 238.879,
+      "duration": 5.761
+    },
+    {
+      "text": "and we get the shimmer effect. Because",
+      "start": 241.76,
+      "duration": 4.399
+    },
+    {
+      "text": "of the way we do things, we get a",
+      "start": 244.64,
+      "duration": 3.84
+    },
+    {
+      "text": "shimmer that moves faster on the edges",
+      "start": 246.159,
+      "duration": 4.481
+    },
+    {
+      "text": "here than it does on the top and bottom.",
+      "start": 248.48,
+      "duration": 4.08
+    },
+    {
+      "text": "Personally, I don't mind it, but some",
+      "start": 250.64,
+      "duration": 4.0
+    },
+    {
+      "text": "people might. So, we added in a pause",
+      "start": 252.56,
+      "duration": 4.32
+    },
+    {
+      "text": "and play button here, so the user can",
+      "start": 254.64,
+      "duration": 5.36
+    },
+    {
+      "text": "toggle that whenever they like. Six,",
+      "start": 256.88,
+      "duration": 6.4
+    },
+    {
+      "text": "delayed tool tips. This is both a micro",
+      "start": 260.0,
+      "duration": 5.84
+    },
+    {
+      "text": "interaction and a massively helpful UX",
+      "start": 263.28,
+      "duration": 5.52
+    },
+    {
+      "text": "tip. When we hover on any icon in this",
+      "start": 265.84,
+      "duration": 5.12
+    },
+    {
+      "text": "note-taking app, Obsidian, for more than",
+      "start": 268.8,
+      "duration": 5.119
+    },
+    {
+      "text": "a second, we get a popup to explain what",
+      "start": 270.96,
+      "duration": 5.28
+    },
+    {
+      "text": "the icon actually does. This is really",
+      "start": 273.919,
+      "duration": 4.401
+    },
+    {
+      "text": "nice when you have a lot of icons, but",
+      "start": 276.24,
+      "duration": 3.679
+    },
+    {
+      "text": "not a lot of space to actually label",
+      "start": 278.32,
+      "duration": 3.52
+    },
+    {
+      "text": "them all. Implementing this is very",
+      "start": 279.919,
+      "duration": 3.361
+    },
+    {
+      "text": "simple if you know what you're doing.",
+      "start": 281.84,
+      "duration": 4.4
+    },
+    {
+      "text": "All we have is a trigger on mouse enter,",
+      "start": 283.28,
+      "duration": 4.88
+    },
+    {
+      "text": "which you might not have used before,",
+      "start": 286.24,
+      "duration": 4.0
+    },
+    {
+      "text": "and then a trigger on mouse leave to",
+      "start": 288.16,
+      "duration": 4.319
+    },
+    {
+      "text": "bring us back to our original frame. We",
+      "start": 290.24,
+      "duration": 4.8
+    },
+    {
+      "text": "add a th00and millisecond delay. So only",
+      "start": 292.479,
+      "duration": 4.961
+    },
+    {
+      "text": "if we hover on it for a full second do",
+      "start": 295.04,
+      "duration": 4.719
+    },
+    {
+      "text": "we actually get the animation pop up.",
+      "start": 297.44,
+      "duration": 4.4
+    },
+    {
+      "text": "We've also used a custom easing with",
+      "start": 299.759,
+      "duration": 4.321
+    },
+    {
+      "text": "these settings to get a bit more bounce",
+      "start": 301.84,
+      "duration": 5.84
+    },
+    {
+      "text": "to it. Seven text hover pop out. Next up",
+      "start": 304.08,
+      "duration": 5.92
+    },
+    {
+      "text": "is text hovers. And Figma's community",
+      "start": 307.68,
+      "duration": 4.959
+    },
+    {
+      "text": "page is just an awesome example of this.",
+      "start": 310.0,
+      "duration": 4.24
+    },
+    {
+      "text": "It's a really great way to show what",
+      "start": 312.639,
+      "duration": 3.441
+    },
+    {
+      "text": "you're actually talking about without",
+      "start": 314.24,
+      "duration": 3.76
+    },
+    {
+      "text": "writing more words or taking up more",
+      "start": 316.08,
+      "duration": 4.16
+    },
+    {
+      "text": "space with images. Ace Studio actually",
+      "start": 318.0,
+      "duration": 4.16
+    },
+    {
+      "text": "does something very similar, although",
+      "start": 320.24,
+      "duration": 4.0
+    },
+    {
+      "text": "their images are a touch more playful",
+      "start": 322.16,
+      "duration": 4.24
+    },
+    {
+      "text": "than Figma's. Regardless, this is a",
+      "start": 324.24,
+      "duration": 4.48
+    },
+    {
+      "text": "really easy thing to set up in Figma.",
+      "start": 326.4,
+      "duration": 4.239
+    },
+    {
+      "text": "All we have are some hover interactions",
+      "start": 328.72,
+      "duration": 4.08
+    },
+    {
+      "text": "with our frames with the elements that",
+      "start": 330.639,
+      "duration": 4.161
+    },
+    {
+      "text": "pop out when we hover. And I'm going to",
+      "start": 332.8,
+      "duration": 3.6
+    },
+    {
+      "text": "be honest, this one might just be my",
+      "start": 334.8,
+      "duration": 3.6
+    },
+    {
+      "text": "favorite of the whole list. It's just so",
+      "start": 336.4,
+      "duration": 6.16
+    },
+    {
+      "text": "fun to play with. Eight. Progress bar.",
+      "start": 338.4,
+      "duration": 7.12
+    },
+    {
+      "text": "Let's be honest, forms are boring, but",
+      "start": 342.56,
+      "duration": 4.56
+    },
+    {
+      "text": "sometimes they're unavoidable. And",
+      "start": 345.52,
+      "duration": 3.44
+    },
+    {
+      "text": "that's why tools like Linear have used",
+      "start": 347.12,
+      "duration": 4.32
+    },
+    {
+      "text": "some super smooth micro interactions for",
+      "start": 348.96,
+      "duration": 4.16
+    },
+    {
+      "text": "their progress bar to keep the user",
+      "start": 351.44,
+      "duration": 3.92
+    },
+    {
+      "text": "engaged. We can create a really nice",
+      "start": 353.12,
+      "duration": 4.48
+    },
+    {
+      "text": "animation in Figma by taking our stroke",
+      "start": 355.36,
+      "duration": 4.32
+    },
+    {
+      "text": "here and masking it to a purple",
+      "start": 357.6,
+      "duration": 4.72
+    },
+    {
+      "text": "rectangle so that we can slide along our",
+      "start": 359.68,
+      "duration": 4.88
+    },
+    {
+      "text": "purple rectangle and it looks like we're",
+      "start": 362.32,
+      "duration": 4.96
+    },
+    {
+      "text": "drawing in the stroke. It works really",
+      "start": 364.56,
+      "duration": 5.04
+    },
+    {
+      "text": "well around the circles and pretty much",
+      "start": 367.28,
+      "duration": 4.24
+    },
+    {
+      "text": "everything else is just fading in or out",
+      "start": 369.6,
+      "duration": 5.319
+    },
+    {
+      "text": "the elements. Nine. Card",
+      "start": 371.52,
+      "duration": 7.36
+    },
+    {
+      "text": "swipe. This one by dub.co is just such a",
+      "start": 374.919,
+      "duration": 7.641
+    },
+    {
+      "text": "cool UI idea. It kind of reminds me of",
+      "start": 378.88,
+      "duration": 6.319
+    },
+    {
+      "text": "iMessage images. I do like where they",
+      "start": 382.56,
+      "duration": 4.479
+    },
+    {
+      "text": "have it in the sidebar here, but for",
+      "start": 385.199,
+      "duration": 3.361
+    },
+    {
+      "text": "ours, we're going to have it in the",
+      "start": 387.039,
+      "duration": 4.081
+    },
+    {
+      "text": "bottom right as kind of a notification",
+      "start": 388.56,
+      "duration": 4.56
+    },
+    {
+      "text": "center. Once you've got all of your",
+      "start": 391.12,
+      "duration": 4.4
+    },
+    {
+      "text": "cards like so, we can stack them one on",
+      "start": 393.12,
+      "duration": 5.12
+    },
+    {
+      "text": "top the other just like this. And then",
+      "start": 395.52,
+      "duration": 5.519
+    },
+    {
+      "text": "it's as simple as rotating the card out",
+      "start": 398.24,
+      "duration": 5.399
+    },
+    {
+      "text": "of the way and setting the opacity to",
+      "start": 401.039,
+      "duration": 5.361
+    },
+    {
+      "text": "0%. And then scaling up the cards in",
+      "start": 403.639,
+      "duration": 4.921
+    },
+    {
+      "text": "behind and shifting them down. One",
+      "start": 406.4,
+      "duration": 4.4
+    },
+    {
+      "text": "important detail is to make sure that as",
+      "start": 408.56,
+      "duration": 4.24
+    },
+    {
+      "text": "you're dragging this card, the other",
+      "start": 410.8,
+      "duration": 4.64
+    },
+    {
+      "text": "cards move down to fill the space where",
+      "start": 412.8,
+      "duration": 5.119
+    },
+    {
+      "text": "the first card was. That's what really",
+      "start": 415.44,
+      "duration": 4.319
+    },
+    {
+      "text": "completes this effect and makes it feel",
+      "start": 417.919,
+      "duration": 5.12
+    },
+    {
+      "text": "like they're moving forward. 10. Search",
+      "start": 419.759,
+      "duration": 4.761
+    },
+    {
+      "text": "bar",
+      "start": 423.039,
+      "duration": 4.401
+    },
+    {
+      "text": "expansion. Search bars. They're large,",
+      "start": 424.52,
+      "duration": 5.0
+    },
+    {
+      "text": "clunky, and definitely can get in the",
+      "start": 427.44,
+      "duration": 4.159
+    },
+    {
+      "text": "way. So, we pack them down into the",
+      "start": 429.52,
+      "duration": 4.399
+    },
+    {
+      "text": "universally accepted search icon, the",
+      "start": 431.599,
+      "duration": 4.72
+    },
+    {
+      "text": "magnifying glass. And by doing that, we",
+      "start": 433.919,
+      "duration": 4.641
+    },
+    {
+      "text": "have a great opportunity to add some",
+      "start": 436.319,
+      "duration": 4.72
+    },
+    {
+      "text": "interaction when the user clicks on it.",
+      "start": 438.56,
+      "duration": 4.479
+    },
+    {
+      "text": "Apple themselves have a pretty good",
+      "start": 441.039,
+      "duration": 4.081
+    },
+    {
+      "text": "interaction when you click on the search",
+      "start": 443.039,
+      "duration": 4.481
+    },
+    {
+      "text": "icon. All we have is this in Figma. It's",
+      "start": 445.12,
+      "duration": 4.079
+    },
+    {
+      "text": "just three frames with a click",
+      "start": 447.52,
+      "duration": 4.0
+    },
+    {
+      "text": "interaction on the first one and then a",
+      "start": 449.199,
+      "duration": 4.241
+    },
+    {
+      "text": "little bit of delay that takes us to the",
+      "start": 451.52,
+      "duration": 4.0
+    },
+    {
+      "text": "last one here. If we try it out, it",
+      "start": 453.44,
+      "duration": 3.68
+    },
+    {
+      "text": "looks a little something like this. And",
+      "start": 455.52,
+      "duration": 4.079
+    },
+    {
+      "text": "I really like how the magnifying glass",
+      "start": 457.12,
+      "duration": 5.199
+    },
+    {
+      "text": "disappears into the circle here. 11.",
+      "start": 459.599,
+      "duration": 4.921
+    },
+    {
+      "text": "Hover for upgrade",
+      "start": 462.319,
+      "duration": 5.361
+    },
+    {
+      "text": "details. This is just another fantastic",
+      "start": 464.52,
+      "duration": 5.56
+    },
+    {
+      "text": "micro interaction by Dub. When we hover",
+      "start": 467.68,
+      "duration": 4.639
+    },
+    {
+      "text": "on this, we get to see the limits if we",
+      "start": 470.08,
+      "duration": 4.399
+    },
+    {
+      "text": "upgrade to Pro. Although I'm not a big",
+      "start": 472.319,
+      "duration": 4.481
+    },
+    {
+      "text": "fan of the crossed out text there. So",
+      "start": 474.479,
+      "duration": 3.28
+    },
+    {
+      "text": "we're going to do things a little",
+      "start": 476.8,
+      "duration": 3.519
+    },
+    {
+      "text": "differently. Moving that over to Figma.",
+      "start": 477.759,
+      "duration": 4.88
+    },
+    {
+      "text": "All we've done is when we hover on this,",
+      "start": 480.319,
+      "duration": 4.641
+    },
+    {
+      "text": "we get a nice slide in effect instead of",
+      "start": 482.639,
+      "duration": 5.28
+    },
+    {
+      "text": "that cross out and the 20 disappears.",
+      "start": 484.96,
+      "duration": 5.12
+    },
+    {
+      "text": "Very simple interaction, but definitely",
+      "start": 487.919,
+      "duration": 5.12
+    },
+    {
+      "text": "a thoughtful one. And that is it. If you",
+      "start": 490.08,
+      "duration": 5.2
+    },
+    {
+      "text": "enjoyed, consider subscribing. The Figma",
+      "start": 493.039,
+      "duration": 3.6
+    },
+    {
+      "text": "file with all the micro interactions",
+      "start": 495.28,
+      "duration": 2.56
+    },
+    {
+      "text": "will be in the first link in the",
+      "start": 496.639,
+      "duration": 2.801
+    },
+    {
+      "text": "description down below. And I'll see you",
+      "start": 497.84,
+      "duration": 5.0
+    },
+    {
+      "text": "in the next one.",
+      "start": 499.44,
+      "duration": 3.4
+    }
+  ]
+}

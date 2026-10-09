@@ -1,0 +1,343 @@
+Title: 4 levels of UI/UX design (and BIG mistakes to avoid)
+Uploader: Tim Gabe
+URL: https://www.youtube.com/watch?v=86PGRyQjdzQ
+Duration: 934s
+
+[000.08] I've designed apps and websites for over
+[002.80] a decade. And when I look back at my own
+[005.84] design journey, one thing is clear.
+[008.56] There are patterns to the kinds of
+[010.56] mistakes you make as a designer at every
+[013.52] level of your career. In this video, I
+[015.84] will highlight those patterns of
+[017.44] mistakes, what they are, when they
+[019.60] typically happen, and how to fix them so
+[022.32] that you can reach your next design
+[024.40] level faster. Here's how we'll do it. We
+[026.80] will take a screen from a real client
+[028.96] project in my agency portfolio and
+[032.00] redesign it starting from an unpaid
+[034.32] beginner level, iterating all the way to
+[036.64] a high ticket senior level. For each
+[038.96] level, we will call out the biggest
+[040.88] mistakes while providing resources and
+[044.24] guidelines so that you can avoid them.
+[046.80] And then by the end of the video, we'll
+[049.60] dig into a hidden mistake that even lots
+[052.96] of senior designers make and a solution
+[056.64] that can really set you apart in this AI
+[060.00] era that we're in. Let's get started.
+[062.48] So, at the beginner level, nothing
+[064.80] works. However, this isn't a surprise
+[067.20] since we have less than a year of
+[069.84] experience and we're not getting paid
+[072.16] for our work yet. But let's dive into
+[074.80] why it doesn't work. The first mistake
+[076.80] in this design is something as simple as
+[079.44] the copyrightiting. For example, do we
+[081.68] really need four words to communicate a
+[084.96] user's rewards? And does it make sense
+[087.44] for the button to be about earning
+[089.80] tokens when the action is actually about
+[093.04] claiming voting rewards? Clarity is key
+[096.56] in copyrightiting, and we're not really
+[098.96] nailing it here. Therefore, it's a fail
+[102.40] on the first principle, which brings us
+[105.44] to the visuals. Lots of beginners will
+[107.96] overuse flashy gradients, blur effects,
+[111.28] and other cool visual techniques like
+[113.44] that. And to be fair, even mid-level
+[115.76] designers do this, but the difference is
+[117.60] that they make it work. More on that
+[120.16] later. The best quick tip I can give
+[122.80] here is if you're unsure, opt for
+[126.84] simplicity instead of flashiness. A
+[129.20] simple but clear graph will help a user
+[131.92] much more than a fancy graph that is
+[134.56] hard to understand. In this case, since
+[136.88] we went for fancy and we couldn't pull
+[139.04] it off, it's a fail. But what about the
+[142.48] colors? First off, we're using too much
+[145.28] of a very strong red color, which makes
+[148.16] the UI straight up stressful to look at.
+[151.12] Everything here is screaming for
+[153.20] attention and therefore nothing gets
+[155.68] attention. Not even the things we want
+[157.84] to highlight in the UI. Now to make
+[160.32] coloring a bit easier, try the
+[163.32] 603010 approach. 60% of the UI is a
+[167.04] neutral color like white or light gray.
+[170.40] 30% of the UI is a complimentary color
+[173.76] like black and 10% of the UI has the
+[178.24] main brand color in this case red. This
+[181.52] UI feels more like a reverse at the
+[184.72] moment. And while that could work here
+[187.84] it doesn't. Now however it's time to
+[190.72] count the font sizes. 1 2 3 4 5 6. Six
+[198.48] different font sizes are used here and
+[201.36] four different font weights. It's
+[203.76] impossible to create a greatl looking UI
+[206.32] with this much variety in the text
+[208.96] department. So here's the easy fix. Try
+[212.40] to reduce those numbers that we just
+[214.72] talked about six and four by at least
+[217.12] two. So four sizes and two weights. That
+[221.44] will take you really far. In this case
+[223.36] though, it's a fail. But we're not done.
+[226.40] We don't need to look super closely to
+[228.80] see that things aren't really aligned in
+[231.36] here. And the things that are aligned
+[233.20] are spaced out randomly. 11 pixels here,
+[237.12] 25 pixels here, just random numbers. So,
+[240.32] here's a little trick to improve spacing
+[243.36] quickly. It's called the eightoint grid
+[245.76] system. The main idea is that anytime
+[248.08] you use a number in your design, make it
+[251.20] divisible by 8 or 4. Instead of 25
+[254.56] pixels, use 24. Instead of 11, use 12. I
+[259.12] actually have a full video on this that
+[261.04] you can check out after this one linked
+[263.36] down in the description below. Anyways,
+[265.44] unfortunately, we fail here as well.
+[268.00] That's six out of six fails. A pretty
+[270.72] rough start. Surprisingly though, lots
+[273.04] of progress happens with just one year
+[276.72] of design obsession. Which brings us to
+[279.28] the junior designer. But before we go
+[281.52] there, if you want to learn from even
+[283.68] more realworld projects, you can check
+[286.08] out a full case study of this and other
+[288.72] projects that we've designed at SIPAP in
+[291.68] the link I've shared down in the
+[293.84] description below. Now, time for the
+[295.60] junior designer. Here we have a person
+[297.68] with one, two, maybe 3 years of
+[300.24] experience designing apps and websites.
+[302.88] They're likely either working in-house
+[305.28] somewhere or making anywhere from a
+[307.52] hundred to maybe 500 bucks, doing
+[310.56] smaller design gigs as a freelancer. And
+[313.36] usually copywriting is still a big issue
+[316.64] at this level. We still add unnecessary
+[319.52] words and write labels that don't really
+[322.32] make sense. For example, commit time
+[325.68] sounds like we're committing time
+[327.84] instead of votes. These are small
+[330.08] details that make a lot of difference if
+[332.88] we improve it. So, how do we do that?
+[335.28] The easiest solution nowadays is just to
+[337.92] take a screenshot of your UI, pop it
+[340.88] into chat GPT, and then feed it some
+[343.68] more context on the project, emphasizing
+[346.32] that you want copy that is clear but
+[348.96] short. For now, though, it's still a
+[351.52] fail. But that means that we get a shot
+[354.32] at redemption for the visuals. And here
+[357.12] we've actually stepped it up. Now, we
+[359.12] understand that visuals primarily serve
+[361.60] a communication purpose, especially if
+[364.08] it's a graph like in this case. And the
+[366.56] red dot in contrast to the gray bars
+[369.36] here communicates to the user, this is a
+[372.64] thing we want you to focus on. Sadly
+[375.04] though, we still think visuals
+[377.28] absolutely need a trendy skumorphic
+[380.56] effect with 45 layers of shadows. But
+[383.36] it's fine. We're still learning. So, a
+[385.76] first half pass and we're back to the
+[388.56] colors. As juniors, we have enough
+[391.44] experience to know that mixing colors
+[394.00] too freely easily turns into a disaster.
+[397.36] We also understand that overusing a
+[400.00] color could work against you if you want
+[402.64] to assign meaning to colors. So, we're
+[405.84] generally more passive when it comes to
+[408.32] color usage, which actually is a very
+[410.40] good thing. And one of the most
+[412.08] important learnings for creating clean,
+[414.72] professional interfaces, but it's a
+[417.04] balance. Here, we went from a UI that
+[419.44] overused our red main color to a UI that
+[423.36] now barely uses any of it, which makes
+[426.72] it a bit dull and therefore just a half
+[432.00] pass. In terms of font sizes, we still
+[434.72] have issues. Too big sizes, too small
+[437.44] sizes, too many sizes. It still happens
+[440.88] at this level, understandably. So,
+[443.20] sadly, it's a pretty quick fail here
+[445.60] that segus into spacing and structure
+[448.96] again, and we've made progress. But it's
+[450.96] evident that there's still no calculated
+[454.08] approach to how we space or structure
+[456.48] elements. pixel values are still a bit
+[459.60] random, which tells me that someone
+[461.92] forgot to study the eightoint grid
+[464.72] method, so it's a faily fail. That puts
+[468.24] us at two out of five half passes. And
+[471.76] while that might not seem great, we're
+[474.56] moving in the right direction here. The
+[476.16] design we saw isn't close to be worth
+[478.80] serious money, but things are about to
+[481.68] change at our next stage, the mid level.
+[484.72] Before we jump into that though, I'm
+[486.84] curious. How would you score your own
+[489.92] design skills? And how many years of
+[492.32] experience do you have? Let me know in
+[494.32] the comments. Now things start to get
+[496.80] interesting. We have somewhere between 3
+[499.52] and 6 years of design experience, and we
+[502.00] can potentially at this point rack in 8
+[505.52] to 10k USD per month with projects
+[509.60] likely ranging anywhere from 3 to 6K.
+[512.80] And this is clearly reflected in the
+[515.20] design. The copywriting is now even
+[517.60] clearer. There's a sense of it being
+[519.60] written for an actual user. It still
+[522.72] might not be the prettiest, but it
+[524.96] definitely looks better, which means
+[527.20] that we have our first half pass on
+[530.56] copy. But what about the visuals? They
+[534.36] look good, maybe a bit overworked, which
+[537.52] is something we usually see with
+[539.52] mid-level designers. Just like beginners
+[541.92] would add and add and add to the
+[544.52] rituals, designers at the mid level can
+[547.84] sometimes gravitate back towards that
+[550.72] same behavior. At this point of their
+[552.88] career though, they have a much more
+[555.20] trained design eye, which allows them to
+[558.56] make it work. So, while it's not
+[560.56] perfect, it's clearly a half pass, which
+[563.52] means we're stepping into colors with
+[566.56] momentum. As a mid-level designer, we
+[568.64] know that UIs don't need all the colors
+[571.52] of the rainbow to look good. We know how
+[574.24] to balance the UI by using different
+[576.64] shades or tints of one color instead of
+[580.32] multiple different colors. If you want
+[582.72] pro tips on shading and tinting, check
+[585.36] out Eric D. Kennedy's article that I
+[588.40] linked down below. Anyways, it's a good
+[590.64] old half pass. And we're back at the
+[593.20] point where the junior still tripped up,
+[595.52] the font department. But now, for the
+[597.92] first time, we understand how to use
+[600.48] fonts in a UI. We have less sizes, have
+[603.84] less weights, and while some sizes and
+[606.84] weights might still be a bit off, it's
+[609.92] starting to look cleaner. Half pass. And
+[613.12] onto the last point before we reach the
+[615.68] senior level and the hidden mistake. And
+[619.20] for spacing and structure, it's looking
+[621.76] pretty good. Related elements are
+[624.00] grouped nicely. We've started to use a
+[626.24] spacing system like the 8oint grid. And
+[629.28] as a result, the UI feels more
+[631.76] professional. It's not entirely cooked
+[634.24] like the young crowd might say, but it's
+[636.56] definitely a half pass, which brings us
+[639.28] to five out of five half passes. And the
+[643.04] final boss. As a senior designer, you
+[645.52] have at least seven years of experience,
+[648.24] which means you have designed so many
+[650.64] websites and apps that you're a safe bet
+[654.24] for clients that want both beautiful
+[656.72] design, but also design that actually
+[659.52] drives business metrics. That's why you
+[661.92] will see deals all the way from 20K to
+[665.28] over 100K from senior designers. Sounds
+[668.64] crazy. Let's dive into how it's
+[671.04] possible. First of all, the difference
+[672.72] in copyrightiting here might look
+[674.64] subtle, but when we actually study the
+[677.84] words and the length of the words, it
+[680.96] all just harmonizes so much better
+[683.68] because as a senior, we find ways to
+[686.72] communicate better with less. We know
+[689.60] that we don't need to write last 10
+[692.36] votes when we have a big label right
+[695.28] above saying voting or claim um if we
+[699.52] have a heading saying um rewards. And by
+[702.48] not repeating the same words, we reduce
+[705.12] cognitive load and visual clutter
+[708.00] without sacrificing clarity. And I know
+[710.80] that might sound like a minor detail,
+[712.88] but when you scale this across a full
+[715.28] app is a massive difference. So, we have
+[718.32] our first full pass and we're ready to
+[720.80] talk about the visuals again. They are
+[723.12] now clearly made with careful thought.
+[726.16] We add emphasis only to what matters and
+[729.28] we help the user make immediate
+[731.88] connections between different parts of
+[734.48] the UI by reusing visual patterns. For
+[738.24] example, here the commit part of the UI
+[741.28] gets connected to the current voting
+[743.68] period in the graph because we're using
+[747.04] the same pulsing circle. We're achieving
+[749.76] more with less. It's a full pass. But
+[753.12] what about the colors? Well, here we
+[755.36] basically just simplified what the
+[757.28] mid-level designer did. Instead of
+[759.04] gradients, just simple flat colors.
+[761.52] Instead of a button that screams error
+[763.52] states, we're saving the red color for
+[766.00] the graph. the rewards icon and the
+[768.80] commit indicator. It's nicer on the eyes
+[771.76] while calling attention to the right
+[774.20] things even more effectively. It's our
+[777.12] third full pass, which brings us back to
+[780.32] the fonts. We're finally down to only
+[782.88] four font sizes and two font weights.
+[785.84] And you can see here that we introduced
+[787.52] a monospace version of the font for big
+[790.40] numbers. And to avoid collision when
+[793.28] this reward number grows, we reuse the
+[797.04] heading size from the voting label for
+[800.16] our decimal fractions. And that's all it
+[802.44] takes for full passing again as we bring
+[805.76] out our rulers. And dang, this is what
+[808.96] we call structure. Elements are grouped
+[811.60] logically. Spacing is deliberate between
+[815.56] elements, inside elements, everywhere.
+[818.80] Those seven plus years of experience are
+[821.60] becoming really evident. Full freaking
+[824.32] pass were five out of five full score.
+[828.16] But what about that hidden mistake that
+[830.16] even senior designers make? Well, I'm
+[832.32] glad you brought it up. Let's talk about
+[834.16] it. This mistake doesn't have anything
+[836.16] to do with static UI or UX skills
+[839.68] because as you saw, senior designers are
+[842.32] capable of creating greatl lookinging,
+[844.64] well functioning interfaces. But thanks
+[847.52] to AI, in the coming years, we're going
+[850.72] to see an exponential increase in the
+[853.84] amount of apps that are available to us,
+[856.40] which means that designing memorable
+[858.80] experiences that connects us with
+[861.44] technology is going to be the easiest
+[863.84] way to stand out as a designer. And the
+[866.96] mistake most designers make, again,
+[869.60] seniors included, is that we get stuck
+[873.12] just focusing on static images. But to
+[877.20] create a true experience, we need to
+[880.24] treat UI design more like a movie. We
+[883.60] need to piece static screens together in
+[886.80] a way that makes the app a pleasure to
+[889.68] use. That's how we create truly
+[892.80] delightful apps and as a result also
+[896.08] drastically increase our price tags as
+[898.96] designers. Look at Phantom Wallet,
+[901.36] Airbnb, and even Dual Lingo. Those are
+[904.80] all great examples of apps that have
+[907.28] gone that extra mile, which raises the
+[910.44] question, how do you achieve this? Well,
+[913.84] that is a topic that is out of scope for
+[917.12] this video. But luckily, if you're
+[919.04] interested in a breakdown of these kinds
+[921.60] of apps and how they create memorable
+[924.52] experiences, I have a video on that here
+[927.52] that you can check out. Now, until the
+[929.20] next one, I want you to have an amazing
+[931.60] everything and we'll talk

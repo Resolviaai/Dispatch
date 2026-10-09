@@ -55,7 +55,9 @@ def backup_database(backup_dir: Optional[Path] = None) -> Path:
 @contextlib.contextmanager
 def get_db_connection():
     """Context manager yielding a thread-safe SQLite connection with auto-commit and guaranteed close."""
-    conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+    import os
+    db_file = os.getenv("DISPATCH_DB_PATH") or str(DB_PATH)
+    conn = sqlite3.connect(str(db_file), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
@@ -140,6 +142,7 @@ def init_db():
                 hashtags TEXT,
                 virality_score INTEGER DEFAULT 0,
                 layout_mode TEXT DEFAULT 'fit_blur', -- crop_follow, fit_blur, native_portrait
+                rendered_layout_mode TEXT,           -- records the framing mode used for current video_path
                 status TEXT NOT NULL DEFAULT 'ready_review', -- ready_review, approved, rejected, published
                 publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
                 platform_targets TEXT DEFAULT 'youtube,instagram',
@@ -223,6 +226,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS youtube_inbox (
                 video_id TEXT PRIMARY KEY,
                 dispatch_id TEXT,
+                session_id TEXT,
+                sequence_number INTEGER,
                 title TEXT NOT NULL,
                 channel_id TEXT,
                 upload_time TIMESTAMP,
@@ -248,11 +253,15 @@ def init_db():
             ON youtube_inbox (status, updated_at);
         """)
 
-        # Migration: Ensure dispatch_id, transcript wait, and AI retry columns exist if table was created in older schema
+        # Migration: Ensure dispatch_id, session_id, sequence_number, transcript wait, and AI retry columns exist if table was created in older schema
         cursor.execute("PRAGMA table_info(youtube_inbox);")
         yt_cols = [col[1] for col in cursor.fetchall()]
         if "dispatch_id" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN dispatch_id TEXT;")
+        if "session_id" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN session_id TEXT;")
+        if "sequence_number" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN sequence_number INTEGER;")
         if "transcript_wait_started_at" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_started_at TIMESTAMP;")
         if "transcript_wait_deadline" not in yt_cols:
@@ -270,6 +279,19 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
             ON youtube_inbox (dispatch_id);
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_youtube_session_id 
+            ON youtube_inbox (session_id);
+        """)
+
+        # Migration: Ensure caption_data and rendered_layout_mode columns exist on clips table
+        cursor.execute("PRAGMA table_info(clips);")
+        clip_cols = [col[1] for col in cursor.fetchall()]
+        if "caption_data" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_data TEXT;")
+        if "rendered_layout_mode" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN rendered_layout_mode TEXT;")
+            cursor.execute("UPDATE clips SET rendered_layout_mode = layout_mode WHERE rendered_layout_mode IS NULL AND video_path IS NOT NULL;")
 
         # Default settings if not already present
         cursor.execute("""
@@ -384,7 +406,8 @@ def save_clip(
     virality_score: int,
     layout_mode: str,
     publish_mode: str = "private",
-    platform_targets: str = "youtube,instagram"
+    platform_targets: str = "youtube,instagram",
+    rendered_layout_mode: Optional[str] = None
 ) -> str:
     clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     duration = end_time - start_time
@@ -394,25 +417,37 @@ def save_clip(
             INSERT INTO clips (
                 id, session_id, chunk_id, start_time, end_time, duration,
                 title, hook, description, hashtags, virality_score,
-                layout_mode, status, publish_mode, platform_targets
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?)
+                layout_mode, rendered_layout_mode, status, publish_mode, platform_targets
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?)
         """, (
             clip_id, session_id, chunk_id, start_time, end_time, duration,
             title, hook, description, hashtags, virality_score,
-            layout_mode, publish_mode, platform_targets
+            layout_mode, rendered_layout_mode, publish_mode, platform_targets
         ))
         conn.commit()
     return clip_id
 
 
-def update_clip_media(clip_id: str, video_path: str, thumbnail_path: str):
+def update_clip_media(
+    clip_id: str,
+    video_path: str,
+    thumbnail_path: Optional[str],
+    rendered_layout_mode: Optional[str] = None
+):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE clips 
-            SET video_path = ?, thumbnail_path = ?, status = 'ready_review'
-            WHERE id = ?
-        """, (video_path, thumbnail_path, clip_id))
+        if rendered_layout_mode:
+            cursor.execute("""
+                UPDATE clips 
+                SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = ?, status = 'ready_review'
+                WHERE id = ?
+            """, (video_path, thumbnail_path, rendered_layout_mode, clip_id))
+        else:
+            cursor.execute("""
+                UPDATE clips 
+                SET video_path = ?, thumbnail_path = ?, status = 'ready_review'
+                WHERE id = ?
+            """, (video_path, thumbnail_path, clip_id))
         conn.commit()
 
 
@@ -421,7 +456,8 @@ def approve_clip(
     custom_title: Optional[str] = None,
     custom_tags: Optional[str] = None,
     custom_mode: Optional[str] = None,
-    custom_platforms: Optional[str] = None
+    custom_platforms: Optional[str] = None,
+    custom_layout: Optional[str] = None
 ):
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -434,12 +470,13 @@ def approve_clip(
         hashtags = custom_tags if custom_tags is not None else clip["hashtags"]
         publish_mode = custom_mode if custom_mode is not None else clip["publish_mode"]
         target_platforms = custom_platforms if custom_platforms is not None else (clip["platform_targets"] or "youtube,instagram")
+        layout_mode = custom_layout if custom_layout is not None else (clip["layout_mode"] or "fit_blur")
 
         cursor.execute("""
             UPDATE clips 
-            SET status = 'approved', title = ?, hashtags = ?, publish_mode = ?, platform_targets = ?, approved_at = CURRENT_TIMESTAMP
+            SET status = 'approved', title = ?, hashtags = ?, publish_mode = ?, platform_targets = ?, layout_mode = ?, approved_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (title, hashtags, publish_mode, target_platforms, clip_id))
+        """, (title, hashtags, publish_mode, target_platforms, layout_mode, clip_id))
 
         # Enqueue to publishing outbox for each selected platform
         platforms = [p.strip() for p in target_platforms.split(",") if p.strip()]
@@ -452,6 +489,29 @@ def approve_clip(
             """, (f"pub_{uuid.uuid4().hex[:8]}", clip_id, plat, publish_mode, idempotency_key))
 
         conn.commit()
+
+
+def get_clip_caption_data(clip_id: str) -> Optional[str]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT caption_data FROM clips WHERE id = ?", (clip_id,))
+        row = cursor.fetchone()
+        return row["caption_data"] if row and row["caption_data"] else None
+
+
+def save_clip_caption_data(clip_id: str, caption_json: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE clips SET caption_data = ? WHERE id = ?", (caption_json, clip_id))
+        conn.commit()
+
+
+def get_clip_by_id(clip_id: str) -> Optional[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
 
 def reject_clip(clip_id: str, reason: str = "User rejected"):
@@ -519,7 +579,9 @@ def register_youtube_video(
     channel_id: Optional[str] = None,
     upload_time: Optional[str] = None,
     duration: float = 0.0,
-    dispatch_id: Optional[str] = None
+    dispatch_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    sequence_number: Optional[int] = None
 ) -> bool:
     """Register discovered YouTube video in inbox idempotently.
     Returns True if newly inserted, False if already present.
@@ -530,10 +592,13 @@ def register_youtube_video(
         if cursor.fetchone():
             return False
 
+        if session_id:
+            cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
+
         cursor.execute("""
-            INSERT INTO youtube_inbox (video_id, dispatch_id, title, channel_id, upload_time, duration, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'DISCOVERED')
-        """, (video_id, dispatch_id, title, channel_id, upload_time, duration))
+            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED')
+        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration))
         conn.commit()
         return True
 
@@ -560,6 +625,8 @@ def update_youtube_video(
     video_id: str,
     status: str,
     dispatch_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    sequence_number: Optional[int] = None,
     local_video_path: Optional[str] = None,
     transcript_source: Optional[str] = None,
     segments_json: Optional[str] = None,
@@ -580,6 +647,15 @@ def update_youtube_video(
         if dispatch_id is not None:
             updates.append("dispatch_id = ?")
             params.append(dispatch_id)
+
+        if session_id is not None:
+            updates.append("session_id = ?")
+            params.append(session_id)
+            cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
+
+        if sequence_number is not None:
+            updates.append("sequence_number = ?")
+            params.append(sequence_number)
 
         if local_video_path is not None:
             updates.append("local_video_path = ?")

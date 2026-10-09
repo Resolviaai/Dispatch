@@ -5,8 +5,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 
 private val DarkColorScheme = darkColorScheme(
-    primary = PrimarySky,
-    secondary = PrimaryBlue,
+    primary = PrimaryBlue,
+    secondary = PrimaryBlueHover,
     background = CanvasBackground,
     surface = CardSurface,
     onPrimary = TextPrimary,

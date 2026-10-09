@@ -71,7 +71,7 @@ class BootReceiver : BroadcastReceiver() {
 
     private fun scheduleYouTubeUpload(context: Context) {
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiredNetworkType(NetworkType.UNMETERED)
             .build()
 
         val uploadReq = OneTimeWorkRequestBuilder<YouTubeDirectUploadWorker>()

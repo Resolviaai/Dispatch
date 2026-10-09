@@ -1,0 +1,230 @@
+Title: Everything you need to know about Mobile App UI’s in 8 minutes (beginner friendly)
+Uploader: Kole Jain
+URL: https://www.youtube.com/watch?v=Gfsd8NNuD9g
+Duration: 456s
+
+[000.00] When it comes to UI, mobile is just so
+[002.36] different from desktop that it results
+[003.88] in some pretty questionable designs. So,
+[006.16] in this video, I'm going to show you how
+[007.28] to design your very first mobile UI
+[009.36] completely from scratch in a way that's
+[011.12] dynamic, purposeful, and effortless to
+[013.60] use. And by the end, you won't just have
+[015.76] a stunning mobile design. You'll
+[017.12] understand why the best apps are
+[018.76] designed the way they are. The first
+[020.92] difference of desktop to mobile is
+[023.00] obviously the navigation. Where we had
+[024.80] an expansive sidebar, we now definitely
+[027.04] do not. So, we have two options. If we
+[029.96] can consolidate our sidebar links down
+[031.72] to just a few key icons, we can go with
+[033.96] a nice bottom bar, which nowadays is
+[035.84] typically floating with the important
+[037.48] action broken out just like this. Five
+[039.84] links down here is pretty much the
+[041.24] definite limit, and three or four is
+[043.40] much more ideal. But, either way, this
+[045.24] means that we'll always maintain over a
+[047.00] 44-pixel target since people do have fat
+[049.72] fingers. It's important to note too that
+[051.60] depending on the context you're in,
+[053.36] these actions can and do change, which
+[055.68] we'll touch on when we start building
+[056.96] out a few pages. That typically is the
+[059.28] standard. However, sometimes you just
+[061.36] have too many important things in the
+[062.84] sidebar to really fit things in here, in
+[064.92] which case another valid form of
+[066.36] navigation is to take the sidebar and
+[068.48] turn that into a whole page that sort of
+[070.52] becomes the home page. In this case,
+[072.80] we'll add in some recent notes to the
+[074.36] top and actions and counts to the right
+[076.44] side, so it doesn't feel so lopsided. It
+[079.20] also conveniently clears up the bottom
+[081.00] for a nice big search bar or action
+[082.88] button, which is what apps like Notion
+[084.60] do. Moving up to the top, a bell and
+[086.76] more menu is a good place to start, but
+[088.72] these actions are also highly contextual
+[090.80] based on the page. Now, when it comes
+[092.52] time to actually start building,
+[093.96] squishing things down and trying to fit
+[095.80] as much on the screen as possible is
+[097.68] pretty natural. This all looks fairly
+[099.76] normal, actually, until I zoom out and
+[101.80] show you the other normal-sized apps for
+[103.88] comparison. Despite our screen getting
+[106.00] much, much smaller, the type scale and
+[108.24] spacing remains relatively similar to
+[110.04] desktop, even getting a bit larger. iOS
+[112.68] actually has a base font size of 17
+[115.00] pixels, while macOS has a base of only
+[117.40] 13 pixels. So, more often than not,
+[119.72] things actually get larger on these
+[121.36] smaller screens. And it's a tough
+[123.28] realization that on desktop, where you
+[124.88] could have had an action bar, a gallery
+[126.80] of recent notes, a full calendar, tasks,
+[129.56] and a scratch pad, now you can pick one
+[131.76] of those things. And because we have to
+[133.64] pick just one, the way we start to lay
+[135.76] out content starts to change a little.
+[137.80] Dashboards and desktop designs can lay
+[139.72] out content in two directions at the
+[141.68] same time. What that means is this
+[143.40] layout has two columns and three rows,
+[145.92] obviously extending in both directions.
+[148.24] However, on mobile, you can choose one
+[150.04] direction to move in per section. Either
+[152.16] you can stack each note vertically, or
+[154.24] you can make it horizontal off the page,
+[156.00] but of course, you can't have both like
+[157.92] you reasonably could on desktop. This is
+[160.20] a useful guideline when taking content
+[161.92] from dashboards and making it
+[163.52] mobile-optimized. And if you understand
+[166.16] that concept, things really start to
+[167.84] become a piece of cake. In addition,
+[169.68] ignoring our floating menus and actions,
+[171.84] there's really only four types of
+[173.48] building blocks for an app. The biggest
+[175.44] and most important are cards. Basically,
+[177.60] everything on here is a card in some way
+[179.52] or another because it allows us to
+[180.84] flexibly group content in place of white
+[183.08] space, which we don't typically have a
+[184.60] lot of here. The others are text or
+[186.76] links, of course, images, and inputs.
+[189.44] And of course, any of those can be put
+[191.28] into cards as well. One important note
+[193.84] about cards is to try and avoid
+[195.72] double-nesting them, kind of like this.
+[197.96] It's not always avoidable, but it
+[199.56] creates padding on padding, which really
+[201.56] restricts the space you have and ends up
+[203.56] cramping things. Often, you can group
+[205.36] with white space instead of a container
+[207.32] and somewhat alleviate this problem.
+[209.68] Because we are so space-constrained on
+[211.76] mobile apps, I'd like to introduce the
+[213.40] important idea that one screen does one
+[216.20] thing, and that's it. Obviously, the
+[218.64] very notable exception is our home
+[220.44] screen, but otherwise, the settings is
+[222.68] just settings, and the notes editor is
+[224.56] just a notes editor. We don't throw in
+[226.28] clutter like recent notes or suggested
+[228.52] templates at the top. Instead, whenever
+[230.60] you need to add something new, don't
+[232.12] reach for a different layout, reach for
+[233.64] a different page altogether. Though,
+[235.60] this example about templates brings up
+[237.48] an interesting point about context.
+[239.72] We're editing a note, so we don't want
+[241.20] to be ripped away to a new page to
+[242.88] select a template, but we don't have
+[244.52] enough room on screen. This is where
+[246.64] bottom sheets become super useful. This
+[249.72] is a bottom sheet. You've probably seen
+[251.20] it a bunch, and now we can simply add in
+[253.44] a title, search bar, and a check and X,
+[256.04] and all of our templates, too. These can
+[257.84] be any height, but they keep the user in
+[259.92] context and are easy to navigate with
+[261.76] gestures, which we'll talk about in just
+[264.00] a second. Another good example is the
+[265.76] typical use of this plus button, which
+[267.96] either opens a little menu or opens with
+[270.68] an input to just immediately start
+[272.56] typing. But, before we get to gestures,
+[274.92] sometimes when you're designing, you
+[276.16] need some inspiration. So, a tool I use
+[278.32] all the time and actually used to make
+[280.16] this video is Mobbin, the sponsor of
+[282.24] today's video. Mobbin curates hundreds
+[284.56] of thousands of videos, images, and user
+[287.00] flows, all from top apps like Notion,
+[289.48] Craft, Headspace, and many more. It
+[292.00] often helps me to see how top teams
+[293.80] design flows like onboarding or to check
+[296.20] out specific UI elements just like
+[298.04] bottom sheets. You can filter by
+[299.60] categories, screens, UI elements, and
+[301.72] user flows, so you can always find
+[303.80] what's relevant to you. If you're
+[305.36] interested, you can check out Mobbin
+[307.04] using my link in description to get 20%
+[309.28] off. Now, back to the video. Now,
+[311.52] gestures is where mobile apps start to
+[313.40] get really interesting. One of the most
+[315.36] common is swiping right to go back like
+[317.64] this. But, if we move the background
+[319.28] left by about 35% and then also animate
+[322.32] it right, we get a super smooth
+[324.00] transition. Same idea with our bottom
+[326.08] sheets. As the bottom sheet comes up, we
+[328.12] often zoom out the background and zoom
+[330.28] back in on swipe down. Swipes are
+[332.56] everywhere in modern mobile apps, so as
+[334.76] long as you educate the user on how to
+[336.56] use them, they can be relied on pretty
+[338.32] heavily. A good example is a handy swipe
+[340.68] up to search, which is used by Slack as
+[342.96] well as sort of by Apple, too. And I'd
+[345.16] be remiss if I didn't mention the long
+[347.00] press, the mobile equivalent of the
+[348.96] right click. It's typical to blur the
+[351.12] rest of the screen and just show the
+[352.80] actions in addition to some slight zoom
+[355.04] on the element itself. Or, we can take
+[356.92] it even a step further and turn this
+[358.60] into a more dynamic preview like how iOS
+[361.12] does it. Now, also because of our
+[363.04] limited space, actions need to come and
+[365.32] go as needed. They can't always be
+[367.32] persistent. For example, clicking into
+[369.20] one of our notes hides our navbar and
+[371.12] reveals other actions specific to note
+[373.08] editing, such as text formatting or
+[374.84] sharing up at the top. Or, when we go to
+[376.80] select templates, all of that is hidden
+[378.56] for really just two actions, a
+[380.24] confirmation button and an X. And of
+[382.76] course, how these actions animate in and
+[385.00] out is half the fun, too. Finally, what
+[387.72] we've designed here is an ideal state.
+[390.20] The app is filled with content, but
+[391.84] don't forget what the user sees the
+[393.52] first time they log in when there is no
+[395.32] content. We could have cards inviting
+[397.52] user to start adding in events, tasks,
+[399.84] and notes, but instead, let's draw
+[401.68] attention to the plus button, which is
+[403.64] our main action, and add in a
+[405.60] full-screen empty state to simplify
+[407.68] things. Then, we have a simple popover
+[409.96] instructing them on how things actually
+[412.00] work. But, there is also another type of
+[414.48] empty state, which is when we search for
+[416.28] a note, for example, and get no results.
+[418.88] Instead of just an instruction, we
+[420.68] should have some nice imagery, and we
+[422.20] need to acknowledge that there are no
+[423.92] notes matching the existing keywords,
+[426.12] and then perhaps give them a few
+[427.48] suggestions in case of a typo, and an
+[429.52] action to exit the empty state. There is
+[432.00] a ton of different apps and mobile
+[433.96] designs you could build, but this should
+[435.64] give you the foundation to start
+[437.36] creating some really pro-level app
+[439.40] designs super easily. If you're
+[441.20] interested in checking out Mobbin, it'll
+[443.00] be the very first link down below, and
+[444.84] the link to all of the Figma assets used
+[446.88] in this video will be down there, too.
+[448.60] Thank you so much for watching, and I'll
+[450.28] see you in the next one.

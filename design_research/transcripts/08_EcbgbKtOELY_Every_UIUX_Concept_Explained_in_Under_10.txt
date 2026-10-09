@@ -1,0 +1,279 @@
+Title: Every UI/UX Concept Explained in Under 10 Minutes
+Uploader: Kole Jain
+URL: https://www.youtube.com/watch?v=EcbgbKtOELY
+Duration: 563s
+
+[000.00] If you want to get good at UI UX design,
+[002.48] you got to start with the basics. So,
+[004.36] let's begin.
+[008.20] This one's easiest to explain with an
+[009.88] example first. If I have three text and
+[012.36] icon pairs, but I put a container around
+[014.36] drinks and food, you know that they're
+[015.92] related and dessert is not. Then, if I
+[018.40] put a container around drinks, you know
+[020.12] that it's selected and you can toggle
+[021.80] over to food. If I gray this text out,
+[023.72] you know that it's inactive and clicking
+[025.52] it probably won't do anything. See how
+[027.60] you just knew all of that? I didn't need
+[029.52] to write instructions on how it worked
+[031.24] because the UI was signifying how things
+[033.68] worked. Good UI has many signifiers,
+[035.96] like a button press state, highlights on
+[038.08] active nav items, hover states, or even
+[040.08] tooltips to tell the user what a UI
+[042.16] affords or what it can do.
+[047.08] Now, take a look at this card. It
+[048.76] displays all of the information in a
+[050.52] logical, repeatable format, but it looks
+[053.20] like a spreadsheet, not a design. So,
+[055.72] let's give it some hierarchy, which is
+[057.48] pretty intuitive. We have size,
+[059.28] position, and color to use to our
+[060.84] advantage. Starting from the top, an
+[062.72] image always adds a great pop of color
+[065.00] and makes scanning super easy, just like
+[067.04] Uber. If in this case the item is the
+[069.28] most important, we want that large and
+[071.20] bold and at the top because otherwise
+[073.16] it'll blend in with something like the
+[074.64] time and date, which can be below and
+[076.68] much smaller. And it's this contrast,
+[078.72] the difference between small and big or
+[081.04] colorful and not, that actually creates
+[083.28] the hierarchy. It's also why price
+[085.08] should be at the top, right aligned, and
+[087.08] blue. It's different than the rest,
+[088.56] which draws the eye to it. The location
+[090.64] should be smaller and below like this.
+[092.84] But, instead of just from and to, we can
+[094.92] use icons and align to demonstrate that
+[096.88] it's moving from Jamesville to Syracuse
+[099.24] without having to actually say that.
+[101.28] Now, with that said, it's not an exact
+[103.40] science and you could definitely end up
+[105.20] with a design that looks like this
+[106.56] instead and it wouldn't be wrong. But,
+[108.44] the same ideas apply. Most important
+[110.20] things near the top, bigger and colorful
+[112.12] is more important, and images are used
+[114.12] whenever possible. And as you start to
+[115.88] design more and more, you'll notice that
+[117.48] similar patterns arise when you need
+[119.32] labels or buttons, which we're going to
+[121.08] talk about in a minute.
+[122.49] >> [music]
+[125.48] >> Now, some people have this misconception
+[127.48] that all of your content needs to align
+[129.36] to a 12-column grid and be exactly eight
+[131.88] pixels apart. But, these are just
+[134.04] guidelines. For example, this design
+[135.92] doesn't line up with any of the columns
+[138.12] and that's not uncommon, especially for
+[140.08] custom landing pages. But, for highly
+[142.32] structured pages like galleries, blogs,
+[144.28] or any repeating content, they can
+[146.20] actually be useful for responsiveness by
+[148.04] giving guidelines for responsive
+[149.56] behavior on tablet [music] with eight
+[151.20] columns and mobile with four. But, much
+[153.92] more important than using excessive
+[155.68] grids and layouts is white space,
+[157.76] letting things breathe. For example, in
+[160.04] a simple section like this, the large
+[161.88] text would have a font size and line
+[163.56] height like this and the subtext would
+[165.08] have a font size and line height like
+[166.96] so. Buttons would be similar and
+[168.80] optionally a top announcement bar like
+[170.68] this. [music] Then, simply 32 pixels
+[172.68] between every item, but you can also
+[174.40] group elements that just go together
+[177.08] like the announcement and text or the
+[179.04] text and subtext, [music] which is just
+[180.96] another form of visual hierarchy. And
+[183.32] this is where we see the four-point grid
+[185.00] system actually come into play.
+[186.72] Everything is a multiple, not because it
+[188.76] inherently looks better, but because you
+[190.64] can always split things in half, which
+[192.32] creates consistency throughout a design.
+[195.19] >> [music]
+[197.92] >> Typography is really interesting because
+[200.12] design is mostly just text. And for
+[203.32] picking a font, I can almost
+[204.96] unilaterally say you'll never need more
+[206.96] than one for any design. So, find a nice
+[209.80] sans serif font like the ones on screen
+[211.60] and stick to it. Over the last seven
+[213.52] years of designing, I've rarely used
+[215.50] [music] any fonts other than what's on
+[217.16] screen and this shouldn't be where
+[218.56] you're spending tons of time. I'm also
+[220.52] not a big fan of calling any design
+[222.36] skill a hack, but this one kind of is.
+[225.28] This design looks okay right now, but
+[227.36] our header text feels a little too
+[229.04] loose. If you tighten up the letter
+[230.68] spacing on this by about -2% to -3% and
+[234.04] drop the line height to about 110% to
+[236.08] 120%, it instantly makes any larger text
+[239.40] look super pro real fast. But, hierarchy
+[242.48] with typography is a little bit more
+[244.32] nuanced. And if we look at our previous
+[246.32] example, text sizes can vary wildly. For
+[249.24] landing pages and websites, you
+[250.48] generally don't want more than six font
+[252.32] sizes, which can have a really large
+[254.16] range. For things like dashboards, that
+[255.96] range shrinks dramatically [music] to
+[257.96] where you don't normally have text sizes
+[259.80] larger than 24 pixels because of the
+[261.92] increase in information density. But,
+[264.24] honestly, one of the most important
+[265.72] concepts of design is getting
+[267.16] inspiration and doing research from a
+[268.92] good source, like today's sponsor,
+[270.68] Mobbin, who curates hundreds of
+[272.72] thousands of mobile and web apps along
+[274.80] with landing pages, too. So, you can
+[276.36] always pull inspiration from real
+[277.96] designs built by the top design teams in
+[280.36] the world. [music] And if you're
+[281.60] struggling with a specific section, just
+[283.24] go and search for it and instantly pull
+[285.08] up real-world examples with links to the
+[287.08] live sites, too. If you're interested,
+[289.20] you can check out Mobbin using the first
+[290.88] link down below to get 20% off. Now,
+[293.28] back to the video.
+[294.75] >> [music]
+[297.24] >> Colors are difficult and everyone has
+[299.84] their own taste, but I'm a big fan of
+[301.84] starting with one primary color.
+[303.92] Generally, this is your brand color.
+[305.48] Then, you can lighten it for a good
+[306.60] background or darken it for text colors.
+[308.80] Both good ways to incorporate subtle
+[310.44] color and make an otherwise drab design
+[312.60] look much more interesting. And with all
+[314.80] of that, we're already halfway to a
+[316.56] color ramp, which is what large
+[318.00] companies use to build out chips,
+[319.64] states, charts, and really anything
+[321.24] else. But, I also think it's important
+[323.24] as a beginner to let the color find you.
+[325.96] Like an announcement bar to grab
+[327.56] attention or a focus state on an input
+[330.08] or the green new chip on a link. These
+[331.96] are all semantic colors, which are
+[333.52] colors that have meaning and provide
+[335.28] signifiers to the user. Blue for trust,
+[337.52] red for danger or urgency, yellow for
+[339.60] warning, and green for success. Make
+[341.68] sure you use color for purpose, not just
+[344.52] for decoration.
+[345.84] >> [music]
+[348.64] >> Now, designing in dark mode presents
+[350.28] some pretty interesting challenges for
+[352.28] us. First, this card is using a light
+[354.36] border, which creates a bit too much
+[355.88] contrast. So, we'll lower that down. In
+[357.88] dark mode, we don't have shadows like
+[359.52] light mode, so to create depth, we need
+[361.32] to have a lighter card than the
+[362.92] background. So, I'll make that
+[364.36] adjustment. This chip is also far too
+[366.52] bright, so we can dim down the
+[367.92] saturation and brightness and flip that
+[370.08] for the text to create some hierarchy.
+[372.08] There's also a ton of flexibility for
+[374.28] deep purples, reds, or greens, not just
+[376.88] navy blue or gray.
+[379.90] >> [music]
+[381.64] >> But, speaking of depth, shadows are a
+[383.44] fantastic tool to use on light mode.
+[385.80] This shadow, along with most, is too
+[387.68] strong. So, reducing the opacity and
+[389.76] dialing up the blur helps a lot. The
+[392.00] strength you'll need depends on the
+[393.64] foreground and background, but cards
+[395.44] require less while content that sits
+[397.32] above other content like popovers will
+[399.72] need stronger shadows. We can even use
+[401.80] these techniques with inner and outer
+[403.72] shadows to create effects like raised
+[405.76] tactile buttons. Just remember, if the
+[407.88] shadow is the first thing you notice on
+[409.56] a design, you're not using it right.
+[412.00] >> [music]
+[414.76] >> Now, to create strong designs, you'll
+[416.40] need icons. Most icons are generally too
+[419.12] large, so the trick is to get the line
+[421.16] height of your font, in this case 24
+[423.04] pixels, and make the icons the same size
+[425.52] and then tighten up the text. Sidebar
+[427.24] links like this are actually just
+[428.80] buttons without a background until you
+[430.48] hover, which are often called ghost
+[432.00] buttons. And if we isolate one and
+[433.88] center it, we've got a perfect
+[435.40] standalone button. These are super
+[437.04] common when you have a primary and
+[438.64] secondary CTA side by side. And a good
+[441.24] guideline for padding on these is to
+[442.92] double the height for the width. And
+[445.04] these can be done with or without icons,
+[447.60] too.
+[451.04] A good rule of design is when a user
+[453.00] does anything, there should be a
+[455.08] response. For example, every button
+[457.08] needs at least four states: default,
+[459.48] hovered, active or pressed, and
+[461.16] disabled. Sometimes you'll need a
+[462.60] loading state, too, with a spinner.
+[464.48] Inputs are even more critical. You'll
+[466.40] need a focus state when the user clicks
+[468.04] in, error states with red borders and
+[469.84] messages when something's wrong, and
+[471.52] sometimes even warning states for
+[473.28] optional issues. And this applies
+[475.44] everywhere. Loading spinners when data
+[477.24] is fetching, success messages when an
+[479.20] action completes, even micro animations
+[481.32] on scroll or swipe. Every interaction
+[484.24] needs a response.
+[488.96] And that brings us wonderfully into
+[490.88] micro interactions. Micro interactions
+[492.88] are a form of feedback, but they step
+[495.12] things up a notch. For example, this
+[497.12] copy button has states and feedback when
+[499.52] we hover and click, but we still don't
+[501.72] know that we've copied anything.
+[503.64] Instead, if we have this chip slide up,
+[505.84] that's a micro interaction that confirms
+[508.08] our action. And these can range from
+[510.20] highly practical to much more fun and
+[512.92] playful.
+[517.08] Finally, overlays are really important
+[519.60] because if you screw them up, you're
+[520.80] going to ruin the image and the text,
+[522.88] too. In this case, we can't leave it as
+[524.96] is, so we could add in a full-screen
+[526.76] overlay, but it doesn't do the image
+[528.68] justice. So, instead, add in a linear
+[530.68] gradient that'll display the image then
+[532.52] smoothly converge into a text-readable
+[534.92] background. Or, if we're going for extra
+[537.04] fancy, we can add in a progressive blur
+[539.28] on top of the gradient for an even more
+[541.40] modern look. And that is more or less
+[544.36] every UI UX concept all wrapped up in 10
+[547.24] minutes. If you want to check out
+[548.92] Mobbin, it will be the first link down
+[550.68] below and you can get the link to all of
+[552.76] the Figma assets used in this video down
+[554.72] there, too. Thank you so much for
+[556.00] watching and I will see you in the next
+[557.56] one.

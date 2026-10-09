@@ -38,8 +38,8 @@ ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 # Video Processing Defaults
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
-MIN_CLIP_DURATION = 20.0  # seconds
-MAX_CLIP_DURATION = 90.0  # seconds
+MIN_CLIP_DURATION = 0.5  # Technical minimum positive interval (seconds)
+MAX_CLIP_DURATION = 180.0  # Hard maximum output duration (seconds)
 
 # Subtitle Styling Defaults (ASS)
 SUBTITLE_FONT = "Arial"
@@ -50,5 +50,5 @@ SUBTITLE_HIGHLIGHT_COLOR = "&H0000FFFF"  # Yellow for active word
 
 # Default Application Modes
 DEFAULT_PUBLISH_MODE = os.getenv("DISPATCH_PUBLISH_MODE", "private")  # "private" or "public"
-WEB_HOST = os.getenv("DISPATCH_WEB_HOST", "127.0.0.1")
+WEB_HOST = os.getenv("DISPATCH_WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("DISPATCH_WEB_PORT", "8000"))

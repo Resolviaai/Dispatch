@@ -1,5 +1,10 @@
 # Dispatch: Autonomous Personal Content Engine
 
+<p align="center">
+  <img src="branding/dist/dispatch-lockup-horizontal-white.svg#gh-dark-mode-only" alt="Dispatch Logo" width="380" />
+  <img src="branding/dist/dispatch-lockup-horizontal-black.svg#gh-light-mode-only" alt="Dispatch Logo" width="380" />
+</p>
+
 > **"You create the raw signal. Dispatch carries it the rest of the way."**
 
 Dispatch is an autonomous, local-first content pipeline engineered to turn raw, multi-hour natural work and speaking sessions recorded on an Android phone into polished, high-retention vertical short-form videos (YouTube Shorts, Instagram Reels, LinkedIn, X).

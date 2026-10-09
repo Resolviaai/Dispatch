@@ -174,7 +174,9 @@ class YouTubeInboxCatcher:
     def ingest_video(
         self,
         url_or_id: str,
-        dispatch_id: Optional[str] = None
+        dispatch_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        sequence_number: Optional[int] = None
     ) -> Dict[str, Any]:
         """Pillar 1: Dedicated YouTube Ingestion & Media Validation.
         
@@ -186,6 +188,7 @@ class YouTubeInboxCatcher:
           5. STOP. (Downstream stages consume DOWNLOADED records).
         """
         from dispatch.ingestion.validator import probe_video
+        from dispatch.youtube_inbox.oauth import extract_dispatch_id, extract_session_metadata
 
         video_id = extract_youtube_video_id(url_or_id)
         if not video_id:
@@ -212,9 +215,16 @@ class YouTubeInboxCatcher:
         info = {}
         try:
             info = self.fetch_video_info(video_id)
+            desc = info.get("description", "")
             if not dispatch_id:
-                from dispatch.youtube_inbox.oauth import extract_dispatch_id
-                dispatch_id = extract_dispatch_id(info.get("description", ""))
+                dispatch_id = extract_dispatch_id(desc)
+            s_sess, s_seg, s_seq = extract_session_metadata(desc)
+            if not session_id:
+                session_id = s_sess
+            if sequence_number is None:
+                sequence_number = s_seq
+            if not dispatch_id and s_seg:
+                dispatch_id = s_seg
 
             db.register_youtube_video(
                 video_id=video_id,
@@ -222,17 +232,27 @@ class YouTubeInboxCatcher:
                 channel_id=info.get("channel_id", ""),
                 upload_time=info.get("upload_date"),
                 duration=info.get("duration", 0.0),
-                dispatch_id=dispatch_id
+                dispatch_id=dispatch_id,
+                session_id=session_id,
+                sequence_number=sequence_number
             )
         except Exception as e:
             logger.warning("Could not fetch remote info for video %s (%s). Registering placeholder.", video_id, e)
             db.register_youtube_video(
                 video_id=video_id,
                 title=f"YouTube Video {video_id}",
-                dispatch_id=dispatch_id
+                dispatch_id=dispatch_id,
+                session_id=session_id,
+                sequence_number=sequence_number
             )
 
-        db.update_youtube_video(video_id, status="DISCOVERED", dispatch_id=dispatch_id)
+        db.update_youtube_video(
+            video_id,
+            status="DISCOVERED",
+            dispatch_id=dispatch_id,
+            session_id=session_id,
+            sequence_number=sequence_number
+        )
 
         # 2. Transition to DOWNLOADING & download media
         db.update_youtube_video(video_id, status="DOWNLOADING")
@@ -325,9 +345,17 @@ class YouTubeInboxCatcher:
         # 1. Fetch metadata
         try:
             info = self.fetch_video_info(video_id)
+            desc = info.get("description", "")
             if not dispatch_id:
                 from dispatch.youtube_inbox.oauth import extract_dispatch_id
-                dispatch_id = extract_dispatch_id(info.get("description", ""))
+                dispatch_id = extract_dispatch_id(desc)
+            if not session_id:
+                from dispatch.youtube_inbox.oauth import extract_session_metadata
+                s_sess, s_seg, s_seq = extract_session_metadata(desc)
+                if s_sess:
+                    session_id = s_sess
+                if not dispatch_id and s_seg:
+                    dispatch_id = s_seg
 
             db.register_youtube_video(
                 video_id=video_id,
@@ -335,18 +363,20 @@ class YouTubeInboxCatcher:
                 channel_id=info["channel_id"],
                 upload_time=info["upload_date"],
                 duration=info["duration"],
-                dispatch_id=dispatch_id
+                dispatch_id=dispatch_id,
+                session_id=session_id
             )
         except Exception as e:
             logger.error("Failed to fetch info for video %s: %s", video_id, e)
             db.register_youtube_video(
                 video_id=video_id,
                 title=f"YouTube Video {video_id}",
-                dispatch_id=dispatch_id
+                dispatch_id=dispatch_id,
+                session_id=session_id
             )
             info = {"title": f"YouTube Video {video_id}", "duration": 0.0}
 
-        db.update_youtube_video(video_id, status="DOWNLOADING", dispatch_id=dispatch_id)
+        db.update_youtube_video(video_id, status="DOWNLOADING", dispatch_id=dispatch_id, session_id=session_id)
 
         # 2. Download media
         try:
@@ -442,23 +472,24 @@ class YouTubeInboxCatcher:
                 cursor.execute("SELECT * FROM clips WHERE id = ?", (cid,))
                 c_row = cursor.fetchone()
 
-            if not c_row:
-                continue
+            start_t = c_row["start_time"] if c_row else 0.0
+            end_t = c_row["end_time"] if c_row else total_duration
+            l_mode = (c_row["layout_mode"] if c_row else None) or "fit_blur"
 
             try:
                 render_result = render_clip(
                     source_video=local_video_path,
                     clip_id=cid,
-                    start_time=c_row["start_time"],
-                    end_time=c_row["end_time"],
+                    start_time=start_t,
+                    end_time=end_t,
                     aspect_ratio="16:9",
-                    layout_mode=c_row["layout_mode"] or "fit_blur",
+                    layout_mode=l_mode,
                     segments=segments
                 )
                 db.update_clip_media(
                     clip_id=cid,
-                    video_path=str(render_result["video_path"]),
-                    thumbnail_path=str(render_result["thumbnail_path"])
+                    video_path=str(render_result.get("video_path", "")),
+                    thumbnail_path=str(render_result.get("thumbnail_path", ""))
                 )
                 rendered_clips.append(cid)
             except Exception as e:

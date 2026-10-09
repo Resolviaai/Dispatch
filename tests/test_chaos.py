@@ -61,6 +61,8 @@ class TestDispatchChaosEngineering(unittest.TestCase):
         init_db()
         init_mobile_db()
         init_job_queue_schema()
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM pipeline_jobs")
         self.temp_dir = Path(tempfile.mkdtemp(prefix="dispatch_chaos_"))
 
     def tearDown(self):

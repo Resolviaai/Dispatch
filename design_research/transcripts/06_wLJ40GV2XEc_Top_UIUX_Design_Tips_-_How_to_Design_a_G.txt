@@ -1,0 +1,631 @@
+Title: Top UI/UX Design Tips - How to Design a Great Bottom Mobile Navigation Bar
+Uploader: uxpeak
+URL: https://www.youtube.com/watch?v=wLJ40GV2XEc
+Duration: 1426s
+
+[000.08] If your bottom navigation looks like
+[001.76] this or this or even this, you need to
+[005.60] watch this video because right now your
+[007.92] users are probably suffering. Every time
+[010.88] they open your app, they feel like this.
+[013.36] A bad bottom navigation doesn't just
+[015.52] look messy and unappealing. It makes
+[017.76] your app frustrating to use and
+[019.68] confusing to navigate. And when that
+[021.92] happens, users don't just get annoyed,
+[024.48] they leave and find something better.
+[026.80] But here's the good news. Fixing this is
+[029.04] easier than you think if you know the
+[031.12] right UI design principles. And today
+[033.44] I'm going to show you exactly how to
+[035.44] design a bottom navigation bar that's
+[037.52] not just good, but so intuitive and
+[040.08] smooth that people will love using your
+[042.48] app. These are the same design
+[044.40] principles used by the best apps in the
+[046.64] world. And by the end of this video,
+[048.80] you'll know exactly how to design a
+[050.56] bottom navbar that feels amazing. Oh,
+[054.00] and stick around till the end because
+[055.60] there's one big mistake that even pro
+[058.08] designers keep making. And trust me, you
+[060.72] don't want to be that designer. Now, one
+[064.00] thing that can really take your bottom
+[065.52] navigation to the next level is adding
+[067.84] subtle micro interactions like this.
+[070.64] Looks great, right? It's those small
+[072.88] details that make an app feel polished
+[074.96] and responsive. But before you get too
+[077.76] excited about animations, there's
+[079.84] something even more important. the
+[082.76] fundamentals because if you don't get
+[084.72] the basics right, no amount of fancy
+[087.04] micro interactions will save your
+[089.00] navigation. So, let's start from the
+[091.60] ground up. When you open a mobile app,
+[093.84] you'll usually see two types of
+[095.84] navigation. Top navigation, which sits
+[098.24] at the top, and bottom navigation, which
+[100.88] sits at the bottom of your screen. They
+[102.80] look similar on both iOS and Android.
+[105.36] But here's something that confuses a lot
+[107.04] of designers. On iOS, it's called a tab
+[110.32] bar. On Android, it's called bottom
+[112.64] navigation. Throughout this video, I'll
+[114.88] just call it the bottom navigation bar
+[116.64] to keep it simple. Now, a lot of
+[118.80] designers think the bottom navigation
+[120.40] bar is just buttons at the bottom, but
+[122.88] the truth is it's so much more. It's
+[125.52] actually the backbone of your app's
+[127.36] usability. Here's why. Your bottom
+[129.76] navigation bar represents the top level
+[132.00] structure of your app. It tells users
+[134.08] what's important and helps them move
+[135.76] quickly between the core sections. And
+[137.76] here's something you really need to
+[139.36] understand. This is prime real estate.
+[143.12] Your bottom navigation is one of the
+[144.80] most tapped, most used areas in your
+[147.20] entire app. So, every icon, every label,
+[151.12] every micro interaction, you have to be
+[153.76] strategic because a well-designed bottom
+[156.00] navigation can make your app feel
+[158.00] effortless. A bad one, it drives people
+[161.28] away. So, how do you decide what to put
+[164.00] in your bottom navigation bar? Let's
+[166.00] break it down step by step. Tip:
+[168.80] Prioritize the most important and
+[170.88] frequently used screens or actions. The
+[173.28] bottom navigation should only contain
+[175.36] the most essential destinations in your
+[177.44] app. The core features users interact
+[180.00] with most often. Good candidates for
+[182.52] bottomnav. Home, main feed, dashboard,
+[185.60] or landing screen. Search, discover, if
+[188.24] users frequently search or browse
+[189.84] content. Add, create, if users regularly
+[193.04] add posts, messages, or content.
+[195.52] Messages, notifications. If social
+[197.76] interaction is a big part of the app,
+[200.24] profile, user account settings, history,
+[202.64] and saved content. Bad candidates for
+[205.56] bottomnav. Help. Fact. It needs to be in
+[208.48] profile or side menu. Log out. No one
+[211.52] logs out that frequently. Keep it
+[213.04] elsewhere. Legal pages, privacy policy,
+[216.00] terms, etc. Nobody needs these at their
+[218.40] fingertips. Introducing elements like a
+[220.72] back or forward button or even logos
+[222.96] which are traditionally part of the top
+[224.56] navigation in the bottom navigation bar
+[226.72] is a practice best avoided. This
+[229.20] approach aligns with Jacob's law which
+[231.44] suggests that users spend most of their
+[233.36] time on other websites or apps.
+[235.44] Therefore, they prefer your site or app
+[237.44] to work the same way as others they
+[239.12] already know. Cluttering the bottom
+[240.80] navigation with elements typically found
+[242.56] at the top can confuse users as it goes
+[245.28] against the familiar navigation patterns
+[247.20] they're accustomed to. On the other
+[249.04] hand, including a call toaction CTA
+[252.32] button in the bottom navigation is a
+[254.32] smart move. These buttons are usually
+[256.64] placed in the center of prominence and
+[258.48] ease of access. CTAs like create an
+[261.28] order or post serve a dual purpose. They
+[264.56] stand out to the user, encouraging
+[266.32] action, and their central positioning
+[268.32] makes them easily reachable, especially
+[270.40] on larger devices. Tip: Understand who
+[273.36] are your users before you design
+[275.92] anything, especially your bottom
+[277.68] navigation. You need to know who your
+[279.60] users are, who's your target audience
+[281.76] because this will shape everything about
+[283.76] your design choices. Ask yourself, how
+[286.16] comfortable are they with technology?
+[287.92] How old are they? What problems are you
+[290.00] helping them solve? What devices do they
+[292.24] use? Why does this matter? Because even
+[295.20] small decisions like adding labels to
+[297.36] your icons depend on your users. If your
+[300.72] audience is younger and techsavvy, you
+[302.96] might get away with minimalist approach
+[304.72] and show just icons. But if your users
+[307.28] are older and less familiar with apps,
+[309.76] labels below icons can make navigation
+[312.24] clearer and help them feel more
+[313.84] confident using your app. Tip: Choose
+[316.32] the right sizes, padding, and margins.
+[319.12] Creating the right autonomy for your
+[320.72] bottom navigation is like crafting a
+[322.96] tailorade suit. It needs to fit
+[325.28] perfectly with the device it's designed
+[326.96] for. In the image, you can see detailed
+[329.76] properties for navigation on the iPhone
+[331.76] 14 and iPhone 15 Pro. But these are
+[334.72] guidelines, not rigid rules. The key is
+[337.52] to adapt and experiment to find what
+[339.92] works best for each device. Why does
+[342.00] this matter? Well, on smaller devices, a
+[344.72] more compact navigation bar might be
+[346.88] more appropriate. A bulky bar can eat up
+[349.52] valuable screen space, making the app
+[351.60] feel cramped. The goal is to find the
+[353.68] right balance between visibility and
+[355.68] accessibility without overshadowing the
+[358.16] main content. Generally, an icon size of
+[361.12] 24 pixels strikes a good balance. It's
+[363.84] large enough to be recognizable but
+[365.60] doesn't dominate the screen. The home
+[367.60] indicator, that dark bar at the bottom,
+[369.92] typically takes up around 34 pixels.
+[372.32] When it comes to labels, the sweet spot
+[374.40] is around 10 to 12 pixels. Smaller text
+[377.52] can cause accessibility issues, making
+[379.68] it hard for some users to read. On the
+[381.92] flip side, larger text can create
+[384.00] clutter and draw attention away from the
+[385.84] main content. Remember, labels are there
+[388.48] to guide, not to overshadow. Designing
+[391.12] for two to three mobile device widths is
+[393.36] a good practice. It ensures your
+[395.28] navigation bar looks great and functions
+[397.28] well across a range of devices. If
+[399.60] you're designing a bottom navigation bar
+[401.60] for modern smartphones, especially on
+[403.68] iPhones and Android devices without
+[405.36] physical buttons, there's one detail
+[407.76] that many junior designers forget. the
+[410.40] home indicator. That thin line at the
+[413.04] bottom of the screen, that's the home
+[415.04] indicator. It lets users swipe up to go
+[417.68] back to the home screen, and it sits
+[419.92] right below your bottom navigation bar.
+[422.80] So, here's what you need to know. You
+[424.72] should not modify or hide the home
+[427.68] indicator. You should not overlap your
+[430.32] navigation bar onto it. Why does this
+[432.40] matter? Because if your bottom
+[434.24] navigation is too low or feels cramped
+[436.80] against the home indicator, users might
+[439.36] accidentally trigger the home indicator
+[441.12] when trying to tap your nav icons. Find
+[443.60] your app harder to use, especially
+[445.52] one-handed. Feel like your design is
+[447.76] broken or unfinished. What to do
+[450.24] instead? Respect the devices safe area,
+[453.60] also called the safe zone. Make sure
+[455.68] your bottom navigation sits above the
+[457.76] home indicator so there's enough
+[459.28] spacing. Test it on a real device. Use
+[462.80] Figma Mirror to see your design directly
+[464.96] on your phone. What looks good in Figma
+[467.20] on your screen can feel completely
+[469.12] different when you're actually tapping
+[470.72] it on a real phone. Tip: Limit the
+[473.52] number of tabs to five. Having too many
+[476.16] tabs in the bottom navigation can lead
+[478.16] to a cluttered and confusing user
+[480.24] experience. Overloading the space with
+[482.64] excessive options not only makes each
+[484.80] tab smaller and harder to accurately
+[486.80] tap, especially on mobile devices, but
+[489.44] also overwhelms users with too many
+[491.36] choices. This can lead to what's known
+[493.36] as choice paralysis, where users find it
+[496.24] difficult to make a decision because of
+[497.92] the sheer number of options presented to
+[500.08] them. The golden rule, aim for three to
+[502.96] five tabs, max six tabs. This range is
+[506.00] the sweet spot for bottom navigation. It
+[508.40] gives users enough options without
+[510.16] crowding the space. With fewer tabs,
+[512.64] each one has more breathing room, making
+[514.96] them easier to tap and reducing
+[516.80] accidental clicks. This also makes your
+[518.88] app feel more organized and easier to
+[521.12] navigate. Focus on what matters most.
+[523.84] Choose tabs that are essential to your
+[525.68] app's core functions and what users
+[527.68] access most often. This way, your users
+[530.64] have everything they need at their
+[532.08] fingertip without the extra clutter.
+[534.64] Tip: Design thumb friendly tap areas. A
+[538.00] common convention is to use a tap area
+[540.08] that is large enough to be easily tapped
+[542.16] with a thumb. This usually means having
+[544.16] a tap area of at least 44 pixels x 44
+[547.36] pixels. This size is not just a random
+[549.76] choice. It's based on the average size
+[551.92] of a human thumb, which ensures that
+[553.92] most users can comfortably and
+[555.84] accurately tap the navigation items
+[557.84] without accidentally hitting the wrong
+[559.36] one. Why is this important? First, it
+[562.40] improves the overall usability of your
+[564.24] app. Users are likely to navigate using
+[566.56] their thumbs, especially on smaller
+[568.56] devices. A larger tap area reduces the
+[571.52] chance of errors and frustration, making
+[573.60] the app more userfriendly. Second, it
+[576.24] enhances accessibility. Not all users
+[578.88] have the same level of dexterity, and a
+[581.20] generous tap area ensures that the app
+[583.52] is more accessible to people with
+[584.96] varying motor abilities. In contrast, a
+[587.92] smaller tap area, like 24 pixels x 24
+[591.20] pixels, might lead to frequent mistaps
+[593.76] and a poor user experience. Enjoying the
+[596.64] tips so far? That's awesome. But let's
+[598.96] be real, watching a few tips is great,
+[601.12] but what is really going to make a
+[602.56] difference is knowing how to put it all
+[604.32] together. That's where a lot of
+[606.16] designers get stuck. You pick up bits
+[608.24] and pieces, but when you sit down to
+[610.08] design, something still feels off.
+[612.64] That's exactly why we created the UIUX
+[615.04] playbook to give you clear, practical
+[617.44] techniques and real examples that show
+[619.44] you how to design UIs that look clean,
+[621.84] modern, and professional so your work
+[624.16] stands out and looks right every time.
+[626.80] We've had so much amazing feedback from
+[628.72] designers who said that after reading
+[630.32] the playbook, they went from struggling
+[632.32] with designs that just didn't look right
+[634.40] to creating work that looks amazing and
+[637.28] that they're finally proud to share. If
+[639.12] you want to check it out, there's a
+[640.40] special discount for you. Use level up
+[642.72] 40 at checkout to get 40% off. And if
+[645.20] you're curious, you can also download a
+[647.44] free preview first. You'll find
+[649.28] everything linked in the description
+[651.00] below. Tip: Differentiate active and
+[654.00] inactive states. Differentiating the
+[656.48] active state in bottom navigation is
+[658.80] essential for creating a clean user
+[660.88] experience. It's about making it
+[662.80] immediately obvious to the user where
+[664.64] they are in the app. A smart way to do
+[666.64] this is to change the style and color of
+[668.64] the active icon. Imagine an icon that
+[671.20] shifts from an outline to a filled
+[673.12] version along with a noticeable change
+[674.88] in color. This visual cue instantly
+[677.44] draws the user's attention to their
+[679.04] current location. To further enhance
+[681.28] this distinction, you can also make the
+[683.36] labeled text for the active icon darker
+[685.76] and thicker. This simple adjustment
+[688.00] reinforces the user's focus on the
+[689.84] active state. The combination of a
+[692.08] transformed icon style, a standout
+[694.24] color, and bolder text works effectively
+[697.04] to differentiate the active tab from the
+[699.28] inactive ones. Conversely, a design that
+[702.00] only alters the text, leaving the icon
+[704.52] unchanged, might not be distinct enough.
+[707.28] In such cases, users might take longer
+[709.52] to identify their current position in
+[711.36] the app, potentially leading to a slower
+[713.84] and more frustrating navigation
+[715.60] experience. It's important to strike a
+[717.76] balance and ensure that the active state
+[719.68] stands out clearly for effortless
+[721.40] navigation. It's also perfectly
+[723.76] acceptable to keep the icon outlined
+[725.76] instead of filling it in as long as you
+[727.60] change its color. The key is to apply at
+[729.76] least two visual changes, such as
+[732.32] adjusting the icon's color and making
+[734.32] the text bolder. This dual change
+[736.72] ensures users can effortlessly
+[738.64] distinguish between active and inactive
+[740.80] tabs, enhancing their navigation
+[742.80] experience in your app. Tip: Choose
+[745.84] simple and familiar icons. When
+[748.24] selecting icons for your bottom
+[749.84] navigation bar, the best approach is to
+[752.32] prioritize familiarity and simplicity.
+[755.20] Choose icons that users can instantly
+[757.28] recognize and that accurately represent
+[759.36] their function. A classic example is
+[761.60] using a magnifying glass for the search
+[763.44] function. It's a universally understood
+[766.08] symbol, making it far more effective
+[768.16] than less familiar options like
+[770.04] binoculars. The simplicity of each icon
+[772.64] is also key. Complex designs or overly
+[775.60] artistic interpretations can confuse
+[777.84] users. The goal is to enable users to
+[780.32] understand and navigate your app with
+[782.40] minimal effort or thought. Simple icons
+[784.88] achieve this by being easy to identify
+[786.96] at a glance. Tip: Keep navigation labels
+[790.56] short and sweet. When it comes to
+[792.56] designing your bottom navigation bar,
+[794.64] less is often more. Opt for concise
+[797.84] single line labels to keep the design
+[800.00] neat and effective. Avoid long labels
+[802.48] that spill over into two lines. They can
+[805.04] clutter the screen and overwhelm your
+[807.20] users. They also tend to make the
+[809.12] navigation bar too big, which can throw
+[811.36] off the balance of your app's layout.
+[813.44] Short labels keep things simple, helping
+[815.84] users make quicker, more instinctive
+[817.84] choices. They also contribute to a
+[820.00] clean, contemporary aesthetic, ensuring
+[822.56] your app is both stylish and functional.
+[825.68] Tip: Keep it clean and simple. A
+[828.40] cluttered or overwhelming design can
+[830.32] hurt the user experience. Avoid adding
+[832.80] unnecessary elements like boxes around
+[834.96] your tabs as these can create visual
+[837.36] noise. Instead, strive for a clean,
+[840.32] minimalist look that guides users
+[842.16] effortlessly through your app. The goal
+[844.16] is to design a navigation bar that's
+[846.08] intuitive and unobtrusive, allowing
+[848.64] users to focus on what matters most, the
+[851.04] content of your app. Tip: Stick to one
+[853.92] icon style except for the selected
+[855.84] state. Mixing filled and outline icons
+[858.24] in the same navigation bar is like
+[860.08] inviting guests to a black tie event
+[862.16] only to have someone show up in
+[863.60] beachwear. To avoid this visual
+[865.44] mismatch, stick to a consistent style of
+[868.00] icons throughout your navigation. If you
+[869.84] decide on outline icons, use them
+[871.92] consistently across all tabs. This
+[874.16] creates a harmonious and visually
+[876.00] balanced look. However, there's a clever
+[878.64] exception, the selected state. here.
+[881.60] Switching an outline icon to a filled
+[883.68] version is a fantastic way to highlight
+[885.76] the active tab. It's like giving that
+[887.76] tab a special badge of honor, making it
+[890.40] stand out in a subtle yet effective way.
+[893.28] Also, be mindful of the complexity of
+[895.76] your icons. Consistency isn't just about
+[898.48] style, it's also about complexity. If
+[901.28] one icon is simple and clean, the others
+[903.92] should follow suit. Mixing a minimal
+[906.24] icon with a more detailed one can throw
+[908.40] off the visual harmony of your
+[909.92] navigation bar. Tip: Avoid using too
+[913.28] many colors. Using too many colors in
+[915.60] your bottom navigation or giving each
+[917.76] tab its own color may seem like a fun
+[920.40] idea, but it usually does more harm than
+[922.80] good. Instead of helping users, it
+[925.36] creates visual chaos. Suddenly,
+[927.92] navigation becomes a guessing game of
+[929.76] colors rather than something that feels
+[931.60] natural and easy. Here's the thing. You
+[934.00] want your navigation to feel like part
+[935.84] of the app, seamless, not loud. When
+[938.64] every tab is a different color, it pulls
+[940.80] attention away from what actually
+[942.40] matters, the content. It can even mess
+[944.88] with your brand's look, making your app
+[947.04] feel less polished and harder to
+[949.04] recognize. The better approach, stick to
+[951.60] your brand's color palette. Keep it
+[953.84] simple and consistent. That way, your
+[956.00] navigation feels clean, your app feels
+[958.32] professional, and your brand stays
+[960.64] strong. Tip: Use notification badges in
+[964.08] bottom navigation to highlight updates.
+[966.56] Using notification badges in your bottom
+[968.56] navigation bar is a great way to signal
+[970.96] new updates or messages to users. These
+[973.20] badges can be simple colored circles, or
+[976.08] they can include numbers to indicate the
+[977.92] quantity of new updates. Badges should
+[980.32] be small enough to stay subtle, but
+[982.16] large enough to be noticeable. Placing
+[984.16] them in the top right corner of the icon
+[986.24] is a common practice, as it's naturally
+[988.84] eye-catching. Here's a pro tip. Adding
+[991.20] an outline around the badge can make it
+[993.12] stand out even more and give it a
+[995.20] polished look. If you're using numbers
+[997.20] within the badge to indicate the count
+[998.88] of new updates, ensure they are easy to
+[1001.68] read. Avoid overly small or stylized
+[1004.40] fonts that might be hard to decipher at
+[1006.48] a glance. Choose a badge color that
+[1008.72] stands out against the navigation bar
+[1010.64] and icon colors, yet still feels
+[1013.20] consistent with the overall app design.
+[1015.68] Finally, only use badges for essential
+[1018.44] notifications. Overloading users with
+[1020.80] badges for every minor update can lead
+[1023.04] to notification fatigue, reducing the
+[1025.52] effectiveness of this feature. Tip:
+[1028.00] Experiment with creative layouts, but
+[1030.24] with usability being your priority.
+[1032.64] While standard layouts are tried and
+[1034.56] tested for usability, stepping outside
+[1036.88] the box with a creative and beautiful
+[1038.80] design can give your app a distinctive
+[1040.88] edge. The key is to strike a balance
+[1043.36] between aesthetics and usability. You
+[1045.92] can add value to your app by
+[1047.36] experimenting with different shapes,
+[1049.28] positions, or even dynamic interactions
+[1051.60] for your bottom navigation. Maybe you're
+[1053.76] thinking about a unique icon arrangement
+[1055.60] or an unconventional bar shape. These
+[1058.00] creative touches can make your app
+[1060.00] memorable. However, here's a word of
+[1062.40] caution. Never sacrifice usability for
+[1065.12] aesthetics. For instance, while an
+[1067.20] unconventional layout may look stunning,
+[1069.76] if it confuses users or makes navigation
+[1072.08] harder, it can do more harm than good.
+[1074.24] All right, let's make this a little bit
+[1075.84] more interactive. I want you to pause
+[1077.84] the video right now and head to the
+[1079.68] comment section. Tell me which bottom
+[1081.52] navigation design you like the most. Is
+[1083.76] it option A, clean and simple? Option B,
+[1087.04] with that sleek line above the active
+[1088.96] tab, option C, minimalist with a smooth,
+[1091.92] interactive feel, or option D with a
+[1094.64] more distinctive custom look. Drop your
+[1097.20] favorites in the comments, A, B, C, or
+[1099.84] D, and tell me why. I'm curious to see
+[1101.92] which style you prefer.
+[1103.92] Tip: Separate bottom navigation from
+[1106.40] main content. Remember when I mentioned
+[1108.56] you should stick around till the end
+[1110.08] because there's one big mistake that
+[1111.68] even pro designers keep making? Well,
+[1114.00] here it is. Not separating the bottom
+[1116.24] navigation from the main content. Adding
+[1118.96] a subtle soft outline or a one pixel
+[1121.68] border around the navigation bar can
+[1123.52] create a gentle but clear separation.
+[1126.32] This method is unobtrusive yet effective
+[1128.72] at visually distinguishing the
+[1130.16] navigation area as a distinct element.
+[1133.20] Tip: You can use background color to
+[1135.20] separate bottom navigation from main
+[1136.96] content. Another approach is to
+[1138.96] differentiate the background colors of
+[1140.64] the bottom navigation and the main
+[1142.40] screen. For instance, if your main
+[1144.32] screen is white, consider using a light
+[1146.64] gray for the navigation bar. This
+[1148.64] contrast creates a sense of depth,
+[1150.72] making the navigation area feel like a
+[1152.80] distinct interactive element of the app.
+[1156.00] Using a shadow is also a great way to
+[1158.24] achieve this separation. A small soft
+[1160.72] shadow above the navigation bar can
+[1162.72] create an elevated effect, giving the
+[1165.04] impression that the navigation is
+[1166.64] floating above the rest of the content.
+[1168.64] However, it's important to keep the
+[1170.32] shadow subtle. An overly large or harsh
+[1173.20] shadow can draw attention away from the
+[1175.20] content and detract from the sleekness
+[1176.96] of your design. Tip: Choose neutral
+[1179.76] colors and avoid using too many colors
+[1181.76] in both your top and bottom navigation.
+[1184.24] It's best to keep the navigation colors
+[1186.08] neutral, such as white, gray, or dark
+[1188.72] tones. This approach ensures that the
+[1190.88] navigation doesn't distract from the
+[1192.72] main content of the app. By reserving
+[1194.96] brighter or primary colors for key
+[1197.04] actions on the main screen, you help
+[1199.20] those elements stand out and draw
+[1201.04] attention to what matters most. It's
+[1203.12] also important to avoid using too many
+[1205.20] different colors between the top and
+[1206.88] bottom navigation bars. This can lead to
+[1209.20] a disjointed visual experience and
+[1211.36] distract users from the app's content.
+[1213.44] Keeping a consistent color palette
+[1215.20] between these two elements creates a
+[1217.12] cohesive and harmonous design. When
+[1219.68] choosing colors for your navigation,
+[1221.60] it's crucial to consider how they
+[1223.44] complement your app's overall theme and
+[1225.52] branding. While neutral colors like
+[1227.68] white, gray, or dark shades are
+[1229.84] generally recommended for their
+[1231.36] versatility and subtlety, it's perfectly
+[1233.92] fine to opt for a different color if it
+[1235.92] enhances your brand's identity. However,
+[1238.48] the color should not be so bright or
+[1240.48] overpowering that it overwhelms the main
+[1242.80] content or disrupts the user's focus. It
+[1245.20] should complement the primary colors
+[1246.96] used on the main screen, enhancing key
+[1249.20] actions and content rather than
+[1250.88] competing with them. By the way,
+[1253.20] everything that you have learned so far
+[1254.64] here is from our UX UI design mastery
+[1257.12] course, where we have more than 50
+[1259.20] lessons like this one, all designed to
+[1261.36] take you from a beginner to a UX UI
+[1264.00] design pro. If you want to know more,
+[1266.08] the link's in the description. Tip:
+[1268.56] Avoid poor contrast for inactive states.
+[1271.52] A common pitfall is using poor contrast
+[1274.24] for inactive icons and labels, making
+[1276.56] them difficult to see or understand,
+[1278.64] especially for users with visual
+[1280.24] impairments. It's important to strike a
+[1282.48] balance between visibility and
+[1284.24] distinction. Instead of opting for
+[1286.40] drastically different colors, consider
+[1288.72] slightly reducing the opacity of
+[1290.40] inactive elements. This approach
+[1292.48] maintains a cohesive color scheme while
+[1294.80] clearly differentiating active and
+[1296.80] inactive states. A good starting point
+[1299.04] is to aim for an opacity level that is
+[1301.20] noticeable yet not too faint. The web
+[1304.16] content accessibility guidelines
+[1306.08] recommend a minimum contrast ratio of
+[1308.32] 3:1 for graphical elements and user
+[1310.64] interface components. To make sure your
+[1312.72] color choices meet accessibility
+[1314.40] standards, use tools like the web aim
+[1317.04] contrast checker. Tip: Add sleek micro
+[1321.08] interactions. Now that you mastered all
+[1323.44] important fundamentals and your bottom
+[1325.28] navigation bar has a solid base, it's
+[1328.00] time to take it completely to the next
+[1330.00] level to absolutely delight your users
+[1332.32] and make them go, "Wow!" A lot of
+[1334.88] beginner designers skip this. Their
+[1336.64] bottom navigation is just static. You
+[1339.52] tap and it changes, but there's no
+[1341.76] feeling. It's like pressing a light
+[1343.60] switch with no click. Micro interactions
+[1346.32] and smooth transitions make your bottom
+[1348.32] navigation feel responsive, polished,
+[1350.80] and honestly just more fun to use. Tip
+[1353.44] one, tap feedback. When a user taps an
+[1356.40] icon, show a quick visual response like
+[1358.96] a color change, scale up, or a ripple
+[1361.36] effect. Tip two, when switching between
+[1364.08] tabs, don't just snap to the next one.
+[1366.64] Add a small sliding underline or animate
+[1368.80] the icon smoothly into place. Tip three,
+[1372.00] transitions between screens. When a user
+[1374.56] switches screens, don't make it feel
+[1376.56] like they teleported, add a soft fade,
+[1379.04] or a sides slide transition. It makes
+[1381.36] navigation feel connected. These little
+[1384.08] details, they're what separating boring
+[1386.24] designs from apps that feel amazing. So,
+[1389.92] next time you design a bottom
+[1391.28] navigation, don't just make it work,
+[1394.00] make it feel great. If you made it all
+[1396.64] the way to the end, congratulations. You
+[1399.28] now know how to design a perfect bottom
+[1401.76] navigation bar. and hopefully your
+[1404.08] navigation will never look like this
+[1406.72] ever again. I really hope you enjoyed
+[1409.20] this video. If you did, it would mean a
+[1411.36] lot if you shared it with others. Let's
+[1413.36] make every bottom navigation bar out
+[1415.12] there awesome. Also, let me know in the
+[1417.36] comments which tip was your favorite.
+[1419.28] I'd love to hear what you found most
+[1420.96] helpful. Thanks for watching and I'll
+[1422.88] see you in the next one. Have an amazing

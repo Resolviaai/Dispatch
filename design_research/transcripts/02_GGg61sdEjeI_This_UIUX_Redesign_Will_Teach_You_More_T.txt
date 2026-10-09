@@ -1,0 +1,402 @@
+Title: This UI/UX Redesign Will Teach You More Than 100 Tutorials Combined
+Uploader: uxpeak
+URL: https://www.youtube.com/watch?v=GGg61sdEjeI
+Duration: 812s
+
+[000.96] Take a look at this ugly product page. I
+[003.40] want you to look at it carefully. How
+[005.20] many UX and UI mistakes can you spot?
+[007.36] Pause the video. Write your number in
+[008.84] the comments. But, be honest, okay?
+[013.36] Ready? If you found at least 10
+[015.28] mistakes, congratulations, you are a
+[017.48] great designer.
+[018.92] I can see at least 15 major mistakes.
+[021.48] Some are obvious. Some are much easier
+[023.56] to miss. My goal is that by the end of
+[025.48] this video, you'll know how to design
+[027.12] the best product pages that users
+[028.76] absolutely love. So, let's apply some of
+[031.12] our UX peek magic and fix it one by one.
+[034.00] The difference will be huge, and I'll
+[035.60] reveal a few cool surprises as well.
+[037.80] Mistake one, icons lost in the image.
+[040.72] The product image goes all the way to
+[042.40] the edge, and the navigation icons sit
+[044.40] directly on top of it. At first, this
+[046.48] might seem fine. The icons are visible,
+[048.68] but they're only visible because this
+[050.52] specific image is dark enough. Now,
+[052.76] watch what happens when we switch the
+[054.16] product image to something brighter,
+[055.96] like pineapple. The icons almost
+[057.88] disappear. And this is a very common UI
+[060.04] problem. Product pages don't have one
+[062.28] image forever. They need to work with
+[063.84] dark images, bright images, busy images,
+[067.16] simple images, lifestyle photos, and
+[069.80] clean product shots. So, the fix is
+[071.96] simple. We add a subtle background
+[073.48] container behind the icons. We give the
+[075.92] icons enough contrast, and we add a thin
+[077.96] outline so they stay readable on
+[079.48] different backgrounds. Now, the icons
+[081.20] work no matter what product image is
+[082.68] used. This is the difference between
+[084.52] designing for one screen and designing
+[086.48] for a real product system. And one of
+[088.52] the best ways to do that is to study how
+[090.32] great products already solve similar
+[091.88] problems. That's why I use Mobbin. With
+[093.96] Mobbin, you can explore real product
+[095.60] flows from some of the best apps in the
+[097.12] world. So, if you are designing an
+[098.88] e-commerce experience, you can look at
+[100.68] product pages, checkout flows, order
+[103.40] confirmations,
+[104.84] saved items, and so many other patterns.
+[107.40] It helps you see how strong products
+[108.96] guide users through the full journey,
+[110.72] from discovering a product to buying it
+[112.76] and tracking the order afterwards. And
+[114.88] because we partnered with Mobbin for
+[116.24] this video, you can get 20% off your
+[118.16] first year subscription using our link
+[119.84] below.
+[120.92] Mistake two, the product image. Product
+[123.40] images are one of the most important
+[125.04] parts of any e-commerce page. They
+[127.36] create emotion. They build trust. And in
+[129.80] many cases, they take up the largest
+[131.88] part of the screen.
+[133.44] Here we have six options. A, B, C, D, E,
+[138.68] and F. Pause the video and pick the one
+[141.08] you think works best.
+[143.80] Okay, if you picked F, you're right. But
+[146.36] not just because it looks clean. Here's
+[148.24] why. Option A is too busy. The
+[150.64] strawberries filled the entire frame.
+[152.48] So, there's no clear focal point. Option
+[154.72] B has a focal point, but the focus is
+[157.04] the hands, not the product. It feels
+[158.84] more like a lifestyle photo than a clean
+[161.04] product image. Option C looks simple,
+[163.28] but it shows one strawberry while the
+[165.12] product is sold by weight. That creates
+[167.12] a small mismatch in the user's mind.
+[169.28] Option D is styled nicely, but the pink
+[171.52] background feels a bit artificial. For
+[173.80] fresh organic food, the image should
+[175.52] feel natural, honest, and real. Option E
+[178.24] is actually strong. The strawberries
+[180.04] look fresh, natural, and high-quality.
+[182.16] But there's one problem. This image will
+[184.60] not live alone. It will sit inside a
+[186.36] product grid next to many other
+[188.04] products. If every product has a
+[189.84] different background, different
+[191.08] lighting, different props, and different
+[192.72] colors, the full catalog starts to feel
+[194.96] messy. That's why F wins. It keeps the
+[197.56] natural feeling of the strawberries,
+[199.16] places them on a clean background. The
+[201.20] product becomes the focus, and the
+[202.84] entire catalog can follow the same
+[204.80] visual system. This is an important
+[206.76] principle. A good product image is not
+[209.04] just beautiful by itself. It also has to
+[211.24] work inside the full shopping
+[212.60] experience.
+[214.08] Mistake three, alignment. This one is
+[216.36] simple, but it makes a huge difference.
+[218.52] In professional UI design, text, icons,
+[221.56] prices, buttons, and sections should
+[224.40] follow a clear layout grid. Right now,
+[226.72] some elements are slightly too far left.
+[228.96] Others are slightly too far right. And
+[231.08] the spacing feels inconsistent. When
+[233.48] alignment is off, users may not
+[235.24] consciously notice it, but they feel it.
+[237.32] The screen feels less calm, less
+[239.12] structured, less trustworthy. So, we
+[241.64] clean it up. We define consistent
+[243.68] margins. For example, if the content
+[245.80] starts 24 pixels from the left, it
+[247.96] should follow the same structure across
+[249.52] the screen. Once everything snaps into
+[251.28] the same grid, the page instantly feels
+[253.36] more balanced, more intentional, and
+[255.48] more professional.
+[257.08] Mistake four, color. The colors in this
+[259.48] design are too bright, too saturated,
+[262.44] and they emphasize the wrong things.
+[264.04] That creates two problems. First, the
+[266.20] screen becomes harder to read. Second,
+[268.64] the hierarchy becomes weaker because too
+[270.36] many elements are competing for
+[271.60] attention. On a fresh organic food
+[273.52] product page, the color should support
+[275.36] the product. They should not overpower
+[277.40] it. So, we switch to a softer, more
+[279.76] natural palette. The interface now feels
+[282.24] calmer, cleaner. This is what good color
+[285.16] does. It sets the mood, supports the
+[287.16] product, and helps users focus on what
+[289.40] matters.
+[291.04] Mistake five, typography. Fonts can
+[293.64] completely change how a design feels.
+[296.04] Right now, the screen uses too many font
+[298.04] styles, and the type doesn't feel fully
+[299.92] consistent. A good product page doesn't
+[302.24] need many fonts. In most cases, one
+[304.76] strong font family is enough. You can
+[307.16] create hierarchy using size, weight,
+[309.84] color, and line height. So, we simplify
+[312.84] the typography. We use Lato, [music] a
+[314.92] cleaner font. Now, the design has a much
+[317.64] stronger foundation. Mistake six,
+[320.24] labels. Now, let's look at the labels.
+[322.92] The fruits label feels cramped because
+[325.08] the letters are too close together. For
+[326.88] small uppercase labels, adding a little
+[328.76] letter spacing usually helps the text
+[330.52] breathe. But, the bigger issue is the
+[332.88] discount badge. Right now, it says 20%
+[335.52] off discount and also includes an icon.
+[337.68] That's too much for a small label. In UI
+[339.72] design, badges should be quick to scan.
+[341.76] The user should understand them
+[342.88] instantly. Something like 20% off is
+[344.96] enough. It still communicates the offer,
+[346.92] but it's no longer stealing too much
+[348.44] attention from the product itself.
+[350.40] Mistake seven, the title. The title is
+[353.24] one of the most important pieces of
+[354.80] information on the page. It tells the
+[356.92] user what they're buying, so it needs to
+[358.52] be clear, readable, and easy to scan.
+[360.84] Right now, the title feels slightly
+[362.56] unbalanced. It's bold, but the size and
+[364.64] weight do not create the right
+[365.88] hierarchy. A product title should stand
+[368.00] out without shouting. So, we adjust the
+[369.92] size, we adjust the weight, and we make
+[372.16] it feel more natural inside the layout.
+[374.32] Now, the title is easier to read, easier
+[376.04] to scan, and much better balanced with
+[378.16] the rest of the page. Mistake eight,
+[380.44] paragraph text. Now, let's fix the
+[382.96] paragraph text. The lines are too close
+[385.00] together, which makes the description
+[386.72] feel tight and harder to read. Paragraph
+[389.16] text should not fight for attention. It
+[391.48] should help the user understand the
+[392.88] product comfortably. So, we increase the
+[395.08] line height, we slightly reduce the
+[396.96] contrast of the body text. This will
+[398.92] make the paragraph feel easier to scan.
+[401.04] A simple typography rule is this,
+[403.00] headlines attract attention, paragraphs
+[405.60] support understanding. When the
+[407.08] paragraph is easier to read, the whole
+[408.80] page feels calmer and more trustworthy.
+[411.12] Mistake nine, review placement. Now,
+[414.12] we're getting deeper into UX thinking.
+[416.48] The rating is currently too far away
+[418.16] from the product title. That's a problem
+[419.92] because reviews are one of the strongest
+[421.80] trust signals in e-commerce. When users
+[423.84] see the product name, they should also
+[425.32] quickly see how well it's rated. What is
+[427.64] it and can I trust it? So, we move the
+[429.96] rating closer to the title. Now, users
+[432.16] immediately understand three important
+[434.04] things, what the product is, how it's
+[436.16] rated, and whether other people trust
+[438.16] it. This makes the buying decision feel
+[440.48] easier. Good UI is not just about
+[442.68] arranging elements. It's about placing
+[444.32] information where the user needs it
+[445.84] most.
+[446.71] >> [music]
+[447.04] >> We're still far from a great design, but
+[448.92] if you compare it with where we started,
+[450.80] you can already see a big improvement.
+[452.88] And you'll love what's coming next. This
+[454.84] is the part of design that most
+[456.24] tutorials skip. They show you how to
+[458.04] make the screen look nicer, but they
+[459.72] don't always explain why one decision
+[461.80] makes the product easier to use, easier
+[464.08] to trust, or easier to buy from. And
+[466.56] that's really the whole idea behind the
+[468.20] UX Peak Plus platform. Inside UX Peak
+[470.76] Plus, we break down real UX and UI
+[472.80] decisions like this. Not just what looks
+[474.76] great, but why it works, how it affects
+[477.16] the user, and how you can apply the same
+[479.12] thinking to your own designs to build
+[480.92] the best websites,
+[482.08] >> [music]
+[482.36] >> apps,
+[483.40] or software application. If you want to
+[485.24] grow as a designer or product person,
+[487.24] you need to understand the thinking
+[488.60] behind strong product design. So, if you
+[490.72] want to go after this video, use code
+[492.84] redesign 25 to get 25% off UX Peak Plus.
+[497.04] You can find everything on our website.
+[499.76] Now, let's continue with the redesign.
+[501.52] Mistake 10, feature icons. At first
+[504.36] glance, this section might seem fine. It
+[506.36] communicates useful product benefits,
+[508.32] but visually, there are several
+[510.12] problems. There are too many colors. The
+[512.72] icon styles are inconsistent. Some icons
+[515.36] feel heavy, some feel light, some are
+[517.80] filled, some are outlined. In good UI
+[520.16] design, icons should share the same
+[521.92] visual logic. So, we simplify the
+[524.08] colors. We make the icon style more
+[526.04] consistent, and we tighten the spacing.
+[528.64] Now, the section still communicates the
+[530.28] benefits, but it no longer dominates the
+[532.20] screen. You can use different colors in
+[534.04] UI design, but they need to be used
+[535.88] intentionally. Mistake 11, divider
+[538.20] lines. Now, let's look at the divider
+[540.00] lines. They are extremely dark and
+[542.20] heavy. They pull too much attention.
+[544.04] Divider lines are meant to separate
+[545.92] sections. When dividers are this strong,
+[548.28] the page starts to feel divided into
+[550.12] harsh blocks instead of one smooth
+[552.16] experience. So, we soften them. Now, it
+[554.64] feels subtle, clean, and more elegant.
+[557.32] This is a small detail, but small
+[559.36] details are often what make an interface
+[561.56] feel premium. Mistake 12, spacing
+[564.40] balance. The spacing between some
+[566.28] sections is too large. White space is
+[568.76] important, but too much white space in
+[570.84] the wrong place can make the layout feel
+[572.56] disconnected. So, we tighten the spacing
+[574.76] slightly. Now, the sections sit closer
+[576.76] together, the flow is easier to scan and
+[579.16] the whole interface feels more cohesive.
+[581.24] Good spacing is not just about adding
+[583.08] more empty space. It's about creating
+[584.64] the right relationship between elements.
+[587.24] Mistake 13, redundant price label. Now
+[590.12] let's move to the price area. We can see
+[592.08] the word price before the number, but in
+[593.80] this context, it's unnecessary. When
+[596.20] users see a number with a currency
+[597.84] symbol, they already understand that
+[599.32] this is the price. And if you want to be
+[601.92] super accessible and label the price,
+[604.28] then logically we should also label the
+[606.28] quantity selector next to it. Otherwise,
+[608.88] the interface becomes inconsistent. So
+[611.00] the cleaner solution is simple. Remove
+[612.72] the label completely. Let the price
+[614.68] speak for itself.
+[616.32] Mistake 14, product quantity and price
+[619.00] placement. The product title includes 1
+[621.44] kg, but this creates a problem. Why?
+[624.28] Because the user can already change the
+[625.88] quantity using the selector. So the
+[627.60] product is no longer fixed to 1 kg. That
+[629.80] makes the title misleading. Instead, the
+[631.68] title should describe the product
+[632.88] itself. The quantity should be handled
+[634.84] separately in the buying area. There's
+[636.80] also another improvement we can make.
+[638.48] The price is currently placed quite far
+[640.16] down the screen. There are different
+[641.92] ways to handle pricing depending on the
+[643.56] product, the audience, and the buying
+[645.96] context. But in this case, users should
+[648.80] see the price much earlier. Now when
+[650.60] users see the product, they immediately
+[652.40] understand what it is, how good it is,
+[655.00] and how much it costs. Mistake 15, the
+[657.52] purchase action. The add to cart button
+[659.84] should be the most important action on
+[661.48] the screen, but right now it feels too
+[663.48] aggressive. The text is all caps, the
+[666.04] size is large, the button feels like
+[667.76] it's shouting. So, we soften it. We make
+[670.20] it feel more refined. But there's
+[672.28] another issue. The quantity selector is
+[674.56] too far away from the add to cart
+[676.08] button. When users buy something, they
+[678.04] choose how much they want, then they add
+[679.60] it to the cart. So, we place them next
+[681.64] to each other. We also add the unit,
+[683.28] kilograms, directly inside the selector.
+[685.68] And finally, we add the total price
+[687.56] inside the add to cart button. Now the
+[689.52] user knows what they're about to pay
+[690.84] before they click. That removes
+[692.60] uncertainty. But, this is where many
+[694.68] redesigns stop. The mistakes are fixed,
+[696.84] the page looks cleaner, but strong
+[698.60] product design is not just about fixing
+[700.48] what is broken. It's about making the
+[701.84] whole experience feel easier. Now, let's
+[704.00] take this redesign one step further.
+[706.08] Improvement one, turn the content into a
+[708.48] scrollable card. First, we turn the
+[710.68] content area into a soft scrollable card
+[713.16] with rounded corners and a subtle
+[714.76] shadow. The product image has its own
+[716.52] space. The product details have their
+[718.44] own space. As the user scrolls, the card
+[721.12] slides up over the product image,
+[723.08] keeping the product visible for the
+[724.40] first part of the experience. Then, once
+[726.84] the image is no longer the main focus,
+[728.72] the product title transitions into the
+[730.36] top navigation and stays sticky. So,
+[732.44] even when the user scrolls deeper into
+[734.08] the page, they never lose context.
+[736.24] Improvement two, add a sticky bottom
+[738.28] action area. Now, the quantity selector
+[740.68] and add to cart buttons stay visible
+[742.56] while the user scrolls. This is powerful
+[744.60] because users don't always decide to buy
+[746.64] at the top of the page. Sometimes, they
+[748.36] scroll. They read more details. They
+[750.60] look at related products. And when they
+[752.76] finally feel ready, they can act
+[754.68] immediately. And this is where the
+[756.20] design becomes much stronger because we
+[758.32] are no longer just making the screen
+[759.96] look better. We are making the buying
+[761.64] experience easier.
+[763.16] Improvement three, add predefined
+[765.04] quantity options.
+[766.68] For example, 500 g, 1 kg, 2 kg. Instead
+[771.24] of forcing users to tap the quantity
+[773.04] selector multiple times, they can choose
+[774.80] a common option with one tap. And these
+[776.68] options can be based on real purchase
+[778.28] data. If most customers buy 1 kg or 2
+[780.76] kg, those should be easy to select. We
+[783.00] still keep the custom quantity selector
+[785.04] for flexibility. This is a small UX
+[787.16] improvement with a real business impact.
+[789.28] And now, we have a design that scales
+[790.68] beautifully across different products.
+[792.68] The images feel consistent. The layout
+[794.48] feels predictable. The product
+[796.04] information is easy to scan. This is
+[798.52] what strong UI design looks like. So,
+[800.36] what do you think? Is this new version
+[801.92] better than the original? How many of
+[803.52] the 15 mistakes did you spot before I
+[805.56] revealed them? Let me know in the
+[806.68] comments. I'm genuinely curious to see
+[808.24] how many you found. Thank you for
+[809.52] watching, and see you in the next video.

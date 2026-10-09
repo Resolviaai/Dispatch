@@ -1,0 +1,163 @@
+Title: How to think like a GENIUS UI/UX designer
+Uploader: Kole Jain
+URL: https://www.youtube.com/watch?v=HE4rLEQpiXY
+Duration: 331s
+
+[000.08] Most designers want to work for big tech
+[001.92] or start an agency, but most designers
+[004.16] won't. Most designers focus on making
+[006.00] things look good, but genius designers
+[008.96] don't. They focus on making things work
+[010.88] brilliantly for the user. Think of web
+[012.80] design not as art, but as a story, and
+[015.20] not every story needs 3D graphics or
+[017.36] buttery smooth scrolling. If your goal
+[019.12] is to impress other designers, maybe.
+[021.68] But if your goal is to guide someone to
+[023.36] an action, all that flare might just be
+[025.36] in the way. Start with user intent.
+[027.36] Let's say you need to design a user flow
+[028.96] that enables customers to rent vacation
+[031.20] properties, not unlike Airbnb. A UI
+[033.68] designer might start thinking about the
+[035.36] icons or the layout of each card and
+[037.28] entirely lose the plot of why we're
+[039.28] designing. The intent of the user is to
+[041.36] search for accommodations. So, a search
+[043.28] bar is a natural starting point. We can
+[045.28] then augment with useful features like
+[047.20] destination, amount of travelers, and
+[049.12] dates. You might think the next step is
+[050.72] to put a header above this and slap an
+[052.80] image on the background. But think about
+[054.40] the user. Does this design do anything
+[056.80] extra that this design didn't? Not at
+[059.20] all. But there can be more than one
+[061.12] intent for a website. Maybe user knows
+[063.60] they want to go on a vacation but
+[065.28] doesn't know where. They're there to
+[067.04] browse. We can serve that intent too by
+[069.68] displaying our listings, but the user
+[072.24] probably wants something more specific.
+[074.40] So, we can add in filtering UI elements.
+[077.12] Notice how the fonts, colors, and icons
+[079.28] affect the aesthetics, but do very
+[081.28] little to change the functionality. Only
+[083.20] as the user intent expands do we expand
+[085.44] the functionality of our designs? But we
+[087.52] jump the gun a little by building full
+[089.20] UIs before talking about leveraging
+[091.36] existing layouts. Why not put the search
+[093.28] bar down here or arrange the cards like
+[095.12] this? Truth be told, nothing is stopping
+[097.04] us from making a UI like this if it
+[099.28] serves the user better. But after 30
+[101.12] plus years of websites, users have come
+[103.20] to expect certain layouts. This doesn't
+[105.28] preclude us from trying new layouts, but
+[107.36] means that typically information should
+[109.28] flow top to bottom and left to right.
+[111.20] Navigation is at the top of the page,
+[112.88] and call to actions are typically
+[114.48] eye-catching and easy to find. Designs
+[116.80] that follow these guides are generally
+[118.48] much easier to integrate new sections
+[120.32] seamlessly and make responsive.
+[122.40] Respecting these expectations, but
+[124.32] making the design uniquely yours, like
+[126.32] adding a cool micro interaction or a set
+[128.64] of unique features is what separates the
+[130.72] good from the genius. And if you're
+[132.72] trying to think like a genius designer,
+[134.64] it helps to see how the best are already
+[136.64] thinking. Mobin is a curated library of
+[139.28] realworld UI and UX from full user flows
+[142.72] down to individual components all pulled
+[145.28] from top apps and websites. Instead of
+[147.68] downloading dozens of apps just to
+[149.44] reverse engineer their design patterns,
+[151.36] Mobin lets you search and explore them
+[153.28] all in one place. Personally, I'm always
+[155.44] diving into the UI element section.
+[157.36] There's a link in the description if you
+[158.80] do want to check it out. Thank you to
+[160.08] Mobin for sponsoring this video. But
+[161.92] without a content structure, design has
+[163.92] very little value. There are two steps
+[165.84] to designing around content. The first
+[168.00] is to decide which content to display.
+[170.48] Understanding how the user will interact
+[172.40] with the design will determine what type
+[174.24] of information is presented. For
+[176.00] example, on our travel page, we can
+[177.92] include a short description for every
+[179.60] listing. But if the user wants a
+[181.44] detailed look, they'll just click on the
+[182.96] listing. They need the specifics to scan
+[185.04] like the location, rating, and price
+[187.12] before anything else. The second step is
+[189.52] structuring the content that we do
+[190.88] display. Currently, our design has
+[192.80] perfect content, meaning that the titles
+[195.04] and locations are all short. But what if
+[197.28] we had a destination with a really long
+[199.20] name or save icons on really bright
+[201.76] listing images? We'd probably want to
+[203.84] truncate long names and add a circle to
+[206.48] the icon to guarantee contrast.
+[208.48] Otherwise, you end up with unintended
+[210.16] consequences, which are not fun to deal
+[212.16] with. Animations should add clarity or
+[214.64] functionality to a design. Just take a
+[216.56] look at my old portfolio website. It's
+[219.04] awful. All of these animations didn't do
+[221.60] anything. Navigation is a great example
+[223.92] of this. As we add more links, we simply
+[226.08] run out of room. So, we consolidate them
+[228.16] into a menu that can animate in serving
+[230.72] a purpose. Or if our web app starts to
+[232.80] take on a browsing priority, instead of
+[235.04] sticking this block to the top of the
+[236.88] screen, we can reduce the size of the
+[238.88] search bar and have it animate in when
+[241.20] clicked. These are all great examples of
+[243.36] progressive disclosure, showing the user
+[245.52] what they need to see and revealing more
+[247.60] as it's required. That's why a load more
+[249.92] button is preferable over infinite
+[251.92] scroll. It gives the user more control
+[253.84] and crucially, it lets them actually
+[256.00] reach the footer, something infinite
+[258.00] scroll often makes impossible. Context
+[260.32] matters, but as a general rule, buttons
+[262.80] should almost always have a small
+[264.32] animation, while scrolljacking effects
+[266.56] should be used very sparingly, if ever.
+[268.96] Finally, design systems add a layer of
+[271.04] replicability and speed that's tough to
+[273.28] match. But the system has to reflect the
+[275.44] values of the team. A lean startup might
+[277.84] need something lightweight and flexible,
+[279.92] quick to update and easy to scrap.
+[282.08] Whereas something like Google's material
+[283.84] design is massive and deeply defined
+[286.80] because the use cases span dozens of
+[288.72] products and billions of users. More
+[290.88] importantly, the development of a design
+[292.72] system is often more critical than the
+[294.88] design itself. The process of defining
+[297.20] rules, spacing, typography scales,
+[299.68] interaction patterns gives you an
+[301.52] architecture for expansion. But a design
+[303.76] system isn't about making everything
+[305.52] look the same. It's about giving your
+[307.20] team a shared language. And like any
+[309.12] language, mastery means knowing when to
+[310.96] bend the rules. You don't break the
+[312.56] system by accident. You break it with
+[314.16] intention. Overall, I hope this gave
+[316.32] some perspective on how to think like a
+[318.16] better designer. If you're interested in
+[319.76] checking out Mobin, it'll be the first
+[321.28] link in the description below. And
+[323.20] thanks for watching.

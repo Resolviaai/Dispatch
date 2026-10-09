@@ -1,0 +1,1385 @@
+{
+  "meta": {
+    "id": "EcbgbKtOELY",
+    "url": "https://www.youtube.com/watch?v=EcbgbKtOELY",
+    "title": "Every UI/UX Concept Explained in Under 10 Minutes",
+    "uploader": "Kole Jain",
+    "duration": 563,
+    "description": "Design like a professional using Mobbin and get 20% off: https://mobbin.com/kole\n\nA complete breakdown of every UI/UX design concept you need to know, from visual hierarchy and color theory to typography, spacing, and much more! Whether you're just starting out or filling in the gaps, this video covers the core principles that separate good design from great design. All in under 10 minutes.\n\nEnjoying the content? Subscribe for more!\n @KoleJain  \n\nFigma files:\nhttps://www.kolejain.com/resources?s",
+    "slug": "Every_UIUX_Concept_Explained_in_Under_10",
+    "snippets_count": 274,
+    "total_words": 1802
+  },
+  "snippets": [
+    {
+      "text": "If you want to get good at UI UX design,",
+      "start": 0.0,
+      "duration": 4.36
+    },
+    {
+      "text": "you got to start with the basics. So,",
+      "start": 2.48,
+      "duration": 4.52
+    },
+    {
+      "text": "let's begin.",
+      "start": 4.36,
+      "duration": 2.64
+    },
+    {
+      "text": "This one's easiest to explain with an",
+      "start": 8.2,
+      "duration": 4.16
+    },
+    {
+      "text": "example first. If I have three text and",
+      "start": 9.88,
+      "duration": 4.48
+    },
+    {
+      "text": "icon pairs, but I put a container around",
+      "start": 12.36,
+      "duration": 3.56
+    },
+    {
+      "text": "drinks and food, you know that they're",
+      "start": 14.36,
+      "duration": 4.04
+    },
+    {
+      "text": "related and dessert is not. Then, if I",
+      "start": 15.92,
+      "duration": 4.2
+    },
+    {
+      "text": "put a container around drinks, you know",
+      "start": 18.4,
+      "duration": 3.4
+    },
+    {
+      "text": "that it's selected and you can toggle",
+      "start": 20.12,
+      "duration": 3.6
+    },
+    {
+      "text": "over to food. If I gray this text out,",
+      "start": 21.8,
+      "duration": 3.72
+    },
+    {
+      "text": "you know that it's inactive and clicking",
+      "start": 23.72,
+      "duration": 3.88
+    },
+    {
+      "text": "it probably won't do anything. See how",
+      "start": 25.52,
+      "duration": 4.0
+    },
+    {
+      "text": "you just knew all of that? I didn't need",
+      "start": 27.6,
+      "duration": 3.64
+    },
+    {
+      "text": "to write instructions on how it worked",
+      "start": 29.52,
+      "duration": 4.16
+    },
+    {
+      "text": "because the UI was signifying how things",
+      "start": 31.24,
+      "duration": 4.72
+    },
+    {
+      "text": "worked. Good UI has many signifiers,",
+      "start": 33.68,
+      "duration": 4.4
+    },
+    {
+      "text": "like a button press state, highlights on",
+      "start": 35.96,
+      "duration": 4.12
+    },
+    {
+      "text": "active nav items, hover states, or even",
+      "start": 38.08,
+      "duration": 4.08
+    },
+    {
+      "text": "tooltips to tell the user what a UI",
+      "start": 40.08,
+      "duration": 5.92
+    },
+    {
+      "text": "affords or what it can do.",
+      "start": 42.16,
+      "duration": 3.84
+    },
+    {
+      "text": "Now, take a look at this card. It",
+      "start": 47.08,
+      "duration": 3.44
+    },
+    {
+      "text": "displays all of the information in a",
+      "start": 48.76,
+      "duration": 4.44
+    },
+    {
+      "text": "logical, repeatable format, but it looks",
+      "start": 50.52,
+      "duration": 5.2
+    },
+    {
+      "text": "like a spreadsheet, not a design. So,",
+      "start": 53.2,
+      "duration": 4.28
+    },
+    {
+      "text": "let's give it some hierarchy, which is",
+      "start": 55.72,
+      "duration": 3.56
+    },
+    {
+      "text": "pretty intuitive. We have size,",
+      "start": 57.48,
+      "duration": 3.36
+    },
+    {
+      "text": "position, and color to use to our",
+      "start": 59.28,
+      "duration": 3.44
+    },
+    {
+      "text": "advantage. Starting from the top, an",
+      "start": 60.84,
+      "duration": 4.16
+    },
+    {
+      "text": "image always adds a great pop of color",
+      "start": 62.72,
+      "duration": 4.32
+    },
+    {
+      "text": "and makes scanning super easy, just like",
+      "start": 65.0,
+      "duration": 4.28
+    },
+    {
+      "text": "Uber. If in this case the item is the",
+      "start": 67.04,
+      "duration": 4.16
+    },
+    {
+      "text": "most important, we want that large and",
+      "start": 69.28,
+      "duration": 3.88
+    },
+    {
+      "text": "bold and at the top because otherwise",
+      "start": 71.2,
+      "duration": 3.44
+    },
+    {
+      "text": "it'll blend in with something like the",
+      "start": 73.16,
+      "duration": 3.52
+    },
+    {
+      "text": "time and date, which can be below and",
+      "start": 74.64,
+      "duration": 4.08
+    },
+    {
+      "text": "much smaller. And it's this contrast,",
+      "start": 76.68,
+      "duration": 4.36
+    },
+    {
+      "text": "the difference between small and big or",
+      "start": 78.72,
+      "duration": 4.56
+    },
+    {
+      "text": "colorful and not, that actually creates",
+      "start": 81.04,
+      "duration": 4.04
+    },
+    {
+      "text": "the hierarchy. It's also why price",
+      "start": 83.28,
+      "duration": 3.8
+    },
+    {
+      "text": "should be at the top, right aligned, and",
+      "start": 85.08,
+      "duration": 3.48
+    },
+    {
+      "text": "blue. It's different than the rest,",
+      "start": 87.08,
+      "duration": 3.56
+    },
+    {
+      "text": "which draws the eye to it. The location",
+      "start": 88.56,
+      "duration": 4.28
+    },
+    {
+      "text": "should be smaller and below like this.",
+      "start": 90.64,
+      "duration": 4.28
+    },
+    {
+      "text": "But, instead of just from and to, we can",
+      "start": 92.84,
+      "duration": 4.04
+    },
+    {
+      "text": "use icons and align to demonstrate that",
+      "start": 94.92,
+      "duration": 4.32
+    },
+    {
+      "text": "it's moving from Jamesville to Syracuse",
+      "start": 96.88,
+      "duration": 4.4
+    },
+    {
+      "text": "without having to actually say that.",
+      "start": 99.24,
+      "duration": 4.16
+    },
+    {
+      "text": "Now, with that said, it's not an exact",
+      "start": 101.28,
+      "duration": 3.92
+    },
+    {
+      "text": "science and you could definitely end up",
+      "start": 103.4,
+      "duration": 3.16
+    },
+    {
+      "text": "with a design that looks like this",
+      "start": 105.2,
+      "duration": 3.24
+    },
+    {
+      "text": "instead and it wouldn't be wrong. But,",
+      "start": 106.56,
+      "duration": 3.64
+    },
+    {
+      "text": "the same ideas apply. Most important",
+      "start": 108.44,
+      "duration": 3.68
+    },
+    {
+      "text": "things near the top, bigger and colorful",
+      "start": 110.2,
+      "duration": 3.92
+    },
+    {
+      "text": "is more important, and images are used",
+      "start": 112.12,
+      "duration": 3.76
+    },
+    {
+      "text": "whenever possible. And as you start to",
+      "start": 114.12,
+      "duration": 3.36
+    },
+    {
+      "text": "design more and more, you'll notice that",
+      "start": 115.88,
+      "duration": 3.44
+    },
+    {
+      "text": "similar patterns arise when you need",
+      "start": 117.48,
+      "duration": 3.6
+    },
+    {
+      "text": "labels or buttons, which we're going to",
+      "start": 119.32,
+      "duration": 3.166
+    },
+    {
+      "text": "talk about in a minute.",
+      "start": 121.08,
+      "duration": 3.426
+    },
+    {
+      "text": ">> [music]",
+      "start": 122.486,
+      "duration": 2.02
+    },
+    {
+      "text": ">> Now, some people have this misconception",
+      "start": 125.48,
+      "duration": 3.88
+    },
+    {
+      "text": "that all of your content needs to align",
+      "start": 127.48,
+      "duration": 4.4
+    },
+    {
+      "text": "to a 12-column grid and be exactly eight",
+      "start": 129.36,
+      "duration": 4.68
+    },
+    {
+      "text": "pixels apart. But, these are just",
+      "start": 131.88,
+      "duration": 4.04
+    },
+    {
+      "text": "guidelines. For example, this design",
+      "start": 134.04,
+      "duration": 4.08
+    },
+    {
+      "text": "doesn't line up with any of the columns",
+      "start": 135.92,
+      "duration": 4.16
+    },
+    {
+      "text": "and that's not uncommon, especially for",
+      "start": 138.12,
+      "duration": 4.2
+    },
+    {
+      "text": "custom landing pages. But, for highly",
+      "start": 140.08,
+      "duration": 4.2
+    },
+    {
+      "text": "structured pages like galleries, blogs,",
+      "start": 142.32,
+      "duration": 3.88
+    },
+    {
+      "text": "or any repeating content, they can",
+      "start": 144.28,
+      "duration": 3.76
+    },
+    {
+      "text": "actually be useful for responsiveness by",
+      "start": 146.2,
+      "duration": 3.36
+    },
+    {
+      "text": "giving guidelines for responsive",
+      "start": 148.04,
+      "duration": 3.16
+    },
+    {
+      "text": "behavior on tablet [music] with eight",
+      "start": 149.56,
+      "duration": 4.36
+    },
+    {
+      "text": "columns and mobile with four. But, much",
+      "start": 151.2,
+      "duration": 4.48
+    },
+    {
+      "text": "more important than using excessive",
+      "start": 153.92,
+      "duration": 3.84
+    },
+    {
+      "text": "grids and layouts is white space,",
+      "start": 155.68,
+      "duration": 4.36
+    },
+    {
+      "text": "letting things breathe. For example, in",
+      "start": 157.76,
+      "duration": 4.12
+    },
+    {
+      "text": "a simple section like this, the large",
+      "start": 160.04,
+      "duration": 3.52
+    },
+    {
+      "text": "text would have a font size and line",
+      "start": 161.88,
+      "duration": 3.2
+    },
+    {
+      "text": "height like this and the subtext would",
+      "start": 163.56,
+      "duration": 3.4
+    },
+    {
+      "text": "have a font size and line height like",
+      "start": 165.08,
+      "duration": 3.72
+    },
+    {
+      "text": "so. Buttons would be similar and",
+      "start": 166.96,
+      "duration": 3.72
+    },
+    {
+      "text": "optionally a top announcement bar like",
+      "start": 168.8,
+      "duration": 3.88
+    },
+    {
+      "text": "this. [music] Then, simply 32 pixels",
+      "start": 170.68,
+      "duration": 3.72
+    },
+    {
+      "text": "between every item, but you can also",
+      "start": 172.68,
+      "duration": 4.4
+    },
+    {
+      "text": "group elements that just go together",
+      "start": 174.4,
+      "duration": 4.64
+    },
+    {
+      "text": "like the announcement and text or the",
+      "start": 177.08,
+      "duration": 3.88
+    },
+    {
+      "text": "text and subtext, [music] which is just",
+      "start": 179.04,
+      "duration": 4.28
+    },
+    {
+      "text": "another form of visual hierarchy. And",
+      "start": 180.96,
+      "duration": 4.04
+    },
+    {
+      "text": "this is where we see the four-point grid",
+      "start": 183.32,
+      "duration": 3.4
+    },
+    {
+      "text": "system actually come into play.",
+      "start": 185.0,
+      "duration": 3.76
+    },
+    {
+      "text": "Everything is a multiple, not because it",
+      "start": 186.72,
+      "duration": 3.92
+    },
+    {
+      "text": "inherently looks better, but because you",
+      "start": 188.76,
+      "duration": 3.56
+    },
+    {
+      "text": "can always split things in half, which",
+      "start": 190.64,
+      "duration": 4.552
+    },
+    {
+      "text": "creates consistency throughout a design.",
+      "start": 192.32,
+      "duration": 4.892
+    },
+    {
+      "text": ">> [music]",
+      "start": 195.192,
+      "duration": 2.02
+    },
+    {
+      "text": ">> Typography is really interesting because",
+      "start": 197.92,
+      "duration": 5.4
+    },
+    {
+      "text": "design is mostly just text. And for",
+      "start": 200.12,
+      "duration": 4.84
+    },
+    {
+      "text": "picking a font, I can almost",
+      "start": 203.32,
+      "duration": 3.64
+    },
+    {
+      "text": "unilaterally say you'll never need more",
+      "start": 204.96,
+      "duration": 4.84
+    },
+    {
+      "text": "than one for any design. So, find a nice",
+      "start": 206.96,
+      "duration": 4.64
+    },
+    {
+      "text": "sans serif font like the ones on screen",
+      "start": 209.8,
+      "duration": 3.72
+    },
+    {
+      "text": "and stick to it. Over the last seven",
+      "start": 211.6,
+      "duration": 3.897
+    },
+    {
+      "text": "years of designing, I've rarely used",
+      "start": 213.52,
+      "duration": 3.64
+    },
+    {
+      "text": "[music] any fonts other than what's on",
+      "start": 215.497,
+      "duration": 3.063
+    },
+    {
+      "text": "screen and this shouldn't be where",
+      "start": 217.16,
+      "duration": 3.36
+    },
+    {
+      "text": "you're spending tons of time. I'm also",
+      "start": 218.56,
+      "duration": 3.8
+    },
+    {
+      "text": "not a big fan of calling any design",
+      "start": 220.52,
+      "duration": 4.76
+    },
+    {
+      "text": "skill a hack, but this one kind of is.",
+      "start": 222.36,
+      "duration": 5.0
+    },
+    {
+      "text": "This design looks okay right now, but",
+      "start": 225.28,
+      "duration": 3.76
+    },
+    {
+      "text": "our header text feels a little too",
+      "start": 227.36,
+      "duration": 3.32
+    },
+    {
+      "text": "loose. If you tighten up the letter",
+      "start": 229.04,
+      "duration": 5.0
+    },
+    {
+      "text": "spacing on this by about -2% to -3% and",
+      "start": 230.68,
+      "duration": 5.4
+    },
+    {
+      "text": "drop the line height to about 110% to",
+      "start": 234.04,
+      "duration": 5.36
+    },
+    {
+      "text": "120%, it instantly makes any larger text",
+      "start": 236.08,
+      "duration": 6.4
+    },
+    {
+      "text": "look super pro real fast. But, hierarchy",
+      "start": 239.4,
+      "duration": 4.92
+    },
+    {
+      "text": "with typography is a little bit more",
+      "start": 242.48,
+      "duration": 3.84
+    },
+    {
+      "text": "nuanced. And if we look at our previous",
+      "start": 244.32,
+      "duration": 4.92
+    },
+    {
+      "text": "example, text sizes can vary wildly. For",
+      "start": 246.32,
+      "duration": 4.16
+    },
+    {
+      "text": "landing pages and websites, you",
+      "start": 249.24,
+      "duration": 3.08
+    },
+    {
+      "text": "generally don't want more than six font",
+      "start": 250.48,
+      "duration": 3.68
+    },
+    {
+      "text": "sizes, which can have a really large",
+      "start": 252.32,
+      "duration": 3.64
+    },
+    {
+      "text": "range. For things like dashboards, that",
+      "start": 254.16,
+      "duration": 3.799
+    },
+    {
+      "text": "range shrinks dramatically [music] to",
+      "start": 255.96,
+      "duration": 3.839
+    },
+    {
+      "text": "where you don't normally have text sizes",
+      "start": 257.959,
+      "duration": 3.961
+    },
+    {
+      "text": "larger than 24 pixels because of the",
+      "start": 259.799,
+      "duration": 4.441
+    },
+    {
+      "text": "increase in information density. But,",
+      "start": 261.92,
+      "duration": 3.8
+    },
+    {
+      "text": "honestly, one of the most important",
+      "start": 264.24,
+      "duration": 2.92
+    },
+    {
+      "text": "concepts of design is getting",
+      "start": 265.72,
+      "duration": 3.2
+    },
+    {
+      "text": "inspiration and doing research from a",
+      "start": 267.16,
+      "duration": 3.52
+    },
+    {
+      "text": "good source, like today's sponsor,",
+      "start": 268.92,
+      "duration": 3.8
+    },
+    {
+      "text": "Mobbin, who curates hundreds of",
+      "start": 270.68,
+      "duration": 4.12
+    },
+    {
+      "text": "thousands of mobile and web apps along",
+      "start": 272.72,
+      "duration": 3.64
+    },
+    {
+      "text": "with landing pages, too. So, you can",
+      "start": 274.8,
+      "duration": 3.16
+    },
+    {
+      "text": "always pull inspiration from real",
+      "start": 276.36,
+      "duration": 4.0
+    },
+    {
+      "text": "designs built by the top design teams in",
+      "start": 277.96,
+      "duration": 3.64
+    },
+    {
+      "text": "the world. [music] And if you're",
+      "start": 280.36,
+      "duration": 2.88
+    },
+    {
+      "text": "struggling with a specific section, just",
+      "start": 281.6,
+      "duration": 3.48
+    },
+    {
+      "text": "go and search for it and instantly pull",
+      "start": 283.24,
+      "duration": 3.84
+    },
+    {
+      "text": "up real-world examples with links to the",
+      "start": 285.08,
+      "duration": 4.12
+    },
+    {
+      "text": "live sites, too. If you're interested,",
+      "start": 287.08,
+      "duration": 3.8
+    },
+    {
+      "text": "you can check out Mobbin using the first",
+      "start": 289.2,
+      "duration": 4.08
+    },
+    {
+      "text": "link down below to get 20% off. Now,",
+      "start": 290.88,
+      "duration": 3.873
+    },
+    {
+      "text": "back to the video.",
+      "start": 293.28,
+      "duration": 3.493
+    },
+    {
+      "text": ">> [music]",
+      "start": 294.753,
+      "duration": 2.02
+    },
+    {
+      "text": ">> Colors are difficult and everyone has",
+      "start": 297.24,
+      "duration": 4.6
+    },
+    {
+      "text": "their own taste, but I'm a big fan of",
+      "start": 299.84,
+      "duration": 4.08
+    },
+    {
+      "text": "starting with one primary color.",
+      "start": 301.84,
+      "duration": 3.64
+    },
+    {
+      "text": "Generally, this is your brand color.",
+      "start": 303.92,
+      "duration": 2.68
+    },
+    {
+      "text": "Then, you can lighten it for a good",
+      "start": 305.48,
+      "duration": 3.32
+    },
+    {
+      "text": "background or darken it for text colors.",
+      "start": 306.6,
+      "duration": 3.84
+    },
+    {
+      "text": "Both good ways to incorporate subtle",
+      "start": 308.8,
+      "duration": 3.8
+    },
+    {
+      "text": "color and make an otherwise drab design",
+      "start": 310.44,
+      "duration": 4.36
+    },
+    {
+      "text": "look much more interesting. And with all",
+      "start": 312.6,
+      "duration": 3.96
+    },
+    {
+      "text": "of that, we're already halfway to a",
+      "start": 314.8,
+      "duration": 3.2
+    },
+    {
+      "text": "color ramp, which is what large",
+      "start": 316.56,
+      "duration": 3.08
+    },
+    {
+      "text": "companies use to build out chips,",
+      "start": 318.0,
+      "duration": 3.24
+    },
+    {
+      "text": "states, charts, and really anything",
+      "start": 319.64,
+      "duration": 3.6
+    },
+    {
+      "text": "else. But, I also think it's important",
+      "start": 321.24,
+      "duration": 4.72
+    },
+    {
+      "text": "as a beginner to let the color find you.",
+      "start": 323.24,
+      "duration": 4.32
+    },
+    {
+      "text": "Like an announcement bar to grab",
+      "start": 325.96,
+      "duration": 4.12
+    },
+    {
+      "text": "attention or a focus state on an input",
+      "start": 327.56,
+      "duration": 4.4
+    },
+    {
+      "text": "or the green new chip on a link. These",
+      "start": 330.08,
+      "duration": 3.44
+    },
+    {
+      "text": "are all semantic colors, which are",
+      "start": 331.96,
+      "duration": 3.32
+    },
+    {
+      "text": "colors that have meaning and provide",
+      "start": 333.52,
+      "duration": 4.0
+    },
+    {
+      "text": "signifiers to the user. Blue for trust,",
+      "start": 335.28,
+      "duration": 4.32
+    },
+    {
+      "text": "red for danger or urgency, yellow for",
+      "start": 337.52,
+      "duration": 4.16
+    },
+    {
+      "text": "warning, and green for success. Make",
+      "start": 339.6,
+      "duration": 4.92
+    },
+    {
+      "text": "sure you use color for purpose, not just",
+      "start": 341.68,
+      "duration": 4.163
+    },
+    {
+      "text": "for decoration.",
+      "start": 344.52,
+      "duration": 3.343
+    },
+    {
+      "text": ">> [music]",
+      "start": 345.843,
+      "duration": 2.02
+    },
+    {
+      "text": ">> Now, designing in dark mode presents",
+      "start": 348.64,
+      "duration": 3.64
+    },
+    {
+      "text": "some pretty interesting challenges for",
+      "start": 350.28,
+      "duration": 4.08
+    },
+    {
+      "text": "us. First, this card is using a light",
+      "start": 352.28,
+      "duration": 3.6
+    },
+    {
+      "text": "border, which creates a bit too much",
+      "start": 354.36,
+      "duration": 3.52
+    },
+    {
+      "text": "contrast. So, we'll lower that down. In",
+      "start": 355.88,
+      "duration": 3.64
+    },
+    {
+      "text": "dark mode, we don't have shadows like",
+      "start": 357.88,
+      "duration": 3.44
+    },
+    {
+      "text": "light mode, so to create depth, we need",
+      "start": 359.52,
+      "duration": 3.4
+    },
+    {
+      "text": "to have a lighter card than the",
+      "start": 361.32,
+      "duration": 3.04
+    },
+    {
+      "text": "background. So, I'll make that",
+      "start": 362.92,
+      "duration": 3.6
+    },
+    {
+      "text": "adjustment. This chip is also far too",
+      "start": 364.36,
+      "duration": 3.56
+    },
+    {
+      "text": "bright, so we can dim down the",
+      "start": 366.52,
+      "duration": 3.56
+    },
+    {
+      "text": "saturation and brightness and flip that",
+      "start": 367.92,
+      "duration": 4.16
+    },
+    {
+      "text": "for the text to create some hierarchy.",
+      "start": 370.08,
+      "duration": 4.2
+    },
+    {
+      "text": "There's also a ton of flexibility for",
+      "start": 372.08,
+      "duration": 4.8
+    },
+    {
+      "text": "deep purples, reds, or greens, not just",
+      "start": 374.28,
+      "duration": 5.624
+    },
+    {
+      "text": "navy blue or gray.",
+      "start": 376.88,
+      "duration": 4.76
+    },
+    {
+      "text": ">> [music]",
+      "start": 379.904,
+      "duration": 3.536
+    },
+    {
+      "text": ">> But, speaking of depth, shadows are a",
+      "start": 381.64,
+      "duration": 4.16
+    },
+    {
+      "text": "fantastic tool to use on light mode.",
+      "start": 383.44,
+      "duration": 4.24
+    },
+    {
+      "text": "This shadow, along with most, is too",
+      "start": 385.8,
+      "duration": 3.96
+    },
+    {
+      "text": "strong. So, reducing the opacity and",
+      "start": 387.68,
+      "duration": 4.32
+    },
+    {
+      "text": "dialing up the blur helps a lot. The",
+      "start": 389.76,
+      "duration": 3.88
+    },
+    {
+      "text": "strength you'll need depends on the",
+      "start": 392.0,
+      "duration": 3.44
+    },
+    {
+      "text": "foreground and background, but cards",
+      "start": 393.64,
+      "duration": 3.68
+    },
+    {
+      "text": "require less while content that sits",
+      "start": 395.44,
+      "duration": 4.28
+    },
+    {
+      "text": "above other content like popovers will",
+      "start": 397.32,
+      "duration": 4.48
+    },
+    {
+      "text": "need stronger shadows. We can even use",
+      "start": 399.72,
+      "duration": 4.0
+    },
+    {
+      "text": "these techniques with inner and outer",
+      "start": 401.8,
+      "duration": 3.96
+    },
+    {
+      "text": "shadows to create effects like raised",
+      "start": 403.72,
+      "duration": 4.16
+    },
+    {
+      "text": "tactile buttons. Just remember, if the",
+      "start": 405.76,
+      "duration": 3.8
+    },
+    {
+      "text": "shadow is the first thing you notice on",
+      "start": 407.88,
+      "duration": 4.119
+    },
+    {
+      "text": "a design, you're not using it right.",
+      "start": 409.56,
+      "duration": 4.459
+    },
+    {
+      "text": ">> [music]",
+      "start": 411.999,
+      "duration": 2.02
+    },
+    {
+      "text": ">> Now, to create strong designs, you'll",
+      "start": 414.76,
+      "duration": 4.36
+    },
+    {
+      "text": "need icons. Most icons are generally too",
+      "start": 416.4,
+      "duration": 4.76
+    },
+    {
+      "text": "large, so the trick is to get the line",
+      "start": 419.12,
+      "duration": 3.92
+    },
+    {
+      "text": "height of your font, in this case 24",
+      "start": 421.16,
+      "duration": 4.36
+    },
+    {
+      "text": "pixels, and make the icons the same size",
+      "start": 423.04,
+      "duration": 4.2
+    },
+    {
+      "text": "and then tighten up the text. Sidebar",
+      "start": 425.52,
+      "duration": 3.28
+    },
+    {
+      "text": "links like this are actually just",
+      "start": 427.24,
+      "duration": 3.24
+    },
+    {
+      "text": "buttons without a background until you",
+      "start": 428.8,
+      "duration": 3.2
+    },
+    {
+      "text": "hover, which are often called ghost",
+      "start": 430.48,
+      "duration": 3.4
+    },
+    {
+      "text": "buttons. And if we isolate one and",
+      "start": 432.0,
+      "duration": 3.4
+    },
+    {
+      "text": "center it, we've got a perfect",
+      "start": 433.88,
+      "duration": 3.16
+    },
+    {
+      "text": "standalone button. These are super",
+      "start": 435.4,
+      "duration": 3.24
+    },
+    {
+      "text": "common when you have a primary and",
+      "start": 437.04,
+      "duration": 4.2
+    },
+    {
+      "text": "secondary CTA side by side. And a good",
+      "start": 438.64,
+      "duration": 4.28
+    },
+    {
+      "text": "guideline for padding on these is to",
+      "start": 441.24,
+      "duration": 3.8
+    },
+    {
+      "text": "double the height for the width. And",
+      "start": 442.92,
+      "duration": 4.68
+    },
+    {
+      "text": "these can be done with or without icons,",
+      "start": 445.04,
+      "duration": 4.88
+    },
+    {
+      "text": "too.",
+      "start": 447.6,
+      "duration": 2.32
+    },
+    {
+      "text": "A good rule of design is when a user",
+      "start": 451.04,
+      "duration": 4.04
+    },
+    {
+      "text": "does anything, there should be a",
+      "start": 453.0,
+      "duration": 4.08
+    },
+    {
+      "text": "response. For example, every button",
+      "start": 455.08,
+      "duration": 4.4
+    },
+    {
+      "text": "needs at least four states: default,",
+      "start": 457.08,
+      "duration": 4.08
+    },
+    {
+      "text": "hovered, active or pressed, and",
+      "start": 459.48,
+      "duration": 3.12
+    },
+    {
+      "text": "disabled. Sometimes you'll need a",
+      "start": 461.16,
+      "duration": 3.32
+    },
+    {
+      "text": "loading state, too, with a spinner.",
+      "start": 462.6,
+      "duration": 3.8
+    },
+    {
+      "text": "Inputs are even more critical. You'll",
+      "start": 464.48,
+      "duration": 3.56
+    },
+    {
+      "text": "need a focus state when the user clicks",
+      "start": 466.4,
+      "duration": 3.44
+    },
+    {
+      "text": "in, error states with red borders and",
+      "start": 468.04,
+      "duration": 3.48
+    },
+    {
+      "text": "messages when something's wrong, and",
+      "start": 469.84,
+      "duration": 3.44
+    },
+    {
+      "text": "sometimes even warning states for",
+      "start": 471.52,
+      "duration": 3.92
+    },
+    {
+      "text": "optional issues. And this applies",
+      "start": 473.28,
+      "duration": 3.96
+    },
+    {
+      "text": "everywhere. Loading spinners when data",
+      "start": 475.44,
+      "duration": 3.76
+    },
+    {
+      "text": "is fetching, success messages when an",
+      "start": 477.24,
+      "duration": 4.08
+    },
+    {
+      "text": "action completes, even micro animations",
+      "start": 479.2,
+      "duration": 5.04
+    },
+    {
+      "text": "on scroll or swipe. Every interaction",
+      "start": 481.32,
+      "duration": 6.32
+    },
+    {
+      "text": "needs a response.",
+      "start": 484.24,
+      "duration": 3.4
+    },
+    {
+      "text": "And that brings us wonderfully into",
+      "start": 488.96,
+      "duration": 3.92
+    },
+    {
+      "text": "micro interactions. Micro interactions",
+      "start": 490.88,
+      "duration": 4.24
+    },
+    {
+      "text": "are a form of feedback, but they step",
+      "start": 492.88,
+      "duration": 4.24
+    },
+    {
+      "text": "things up a notch. For example, this",
+      "start": 495.12,
+      "duration": 4.4
+    },
+    {
+      "text": "copy button has states and feedback when",
+      "start": 497.12,
+      "duration": 4.6
+    },
+    {
+      "text": "we hover and click, but we still don't",
+      "start": 499.52,
+      "duration": 4.12
+    },
+    {
+      "text": "know that we've copied anything.",
+      "start": 501.72,
+      "duration": 4.12
+    },
+    {
+      "text": "Instead, if we have this chip slide up,",
+      "start": 503.64,
+      "duration": 4.44
+    },
+    {
+      "text": "that's a micro interaction that confirms",
+      "start": 505.84,
+      "duration": 4.36
+    },
+    {
+      "text": "our action. And these can range from",
+      "start": 508.08,
+      "duration": 4.839
+    },
+    {
+      "text": "highly practical to much more fun and",
+      "start": 510.2,
+      "duration": 5.32
+    },
+    {
+      "text": "playful.",
+      "start": 512.919,
+      "duration": 2.601
+    },
+    {
+      "text": "Finally, overlays are really important",
+      "start": 517.08,
+      "duration": 3.72
+    },
+    {
+      "text": "because if you screw them up, you're",
+      "start": 519.599,
+      "duration": 3.281
+    },
+    {
+      "text": "going to ruin the image and the text,",
+      "start": 520.8,
+      "duration": 4.16
+    },
+    {
+      "text": "too. In this case, we can't leave it as",
+      "start": 522.88,
+      "duration": 3.88
+    },
+    {
+      "text": "is, so we could add in a full-screen",
+      "start": 524.96,
+      "duration": 3.72
+    },
+    {
+      "text": "overlay, but it doesn't do the image",
+      "start": 526.76,
+      "duration": 3.92
+    },
+    {
+      "text": "justice. So, instead, add in a linear",
+      "start": 528.68,
+      "duration": 3.84
+    },
+    {
+      "text": "gradient that'll display the image then",
+      "start": 530.68,
+      "duration": 4.24
+    },
+    {
+      "text": "smoothly converge into a text-readable",
+      "start": 532.52,
+      "duration": 4.52
+    },
+    {
+      "text": "background. Or, if we're going for extra",
+      "start": 534.92,
+      "duration": 4.36
+    },
+    {
+      "text": "fancy, we can add in a progressive blur",
+      "start": 537.04,
+      "duration": 4.36
+    },
+    {
+      "text": "on top of the gradient for an even more",
+      "start": 539.28,
+      "duration": 5.08
+    },
+    {
+      "text": "modern look. And that is more or less",
+      "start": 541.4,
+      "duration": 5.84
+    },
+    {
+      "text": "every UI UX concept all wrapped up in 10",
+      "start": 544.36,
+      "duration": 4.56
+    },
+    {
+      "text": "minutes. If you want to check out",
+      "start": 547.24,
+      "duration": 3.44
+    },
+    {
+      "text": "Mobbin, it will be the first link down",
+      "start": 548.92,
+      "duration": 3.84
+    },
+    {
+      "text": "below and you can get the link to all of",
+      "start": 550.68,
+      "duration": 4.04
+    },
+    {
+      "text": "the Figma assets used in this video down",
+      "start": 552.76,
+      "duration": 3.24
+    },
+    {
+      "text": "there, too. Thank you so much for",
+      "start": 554.72,
+      "duration": 2.84
+    },
+    {
+      "text": "watching and I will see you in the next",
+      "start": 556.0,
+      "duration": 3.88
+    },
+    {
+      "text": "one.",
+      "start": 557.56,
+      "duration": 2.32
+    }
+  ]
+}

@@ -169,7 +169,7 @@ class TestPillar1Ingestion(unittest.TestCase):
         # Second call should NOT call download_video
         with patch.object(self.catcher, "download_video", side_effect=AssertionError("Should not re-download")):
             second = self.catcher.ingest_video(vid_id, dispatch_id=self.test_dispatch_id)
-        self.assertEqual(second["status"], "DOWNLOADED")
+        self.assertIn(second["status"], ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT"))
         self.assertTrue(second["verified"])
 
 

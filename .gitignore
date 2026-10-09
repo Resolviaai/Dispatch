@@ -17,6 +17,8 @@ storage/database/backups/
 !storage/database/.gitkeep
 storage/mobile/*
 !storage/mobile/.gitkeep
+storage/youtube_inbox/*
+!storage/youtube_inbox/.gitkeep
 
 # Media & temporary files
 *.mp4
@@ -52,4 +54,13 @@ local.properties
 android/local.properties
 storage/quarantine/*
 !storage/quarantine/.gitkeep
+
+# Web frontend build & dependencies
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Android binary release
+storage/dispatch.apk
+*.apk
 

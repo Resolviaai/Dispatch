@@ -23,7 +23,7 @@ interface RecordingDao {
     @Query("SELECT * FROM segments WHERE sessionId = :sessionId AND status = 'RECORDING'")
     suspend fun getUnfinalizedSegments(sessionId: String): List<SegmentEntity>
 
-    @Query("SELECT * FROM segments WHERE status = 'QUEUED_FOR_UPLOAD'")
+    @Query("SELECT * FROM segments WHERE status IN ('QUEUED_FOR_UPLOAD', 'FAILED_RETRY') ORDER BY sequenceNumber ASC")
     suspend fun getPendingUploadSegments(): List<SegmentEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -41,8 +41,17 @@ interface RecordingDao {
     @Query("SELECT * FROM segments ORDER BY createdAt DESC LIMIT 25")
     fun getAllSegmentsFlow(): Flow<List<SegmentEntity>>
 
+    @Query("SELECT * FROM segments ORDER BY createdAt DESC LIMIT 50")
+    suspend fun getAllSegmentsList(): List<SegmentEntity>
+
     @Query("UPDATE segments SET status = :status WHERE segmentId = :segmentId")
     suspend fun updateSegmentStatus(segmentId: String, status: String)
+
+    @Query("UPDATE segments SET status = :status, youtubeVideoId = :youtubeVideoId WHERE segmentId = :segmentId")
+    suspend fun updateSegmentStatusAndVideoId(segmentId: String, status: String, youtubeVideoId: String?)
+
+    @Query("SELECT * FROM segments WHERE segmentId = :segmentId LIMIT 1")
+    suspend fun getSegmentById(segmentId: String): SegmentEntity?
 
     @Query("UPDATE outbox SET remoteOffset = :offset, updatedAt = :updatedAt WHERE segmentId = :segmentId")
     suspend fun updateOutboxOffset(segmentId: String, offset: Long, updatedAt: Long = System.currentTimeMillis())
@@ -52,4 +61,7 @@ interface RecordingDao {
 
     @Query("DELETE FROM outbox WHERE segmentId = :segmentId")
     suspend fun deleteOutboxItem(segmentId: String)
+
+    @Query("DELETE FROM segments WHERE segmentId = :segmentId")
+    suspend fun deleteSegment(segmentId: String)
 }

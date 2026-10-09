@@ -1,0 +1,1705 @@
+{
+  "meta": {
+    "id": "86PGRyQjdzQ",
+    "url": "https://www.youtube.com/watch?v=86PGRyQjdzQ",
+    "title": "4 levels of UI/UX design (and BIG mistakes to avoid)",
+    "uploader": "Tim Gabe",
+    "duration": 934,
+    "description": "✅ Learn proven ways to grow a business with design: \nhttps://zipzap.design/case-studies/signup?video=86PGRyQjdzQ\n\n✅ Get help growing your business with a Free Consultation:\nhttps://zipzap.design/strategy-consultation?video=86PGRyQjdzQ\n\n—\n\nTimecodes\n0:00 – Intro: Why Designers Keep Making the Same Mistakes\n0:27 – The Plan: Redesigning a Real Client Screen at Every Level\n1:01 – Beginner Level: 6 Classic Mistakes That Hold You Back\n3:01 – Color Theory for Beginners: Avoid the Reverse UI Look\n4:00 –",
+    "slug": "4_levels_of_UIUX_design_and_BIG_mistakes",
+    "snippets_count": 338,
+    "total_words": 2361
+  },
+  "snippets": [
+    {
+      "text": "I've designed apps and websites for over",
+      "start": 0.08,
+      "duration": 5.759
+    },
+    {
+      "text": "a decade. And when I look back at my own",
+      "start": 2.8,
+      "duration": 5.759
+    },
+    {
+      "text": "design journey, one thing is clear.",
+      "start": 5.839,
+      "duration": 4.72
+    },
+    {
+      "text": "There are patterns to the kinds of",
+      "start": 8.559,
+      "duration": 4.96
+    },
+    {
+      "text": "mistakes you make as a designer at every",
+      "start": 10.559,
+      "duration": 5.28
+    },
+    {
+      "text": "level of your career. In this video, I",
+      "start": 13.519,
+      "duration": 3.921
+    },
+    {
+      "text": "will highlight those patterns of",
+      "start": 15.839,
+      "duration": 3.761
+    },
+    {
+      "text": "mistakes, what they are, when they",
+      "start": 17.44,
+      "duration": 4.88
+    },
+    {
+      "text": "typically happen, and how to fix them so",
+      "start": 19.6,
+      "duration": 4.8
+    },
+    {
+      "text": "that you can reach your next design",
+      "start": 22.32,
+      "duration": 4.48
+    },
+    {
+      "text": "level faster. Here's how we'll do it. We",
+      "start": 24.4,
+      "duration": 4.56
+    },
+    {
+      "text": "will take a screen from a real client",
+      "start": 26.8,
+      "duration": 5.2
+    },
+    {
+      "text": "project in my agency portfolio and",
+      "start": 28.96,
+      "duration": 5.36
+    },
+    {
+      "text": "redesign it starting from an unpaid",
+      "start": 32.0,
+      "duration": 4.64
+    },
+    {
+      "text": "beginner level, iterating all the way to",
+      "start": 34.32,
+      "duration": 4.64
+    },
+    {
+      "text": "a high ticket senior level. For each",
+      "start": 36.64,
+      "duration": 4.239
+    },
+    {
+      "text": "level, we will call out the biggest",
+      "start": 38.96,
+      "duration": 5.279
+    },
+    {
+      "text": "mistakes while providing resources and",
+      "start": 40.879,
+      "duration": 5.921
+    },
+    {
+      "text": "guidelines so that you can avoid them.",
+      "start": 44.239,
+      "duration": 5.361
+    },
+    {
+      "text": "And then by the end of the video, we'll",
+      "start": 46.8,
+      "duration": 6.16
+    },
+    {
+      "text": "dig into a hidden mistake that even lots",
+      "start": 49.6,
+      "duration": 7.04
+    },
+    {
+      "text": "of senior designers make and a solution",
+      "start": 52.96,
+      "duration": 7.04
+    },
+    {
+      "text": "that can really set you apart in this AI",
+      "start": 56.64,
+      "duration": 5.84
+    },
+    {
+      "text": "era that we're in. Let's get started.",
+      "start": 60.0,
+      "duration": 4.799
+    },
+    {
+      "text": "So, at the beginner level, nothing",
+      "start": 62.48,
+      "duration": 4.72
+    },
+    {
+      "text": "works. However, this isn't a surprise",
+      "start": 64.799,
+      "duration": 5.041
+    },
+    {
+      "text": "since we have less than a year of",
+      "start": 67.2,
+      "duration": 4.959
+    },
+    {
+      "text": "experience and we're not getting paid",
+      "start": 69.84,
+      "duration": 4.959
+    },
+    {
+      "text": "for our work yet. But let's dive into",
+      "start": 72.159,
+      "duration": 4.64
+    },
+    {
+      "text": "why it doesn't work. The first mistake",
+      "start": 74.799,
+      "duration": 4.64
+    },
+    {
+      "text": "in this design is something as simple as",
+      "start": 76.799,
+      "duration": 4.881
+    },
+    {
+      "text": "the copyrightiting. For example, do we",
+      "start": 79.439,
+      "duration": 5.521
+    },
+    {
+      "text": "really need four words to communicate a",
+      "start": 81.68,
+      "duration": 5.759
+    },
+    {
+      "text": "user's rewards? And does it make sense",
+      "start": 84.96,
+      "duration": 4.839
+    },
+    {
+      "text": "for the button to be about earning",
+      "start": 87.439,
+      "duration": 5.601
+    },
+    {
+      "text": "tokens when the action is actually about",
+      "start": 89.799,
+      "duration": 6.761
+    },
+    {
+      "text": "claiming voting rewards? Clarity is key",
+      "start": 93.04,
+      "duration": 5.92
+    },
+    {
+      "text": "in copyrightiting, and we're not really",
+      "start": 96.56,
+      "duration": 5.84
+    },
+    {
+      "text": "nailing it here. Therefore, it's a fail",
+      "start": 98.96,
+      "duration": 6.479
+    },
+    {
+      "text": "on the first principle, which brings us",
+      "start": 102.4,
+      "duration": 5.56
+    },
+    {
+      "text": "to the visuals. Lots of beginners will",
+      "start": 105.439,
+      "duration": 5.841
+    },
+    {
+      "text": "overuse flashy gradients, blur effects,",
+      "start": 107.96,
+      "duration": 5.479
+    },
+    {
+      "text": "and other cool visual techniques like",
+      "start": 111.28,
+      "duration": 4.479
+    },
+    {
+      "text": "that. And to be fair, even mid-level",
+      "start": 113.439,
+      "duration": 4.161
+    },
+    {
+      "text": "designers do this, but the difference is",
+      "start": 115.759,
+      "duration": 4.4
+    },
+    {
+      "text": "that they make it work. More on that",
+      "start": 117.6,
+      "duration": 5.199
+    },
+    {
+      "text": "later. The best quick tip I can give",
+      "start": 120.159,
+      "duration": 6.681
+    },
+    {
+      "text": "here is if you're unsure, opt for",
+      "start": 122.799,
+      "duration": 6.401
+    },
+    {
+      "text": "simplicity instead of flashiness. A",
+      "start": 126.84,
+      "duration": 5.08
+    },
+    {
+      "text": "simple but clear graph will help a user",
+      "start": 129.2,
+      "duration": 5.36
+    },
+    {
+      "text": "much more than a fancy graph that is",
+      "start": 131.92,
+      "duration": 4.959
+    },
+    {
+      "text": "hard to understand. In this case, since",
+      "start": 134.56,
+      "duration": 4.48
+    },
+    {
+      "text": "we went for fancy and we couldn't pull",
+      "start": 136.879,
+      "duration": 5.601
+    },
+    {
+      "text": "it off, it's a fail. But what about the",
+      "start": 139.04,
+      "duration": 6.24
+    },
+    {
+      "text": "colors? First off, we're using too much",
+      "start": 142.48,
+      "duration": 5.68
+    },
+    {
+      "text": "of a very strong red color, which makes",
+      "start": 145.28,
+      "duration": 5.84
+    },
+    {
+      "text": "the UI straight up stressful to look at.",
+      "start": 148.16,
+      "duration": 5.04
+    },
+    {
+      "text": "Everything here is screaming for",
+      "start": 151.12,
+      "duration": 4.56
+    },
+    {
+      "text": "attention and therefore nothing gets",
+      "start": 153.2,
+      "duration": 4.64
+    },
+    {
+      "text": "attention. Not even the things we want",
+      "start": 155.68,
+      "duration": 4.639
+    },
+    {
+      "text": "to highlight in the UI. Now to make",
+      "start": 157.84,
+      "duration": 5.479
+    },
+    {
+      "text": "coloring a bit easier, try the",
+      "start": 160.319,
+      "duration": 6.721
+    },
+    {
+      "text": "603010 approach. 60% of the UI is a",
+      "start": 163.319,
+      "duration": 7.081
+    },
+    {
+      "text": "neutral color like white or light gray.",
+      "start": 167.04,
+      "duration": 6.72
+    },
+    {
+      "text": "30% of the UI is a complimentary color",
+      "start": 170.4,
+      "duration": 7.839
+    },
+    {
+      "text": "like black and 10% of the UI has the",
+      "start": 173.76,
+      "duration": 7.759
+    },
+    {
+      "text": "main brand color in this case red. This",
+      "start": 178.239,
+      "duration": 6.481
+    },
+    {
+      "text": "UI feels more like a reverse at the",
+      "start": 181.519,
+      "duration": 6.321
+    },
+    {
+      "text": "moment. And while that could work here",
+      "start": 184.72,
+      "duration": 6.0
+    },
+    {
+      "text": "it doesn't. Now however it's time to",
+      "start": 187.84,
+      "duration": 10.64
+    },
+    {
+      "text": "count the font sizes. 1 2 3 4 5 6. Six",
+      "start": 190.72,
+      "duration": 10.64
+    },
+    {
+      "text": "different font sizes are used here and",
+      "start": 198.48,
+      "duration": 5.28
+    },
+    {
+      "text": "four different font weights. It's",
+      "start": 201.36,
+      "duration": 4.959
+    },
+    {
+      "text": "impossible to create a greatl looking UI",
+      "start": 203.76,
+      "duration": 5.199
+    },
+    {
+      "text": "with this much variety in the text",
+      "start": 206.319,
+      "duration": 6.081
+    },
+    {
+      "text": "department. So here's the easy fix. Try",
+      "start": 208.959,
+      "duration": 5.761
+    },
+    {
+      "text": "to reduce those numbers that we just",
+      "start": 212.4,
+      "duration": 4.72
+    },
+    {
+      "text": "talked about six and four by at least",
+      "start": 214.72,
+      "duration": 6.72
+    },
+    {
+      "text": "two. So four sizes and two weights. That",
+      "start": 217.12,
+      "duration": 6.24
+    },
+    {
+      "text": "will take you really far. In this case",
+      "start": 221.44,
+      "duration": 4.96
+    },
+    {
+      "text": "though, it's a fail. But we're not done.",
+      "start": 223.36,
+      "duration": 5.439
+    },
+    {
+      "text": "We don't need to look super closely to",
+      "start": 226.4,
+      "duration": 4.96
+    },
+    {
+      "text": "see that things aren't really aligned in",
+      "start": 228.799,
+      "duration": 4.401
+    },
+    {
+      "text": "here. And the things that are aligned",
+      "start": 231.36,
+      "duration": 5.76
+    },
+    {
+      "text": "are spaced out randomly. 11 pixels here,",
+      "start": 233.2,
+      "duration": 7.119
+    },
+    {
+      "text": "25 pixels here, just random numbers. So,",
+      "start": 237.12,
+      "duration": 6.24
+    },
+    {
+      "text": "here's a little trick to improve spacing",
+      "start": 240.319,
+      "duration": 5.441
+    },
+    {
+      "text": "quickly. It's called the eightoint grid",
+      "start": 243.36,
+      "duration": 4.72
+    },
+    {
+      "text": "system. The main idea is that anytime",
+      "start": 245.76,
+      "duration": 5.44
+    },
+    {
+      "text": "you use a number in your design, make it",
+      "start": 248.08,
+      "duration": 6.48
+    },
+    {
+      "text": "divisible by 8 or 4. Instead of 25",
+      "start": 251.2,
+      "duration": 7.92
+    },
+    {
+      "text": "pixels, use 24. Instead of 11, use 12. I",
+      "start": 254.56,
+      "duration": 6.48
+    },
+    {
+      "text": "actually have a full video on this that",
+      "start": 259.12,
+      "duration": 4.24
+    },
+    {
+      "text": "you can check out after this one linked",
+      "start": 261.04,
+      "duration": 4.4
+    },
+    {
+      "text": "down in the description below. Anyways,",
+      "start": 263.36,
+      "duration": 4.64
+    },
+    {
+      "text": "unfortunately, we fail here as well.",
+      "start": 265.44,
+      "duration": 5.28
+    },
+    {
+      "text": "That's six out of six fails. A pretty",
+      "start": 268.0,
+      "duration": 5.04
+    },
+    {
+      "text": "rough start. Surprisingly though, lots",
+      "start": 270.72,
+      "duration": 6.0
+    },
+    {
+      "text": "of progress happens with just one year",
+      "start": 273.04,
+      "duration": 6.24
+    },
+    {
+      "text": "of design obsession. Which brings us to",
+      "start": 276.72,
+      "duration": 4.8
+    },
+    {
+      "text": "the junior designer. But before we go",
+      "start": 279.28,
+      "duration": 4.4
+    },
+    {
+      "text": "there, if you want to learn from even",
+      "start": 281.52,
+      "duration": 4.56
+    },
+    {
+      "text": "more realworld projects, you can check",
+      "start": 283.68,
+      "duration": 5.04
+    },
+    {
+      "text": "out a full case study of this and other",
+      "start": 286.08,
+      "duration": 5.6
+    },
+    {
+      "text": "projects that we've designed at SIPAP in",
+      "start": 288.72,
+      "duration": 5.12
+    },
+    {
+      "text": "the link I've shared down in the",
+      "start": 291.68,
+      "duration": 3.92
+    },
+    {
+      "text": "description below. Now, time for the",
+      "start": 293.84,
+      "duration": 3.84
+    },
+    {
+      "text": "junior designer. Here we have a person",
+      "start": 295.6,
+      "duration": 4.64
+    },
+    {
+      "text": "with one, two, maybe 3 years of",
+      "start": 297.68,
+      "duration": 5.2
+    },
+    {
+      "text": "experience designing apps and websites.",
+      "start": 300.24,
+      "duration": 5.04
+    },
+    {
+      "text": "They're likely either working in-house",
+      "start": 302.88,
+      "duration": 4.64
+    },
+    {
+      "text": "somewhere or making anywhere from a",
+      "start": 305.28,
+      "duration": 5.28
+    },
+    {
+      "text": "hundred to maybe 500 bucks, doing",
+      "start": 307.52,
+      "duration": 5.84
+    },
+    {
+      "text": "smaller design gigs as a freelancer. And",
+      "start": 310.56,
+      "duration": 6.079
+    },
+    {
+      "text": "usually copywriting is still a big issue",
+      "start": 313.36,
+      "duration": 6.16
+    },
+    {
+      "text": "at this level. We still add unnecessary",
+      "start": 316.639,
+      "duration": 5.681
+    },
+    {
+      "text": "words and write labels that don't really",
+      "start": 319.52,
+      "duration": 6.16
+    },
+    {
+      "text": "make sense. For example, commit time",
+      "start": 322.32,
+      "duration": 5.52
+    },
+    {
+      "text": "sounds like we're committing time",
+      "start": 325.68,
+      "duration": 4.4
+    },
+    {
+      "text": "instead of votes. These are small",
+      "start": 327.84,
+      "duration": 5.04
+    },
+    {
+      "text": "details that make a lot of difference if",
+      "start": 330.08,
+      "duration": 5.2
+    },
+    {
+      "text": "we improve it. So, how do we do that?",
+      "start": 332.88,
+      "duration": 5.039
+    },
+    {
+      "text": "The easiest solution nowadays is just to",
+      "start": 335.28,
+      "duration": 5.6
+    },
+    {
+      "text": "take a screenshot of your UI, pop it",
+      "start": 337.919,
+      "duration": 5.761
+    },
+    {
+      "text": "into chat GPT, and then feed it some",
+      "start": 340.88,
+      "duration": 5.44
+    },
+    {
+      "text": "more context on the project, emphasizing",
+      "start": 343.68,
+      "duration": 5.28
+    },
+    {
+      "text": "that you want copy that is clear but",
+      "start": 346.32,
+      "duration": 5.2
+    },
+    {
+      "text": "short. For now, though, it's still a",
+      "start": 348.96,
+      "duration": 5.36
+    },
+    {
+      "text": "fail. But that means that we get a shot",
+      "start": 351.52,
+      "duration": 5.6
+    },
+    {
+      "text": "at redemption for the visuals. And here",
+      "start": 354.32,
+      "duration": 4.8
+    },
+    {
+      "text": "we've actually stepped it up. Now, we",
+      "start": 357.12,
+      "duration": 4.48
+    },
+    {
+      "text": "understand that visuals primarily serve",
+      "start": 359.12,
+      "duration": 4.96
+    },
+    {
+      "text": "a communication purpose, especially if",
+      "start": 361.6,
+      "duration": 4.96
+    },
+    {
+      "text": "it's a graph like in this case. And the",
+      "start": 364.08,
+      "duration": 5.28
+    },
+    {
+      "text": "red dot in contrast to the gray bars",
+      "start": 366.56,
+      "duration": 6.079
+    },
+    {
+      "text": "here communicates to the user, this is a",
+      "start": 369.36,
+      "duration": 5.679
+    },
+    {
+      "text": "thing we want you to focus on. Sadly",
+      "start": 372.639,
+      "duration": 4.641
+    },
+    {
+      "text": "though, we still think visuals",
+      "start": 375.039,
+      "duration": 5.521
+    },
+    {
+      "text": "absolutely need a trendy skumorphic",
+      "start": 377.28,
+      "duration": 6.08
+    },
+    {
+      "text": "effect with 45 layers of shadows. But",
+      "start": 380.56,
+      "duration": 5.199
+    },
+    {
+      "text": "it's fine. We're still learning. So, a",
+      "start": 383.36,
+      "duration": 5.2
+    },
+    {
+      "text": "first half pass and we're back to the",
+      "start": 385.759,
+      "duration": 5.681
+    },
+    {
+      "text": "colors. As juniors, we have enough",
+      "start": 388.56,
+      "duration": 5.44
+    },
+    {
+      "text": "experience to know that mixing colors",
+      "start": 391.44,
+      "duration": 5.92
+    },
+    {
+      "text": "too freely easily turns into a disaster.",
+      "start": 394.0,
+      "duration": 6.0
+    },
+    {
+      "text": "We also understand that overusing a",
+      "start": 397.36,
+      "duration": 5.279
+    },
+    {
+      "text": "color could work against you if you want",
+      "start": 400.0,
+      "duration": 5.84
+    },
+    {
+      "text": "to assign meaning to colors. So, we're",
+      "start": 402.639,
+      "duration": 5.68
+    },
+    {
+      "text": "generally more passive when it comes to",
+      "start": 405.84,
+      "duration": 4.56
+    },
+    {
+      "text": "color usage, which actually is a very",
+      "start": 408.319,
+      "duration": 3.761
+    },
+    {
+      "text": "good thing. And one of the most",
+      "start": 410.4,
+      "duration": 4.32
+    },
+    {
+      "text": "important learnings for creating clean,",
+      "start": 412.08,
+      "duration": 4.959
+    },
+    {
+      "text": "professional interfaces, but it's a",
+      "start": 414.72,
+      "duration": 4.72
+    },
+    {
+      "text": "balance. Here, we went from a UI that",
+      "start": 417.039,
+      "duration": 6.321
+    },
+    {
+      "text": "overused our red main color to a UI that",
+      "start": 419.44,
+      "duration": 7.28
+    },
+    {
+      "text": "now barely uses any of it, which makes",
+      "start": 423.36,
+      "duration": 8.64
+    },
+    {
+      "text": "it a bit dull and therefore just a half",
+      "start": 426.72,
+      "duration": 8.0
+    },
+    {
+      "text": "pass. In terms of font sizes, we still",
+      "start": 432.0,
+      "duration": 5.44
+    },
+    {
+      "text": "have issues. Too big sizes, too small",
+      "start": 434.72,
+      "duration": 6.16
+    },
+    {
+      "text": "sizes, too many sizes. It still happens",
+      "start": 437.44,
+      "duration": 5.759
+    },
+    {
+      "text": "at this level, understandably. So,",
+      "start": 440.88,
+      "duration": 4.719
+    },
+    {
+      "text": "sadly, it's a pretty quick fail here",
+      "start": 443.199,
+      "duration": 5.761
+    },
+    {
+      "text": "that segus into spacing and structure",
+      "start": 445.599,
+      "duration": 5.361
+    },
+    {
+      "text": "again, and we've made progress. But it's",
+      "start": 448.96,
+      "duration": 5.12
+    },
+    {
+      "text": "evident that there's still no calculated",
+      "start": 450.96,
+      "duration": 5.519
+    },
+    {
+      "text": "approach to how we space or structure",
+      "start": 454.08,
+      "duration": 5.519
+    },
+    {
+      "text": "elements. pixel values are still a bit",
+      "start": 456.479,
+      "duration": 5.44
+    },
+    {
+      "text": "random, which tells me that someone",
+      "start": 459.599,
+      "duration": 5.121
+    },
+    {
+      "text": "forgot to study the eightoint grid",
+      "start": 461.919,
+      "duration": 6.321
+    },
+    {
+      "text": "method, so it's a faily fail. That puts",
+      "start": 464.72,
+      "duration": 7.039
+    },
+    {
+      "text": "us at two out of five half passes. And",
+      "start": 468.24,
+      "duration": 6.32
+    },
+    {
+      "text": "while that might not seem great, we're",
+      "start": 471.759,
+      "duration": 4.401
+    },
+    {
+      "text": "moving in the right direction here. The",
+      "start": 474.56,
+      "duration": 4.24
+    },
+    {
+      "text": "design we saw isn't close to be worth",
+      "start": 476.16,
+      "duration": 5.52
+    },
+    {
+      "text": "serious money, but things are about to",
+      "start": 478.8,
+      "duration": 5.92
+    },
+    {
+      "text": "change at our next stage, the mid level.",
+      "start": 481.68,
+      "duration": 5.16
+    },
+    {
+      "text": "Before we jump into that though, I'm",
+      "start": 484.72,
+      "duration": 5.199
+    },
+    {
+      "text": "curious. How would you score your own",
+      "start": 486.84,
+      "duration": 5.479
+    },
+    {
+      "text": "design skills? And how many years of",
+      "start": 489.919,
+      "duration": 4.4
+    },
+    {
+      "text": "experience do you have? Let me know in",
+      "start": 492.319,
+      "duration": 4.481
+    },
+    {
+      "text": "the comments. Now things start to get",
+      "start": 494.319,
+      "duration": 5.201
+    },
+    {
+      "text": "interesting. We have somewhere between 3",
+      "start": 496.8,
+      "duration": 5.2
+    },
+    {
+      "text": "and 6 years of design experience, and we",
+      "start": 499.52,
+      "duration": 6.0
+    },
+    {
+      "text": "can potentially at this point rack in 8",
+      "start": 502.0,
+      "duration": 7.599
+    },
+    {
+      "text": "to 10k USD per month with projects",
+      "start": 505.52,
+      "duration": 7.28
+    },
+    {
+      "text": "likely ranging anywhere from 3 to 6K.",
+      "start": 509.599,
+      "duration": 5.601
+    },
+    {
+      "text": "And this is clearly reflected in the",
+      "start": 512.8,
+      "duration": 4.799
+    },
+    {
+      "text": "design. The copywriting is now even",
+      "start": 515.2,
+      "duration": 4.399
+    },
+    {
+      "text": "clearer. There's a sense of it being",
+      "start": 517.599,
+      "duration": 5.12
+    },
+    {
+      "text": "written for an actual user. It still",
+      "start": 519.599,
+      "duration": 5.36
+    },
+    {
+      "text": "might not be the prettiest, but it",
+      "start": 522.719,
+      "duration": 4.481
+    },
+    {
+      "text": "definitely looks better, which means",
+      "start": 524.959,
+      "duration": 5.601
+    },
+    {
+      "text": "that we have our first half pass on",
+      "start": 527.2,
+      "duration": 7.16
+    },
+    {
+      "text": "copy. But what about the visuals? They",
+      "start": 530.56,
+      "duration": 6.959
+    },
+    {
+      "text": "look good, maybe a bit overworked, which",
+      "start": 534.36,
+      "duration": 5.159
+    },
+    {
+      "text": "is something we usually see with",
+      "start": 537.519,
+      "duration": 4.401
+    },
+    {
+      "text": "mid-level designers. Just like beginners",
+      "start": 539.519,
+      "duration": 5.0
+    },
+    {
+      "text": "would add and add and add to the",
+      "start": 541.92,
+      "duration": 5.919
+    },
+    {
+      "text": "rituals, designers at the mid level can",
+      "start": 544.519,
+      "duration": 6.201
+    },
+    {
+      "text": "sometimes gravitate back towards that",
+      "start": 547.839,
+      "duration": 5.041
+    },
+    {
+      "text": "same behavior. At this point of their",
+      "start": 550.72,
+      "duration": 4.48
+    },
+    {
+      "text": "career though, they have a much more",
+      "start": 552.88,
+      "duration": 5.68
+    },
+    {
+      "text": "trained design eye, which allows them to",
+      "start": 555.2,
+      "duration": 5.36
+    },
+    {
+      "text": "make it work. So, while it's not",
+      "start": 558.56,
+      "duration": 4.959
+    },
+    {
+      "text": "perfect, it's clearly a half pass, which",
+      "start": 560.56,
+      "duration": 6.0
+    },
+    {
+      "text": "means we're stepping into colors with",
+      "start": 563.519,
+      "duration": 5.121
+    },
+    {
+      "text": "momentum. As a mid-level designer, we",
+      "start": 566.56,
+      "duration": 4.959
+    },
+    {
+      "text": "know that UIs don't need all the colors",
+      "start": 568.64,
+      "duration": 5.6
+    },
+    {
+      "text": "of the rainbow to look good. We know how",
+      "start": 571.519,
+      "duration": 5.121
+    },
+    {
+      "text": "to balance the UI by using different",
+      "start": 574.24,
+      "duration": 6.08
+    },
+    {
+      "text": "shades or tints of one color instead of",
+      "start": 576.64,
+      "duration": 6.08
+    },
+    {
+      "text": "multiple different colors. If you want",
+      "start": 580.32,
+      "duration": 5.04
+    },
+    {
+      "text": "pro tips on shading and tinting, check",
+      "start": 582.72,
+      "duration": 5.679
+    },
+    {
+      "text": "out Eric D. Kennedy's article that I",
+      "start": 585.36,
+      "duration": 5.28
+    },
+    {
+      "text": "linked down below. Anyways, it's a good",
+      "start": 588.399,
+      "duration": 4.801
+    },
+    {
+      "text": "old half pass. And we're back at the",
+      "start": 590.64,
+      "duration": 4.879
+    },
+    {
+      "text": "point where the junior still tripped up,",
+      "start": 593.2,
+      "duration": 4.72
+    },
+    {
+      "text": "the font department. But now, for the",
+      "start": 595.519,
+      "duration": 4.961
+    },
+    {
+      "text": "first time, we understand how to use",
+      "start": 597.92,
+      "duration": 5.919
+    },
+    {
+      "text": "fonts in a UI. We have less sizes, have",
+      "start": 600.48,
+      "duration": 6.359
+    },
+    {
+      "text": "less weights, and while some sizes and",
+      "start": 603.839,
+      "duration": 6.081
+    },
+    {
+      "text": "weights might still be a bit off, it's",
+      "start": 606.839,
+      "duration": 6.281
+    },
+    {
+      "text": "starting to look cleaner. Half pass. And",
+      "start": 609.92,
+      "duration": 5.76
+    },
+    {
+      "text": "onto the last point before we reach the",
+      "start": 613.12,
+      "duration": 6.08
+    },
+    {
+      "text": "senior level and the hidden mistake. And",
+      "start": 615.68,
+      "duration": 6.08
+    },
+    {
+      "text": "for spacing and structure, it's looking",
+      "start": 619.2,
+      "duration": 4.8
+    },
+    {
+      "text": "pretty good. Related elements are",
+      "start": 621.76,
+      "duration": 4.48
+    },
+    {
+      "text": "grouped nicely. We've started to use a",
+      "start": 624.0,
+      "duration": 5.279
+    },
+    {
+      "text": "spacing system like the 8oint grid. And",
+      "start": 626.24,
+      "duration": 5.52
+    },
+    {
+      "text": "as a result, the UI feels more",
+      "start": 629.279,
+      "duration": 4.961
+    },
+    {
+      "text": "professional. It's not entirely cooked",
+      "start": 631.76,
+      "duration": 4.8
+    },
+    {
+      "text": "like the young crowd might say, but it's",
+      "start": 634.24,
+      "duration": 5.039
+    },
+    {
+      "text": "definitely a half pass, which brings us",
+      "start": 636.56,
+      "duration": 6.48
+    },
+    {
+      "text": "to five out of five half passes. And the",
+      "start": 639.279,
+      "duration": 6.24
+    },
+    {
+      "text": "final boss. As a senior designer, you",
+      "start": 643.04,
+      "duration": 5.2
+    },
+    {
+      "text": "have at least seven years of experience,",
+      "start": 645.519,
+      "duration": 5.121
+    },
+    {
+      "text": "which means you have designed so many",
+      "start": 648.24,
+      "duration": 6.0
+    },
+    {
+      "text": "websites and apps that you're a safe bet",
+      "start": 650.64,
+      "duration": 6.08
+    },
+    {
+      "text": "for clients that want both beautiful",
+      "start": 654.24,
+      "duration": 5.279
+    },
+    {
+      "text": "design, but also design that actually",
+      "start": 656.72,
+      "duration": 5.2
+    },
+    {
+      "text": "drives business metrics. That's why you",
+      "start": 659.519,
+      "duration": 5.76
+    },
+    {
+      "text": "will see deals all the way from 20K to",
+      "start": 661.92,
+      "duration": 6.72
+    },
+    {
+      "text": "over 100K from senior designers. Sounds",
+      "start": 665.279,
+      "duration": 5.761
+    },
+    {
+      "text": "crazy. Let's dive into how it's",
+      "start": 668.64,
+      "duration": 4.08
+    },
+    {
+      "text": "possible. First of all, the difference",
+      "start": 671.04,
+      "duration": 3.6
+    },
+    {
+      "text": "in copyrightiting here might look",
+      "start": 672.72,
+      "duration": 5.119
+    },
+    {
+      "text": "subtle, but when we actually study the",
+      "start": 674.64,
+      "duration": 6.319
+    },
+    {
+      "text": "words and the length of the words, it",
+      "start": 677.839,
+      "duration": 5.841
+    },
+    {
+      "text": "all just harmonizes so much better",
+      "start": 680.959,
+      "duration": 5.761
+    },
+    {
+      "text": "because as a senior, we find ways to",
+      "start": 683.68,
+      "duration": 5.92
+    },
+    {
+      "text": "communicate better with less. We know",
+      "start": 686.72,
+      "duration": 5.64
+    },
+    {
+      "text": "that we don't need to write last 10",
+      "start": 689.6,
+      "duration": 5.679
+    },
+    {
+      "text": "votes when we have a big label right",
+      "start": 692.36,
+      "duration": 7.159
+    },
+    {
+      "text": "above saying voting or claim um if we",
+      "start": 695.279,
+      "duration": 7.201
+    },
+    {
+      "text": "have a heading saying um rewards. And by",
+      "start": 699.519,
+      "duration": 5.601
+    },
+    {
+      "text": "not repeating the same words, we reduce",
+      "start": 702.48,
+      "duration": 5.52
+    },
+    {
+      "text": "cognitive load and visual clutter",
+      "start": 705.12,
+      "duration": 5.68
+    },
+    {
+      "text": "without sacrificing clarity. And I know",
+      "start": 708.0,
+      "duration": 4.88
+    },
+    {
+      "text": "that might sound like a minor detail,",
+      "start": 710.8,
+      "duration": 4.479
+    },
+    {
+      "text": "but when you scale this across a full",
+      "start": 712.88,
+      "duration": 5.44
+    },
+    {
+      "text": "app is a massive difference. So, we have",
+      "start": 715.279,
+      "duration": 5.521
+    },
+    {
+      "text": "our first full pass and we're ready to",
+      "start": 718.32,
+      "duration": 4.8
+    },
+    {
+      "text": "talk about the visuals again. They are",
+      "start": 720.8,
+      "duration": 5.36
+    },
+    {
+      "text": "now clearly made with careful thought.",
+      "start": 723.12,
+      "duration": 6.159
+    },
+    {
+      "text": "We add emphasis only to what matters and",
+      "start": 726.16,
+      "duration": 5.72
+    },
+    {
+      "text": "we help the user make immediate",
+      "start": 729.279,
+      "duration": 5.201
+    },
+    {
+      "text": "connections between different parts of",
+      "start": 731.88,
+      "duration": 6.36
+    },
+    {
+      "text": "the UI by reusing visual patterns. For",
+      "start": 734.48,
+      "duration": 6.799
+    },
+    {
+      "text": "example, here the commit part of the UI",
+      "start": 738.24,
+      "duration": 5.44
+    },
+    {
+      "text": "gets connected to the current voting",
+      "start": 741.279,
+      "duration": 5.761
+    },
+    {
+      "text": "period in the graph because we're using",
+      "start": 743.68,
+      "duration": 6.08
+    },
+    {
+      "text": "the same pulsing circle. We're achieving",
+      "start": 747.04,
+      "duration": 6.08
+    },
+    {
+      "text": "more with less. It's a full pass. But",
+      "start": 749.76,
+      "duration": 5.6
+    },
+    {
+      "text": "what about the colors? Well, here we",
+      "start": 753.12,
+      "duration": 4.159
+    },
+    {
+      "text": "basically just simplified what the",
+      "start": 755.36,
+      "duration": 3.68
+    },
+    {
+      "text": "mid-level designer did. Instead of",
+      "start": 757.279,
+      "duration": 4.24
+    },
+    {
+      "text": "gradients, just simple flat colors.",
+      "start": 759.04,
+      "duration": 4.479
+    },
+    {
+      "text": "Instead of a button that screams error",
+      "start": 761.519,
+      "duration": 4.481
+    },
+    {
+      "text": "states, we're saving the red color for",
+      "start": 763.519,
+      "duration": 5.281
+    },
+    {
+      "text": "the graph. the rewards icon and the",
+      "start": 766.0,
+      "duration": 5.76
+    },
+    {
+      "text": "commit indicator. It's nicer on the eyes",
+      "start": 768.8,
+      "duration": 5.4
+    },
+    {
+      "text": "while calling attention to the right",
+      "start": 771.76,
+      "duration": 5.36
+    },
+    {
+      "text": "things even more effectively. It's our",
+      "start": 774.2,
+      "duration": 6.12
+    },
+    {
+      "text": "third full pass, which brings us back to",
+      "start": 777.12,
+      "duration": 5.76
+    },
+    {
+      "text": "the fonts. We're finally down to only",
+      "start": 780.32,
+      "duration": 5.519
+    },
+    {
+      "text": "four font sizes and two font weights.",
+      "start": 782.88,
+      "duration": 4.639
+    },
+    {
+      "text": "And you can see here that we introduced",
+      "start": 785.839,
+      "duration": 4.56
+    },
+    {
+      "text": "a monospace version of the font for big",
+      "start": 787.519,
+      "duration": 5.76
+    },
+    {
+      "text": "numbers. And to avoid collision when",
+      "start": 790.399,
+      "duration": 6.641
+    },
+    {
+      "text": "this reward number grows, we reuse the",
+      "start": 793.279,
+      "duration": 6.881
+    },
+    {
+      "text": "heading size from the voting label for",
+      "start": 797.04,
+      "duration": 5.4
+    },
+    {
+      "text": "our decimal fractions. And that's all it",
+      "start": 800.16,
+      "duration": 5.6
+    },
+    {
+      "text": "takes for full passing again as we bring",
+      "start": 802.44,
+      "duration": 6.519
+    },
+    {
+      "text": "out our rulers. And dang, this is what",
+      "start": 805.76,
+      "duration": 5.84
+    },
+    {
+      "text": "we call structure. Elements are grouped",
+      "start": 808.959,
+      "duration": 6.601
+    },
+    {
+      "text": "logically. Spacing is deliberate between",
+      "start": 811.6,
+      "duration": 7.2
+    },
+    {
+      "text": "elements, inside elements, everywhere.",
+      "start": 815.56,
+      "duration": 6.04
+    },
+    {
+      "text": "Those seven plus years of experience are",
+      "start": 818.8,
+      "duration": 5.52
+    },
+    {
+      "text": "becoming really evident. Full freaking",
+      "start": 821.6,
+      "duration": 6.56
+    },
+    {
+      "text": "pass were five out of five full score.",
+      "start": 824.32,
+      "duration": 5.84
+    },
+    {
+      "text": "But what about that hidden mistake that",
+      "start": 828.16,
+      "duration": 4.16
+    },
+    {
+      "text": "even senior designers make? Well, I'm",
+      "start": 830.16,
+      "duration": 4.0
+    },
+    {
+      "text": "glad you brought it up. Let's talk about",
+      "start": 832.32,
+      "duration": 3.84
+    },
+    {
+      "text": "it. This mistake doesn't have anything",
+      "start": 834.16,
+      "duration": 5.52
+    },
+    {
+      "text": "to do with static UI or UX skills",
+      "start": 836.16,
+      "duration": 6.16
+    },
+    {
+      "text": "because as you saw, senior designers are",
+      "start": 839.68,
+      "duration": 4.959
+    },
+    {
+      "text": "capable of creating greatl lookinging,",
+      "start": 842.32,
+      "duration": 5.199
+    },
+    {
+      "text": "well functioning interfaces. But thanks",
+      "start": 844.639,
+      "duration": 6.081
+    },
+    {
+      "text": "to AI, in the coming years, we're going",
+      "start": 847.519,
+      "duration": 6.32
+    },
+    {
+      "text": "to see an exponential increase in the",
+      "start": 850.72,
+      "duration": 5.679
+    },
+    {
+      "text": "amount of apps that are available to us,",
+      "start": 853.839,
+      "duration": 4.961
+    },
+    {
+      "text": "which means that designing memorable",
+      "start": 856.399,
+      "duration": 5.041
+    },
+    {
+      "text": "experiences that connects us with",
+      "start": 858.8,
+      "duration": 5.039
+    },
+    {
+      "text": "technology is going to be the easiest",
+      "start": 861.44,
+      "duration": 5.519
+    },
+    {
+      "text": "way to stand out as a designer. And the",
+      "start": 863.839,
+      "duration": 5.761
+    },
+    {
+      "text": "mistake most designers make, again,",
+      "start": 866.959,
+      "duration": 6.161
+    },
+    {
+      "text": "seniors included, is that we get stuck",
+      "start": 869.6,
+      "duration": 7.599
+    },
+    {
+      "text": "just focusing on static images. But to",
+      "start": 873.12,
+      "duration": 7.12
+    },
+    {
+      "text": "create a true experience, we need to",
+      "start": 877.199,
+      "duration": 6.401
+    },
+    {
+      "text": "treat UI design more like a movie. We",
+      "start": 880.24,
+      "duration": 6.56
+    },
+    {
+      "text": "need to piece static screens together in",
+      "start": 883.6,
+      "duration": 6.08
+    },
+    {
+      "text": "a way that makes the app a pleasure to",
+      "start": 886.8,
+      "duration": 6.0
+    },
+    {
+      "text": "use. That's how we create truly",
+      "start": 889.68,
+      "duration": 6.399
+    },
+    {
+      "text": "delightful apps and as a result also",
+      "start": 892.8,
+      "duration": 6.159
+    },
+    {
+      "text": "drastically increase our price tags as",
+      "start": 896.079,
+      "duration": 5.281
+    },
+    {
+      "text": "designers. Look at Phantom Wallet,",
+      "start": 898.959,
+      "duration": 5.841
+    },
+    {
+      "text": "Airbnb, and even Dual Lingo. Those are",
+      "start": 901.36,
+      "duration": 5.919
+    },
+    {
+      "text": "all great examples of apps that have",
+      "start": 904.8,
+      "duration": 5.64
+    },
+    {
+      "text": "gone that extra mile, which raises the",
+      "start": 907.279,
+      "duration": 6.56
+    },
+    {
+      "text": "question, how do you achieve this? Well,",
+      "start": 910.44,
+      "duration": 6.68
+    },
+    {
+      "text": "that is a topic that is out of scope for",
+      "start": 913.839,
+      "duration": 5.201
+    },
+    {
+      "text": "this video. But luckily, if you're",
+      "start": 917.12,
+      "duration": 4.48
+    },
+    {
+      "text": "interested in a breakdown of these kinds",
+      "start": 919.04,
+      "duration": 5.479
+    },
+    {
+      "text": "of apps and how they create memorable",
+      "start": 921.6,
+      "duration": 5.919
+    },
+    {
+      "text": "experiences, I have a video on that here",
+      "start": 924.519,
+      "duration": 4.68
+    },
+    {
+      "text": "that you can check out. Now, until the",
+      "start": 927.519,
+      "duration": 4.081
+    },
+    {
+      "text": "next one, I want you to have an amazing",
+      "start": 929.199,
+      "duration": 6.08
+    },
+    {
+      "text": "everything and we'll talk",
+      "start": 931.6,
+      "duration": 3.679
+    }
+  ]
+}

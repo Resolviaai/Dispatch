@@ -3,8 +3,9 @@ Ensures durable, idempotent publishing to YouTube and Instagram with automatic c
 """
 import time
 import logging
+import threading
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dispatch.publisher.youtube import upload_youtube_short
 from dispatch.publisher.instagram import upload_instagram_reel
 from dispatch.publisher.linkedin import upload_linkedin_video
@@ -12,6 +13,7 @@ from dispatch.publisher.twitter import upload_x_video
 from dispatch import db
 
 logger = logging.getLogger("dispatch.publisher.outbox")
+_processing_lock = threading.Lock()
 
 
 def process_outbox_queue() -> int:
@@ -19,6 +21,18 @@ def process_outbox_queue() -> int:
     Returns:
         Number of successfully published jobs in this pass.
     """
+    acquired = _processing_lock.acquire(blocking=False)
+    if not acquired:
+        logger.debug("Outbox queue processor is already active; skipping duplicate run.")
+        return 0
+
+    try:
+        return _process_outbox_queue_internal()
+    finally:
+        _processing_lock.release()
+
+
+def _process_outbox_queue_internal() -> int:
     queue = db.get_outbox_queue()
     if not queue:
         return 0
@@ -136,12 +150,62 @@ def check_and_finalize_clip(clip_id: str, video_path: Path):
             logger.info("All platform uploads confirmed for clip %s. Clip marked published (media preserved).", clip_id)
 
 
+class PublishingOutboxWorker:
+    """Daemon thread worker that regularly monitors and processes queued social publishing jobs."""
+
+    def __init__(self, poll_interval: float = 10.0):
+        self.poll_interval = poll_interval
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        """Start background polling thread."""
+        if self._thread and self._thread.is_alive():
+            logger.warning("Publishing outbox worker is already running.")
+            return
+
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="PublishingOutboxWorker",
+            daemon=True
+        )
+        self._thread.start()
+        logger.info("Autonomous Publishing Outbox worker started (daemon thread, interval: %.1fs)", self.poll_interval)
+
+    def stop(self):
+        """Signal worker to stop and wait for completion."""
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+            logger.info("Publishing outbox worker stopped.")
+
+    def _run_loop(self):
+        logger.info("Starting publishing outbox worker loop")
+        while not self._stop_event.is_set():
+            try:
+                process_outbox_queue()
+            except Exception as e:
+                logger.error("Publishing outbox worker loop exception: %s", e)
+            self._stop_event.wait(self.poll_interval)
+
+
+def trigger_outbox_pass():
+    """Trigger an immediate asynchronous publishing pass without waiting for the next poll interval."""
+    t = threading.Thread(
+        target=process_outbox_queue,
+        name="ImmediateOutboxPass",
+        daemon=True
+    )
+    t.start()
+
+
 def watch_outbox_loop(poll_interval: float = 10.0):
-    """Background polling loop for the publishing outbox."""
-    logger.info("Starting publishing outbox worker loop")
-    while True:
-        try:
-            process_outbox_queue()
-        except Exception as e:
-            logger.error("Outbox loop exception: %s", e)
-        time.sleep(poll_interval)
+    """Background polling loop for the publishing outbox (standalone runner)."""
+    worker = PublishingOutboxWorker(poll_interval=poll_interval)
+    worker.start()
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        worker.stop()

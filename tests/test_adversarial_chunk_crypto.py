@@ -490,7 +490,7 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
         genuine_size = len(genuine_data)
 
         # Step 1: Corrupted attempt
-        corrupt_data = b"CORRUPTED_STREAM_BYTE_DRIFT" * 50
+        corrupt_data = b"CORRUPTED_STREAM_BYTE_DRIFT_01234" * 50
         res_fail = client.patch(
             "/api/sync/upload/chunk",
             content=corrupt_data,

@@ -13,6 +13,48 @@ logger = logging.getLogger("dispatch.youtube_inbox.oauth")
 
 # Regex to extract dispatch_id from YouTube description or tags
 DISPATCH_ID_REGEX = re.compile(r"dispatch_id[:=]\s*([a-zA-Z0-9_-]+)", re.IGNORECASE)
+SESSION_ID_REGEX = re.compile(r"session_id[:=]\s*([a-zA-Z0-9_-]+)", re.IGNORECASE)
+SEGMENT_ID_REGEX = re.compile(r"segment_id[:=]\s*([a-zA-Z0-9_-]+)", re.IGNORECASE)
+SEQUENCE_NUM_REGEX = re.compile(r"sequence_number[:=]\s*(\d+)", re.IGNORECASE)
+
+
+def extract_session_metadata(description: str, tags: Optional[List[str]] = None) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+    """Extract session_id, segment_id, sequence_number from description or tags."""
+    session_id = None
+    segment_id = None
+    sequence_number = None
+
+    if description:
+        m_sess = SESSION_ID_REGEX.search(description)
+        if m_sess:
+            session_id = m_sess.group(1).strip()
+        m_seg = SEGMENT_ID_REGEX.search(description)
+        if m_seg:
+            segment_id = m_seg.group(1).strip()
+        m_seq = SEQUENCE_NUM_REGEX.search(description)
+        if m_seq:
+            try:
+                sequence_number = int(m_seq.group(1).strip())
+            except ValueError:
+                pass
+
+    if tags:
+        for t in tags:
+            t_clean = t.strip()
+            if t_clean.lower().startswith("dispatch_session_"):
+                if not session_id:
+                    session_id = t_clean[len("dispatch_session_"):].strip()
+            elif t_clean.lower().startswith("dispatch_seg_"):
+                if sequence_number is None:
+                    try:
+                        sequence_number = int(t_clean[len("dispatch_seg_"):].strip())
+                    except ValueError:
+                        pass
+            elif t_clean.lower().startswith("dispatch_id_"):
+                if not segment_id:
+                    segment_id = t_clean[len("dispatch_id_"):].strip()
+
+    return session_id, segment_id, sequence_number
 
 
 def extract_dispatch_id(description: str, tags: Optional[List[str]] = None) -> Optional[str]:
@@ -135,11 +177,18 @@ def list_authenticated_user_uploads(
                 privacy = item.get("status", {}).get("privacyStatus", "unlisted")
 
                 dispatch_id = extract_dispatch_id(description, tags)
+                session_id, segment_id, sequence_number = extract_session_metadata(description, tags)
+                if not dispatch_id and segment_id:
+                    dispatch_id = segment_id
+                if not dispatch_id and session_id:
+                    seq_str = f"{sequence_number:04d}" if sequence_number is not None else "0001"
+                    dispatch_id = f"{session_id}_seg_{seq_str}"
 
                 # Check if this is a Dispatch upload:
-                # Matches if dispatch_id is present, OR "[DISPATCH]" is in title, OR "dispatch" in tags
+                # Matches if dispatch_id or session_id is present, OR "[DISPATCH]" is in title, OR "dispatch" in tags
                 is_dispatch = (
                     dispatch_id is not None
+                    or session_id is not None
                     or "[dispatch]" in title.lower()
                     or any("dispatch" in t.lower() for t in tags)
                 )
@@ -151,6 +200,8 @@ def list_authenticated_user_uploads(
                     discovered.append({
                         "video_id": video_id,
                         "dispatch_id": dispatch_id,
+                        "session_id": session_id,
+                        "sequence_number": sequence_number,
                         "title": title,
                         "description": description,
                         "published_at": published_at,
