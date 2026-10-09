@@ -8,6 +8,9 @@ import logging
 import threading
 import time
 import re
+import subprocess
+import sys
+import ipaddress
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -41,11 +44,114 @@ from dispatch.captions.presets import get_preset
 from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish
 
 from dispatch.sync.receiver import router as sync_router
+from dispatch.sync.pairing_codes import (
+    PairingCodeError,
+    consume_pairing_code,
+    issue_pairing_code,
+)
+from dispatch.sync.receiver import is_trusted_localhost
 
 logger = logging.getLogger("dispatch.web")
 
 app = FastAPI(title="Dispatch Dashboard", version="1.0.0")
 app.include_router(sync_router)
+
+_YOUTUBE_AUTH_LOCK = threading.Lock()
+_YOUTUBE_AUTH_PROCESS: Optional[subprocess.Popen] = None
+_YOUTUBE_AUTH_STATE: Dict[str, Any] = {
+    "status": "idle",
+    "message": "YouTube sign-in has not been started.",
+}
+_OAUTH_STATE_PREFIX = "DISPATCH_OAUTH_STATE="
+
+
+def _monitor_youtube_auth(process: subprocess.Popen) -> None:
+    """Read only the helper's safe status markers; never log its raw output."""
+    global _YOUTUBE_AUTH_PROCESS
+    exit_code = -1
+    try:
+        if process.stdout is not None:
+            for line in process.stdout:
+                if not line.startswith(_OAUTH_STATE_PREFIX):
+                    continue
+                try:
+                    event = json.loads(line[len(_OAUTH_STATE_PREFIX):])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                status = event.get("status")
+                if status not in {"starting", "awaiting_authorization", "authenticated", "failed"}:
+                    continue
+                safe_state = {
+                    "status": status,
+                    "message": str(event.get("message", ""))[:240],
+                }
+                for field in ("channel_title", "channel_id"):
+                    value = event.get(field)
+                    if isinstance(value, str):
+                        safe_state[field] = value[:160]
+                with _YOUTUBE_AUTH_LOCK:
+                    _YOUTUBE_AUTH_STATE.clear()
+                    _YOUTUBE_AUTH_STATE.update(safe_state)
+        exit_code = process.wait()
+    except Exception:
+        exit_code = -1
+    finally:
+        with _YOUTUBE_AUTH_LOCK:
+            current_status = _YOUTUBE_AUTH_STATE.get("status")
+            if current_status not in {"authenticated", "failed"}:
+                _YOUTUBE_AUTH_STATE.clear()
+                _YOUTUBE_AUTH_STATE.update({
+                    "status": "failed",
+                    "message": "The Google sign-in process ended before Dispatch could verify the account.",
+                })
+            elif current_status == "authenticated" and exit_code != 0:
+                _YOUTUBE_AUTH_STATE.clear()
+                _YOUTUBE_AUTH_STATE.update({
+                    "status": "failed",
+                    "message": "The Google sign-in process exited unexpectedly. Try again.",
+                })
+            if _YOUTUBE_AUTH_PROCESS is process:
+                _YOUTUBE_AUTH_PROCESS = None
+
+
+def _load_youtube_pairing_credentials() -> Dict[str, str]:
+    """Load only the fields required by the phone uploader; never log their values."""
+    token_path = ROOT_DIR / "youtube_token.json"
+    secrets_path = ROOT_DIR / "client_secrets.json"
+    token_data: Dict[str, Any] = {}
+    client_data: Dict[str, Any] = {}
+    try:
+        if token_path.exists():
+            token_data = json.loads(token_path.read_text(encoding="utf-8"))
+        if secrets_path.exists():
+            secrets_data = json.loads(secrets_path.read_text(encoding="utf-8"))
+            client_data = secrets_data.get("installed") or secrets_data.get("web") or {}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return {"refresh_token": "", "client_id": "", "client_secret": ""}
+
+    return {
+        "refresh_token": str(token_data.get("refresh_token") or ""),
+        "client_id": str(token_data.get("client_id") or client_data.get("client_id") or ""),
+        "client_secret": str(token_data.get("client_secret") or client_data.get("client_secret") or ""),
+    }
+
+
+def _youtube_credentials_response() -> Dict[str, Any]:
+    credentials = _load_youtube_pairing_credentials()
+    configured = all(credentials.values())
+    return {"configured": configured, **credentials}
+
+
+def _is_local_network_peer(client_host: str) -> bool:
+    if is_trusted_localhost(client_host):
+        return True
+    try:
+        address = ipaddress.ip_address(client_host.split("%", 1)[0])
+        if getattr(address, "ipv4_mapped", None):
+            address = address.ipv4_mapped
+        return address.is_private or address.is_link_local or address in ipaddress.ip_network("100.64.0.0/10")
+    except ValueError:
+        return False
 
 class ApproveRequest(BaseModel):
     title: Optional[str] = None
@@ -1063,6 +1169,14 @@ class GeminiKeyRequest(BaseModel):
     api_key: str
 
 
+class PairingCodeIssueRequest(BaseModel):
+    understands_http_risk: bool = False
+
+
+class PairingCredentialsRequest(BaseModel):
+    pairing_code: Optional[str] = None
+
+
 @app.get("/api/integrations/status")
 async def get_integrations_status():
     """Return live status of YouTube OAuth and Gemini AI integrations."""
@@ -1070,18 +1184,23 @@ async def get_integrations_status():
     from dispatch.config import GEMINI_API_KEY
 
     yt_service = get_youtube_service()
-    yt_connected = yt_service is not None
+    yt_connected = False
     channel_title = ""
     channel_id = ""
-    if yt_connected:
+    youtube_error = ""
+    if yt_service:
         try:
             resp = yt_service.channels().list(mine=True, part="snippet").execute()
             items = resp.get("items", [])
             if items:
+                yt_connected = True
                 channel_title = items[0]["snippet"].get("title", "")
                 channel_id = items[0].get("id", "")
+            else:
+                youtube_error = "Google authorization returned no YouTube channel."
         except Exception as e:
-            logger.debug("Could not fetch channel snippet: %s", e)
+            logger.warning("YouTube account verification failed (%s).", type(e).__name__)
+            youtube_error = "YouTube could not be verified from this PC. Check its internet/DNS connection and retry."
 
     client_secrets_exist = (ROOT_DIR / "client_secrets.json").exists()
     token_exists = (ROOT_DIR / "youtube_token.json").exists()
@@ -1095,7 +1214,8 @@ async def get_integrations_status():
             "channel_title": channel_title,
             "channel_id": channel_id,
             "has_client_secrets": client_secrets_exist,
-            "has_token": token_exists
+            "has_token": token_exists,
+            "error": youtube_error,
         },
         "gemini": {
             "configured": gemini_configured,
@@ -1129,7 +1249,8 @@ async def update_gemini_key(payload: GeminiKeyRequest):
 
 @app.post("/api/integrations/youtube/start-auth")
 async def start_youtube_auth():
-    """Trigger the YouTube OAuth login flow."""
+    """Start one desktop OAuth flow using this Dispatch runtime's Python interpreter."""
+    global _YOUTUBE_AUTH_PROCESS
     client_secrets = ROOT_DIR / "client_secrets.json"
     if not client_secrets.exists():
         raise HTTPException(
@@ -1137,14 +1258,44 @@ async def start_youtube_auth():
             detail="client_secrets.json not found. Please ensure Google OAuth Client ID is configured."
         )
 
-    import subprocess
-    cmd = ["python", str(ROOT_DIR / "scripts" / "auth_youtube.py")]
-    subprocess.Popen(cmd, cwd=str(ROOT_DIR))
+    with _YOUTUBE_AUTH_LOCK:
+        if _YOUTUBE_AUTH_PROCESS is not None and _YOUTUBE_AUTH_PROCESS.poll() is None:
+            return JSONResponse(status_code=202, content=dict(_YOUTUBE_AUTH_STATE))
 
-    return {
-        "status": "started",
-        "message": "Authentication window started. Authorize in your browser."
-    }
+        _YOUTUBE_AUTH_STATE.clear()
+        _YOUTUBE_AUTH_STATE.update({"status": "starting", "message": "Starting Google sign-in."})
+        try:
+            process = subprocess.Popen(
+                [sys.executable, str(ROOT_DIR / "scripts" / "auth_youtube.py")],
+                cwd=str(ROOT_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as error:
+            logger.error("Unable to launch OAuth helper (%s).", type(error).__name__)
+            _YOUTUBE_AUTH_STATE.update({
+                "status": "failed",
+                "message": "Dispatch could not start Google sign-in with its active Python environment.",
+            })
+            raise HTTPException(status_code=500, detail=_YOUTUBE_AUTH_STATE["message"])
+        _YOUTUBE_AUTH_PROCESS = process
+
+    threading.Thread(
+        target=_monitor_youtube_auth,
+        args=(process,),
+        name="YouTubeOAuthMonitor",
+        daemon=True,
+    ).start()
+    return JSONResponse(status_code=202, content=dict(_YOUTUBE_AUTH_STATE))
+
+
+@app.get("/api/integrations/youtube/auth-status")
+async def get_youtube_auth_status():
+    """Return the actual state reported by the OAuth helper process."""
+    with _YOUTUBE_AUTH_LOCK:
+        return dict(_YOUTUBE_AUTH_STATE)
 
 
 @app.post("/api/integrations/youtube/disconnect")
@@ -1161,51 +1312,67 @@ async def get_youtube_credentials(
     request: Request,
     authorization: Optional[str] = Header(None)
 ):
-    """Return YouTube OAuth client credentials and refresh token for mobile app pairing.
-    Protected: Accessible only via localhost / loopback OR with valid Authorization token.
-    """
+    """Legacy read path, restricted to loopback or an existing Bearer device token."""
     client_host = request.client.host if request.client else "unknown"
-    is_localhost = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
-
-    if not is_localhost:
+    if not is_trusted_localhost(client_host):
         from dispatch.sync.receiver import verify_token
-        token = authorization or request.query_params.get("auth_token")
-        verify_token(token)
-    token_file = ROOT_DIR / "youtube_token.json"
-    client_secrets = ROOT_DIR / "client_secrets.json"
+        verify_token(authorization)
+    return _youtube_credentials_response()
 
-    refresh_token = ""
-    client_id = ""
-    client_secret = ""
 
-    if token_file.exists():
-        try:
-            with open(token_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                refresh_token = data.get("refresh_token", "")
-                client_id = data.get("client_id", "")
-                client_secret = data.get("client_secret", "")
-        except Exception as e:
-            logger.error("Failed to read youtube_token.json: %s", e)
+@app.post("/api/integrations/youtube/pairing-code")
+async def create_youtube_pairing_code(request: Request, payload: PairingCodeIssueRequest):
+    """Issue an explicit, five-minute pairing code only from the local PC dashboard."""
+    client_host = request.client.host if request.client else "unknown"
+    if not is_trusted_localhost(client_host):
+        raise HTTPException(status_code=403, detail="Create pairing codes from the PC dashboard itself.")
+    if not payload.understands_http_risk:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm that the phone will receive YouTube credentials over unencrypted HTTP.",
+        )
+    credentials = _youtube_credentials_response()
+    if not credentials["configured"]:
+        raise HTTPException(
+            status_code=409,
+            detail="YouTube is not configured on this PC. Complete Google sign-in on the PC first.",
+        )
 
-    if (not client_id or not client_secret) and client_secrets.exists():
-        try:
-            with open(client_secrets, "r", encoding="utf-8") as f:
-                cs = json.load(f)
-                installed = cs.get("installed", {}) or cs.get("web", {})
-                if not client_id:
-                    client_id = installed.get("client_id", "")
-                if not client_secret:
-                    client_secret = installed.get("client_secret", "")
-        except Exception as e:
-            logger.error("Failed to read client_secrets.json: %s", e)
-
+    code, expires_in = issue_pairing_code()
     return {
-        "configured": bool(refresh_token and client_id and client_secret),
-        "refresh_token": refresh_token,
-        "client_id": client_id,
-        "client_secret": client_secret
+        "code": code,
+        "expires_in_seconds": expires_in,
+        "message": "One-time code. Use it within five minutes on a trusted local network.",
     }
+
+
+@app.post("/api/youtube/credentials")
+async def pair_youtube_credentials(
+    request: Request,
+    payload: PairingCredentialsRequest,
+    authorization: Optional[str] = Header(None),
+):
+    """Transfer uploader credentials after explicit one-time code or existing Bearer auth."""
+    client_host = request.client.host if request.client else "unknown"
+    if not is_trusted_localhost(client_host):
+        if payload.pairing_code:
+            if not _is_local_network_peer(client_host):
+                raise HTTPException(status_code=403, detail="One-time pairing codes are accepted only on a local or Tailscale network.")
+            try:
+                consume_pairing_code(payload.pairing_code.strip(), client_host)
+            except PairingCodeError as error:
+                raise HTTPException(status_code=error.status_code, detail=str(error))
+        else:
+            from dispatch.sync.receiver import verify_token
+            verify_token(authorization)
+
+    credentials = _youtube_credentials_response()
+    if not credentials["configured"]:
+        raise HTTPException(
+            status_code=409,
+            detail="YouTube is not configured on this PC. Complete Google sign-in on the PC first.",
+        )
+    return credentials
 
 
 

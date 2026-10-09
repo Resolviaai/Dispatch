@@ -5,7 +5,10 @@ import {
   Wifi, 
   LogOut, 
   Sliders, 
-  HardDrive 
+  HardDrive,
+  Copy,
+  KeyRound,
+  ShieldAlert
 } from 'lucide-react';
 import { Bridge, StorageInfo, apiUrl } from '../bridge';
 
@@ -31,9 +34,23 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [storageInfo, setStorageInfo] = useState<StorageInfo>({ freeGb: 48, totalGb: 128 });
   const [feedback, setFeedback] = useState<string | null>(null);
   const [inputHost, setInputHost] = useState(pcHost);
+  const [pairingCode, setPairingCode] = useState('');
+  const [acknowledgeHttpRisk, setAcknowledgeHttpRisk] = useState(false);
+  const [isCreatingPairingCode, setIsCreatingPairingCode] = useState(false);
+  const isNativeAndroid = Bridge.isAvailable();
 
   const fetchYouTubeStatus = async () => {
     setIsChecking(true);
+    if (Bridge.isAvailable()) {
+      const status = Bridge.getYouTubeStatus();
+      setYoutubeState({
+        connected: status.connected,
+        channelTitle: status.channelTitle || '',
+        channelId: status.account || '',
+      });
+      setIsChecking(false);
+      return;
+    }
     try {
       const res = await fetch(apiUrl('/api/integrations/status', pcHost));
       if (res.ok) {
@@ -43,6 +60,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           channelTitle: data.youtube?.channel_title || '',
           channelId: data.youtube?.channel_id || '',
         });
+        if (!data.youtube?.connected && data.youtube?.error) {
+          setFeedback(data.youtube.error);
+        }
       }
     } catch {
       // Bridge fallback on phone
@@ -66,23 +86,80 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
   }, [pcHost]);
 
+  useEffect(() => setInputHost(pcHost), [pcHost]);
+
   const handleConnectYouTube = async () => {
+    if (Bridge.isAvailable()) {
+      if (!pairingCode.trim()) {
+        setFeedback('Enter the one-time pairing code shown in PC Settings.');
+        return;
+      }
+      const result = Bridge.connectYouTube(pcHost, pairingCode.trim());
+      setFeedback(result.message);
+      if (result.success) {
+        setPairingCode('');
+        await fetchYouTubeStatus();
+      }
+      return;
+    }
+
     setIsStartingAuth(true);
     setFeedback(null);
     try {
       const res = await fetch(apiUrl('/api/integrations/youtube/start-auth', pcHost), { method: 'POST' });
       const data = await res.json();
-      setFeedback(data.message || 'Browser login window started.');
-      setTimeout(() => fetchYouTubeStatus(), 5000);
-    } catch (e: any) {
-      if (Bridge.isAvailable()) {
-        const bridgeRes = Bridge.connectYouTube(pcHost);
-        setFeedback(bridgeRes.message);
-      } else {
-        setFeedback(`OAuth launch failed: ${e.message}`);
+      if (!res.ok) {
+        throw new Error(data.detail || 'Dispatch could not start Google sign-in.');
       }
+      setFeedback(data.message || 'Google sign-in is starting.');
+
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        const statusResponse = await fetch(apiUrl('/api/integrations/youtube/auth-status', pcHost));
+        const authState = await statusResponse.json();
+        if (!statusResponse.ok) {
+          throw new Error(authState.detail || 'Could not check Google sign-in status.');
+        }
+        if (authState.status === 'authenticated') {
+          setFeedback(authState.message || 'YouTube account connected and verified.');
+          await fetchYouTubeStatus();
+          return;
+        }
+        if (authState.status === 'failed') {
+          setFeedback(authState.message || 'Google sign-in failed. Check the PC and retry.');
+          return;
+        }
+        if (authState.status === 'awaiting_authorization') {
+          setFeedback('Google sign-in opened. Complete authorization in the PC browser…');
+        }
+      }
+      setFeedback('Google sign-in is still waiting. Complete it in the PC browser, then check the connection again.');
+    } catch (e: any) {
+      setFeedback(e.message || 'Google sign-in failed. Check the PC and retry.');
     } finally {
       setIsStartingAuth(false);
+    }
+  };
+
+  const handleCreatePairingCode = async () => {
+    setIsCreatingPairingCode(true);
+    setFeedback(null);
+    try {
+      const res = await fetch(apiUrl('/api/integrations/youtube/pairing-code', pcHost), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ understands_http_risk: acknowledgeHttpRisk }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Could not create a pairing code.');
+      }
+      setPairingCode(data.code);
+      setFeedback('Pairing code created. Enter it on the phone within five minutes.');
+    } catch (e: any) {
+      setFeedback(e.message || 'Could not create a pairing code.');
+    } finally {
+      setIsCreatingPairingCode(false);
     }
   };
 
@@ -172,6 +249,55 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 <span>Disconnect Account</span>
               </button>
             </div>
+          ) : isNativeAndroid ? (
+            <div className="space-y-3 pt-1">
+              <label className="block text-xs font-mono text-text-main" htmlFor="pc-host">
+                PC address
+              </label>
+              <input
+                id="pc-host"
+                value={inputHost}
+                onChange={(event) => setInputHost(event.target.value)}
+                placeholder="192.168.1.20:8000"
+                autoCapitalize="none"
+                autoCorrect="off"
+                className="w-full min-h-[44px] rounded-lg bg-surface-200 border border-border px-3 text-xs font-mono text-text-main placeholder:text-text-muted"
+              />
+              <button
+                onClick={handleSaveHost}
+                className="w-full min-h-[44px] rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-text-muted font-mono text-xs transition-all duration-150 active:scale-[0.98]"
+              >
+                Save PC address
+              </button>
+
+              <label className="block text-xs font-mono text-text-main" htmlFor="youtube-pairing-code">
+                One-time code from PC Settings
+              </label>
+              <input
+                id="youtube-pairing-code"
+                value={pairingCode}
+                onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, '').slice(0, 8))}
+                placeholder="8-digit code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={8}
+                className="w-full min-h-[44px] rounded-lg bg-surface-200 border border-border px-3 text-center text-sm font-mono tabular-nums tracking-[0.2em] text-text-main placeholder:text-text-muted"
+              />
+              <div className="rounded-lg bg-surface-200 border border-border p-3 flex gap-2">
+                <ShieldAlert size={16} className="shrink-0 text-warning" />
+                <p className="text-[10px] font-mono text-text-muted leading-relaxed">
+                  Pair only on a trusted network. This HTTP connection is not encrypted; the code authorizes sending your YouTube refresh token and client secret to this phone.
+                </p>
+              </div>
+              <button
+                onClick={handleConnectYouTube}
+                disabled={pairingCode.length !== 8}
+                className="w-full min-h-[44px] py-2.5 px-3 rounded-lg bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
+              >
+                <KeyRound size={16} />
+                <span>Pair this phone</span>
+              </button>
+            </div>
           ) : (
             <div className="space-y-2 pt-1">
               <button
@@ -180,11 +306,56 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 className="w-full min-h-[44px] py-2.5 px-3 rounded-lg bg-primary hover:bg-primary-hover text-white font-mono text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
               >
                 <Youtube size={16} />
-                <span>{isStartingAuth ? 'Opening Browser Login…' : 'Connect YouTube (OAuth)'}</span>
+                <span>{isStartingAuth ? 'Google sign-in in progress…' : 'Connect YouTube (OAuth)'}</span>
               </button>
               <p className="text-[10px] text-text-muted text-center font-mono">
                 Opens official Google OAuth login. No manual tokens required.
               </p>
+            </div>
+          )}
+
+          {youtubeState.connected && !isNativeAndroid && (
+            <div className="mt-3 rounded-lg bg-surface-200 border border-border p-3 space-y-2.5">
+              <div className="flex items-center gap-2">
+                <KeyRound size={16} className="text-primary" />
+                <span className="text-xs font-semibold text-text-main">Connect the phone</span>
+              </div>
+              <p className="text-[10px] font-mono text-text-muted leading-relaxed">
+                The one-time code expires in five minutes and works once. HTTP does not encrypt this transfer: the phone receives your YouTube refresh token and client secret. Use a trusted local network only.
+              </p>
+              <label className="flex min-h-[44px] items-center gap-2 text-[10px] font-mono text-text-muted">
+                <input
+                  type="checkbox"
+                  checked={acknowledgeHttpRisk}
+                  onChange={(event) => setAcknowledgeHttpRisk(event.target.checked)}
+                  className="h-4 w-4 accent-blue-600"
+                />
+                I understand this credential transfer is unencrypted.
+              </label>
+              <button
+                onClick={handleCreatePairingCode}
+                disabled={!acknowledgeHttpRisk || isCreatingPairingCode}
+                className="w-full min-h-[44px] rounded-lg bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
+              >
+                <KeyRound size={16} />
+                {isCreatingPairingCode ? 'Creating code…' : 'Create phone pairing code'}
+              </button>
+              {pairingCode && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-100 px-3 py-2">
+                  <span className="text-lg font-mono font-semibold tabular-nums tracking-[0.2em] text-text-main">{pairingCode}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard?.writeText(pairingCode);
+                      setFeedback('Pairing code copied. Enter it on the phone now.');
+                    }}
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-text-muted hover:bg-surface-200 transition-all duration-150 active:scale-[0.98]"
+                    aria-label="Copy pairing code"
+                  >
+                    <Copy size={16} />
+                  </button>
+                  <span className="text-[10px] font-mono text-text-muted">Use within five minutes</span>
+                </div>
+              )}
             </div>
           )}
         </div>

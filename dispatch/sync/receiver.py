@@ -54,7 +54,7 @@ def get_auth_token() -> str:
 
     generated_token = secrets.token_urlsafe(32)
     db.set_setting("device_auth_token", generated_token)
-    logger.info("Generated new cryptographically secure device pairing token: %s...", generated_token[:8])
+    logger.info("Generated a new cryptographically secure device pairing token.")
     return generated_token
 
 
@@ -97,7 +97,7 @@ class ReconcileRequest(BaseModel):
 
 
 @router.get("/ping")
-async def ping_receiver(auth_token: Optional[str] = None):
+async def ping_receiver():
     """Probing endpoint for LAN and Tailscale transport latency checks."""
     return {
         "status": "online",
@@ -193,26 +193,6 @@ def get_network_endpoints() -> tuple[str, str]:
     return lan_url, tailscale_url
 
 
-def get_youtube_pairing_credentials() -> tuple[str, str, str, str]:
-    """Retrieve YouTube OAuth credentials from youtube_token.json if configured."""
-    from dispatch.config import ROOT_DIR
-    import json
-    yt_token_file = ROOT_DIR / "youtube_token.json"
-    if yt_token_file.exists():
-        try:
-            with open(yt_token_file, "r", encoding="utf-8") as f:
-                yt_data = json.load(f)
-            return (
-                yt_data.get("token", ""),
-                yt_data.get("refresh_token", ""),
-                yt_data.get("client_id", ""),
-                yt_data.get("client_secret", "")
-            )
-        except Exception as e:
-            logger.debug("Could not read youtube_token.json for pairing: %s", e)
-    return "", "", "", ""
-
-
 class PairingHandshakeRequest(BaseModel):
     pin: str
     client_name: Optional[str] = "dispatch_mobile"
@@ -226,17 +206,15 @@ def get_pairing_pin() -> str:
     if not pin or len(pin) != 6 or not pin.isdigit():
         pin = f"{secrets.randbelow(900000) + 100000}"
         db.set_setting("pairing_pin", pin)
-        logger.info("Generated persistent 6-digit pairing PIN: %s", pin)
+        logger.info("Generated a pairing PIN.")
     return pin
 
 
 @router.get("/pairing/config")
 async def get_pairing_config(
     request: Request,
-    pin: Optional[str] = None,
     auth_token: Optional[str] = Header(None, alias="x-auth-token"),
     x_pairing_pin: Optional[str] = Header(None, alias="x-pairing-pin"),
-    token: Optional[str] = None,
     mask: bool = False
 ):
     """Return discovered laptop network endpoints and pairing token for phone configuration.
@@ -251,11 +229,11 @@ async def get_pairing_config(
     expected_token = get_auth_token()
     current_pin = get_pairing_pin()
 
-    provided_token = auth_token or token
+    provided_token = auth_token
     if provided_token and provided_token.startswith("Bearer "):
         provided_token = provided_token[7:].strip()
 
-    provided_pin = pin or x_pairing_pin
+    provided_pin = x_pairing_pin
 
     is_authenticated = False
 
@@ -294,10 +272,6 @@ async def get_pairing_config(
                 "tailscale_url": tailscale_url,
                 "auth_token": None,
                 "pairing_pin": None,
-                "yt_token": None,
-                "yt_refresh": None,
-                "yt_client_id": None,
-                "yt_client_secret": None,
                 "connection_string": None,
                 "authenticated": False,
                 "requires_pairing": True,
@@ -305,27 +279,18 @@ async def get_pairing_config(
             }
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Provide valid 'pin' query param, 'x-pairing-pin' header, or 'x-auth-token' header.",
+            detail="Authentication required. Provide a valid x-pairing-pin or x-auth-token header.",
             headers={"WWW-Authenticate": 'Bearer realm="dispatch", PairingPIN realm="dispatch"'}
         )
 
     lan_url, tailscale_url = get_network_endpoints()
     token_val = expected_token
-    yt_token, yt_refresh, yt_cid, yt_csec = get_youtube_pairing_credentials()
-
-    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={token_val}&pin={current_pin}"
-    if yt_token or yt_refresh:
-        connection_string += f"&yt_token={yt_token}&yt_refresh={yt_refresh}&yt_client_id={yt_cid}&yt_client_secret={yt_csec}"
+    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}"
 
     return {
         "lan_url": lan_url,
         "tailscale_url": tailscale_url,
         "auth_token": token_val,
-        "pairing_pin": current_pin,
-        "yt_token": yt_token,
-        "yt_refresh": yt_refresh,
-        "yt_client_id": yt_cid,
-        "yt_client_secret": yt_csec,
         "connection_string": connection_string,
         "authenticated": True
     }
@@ -355,22 +320,13 @@ async def pairing_handshake(
 
     lan_url, tailscale_url = get_network_endpoints()
     token_val = get_auth_token()
-    yt_token, yt_refresh, yt_cid, yt_csec = get_youtube_pairing_credentials()
-
-    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}&token={token_val}&pin={current_pin}"
-    if yt_token or yt_refresh:
-        connection_string += f"&yt_token={yt_token}&yt_refresh={yt_refresh}&yt_client_id={yt_cid}&yt_client_secret={yt_csec}"
+    connection_string = f"dispatch://pair?lan={lan_url}&tailscale={tailscale_url}"
 
     return {
         "status": "paired",
         "lan_url": lan_url,
         "tailscale_url": tailscale_url,
         "auth_token": token_val,
-        "pairing_pin": current_pin,
-        "yt_token": yt_token,
-        "yt_refresh": yt_refresh,
-        "yt_client_id": yt_cid,
-        "yt_client_secret": yt_csec,
         "connection_string": connection_string
     }
 
@@ -380,14 +336,13 @@ async def verify_chunk_explicit(
     segment_id: str,
     sha256: str,
     file_size: Optional[int] = None,
-    auth_token: Optional[str] = Header(None, alias="x-auth-token"),
-    token: Optional[str] = None
+    auth_token: Optional[str] = Header(None, alias="x-auth-token")
 ):
     """Explicit cryptographic proof-of-receipt endpoint for phone before deleting local files.
     Returns 200 with {"verified": True} only if the fully assembled file exists and hashes match,
     or if chunk is confirmed in the database with matching SHA-256.
     """
-    verify_token(auth_token or token)
+    verify_token(auth_token)
     seg_id = sanitize_segment_id(segment_id)
 
     final_name = f"{seg_id}.mp4"

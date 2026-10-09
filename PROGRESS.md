@@ -4,33 +4,14 @@ This section is the current source of truth and supersedes conflicting historica
 
 ## 0. Latest checkpoint — 2026-10-10
 
-- **Branch/base:** `main`, based on `af9c152` (`fix(reliability): camera preview, upload resumption, and ingestion gating`).
+- **Branch/base:** `main`, based on `64b1d37` (`fix(reliability): harden upload and clip processing`).
 - **Changes prepared in this checkpoint:**
-  - The PC inbox now queries authoritative YouTube processing status, defers downloads while YouTube reports processing, records processing failures, revisits waiting videos, and flags items that exceed the configured wait threshold.
-  - Android upload completion now requires a confirmed YouTube video ID; unresolved completed uploads retain their outbox and resumable-session data for reconciliation.
-  - Clip selection/rendering gained silence-aware duration handling and recovery for short moments, with related preference, prompt, layout, renderer, and persistence updates.
-- **Verification:** `python -m compileall -q dispatch tests` passed. `:app:compileDebugKotlin` passed. The focused pytest run could not start because the configured Python environment has no `pytest` module, and the Windows Python launcher reports no other installed Python runtimes. No physical-device or real-upload verification was performed.
-- **OAuth/pairing scope:** The Google OAuth login and phone-PC pairing failures in the separately supplied brief are not fixed by this checkpoint. The only OAuth-module change in this changeset is the YouTube video-processing status query; do not report the login or pairing flow as repaired.
-- **Exact code/test files in this changeset:**
-  - `android/app/src/main/java/com/resolvia/dispatch/sync/YouTubeDirectUploadWorker.kt`
-  - `dispatch/ai_clips/highlight_finder.py`
-  - `dispatch/ai_clips/preference_learner.py`
-  - `dispatch/ai_clips/prompt_templates.py`
-  - `dispatch/config.py`
-  - `dispatch/db.py`
-  - `dispatch/publisher/outbox.py`
-  - `dispatch/video_engine/reframer.py`
-  - `dispatch/video_engine/renderer.py`
-  - `dispatch/video_engine/silence.py`
-  - `dispatch/youtube_inbox/catcher.py`
-  - `dispatch/youtube_inbox/oauth.py`
-  - `dispatch/youtube_inbox/poller.py`
-  - `tests/e2e/test_tier1_features_media_ai_engine.py`
-  - `tests/test_ai_highlight_editorial_quality.py`
-  - `tests/test_layout_framing_architecture.py`
-  - `tests/test_pillar3_highlights.py`
-  - `tests/test_youtube_processing_tracker.py`
-- **Next step:** Complete the OAuth and explicitly authorized phone-pairing work as a separate scoped change, first checking the exact Python runtime and the existing pairing authorization contract. Keep real credentials private and do not alter existing YouTube videos.
+  - PC OAuth launches with the same Python interpreter as the running Dispatch server, verifies the signed-in YouTube channel, and replaces the saved token only after verification succeeds.
+  - Phone setup uses a short-lived, one-time code to receive upload credentials for the same YouTube account already connected on the PC. This does not create another account or channel.
+  - Credentials are no longer transferred through a URL; existing receiver pairing responses no longer expose YouTube secrets.
+- **Verification:** Focused OAuth/pairing tests and Python compile check passed. `npm run build` and `:app:compileDebugKotlin` passed. Live Google sign-in could not be verified because DNS/network access to Google fails in the active runtime. No physical-phone pairing or YouTube upload was performed.
+- **Files in this checkpoint:** `scripts/auth_youtube.py`, `dispatch/web/app.py`, `dispatch/sync/pairing_codes.py`, `dispatch/sync/receiver.py`, `frontend/src/bridge.ts`, `frontend/src/screens/SettingsScreen.tsx`, `android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt`, packaged web assets under `android/app/src/main/assets/web/`, and `tests/test_youtube_auth_pairing.py`.
+- **Next step:** When PC DNS/network access works, sign in to the intended YouTube account on the PC, pair the phone once on a trusted local network, then verify a real session upload and processing flow. Do not upload a test video without approval or claim a processing-time improvement before measuring it.
 
 ## 1. Current architecture
 

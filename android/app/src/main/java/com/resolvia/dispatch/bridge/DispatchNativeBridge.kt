@@ -20,7 +20,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
@@ -173,36 +175,63 @@ class DispatchNativeBridge(
     }
 
     @JavascriptInterface
-    fun connectYouTube(pcHost: String): String {
+    fun connectYouTube(pcHost: String, pairingCode: String): String {
         return try {
+            if (pairingCode.isBlank()) {
+                return JsonObject().apply {
+                    addProperty("success", false)
+                    addProperty("message", "Enter the one-time pairing code shown in PC Settings.")
+                }.toString()
+            }
             val cleanHost = pcHost.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
             val url = "http://$cleanHost/api/youtube/credentials"
-            val req = Request.Builder().url(url).build()
-            val resp = httpClient.newCall(req).execute()
-            if (resp.isSuccessful) {
-                val body = resp.body?.string() ?: ""
-                val creds = gson.fromJson(body, JsonObject::class.java)
-                val refreshToken = creds.get("refresh_token")?.asString ?: ""
-                val clientId = creds.get("client_id")?.asString ?: ""
-                val clientSecret = creds.get("client_secret")?.asString ?: ""
-
-                if (refreshToken.isNotBlank() && clientId.isNotBlank() && clientSecret.isNotBlank()) {
-                    pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
-                    val result = JsonObject().apply {
-                        addProperty("success", true)
-                        addProperty("message", "Paired successfully with PC YouTube credentials")
+            val payload = JsonObject().apply { addProperty("pairing_code", pairingCode.trim()) }
+            val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val req = Request.Builder().url(url).post(body).build()
+            httpClient.newCall(req).execute().use { resp ->
+                val bodyText = resp.body?.string() ?: ""
+                val response = try {
+                    gson.fromJson(bodyText, JsonObject::class.java)
+                } catch (_: Exception) {
+                    JsonObject()
+                }
+                if (!resp.isSuccessful) {
+                    val detail = response.get("detail")?.takeIf { it.isJsonPrimitive }?.asString
+                    val message = when (resp.code) {
+                        401 -> detail ?: "Pairing code is invalid or expired. Create a new one on the PC."
+                        403 -> detail ?: "Create the pairing code from the PC dashboard."
+                        409 -> detail ?: "YouTube is not configured on the PC. Sign in there first."
+                        429 -> detail ?: "Too many attempts. Wait before trying again."
+                        else -> detail ?: "PC pairing failed (HTTP ${resp.code})."
                     }
-                    return result.toString()
+                    return JsonObject().apply {
+                        addProperty("success", false)
+                        addProperty("message", message)
+                    }.toString()
+                }
+
+                val refreshToken = response.get("refresh_token")?.asString ?: ""
+                val clientId = response.get("client_id")?.asString ?: ""
+                val clientSecret = response.get("client_secret")?.asString ?: ""
+                if (response.get("configured")?.asBoolean == true &&
+                    refreshToken.isNotBlank() && clientId.isNotBlank() && clientSecret.isNotBlank()
+                ) {
+                    pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
+                    JsonObject().apply {
+                        addProperty("success", true)
+                        addProperty("message", "YouTube connected on this phone.")
+                    }.toString()
+                } else {
+                    JsonObject().apply {
+                        addProperty("success", false)
+                        addProperty("message", "The PC did not return complete YouTube credentials. Sign in there and create a new code.")
+                    }.toString()
                 }
             }
-            JsonObject().apply {
-                addProperty("success", false)
-                addProperty("message", "PC response HTTP ${resp.code}: YouTube not configured on PC")
-            }.toString()
         } catch (e: Exception) {
             JsonObject().apply {
                 addProperty("success", false)
-                addProperty("message", "Failed to connect to PC at $pcHost: ${e.message}")
+                addProperty("message", "Could not reach the PC. Check its address and that both devices use the same trusted network.")
             }.toString()
         }
     }

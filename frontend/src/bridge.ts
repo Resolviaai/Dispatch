@@ -38,7 +38,7 @@ declare global {
       setZoom: (ratio: number) => number;
       getRecordings: () => string;
       getYouTubeStatus: () => string;
-      connectYouTube: (pcHost: string) => string;
+      connectYouTube: (pcHost: string, pairingCode: string) => string;
       disconnectYouTube: () => void;
       retryUpload: (segmentId: string) => void;
       getStorageInfo: () => string;
@@ -136,10 +136,10 @@ export const Bridge = {
     return { connected: false };
   },
 
-  connectYouTube(pcHost: string): { success: boolean; message: string } {
+  connectYouTube(pcHost: string, pairingCode: string): { success: boolean; message: string } {
     if (window.DispatchBridge?.connectYouTube) {
       try {
-        const res = window.DispatchBridge.connectYouTube(pcHost);
+        const res = window.DispatchBridge.connectYouTube(pcHost, pairingCode);
         return JSON.parse(res);
       } catch (e: any) {
         return { success: false, message: e.message || 'Connection error' };
