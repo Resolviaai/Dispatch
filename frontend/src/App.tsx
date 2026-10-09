@@ -9,8 +9,21 @@ import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
+  const [pcHost, setPcHost] = useState<string>(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('dispatch_pc_host');
+      if (saved) return saved;
+    }
+    if (typeof window !== 'undefined' && (
+      window.location.protocol === 'file:' ||
+      window.location.hostname === 'appassets.androidplatform.net' ||
+      !!(window as any).DispatchBridge
+    )) {
+      return '192.168.0.102:8000';
+    }
+    return 'localhost:8000';
+  });
   const [isMobileFrame, setIsMobileFrame] = useState<boolean>(true);
-  const [pcHost, setPcHost] = useState<string>('localhost:8000');
   
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [isYouTubeConnected, setIsYouTubeConnected] = useState<boolean>(false);

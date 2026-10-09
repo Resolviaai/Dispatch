@@ -175,8 +175,12 @@ export const Bridge = {
 };
 
 export function getApiBaseUrl(pcHost?: string): string {
-  if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
-    const host = pcHost || (typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_pc_host') : null) || '127.0.0.1:8000';
+  if (typeof window !== 'undefined' && (
+    window.location.protocol === 'file:' ||
+    window.location.hostname === 'appassets.androidplatform.net' ||
+    !!(window as any).DispatchBridge
+  )) {
+    const host = pcHost || (typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_pc_host') : null) || '192.168.0.102:8000';
     const cleanHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
     return `http://${cleanHost}`;
   }

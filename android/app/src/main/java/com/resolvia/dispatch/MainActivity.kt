@@ -8,11 +8,16 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
+import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.webkit.WebViewAssetLoader
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -86,6 +91,12 @@ class MainActivity : ComponentActivity() {
         // Check required permissions on startup
         checkAndRequestPermissions()
 
+        // Set up WebViewAssetLoader to safely serve assets over https://appassets.androidplatform.net
+        // This is required for Chromium to execute Vite ES modules (<script type="module">) without file:// CORS blocks.
+        val assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
         // Configure hardware-accelerated full-bleed WebView
         webView = WebView(this).apply {
             setBackgroundColor(Color.parseColor("#161616")) // Layer 0: bg-studio anchor
@@ -99,16 +110,44 @@ class MainActivity : ComponentActivity() {
                 databaseEnabled = true
                 allowFileAccess = true
                 allowContentAccess = true
+                allowFileAccessFromFileURLs = true
+                allowUniversalAccessFromFileURLs = true
+                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 mediaPlaybackRequiresUserGesture = false
                 loadWithOverviewMode = true
                 useWideViewPort = true
                 cacheMode = WebSettings.LOAD_DEFAULT
             }
 
-            webViewClient = object : WebViewClient() {}
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): WebResourceResponse? {
+                    return assetLoader.shouldInterceptRequest(request.url)
+                }
+
+                override fun onReceivedError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    error: WebResourceError
+                ) {
+                    super.onReceivedError(view, request, error)
+                    android.util.Log.e("DispatchWebView", "Resource error on ${request.url}: ${error.description}")
+                }
+            }
+
             webChromeClient = object : WebChromeClient() {
                 override fun onPermissionRequest(request: PermissionRequest) {
                     request.grant(request.resources)
+                }
+
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                    android.util.Log.d(
+                        "DispatchWebConsole",
+                        "[${consoleMessage.messageLevel()}] ${consoleMessage.message()} (at ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})"
+                    )
+                    return true
                 }
             }
         }
@@ -137,7 +176,7 @@ class MainActivity : ComponentActivity() {
         })
 
         // Load canonical React application packaged in assets
-        webView.loadUrl("file:///android_asset/web/index.html")
+        webView.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
 
         setContentView(webView)
     }
