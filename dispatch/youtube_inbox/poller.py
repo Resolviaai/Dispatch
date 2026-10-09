@@ -76,12 +76,15 @@ class YouTubeInboxPoller:
                 logger.error("Error during scheduled YouTube inbox poll: %s", e)
 
     def poll_once(self) -> List[Dict[str, Any]]:
-        """Execute a single check against YouTube and process newly discovered videos."""
+        """Execute a single check against YouTube and process newly discovered or ready videos."""
+        from datetime import datetime, timezone
+        from dispatch.youtube_inbox.oauth import get_youtube_processing_status
+
         with self._lock:
             self.last_poll_time = time.time()
-            discovered_videos = []
-            # Authenticated uploads are required to see private/unlisted videos from
-            # the account's uploads playlist.
+            discovered_videos: List[Dict[str, Any]] = []
+
+            # 1. Fetch recent authenticated uploads
             try:
                 auth_uploads = list_authenticated_user_uploads(max_results_per_page=15)
                 for item in auth_uploads:
@@ -89,24 +92,58 @@ class YouTubeInboxPoller:
             except Exception as e:
                 logger.warning("Authenticated YouTube upload check failed: %s", e)
 
+            # 2. Also retrieve any videos currently waiting in the database to prevent stalling
+            try:
+                waiting_in_db = db.list_youtube_inbox(status="WAITING_FOR_YOUTUBE_PROCESSING", limit=50)
+                known_ids = {v["video_id"] for v in discovered_videos}
+                for w in waiting_in_db:
+                    vid = w["video_id"]
+                    if vid not in known_ids:
+                        discovered_videos.append({
+                            "video_id": vid,
+                            "title": w.get("title", f"Dispatch Video {vid}"),
+                            "dispatch_id": w.get("dispatch_id"),
+                            "session_id": w.get("session_id"),
+                            "sequence_number": w.get("sequence_number"),
+                            "published_at": w.get("upload_time") or w.get("discovered_at")
+                        })
+            except Exception as e:
+                logger.warning("Error fetching waiting YouTube videos from DB: %s", e)
+
             if not discovered_videos:
                 logger.debug("YouTube poll complete: 0 new uploads found.")
                 return []
 
-            logger.info("YouTube poll found %d matching Dispatch upload(s). Checking processing status...", len(discovered_videos))
+            # Filter candidates that are not already finished downstream
+            candidate_items = [
+                item for item in discovered_videos
+                if not db.is_youtube_video_processed(item["video_id"])
+            ]
+
+            if not candidate_items:
+                logger.debug("YouTube poll complete: All %d discovered videos already processed.", len(discovered_videos))
+                return []
+
+            logger.info("YouTube poll found %d candidate video(s) to verify status.", len(candidate_items))
+
+            # 3. Batch query authoritative YouTube processing status
+            candidate_ids = [item["video_id"] for item in candidate_items]
+            status_map: Dict[str, Dict[str, Any]] = {}
+            try:
+                status_map = get_youtube_processing_status(candidate_ids)
+            except Exception as e:
+                logger.warning("Batch YouTube processing status check failed: %s", e)
 
             processed_items = []
-            for item in discovered_videos:
+            timeout_minutes = int(os.getenv("DISPATCH_YOUTUBE_PROCESSING_TIMEOUT_MINUTES", "60"))
+
+            for item in candidate_items:
                 video_id = item["video_id"]
                 title = item.get("title", f"Dispatch Video {video_id}")
                 dispatch_id = item.get("dispatch_id")
                 session_id = item.get("session_id")
                 sequence_number = item.get("sequence_number")
                 pub_time = item.get("published_at")
-
-                # Idempotency check: Skip if already finished
-                if db.is_youtube_video_processed(video_id):
-                    continue
 
                 existing = db.get_youtube_video(video_id)
                 if not existing:
@@ -120,8 +157,71 @@ class YouTubeInboxPoller:
                         session_id=session_id,
                         sequence_number=sequence_number
                     )
+                    existing = db.get_youtube_video(video_id)
 
-                # Pillar 1 Ingestion: Discover -> Download -> Validate -> DOWNLOADED
+                st_info = status_map.get(video_id)
+
+                if st_info:
+                    p_status = st_info.get("processing_status")
+                    u_status = st_info.get("upload_status")
+                    fail_reason = st_info.get("failure_reason")
+
+                    # Case A: Video is still processing on YouTube
+                    if p_status == "processing" or (u_status == "uploaded" and p_status != "succeeded"):
+                        # Calculate elapsed processing time
+                        start_time_str = pub_time or (existing.get("discovered_at") if existing else None)
+                        elapsed_min = 0.0
+                        if start_time_str:
+                            try:
+                                clean_ts = str(start_time_str).replace("+00:00", "Z")
+                                for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                                    try:
+                                        parsed = datetime.strptime(clean_ts, fmt)
+                                        elapsed_sec = (datetime.utcnow() - parsed).total_seconds()
+                                        elapsed_min = max(0.0, elapsed_sec / 60.0)
+                                        break
+                                    except ValueError:
+                                        pass
+                            except Exception:
+                                pass
+
+                        if elapsed_min >= timeout_minutes:
+                            warn_msg = (
+                                f"[STALLED_YOUTUBE_PROCESSING] Processing exceeded {timeout_minutes}m "
+                                f"({elapsed_min:.0f}m elapsed). YouTube server delay. Check YouTube Studio or sync directly over LAN."
+                            )
+                            logger.warning(
+                                "[STALLED] YouTube processing for %s (%s) has exceeded %d minutes (elapsed: %.1f min).",
+                                video_id, title, timeout_minutes, elapsed_min
+                            )
+                            db.update_youtube_video(video_id, status="WAITING_FOR_YOUTUBE_PROCESSING", last_error=warn_msg)
+                        else:
+                            logger.info(
+                                "Video %s is still processing on YouTube (%.1fm elapsed). Waiting for completion without downloading.",
+                                video_id, elapsed_min
+                            )
+                            db.update_youtube_video(
+                                video_id,
+                                status="WAITING_FOR_YOUTUBE_PROCESSING",
+                                last_error=f"Processing on YouTube ({elapsed_min:.0f}m elapsed)..."
+                            )
+                        continue
+
+                    # Case B: Video explicitly failed processing on YouTube
+                    if p_status in ("failed", "terminated") or u_status in ("failed", "rejected"):
+                        err_msg = f"YouTube processing failed: {fail_reason or 'rejected'}"
+                        logger.error("Video %s failed processing on YouTube: %s", video_id, err_msg)
+                        db.update_youtube_video(video_id, status="FAILED", last_error=err_msg)
+                        continue
+
+                    # Case C: Video processing confirmed SUCCEEDED on YouTube
+                    if p_status == "succeeded" or u_status == "processed":
+                        logger.info(
+                            "YouTube video %s processing confirmed SUCCEEDED (Duration: %s). Proceeding to Pillar 1 media download.",
+                            video_id, st_info.get("duration")
+                        )
+
+                # Ingestion: Discover -> Download -> Validate -> DOWNLOADED
                 try:
                     logger.info("Starting Pillar 1 Ingestion for YouTube video %s (%s, session %s)", video_id, dispatch_id, session_id)
                     result = self.catcher.ingest_video(

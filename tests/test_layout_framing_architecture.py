@@ -26,7 +26,7 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
             "-f", "lavfi", "-i", "sine=frequency=440",
-            "-t", "3",
+            "-t", "6",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-c:a", "aac",
@@ -34,13 +34,13 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
         ]
         subprocess.run(cmd_land, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-        # 2. Create a 3-second 9:16 portrait test video (720x1280) with audio
+        # 2. Create a 6-second 9:16 portrait test video (720x1280) with audio
         cls.source_video_portrait = PROCESSING_DIR / "test_framing_source_9x16.mp4"
         cmd_port = [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=25",
             "-f", "lavfi", "-i", "sine=frequency=520",
-            "-t", "3",
+            "-t", "6",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-c:a", "aac",
@@ -72,7 +72,7 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
             # 1. Register Landscape Chunk & Clip
             conn.execute("""
                 INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, status, duration, width, height, aspect_ratio)
-                VALUES (?, ?, ?, ?, 'hash_test_frame', 'processed', 3.0, 1280, 720, '16:9')
+                VALUES (?, ?, ?, ?, 'hash_test_frame', 'processed', 6.0, 1280, 720, '16:9')
             """, (self.chunk_id, self.session_id, self.source_video.name, str(self.source_video)))
             
             conn.execute("""
@@ -80,7 +80,7 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
                     id, session_id, chunk_id, start_time, end_time, duration,
                     title, hook, description, hashtags, virality_score,
                     layout_mode, rendered_layout_mode, status, publish_mode, platform_targets
-                ) VALUES (?, ?, ?, 0.5, 2.5, 2.0,
+                ) VALUES (?, ?, ?, 0.5, 5.5, 5.0,
                     'Testing Layout Architecture', 'Hook text', 'Desc', '#test', 90,
                     'fit_blur', NULL, 'ready_review', 'private', 'youtube,instagram'
                 )
@@ -89,7 +89,7 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
             # 2. Register Portrait Chunk & Clip
             conn.execute("""
                 INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, status, duration, width, height, aspect_ratio)
-                VALUES (?, ?, ?, ?, 'hash_test_port', 'processed', 3.0, 720, 1280, '9:16')
+                VALUES (?, ?, ?, ?, 'hash_test_port', 'processed', 6.0, 720, 1280, '9:16')
             """, (self.chunk_id_port, self.session_id, self.source_video_portrait.name, str(self.source_video_portrait)))
 
             conn.execute("""
@@ -97,7 +97,7 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
                     id, session_id, chunk_id, start_time, end_time, duration,
                     title, hook, description, hashtags, virality_score,
                     layout_mode, rendered_layout_mode, status, publish_mode, platform_targets
-                ) VALUES (?, ?, ?, 0.5, 2.5, 2.0,
+                ) VALUES (?, ?, ?, 0.5, 5.5, 5.0,
                     'Testing Portrait Layout Architecture', 'Hook text port', 'Desc', '#port', 88,
                     'native_916', NULL, 'ready_review', 'private', 'youtube,instagram'
                 )
@@ -127,8 +127,8 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.headers.get("content-type"), "video/mp4")
         self.assertEqual(res.headers.get("x-clip-start"), "0.5")
-        self.assertEqual(res.headers.get("x-clip-end"), "2.5")
-        self.assertEqual(res.headers.get("x-clip-duration"), "2.0")
+        self.assertEqual(res.headers.get("x-clip-end"), "5.5")
+        self.assertEqual(res.headers.get("x-clip-duration"), "5.0")
         self.assertGreater(len(res.content), 1000)
 
     def test_02_layout_change_persists_and_marks_stale(self):
@@ -138,7 +138,7 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
             source_video=self.source_video,
             clip_id=self.clip_id,
             start_time=0.5,
-            end_time=2.5,
+            end_time=5.5,
             aspect_ratio="16:9",
             layout_mode="fit_blur"
         )
@@ -173,7 +173,7 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
             source_video=self.source_video,
             clip_id=self.clip_id,
             start_time=0.5,
-            end_time=2.5,
+            end_time=5.5,
             aspect_ratio="16:9",
             layout_mode="fit_blur"
         )

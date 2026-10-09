@@ -25,7 +25,8 @@ def escape_ffmpeg_filter_path(filepath: Path) -> str:
 def build_filter_complex(
     aspect_ratio: str,
     layout_mode: str = "fit_blur",
-    ass_subtitle_path: Optional[Path] = None
+    ass_subtitle_path: Optional[Path] = None,
+    input_v_label: str = "[0:v]"
 ) -> Tuple[str, str]:
     """Build FFmpeg filter_complex string for orientation-aware conversion and subtitle burning.
     
@@ -42,6 +43,7 @@ def build_filter_complex(
                 - 'fit_black': 9:16 vertical output with black top/bottom letterbox bars.
                 - 'native_169' (or 'landscape'): 16:9 widescreen output, 100% full original video (no bars, no crop).
         ass_subtitle_path: Optional path to .ass subtitle file.
+        input_v_label: Input video label (default '[0:v]').
         
     Returns:
         (filter_complex_string, output_video_label)
@@ -49,6 +51,7 @@ def build_filter_complex(
     filters = []
     mode = (layout_mode or "").strip().lower()
     is_portrait = str(aspect_ratio).strip().lower() in ("9:16", "portrait", "vertical")
+    in_v = input_v_label
 
     if is_portrait:
         # ============================================================
@@ -58,14 +61,14 @@ def build_filter_complex(
             # OPTION 1 — LONG FORM / 16:9 + BLACK
             # Output: 16:9. Source fully visible in center with black pillarbox bars.
             filters.append(
-                f"[0:v]scale={WIDE_WIDTH}:{WIDE_HEIGHT}:force_original_aspect_ratio=decrease,"
+                f"{in_v}scale={WIDE_WIDTH}:{WIDE_HEIGHT}:force_original_aspect_ratio=decrease,"
                 f"pad={WIDE_WIDTH}:{WIDE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black[base]"
             )
         elif mode == "fit_blur":
             # OPTION 2 — LONG FORM / 16:9 + BLUR
             # Output: 16:9. Source fully visible in center with blurred pillarbox bars.
             filters.append(
-                f"[0:v]split=2[bg_in][fg_in];"
+                f"{in_v}split=2[bg_in][fg_in];"
                 f"[bg_in]scale={WIDE_WIDTH}:{WIDE_HEIGHT}:force_original_aspect_ratio=increase,"
                 f"crop={WIDE_WIDTH}:{WIDE_HEIGHT},boxblur=25:5[bg];"
                 f"[fg_in]scale=-2:{WIDE_HEIGHT}[fg];"
@@ -75,7 +78,7 @@ def build_filter_complex(
             # OPTION 3 — NATIVE 9:16 ('native_916', 'native_portrait', default)
             # Output: 9:16. 100% full original vertical video. No crop, no blur, no bars.
             filters.append(
-                f"[0:v]scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease,"
+                f"{in_v}scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease,"
                 f"pad={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black[base]"
             )
     else:
@@ -86,13 +89,13 @@ def build_filter_complex(
             # OPTION 1 — CROP 9:16
             # Output: 9:16. 16:9 source cropped vertically to fill 9:16 frame.
             filters.append(
-                f"[0:v]crop=w=trunc(ih*9/16/2)*2:h=ih:x=trunc((iw-ow)/2):y=0,scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}[base]"
+                f"{in_v}crop=w=trunc(ih*9/16/2)*2:h=ih:x=trunc((iw-ow)/2):y=0,scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}[base]"
             )
         elif mode == "fit_blur":
             # OPTION 2 — FIT + BLUR
             # Output: 9:16. 16:9 source in center with blurred top/bottom letterbox.
             filters.append(
-                f"[0:v]split=2[bg_in][fg_in];"
+                f"{in_v}split=2[bg_in][fg_in];"
                 f"[bg_in]scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:force_original_aspect_ratio=increase,"
                 f"crop={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT},boxblur=25:5[bg];"
                 f"[fg_in]scale={PORTRAIT_WIDTH}:-2[fg];"
@@ -102,14 +105,14 @@ def build_filter_complex(
             # OPTION 3 — FIT + BLACK
             # Output: 9:16. 16:9 source in center with black top/bottom letterbox bars.
             filters.append(
-                f"[0:v]scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease,"
+                f"{in_v}scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:force_original_aspect_ratio=decrease,"
                 f"pad={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black[base]"
             )
         else:
             # OPTION 4 — NATIVE 16:9 ('native_169', 'landscape', default)
             # Output: 16:9. 100% full original horizontal video. No crop, no blur, no bars.
             filters.append(
-                f"[0:v]scale={WIDE_WIDTH}:{WIDE_HEIGHT}:force_original_aspect_ratio=decrease,"
+                f"{in_v}scale={WIDE_WIDTH}:{WIDE_HEIGHT}:force_original_aspect_ratio=decrease,"
                 f"pad={WIDE_WIDTH}:{WIDE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black[base]"
             )
 

@@ -85,16 +85,22 @@ class YouTubeDirectUploadWorker(
                 val dispatchId = "dsp_${seg.finalizedAt ?: System.currentTimeMillis()}_${seg.segmentId.takeLast(6)}"
                 val result = uploadToYouTubeDirect(accessToken, file, dispatchId, seg)
 
-                if (result.success) {
+                if (result.success && !result.youtubeVideoId.isNullOrBlank()) {
                     val updated = seg.copy(
                         status = "UPLOADED_TO_YOUTUBE",
                         youtubeVideoId = result.youtubeVideoId
                     )
                     dao.updateSegment(updated)
                     dao.deleteOutboxItem(seg.segmentId)
+                    pairingManager.clearUploadSessionUrl(seg.segmentId)
+                    android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} successfully confirmed uploaded with ID ${result.youtubeVideoId}.")
                 } else {
                     hasFailures = true
                     failedInThisRun.add(seg.segmentId)
+                    val offset = dao.getOutboxOffset(seg.segmentId) ?: 0L
+                    if (offset >= file.length() && file.length() > 0L) {
+                        android.util.Log.w("YouTubeUploader", "Segment ${seg.segmentId} bytes fully sent but remote ID unconfirmed; keeping outbox entry for reconciliation.")
+                    }
                     dao.updateSegmentStatus(seg.segmentId, "FAILED_RETRY")
                     // Do NOT abort entire loop; continue with remaining segments
                     continue
@@ -260,7 +266,6 @@ class YouTubeDirectUploadWorker(
                         200, 201 -> {
                             currentOffset = totalBytes
                             dao.updateOutboxOffset(segId, totalBytes)
-                            pairingManager.clearUploadSessionUrl(segId)
                             val bodyStr = resp.body?.string() ?: ""
                             val videoId = try {
                                 val json = gson.fromJson(bodyStr, JsonObject::class.java)
@@ -268,8 +273,15 @@ class YouTubeDirectUploadWorker(
                             } catch (_: Exception) {
                                 null
                             } ?: findExistingUploadByDispatchId(accessToken, dispatchId)
-                            android.util.Log.i("YouTubeUploader", "Upload 100% complete for $segId (Video ID: $videoId)")
-                            return DirectUploadResult(success = true, youtubeVideoId = videoId)
+
+                            if (!videoId.isNullOrBlank()) {
+                                pairingManager.clearUploadSessionUrl(segId)
+                                android.util.Log.i("YouTubeUploader", "Upload 100% complete for $segId (Video ID: $videoId)")
+                                return DirectUploadResult(success = true, youtubeVideoId = videoId)
+                            } else {
+                                android.util.Log.w("YouTubeUploader", "Upload completed HTTP ${resp.code} for $segId, but video ID could not be confirmed. Retaining session URL.")
+                                return DirectUploadResult(success = false, youtubeVideoId = null)
+                            }
                         }
                         401 -> {
                             val freshToken = refreshYouTubeToken()
@@ -298,8 +310,12 @@ class YouTubeDirectUploadWorker(
         }
 
         val finalCheckId = if (currentOffset >= totalBytes) findExistingUploadByDispatchId(accessToken, dispatchId) else null
+        val isConfirmed = currentOffset >= totalBytes && !finalCheckId.isNullOrBlank()
+        if (isConfirmed) {
+            pairingManager.clearUploadSessionUrl(segId)
+        }
         return DirectUploadResult(
-            success = currentOffset >= totalBytes,
+            success = isConfirmed,
             youtubeVideoId = finalCheckId
         )
     }

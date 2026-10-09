@@ -254,6 +254,48 @@ class YouTubeInboxCatcher:
             sequence_number=sequence_number
         )
 
+        # 1.5 Authoritative YouTube Data API status check before download attempt
+        from dispatch.youtube_inbox.oauth import get_youtube_processing_status
+        status_info = None
+        try:
+            status_map = get_youtube_processing_status([video_id])
+            status_info = status_map.get(video_id)
+        except Exception as e:
+            logger.debug("Authoritative status check error for %s: %s", video_id, e)
+
+        if status_info:
+            p_status = status_info.get("processing_status")
+            u_status = status_info.get("upload_status")
+            fail_reason = status_info.get("failure_reason")
+
+            if p_status == "processing" or (u_status == "uploaded" and p_status != "succeeded"):
+                logger.info(
+                    "Video %s is still processing on YouTube (processingStatus=%s, uploadStatus=%s). Deferring download.",
+                    video_id, p_status, u_status
+                )
+                db.update_youtube_video(
+                    video_id,
+                    status="WAITING_FOR_YOUTUBE_PROCESSING",
+                    last_error=f"Processing on YouTube (processingStatus={p_status}, uploadStatus={u_status})..."
+                )
+                return {
+                    "video_id": video_id,
+                    "status": "WAITING_FOR_YOUTUBE_PROCESSING",
+                    "verified": False,
+                    "processing": True
+                }
+
+            if p_status in ("failed", "terminated") or u_status in ("failed", "rejected"):
+                err_msg = f"YouTube processing failed: {fail_reason or 'rejected'}"
+                logger.error("Video %s failed processing on YouTube: %s", video_id, err_msg)
+                db.update_youtube_video(video_id, status="FAILED", last_error=err_msg)
+                return {
+                    "video_id": video_id,
+                    "status": "FAILED",
+                    "verified": False,
+                    "error": err_msg
+                }
+
         # 2. Transition to DOWNLOADING & download media
         db.update_youtube_video(video_id, status="DOWNLOADING")
         try:

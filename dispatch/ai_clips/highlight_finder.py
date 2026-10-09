@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 from dispatch.config import GEMINI_API_KEY, MIN_CLIP_DURATION, MAX_CLIP_DURATION
 from dispatch.ai_clips.prompt_templates import HIGHLIGHT_SYSTEM_PROMPT, build_highlight_user_prompt
 from dispatch.ai_clips.preference_learner import get_negative_feedback_prompt
+from dispatch.video_engine.silence import analyze_silence_gaps, find_natural_subsection_within_limit
 from dispatch import db
 
 logger = logging.getLogger("dispatch.ai_clips")
@@ -301,6 +302,81 @@ def transliterate_segments_to_hinglish(segments: List[Dict[str, Any]]) -> List[D
     return output_segments
 
 
+def expand_short_candidate_with_context(
+    start_t: float,
+    end_t: float,
+    segments: List[Dict[str, Any]],
+    total_duration: float,
+    min_duration: float = MIN_CLIP_DURATION,
+    max_duration: float = MAX_CLIP_DURATION
+) -> Optional[Tuple[float, float]]:
+    """Recover a valuable moment that is shorter than min_duration (e.g. 3-4s punchline).
+
+    Invariants:
+      1. Preserves meaning, setup, and resolution by expanding to preceding/succeeding sentences.
+      2. Respects natural sentence boundaries.
+      3. Never pads with dead silence.
+      4. After expansion and silence evaluation, result must be in [min_duration, max_duration].
+      5. Returns (expanded_start, expanded_end) or None if no worthwhile clip can be formed.
+    """
+    if not segments or end_t <= start_t:
+        return None
+
+    # Find the indices of segments intersecting or nearest to [start_t, end_t]
+    matching_indices = [
+        i for i, s in enumerate(segments)
+        if float(s.get("end", 0.0)) > start_t and float(s.get("start", 0.0)) < end_t
+    ]
+
+    if not matching_indices:
+        closest_idx = min(
+            range(len(segments)),
+            key=lambda i: min(abs(float(segments[i].get("start", 0.0)) - start_t),
+                              abs(float(segments[i].get("end", 0.0)) - end_t))
+        )
+        matching_indices = [closest_idx]
+
+    first_idx = matching_indices[0]
+    last_idx = matching_indices[-1]
+
+    cand_s = start_t
+    cand_e = end_t
+
+    # 1. Expand backwards to include preceding setup / context
+    cur_first = first_idx
+    while cur_first > 0 and (cand_e - cand_s) < min_duration:
+        cur_first -= 1
+        prev_seg = segments[cur_first]
+        prev_s = float(prev_seg.get("start", 0.0))
+        gap = cand_s - float(prev_seg.get("end", 0.0))
+        if gap > 4.0:
+            break
+        cand_s = prev_s
+
+    # 2. Expand forward to include reaction / conclusion if still < min_duration
+    cur_last = last_idx
+    while cur_last < len(segments) - 1 and (cand_e - cand_s) < min_duration:
+        cur_last += 1
+        nxt_seg = segments[cur_last]
+        nxt_e = float(nxt_seg.get("end", 0.0))
+        gap = float(nxt_seg.get("start", 0.0)) - cand_e
+        if gap > 4.0:
+            break
+        cand_e = nxt_e
+
+    # Snap to clean word boundaries
+    snapped_s = snap_to_word_boundary(cand_s, segments, prefer_start=True)
+    snapped_e = snap_to_word_boundary(cand_e, segments, prefer_start=False)
+    final_s = max(0.0, snapped_s - 0.15)
+    final_e = min(total_duration, snapped_e + 0.20)
+
+    eff_dur, _ = analyze_silence_gaps(final_s, final_e, segments)
+    if min_duration <= eff_dur <= max_duration:
+        return final_s, final_e
+
+    return None
+
+
 def validate_and_filter_candidates(
     raw_candidates: List[Dict[str, Any]],
     segments: List[Dict[str, Any]],
@@ -313,9 +389,13 @@ def validate_and_filter_candidates(
       1. Schema validation via Pydantic HighlightCandidate.
       2. Timestamp clamping to [0.0, total_duration].
       3. Word boundary snapping with false start detection & padding margins.
-      4. Strict duration constraint: MIN_CLIP_DURATION <= duration <= 180.0s.
-      5. Deduplication: Suppress heavy overlapping clips (IoU > 0.5), keeping higher virality.
-      6. Capped at max_clips (highest virality first).
+      4. Short moment recovery (< 5.0s): expands context backwards/forwards to reach >= 5.0s.
+      5. Silence removal for long candidates (> 180.0s): evaluates dead-air removal. If speech
+         fits <= 180.0s, qualifies. If still > 180.0s, finds natural complete subsection.
+      6. Strict duration constraint: MIN_CLIP_DURATION (5.0s) <= duration <= MAX_CLIP_DURATION (180.0s).
+      7. Deduplication: Suppresses heavy overlapping clips (IoU > 0.5), keeping higher virality,
+         while preserving distinct nearby candidates.
+      8. Capped at max_clips (highest virality first).
     """
     valid_candidates: List[Dict[str, Any]] = []
 
@@ -343,15 +423,45 @@ def validate_and_filter_candidates(
             snapped_e = snap_to_word_boundary(end_t, segments, prefer_start=False)
             start_t = max(0.0, snapped_s - 0.15)
             end_t = min(total_duration, snapped_e + 0.20)
+            if (end_t - start_t) > MAX_CLIP_DURATION and (float(cand.end_time) - float(cand.start_time)) <= MAX_CLIP_DURATION:
+                end_t = min(total_duration, start_t + MAX_CLIP_DURATION)
 
-        # Enforce canonical duration constraints (20.0s <= duration <= 90.0s)
-        duration = round(end_t - start_t, 2)
-        if duration < MIN_CLIP_DURATION:
-            logger.info("Rejecting candidate '%s' (duration %.2fs < min %.2fs)", cand.title, duration, MIN_CLIP_DURATION)
+        raw_duration = round(end_t - start_t, 2)
+
+        # 1. Handle short candidate recovery (< 5.0s)
+        if raw_duration < MIN_CLIP_DURATION:
+            expanded = expand_short_candidate_with_context(start_t, end_t, segments, total_duration)
+            if expanded:
+                start_t, end_t = expanded
+                logger.info("Expanded short candidate '%s' (%.2fs -> %.2fs) with surrounding context",
+                            cand.title, raw_duration, end_t - start_t)
+            else:
+                logger.info("Rejecting candidate '%s' (duration %.2fs < min %.2fs and cannot be naturally expanded)",
+                            cand.title, raw_duration, MIN_CLIP_DURATION)
+                continue
+
+        # 2. Handle long candidate & dead-air silence removal (> 180.0s)
+        eff_dur, cuts = analyze_silence_gaps(start_t, end_t, segments)
+        if eff_dur > MAX_CLIP_DURATION:
+            # Check for a natural complete subsection within limits
+            sub = find_natural_subsection_within_limit(start_t, end_t, segments, MAX_CLIP_DURATION, MIN_CLIP_DURATION)
+            if sub:
+                start_t, end_t = sub
+                eff_dur, cuts = analyze_silence_gaps(start_t, end_t, segments)
+                logger.info("Trimmed overlong candidate '%s' to complete subsection (%.2fs - %.2fs, eff: %.2fs)",
+                            cand.title, start_t, end_t, eff_dur)
+            else:
+                logger.info("Rejecting candidate '%s' (effective duration %.2fs > max %.2fs with no complete subsection)",
+                            cand.title, eff_dur, MAX_CLIP_DURATION)
+                continue
+
+        # 3. Final verification of effective duration
+        if eff_dur < MIN_CLIP_DURATION or eff_dur > MAX_CLIP_DURATION:
+            logger.info("Rejecting candidate '%s' (final effective duration %.2fs outside [%.1fs, %.1fs])",
+                        cand.title, eff_dur, MIN_CLIP_DURATION, MAX_CLIP_DURATION)
             continue
-        if duration > MAX_CLIP_DURATION:
-            logger.info("Rejecting candidate '%s' (duration %.2fs > max %.2fs)", cand.title, duration, MAX_CLIP_DURATION)
-            continue
+
+        duration = eff_dur
 
         # Clean layout recommendation
         layout = cand.layout_recommendation.lower()
@@ -368,7 +478,8 @@ def validate_and_filter_candidates(
             "hashtags": (cand.hashtags or "#Shorts #Reels").strip(),
             "virality_score": int(cand.virality_score),
             "layout_recommendation": layout,
-            "reason": (cand.reason or "").strip()
+            "reason": (cand.reason or "").strip(),
+            "silence_cuts": cuts
         })
 
     # Sort primarily by virality_score descending, then duration
@@ -538,9 +649,16 @@ def extract_clips_local_heuristic(segments: List[Dict[str, Any]], total_duration
     if not segments:
         return []
 
+    full_text = " ".join(s.get("text", "") for s in segments).strip()
+    words = full_text.split()
+    if len(words) < 4:
+        return []
+
     HOOK_KEYWORDS = [
         "suno", "dekho", "basically", "problem yeh hai", "important", "secret", "kaise",
-        "agar aap", "solution", "sabse pehle", "trick", "automate", "system", "real reason"
+        "agar aap", "solution", "sabse pehle", "trick", "automate", "system", "real reason",
+        "so", "actually", "the thing is", "remember", "never", "always", "funny thing",
+        "i realized", "story", "honestly", "point is", "truth is", "listen", "wild", "key"
     ]
 
     candidate_clips = []
@@ -562,8 +680,8 @@ def extract_clips_local_heuristic(segments: List[Dict[str, Any]], total_duration
                     if kw in text_lower:
                         virality = min(95, virality + 8)
 
-                words = block_text.split()
-                title_words = words[:6]
+                block_words = block_text.split()
+                title_words = block_words[:6]
                 title = " ".join(title_words)
                 if len(title) > 50:
                     title = title[:47] + "..."
@@ -601,18 +719,27 @@ def extract_clips_local_heuristic(segments: List[Dict[str, Any]], total_duration
                 "reason": "Concluding thought segment"
             })
 
-    if not candidate_clips and total_duration >= MIN_CLIP_DURATION:
-        full_text = " ".join(s.get("text", "") for s in segments).strip()
+    if not candidate_clips and MIN_CLIP_DURATION <= total_duration:
+        clip_end = min(total_duration, float(segments[-1].get("end", total_duration)))
+        clip_duration = clip_end - 0.0
+        if clip_duration > MAX_CLIP_DURATION:
+            matching_segs = [s for s in segments if float(s.get("end", 0.0)) <= MAX_CLIP_DURATION]
+            if matching_segs and (matching_segs[-1]["end"] - 0.0) >= MIN_CLIP_DURATION:
+                clip_end = matching_segs[-1]["end"]
+            else:
+                clip_end = MAX_CLIP_DURATION
+
+        snippet_text = " ".join(s.get("text", "") for s in segments if float(s.get("end", 0.0)) <= clip_end).strip()
         candidate_clips.append({
             "start_time": 0.0,
-            "end_time": round(total_duration, 2),
-            "title": f"{full_text[:40]} | Quick Clip",
+            "end_time": round(clip_end, 2),
+            "title": f"{snippet_text[:40]} | Quick Clip",
             "hook": segments[0].get("text", "")[:80] if segments else "Quick highlight",
-            "description": full_text[:120],
+            "description": snippet_text[:120],
             "hashtags": "#Shorts #Reels #Tech #Dispatch",
             "virality_score": 75,
             "layout_recommendation": "fit_blur",
-            "reason": "Full session thought clip"
+            "reason": "Complete thought clip"
         })
 
     return candidate_clips
@@ -679,12 +806,14 @@ def identify_and_save_highlights(
                 chunk_id=chunk_id,
                 start_time=c["start_time"],
                 end_time=c["end_time"],
+                duration=c.get("duration"),
                 title=c["title"],
                 hook=c["hook"],
                 description=c["description"],
                 hashtags=c["hashtags"],
                 virality_score=c["virality_score"],
                 layout_mode=c["layout_recommendation"],
+                platform_targets="youtube",
                 publish_mode=publish_mode
             )
             saved_ids.append(cid)

@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from tests.e2e.e2e_base import DispatchE2EBaseTestCase
-from dispatch.config import CLIPS_DIR, PROCESSING_DIR, ROOT_DIR
+from dispatch.config import CLIPS_DIR, PROCESSING_DIR, ROOT_DIR, MIN_CLIP_DURATION, MAX_CLIP_DURATION
 from dispatch.db import get_db_connection, save_transcript, register_chunk, save_clip, reject_clip, register_youtube_video
 from dispatch.transcription.audio import extract_audio
 from dispatch.transcription.transcriber import transcribe_video
@@ -205,8 +205,8 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
         self.assertGreaterEqual(len(clips), 1)
         for c in clips:
             duration = c["end_time"] - c["start_time"]
-            self.assertGreaterEqual(duration, 15.0)  # Tolerant lower bound
-            self.assertLessEqual(duration, 95.0)
+            self.assertGreaterEqual(duration, MIN_CLIP_DURATION)
+            self.assertLessEqual(duration, MAX_CLIP_DURATION)
 
     def test_f15_word_boundary_snapping_precision(self):
         """F15.3: snap_to_word_boundary snaps float timestamp to nearest spoken word boundary."""
@@ -307,11 +307,11 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
     def test_f16_ffmpeg_atomic_render_generates_mp4_and_thumb(self):
         """F16.4: Video renderer produces .mp4 clip and .jpg thumbnail."""
         source_video = self.temp_dir / "source_render.mp4"
-        self.create_synthetic_mp4(source_video, duration_seconds=2.0)
+        self.create_synthetic_mp4(source_video, duration_seconds=6.0)
 
         clip_id = f"clip_render_{int(time.time() * 1000)}"
         save_clip(
-            session_id=None, chunk_id=None, start_time=0.0, end_time=1.5,
+            session_id=None, chunk_id=None, start_time=0.0, end_time=5.0,
             title="Render Test", hook="Hook", description="", hashtags="",
             virality_score=80, layout_mode="fit_blur"
         )
@@ -320,7 +320,7 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
             source_video=source_video,
             clip_id=clip_id,
             start_time=0.0,
-            end_time=1.5,
+            end_time=5.0,
             aspect_ratio="16:9",
             layout_mode="fit_blur",
             segments=None

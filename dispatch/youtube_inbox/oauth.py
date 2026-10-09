@@ -226,3 +226,64 @@ def list_authenticated_user_uploads(
         logger.warning("Error querying authenticated YouTube uploads: %s", e)
 
     return discovered
+
+
+def get_youtube_processing_status(video_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Query authoritative YouTube Data API v3 for uploadStatus, processingStatus,
+    failure reasons, and content duration for a list of video IDs.
+
+    Batches up to 50 video IDs per request to respect quota and network efficiency.
+    Returns a dict mapping video_id to structured metadata:
+        {
+            "video_id": str,
+            "upload_status": str,       # 'uploaded', 'processed', 'failed', 'rejected', 'deleted'
+            "processing_status": str,   # 'processing', 'succeeded', 'failed', 'terminated', or None
+            "failure_reason": str|None, # 'transcodingFailed', 'uploadFailed', 'other', or None
+            "duration": str,            # ISO 8601 string e.g. 'PT56S', 'P0D'
+            "title": str,
+            "published_at": str,
+            "privacy_status": str
+        }
+    """
+    if not video_ids:
+        return {}
+
+    service = get_youtube_service()
+    if not service:
+        logger.debug("YouTube API service unavailable; skipping authoritative status query.")
+        return {}
+
+    results: Dict[str, Dict[str, Any]] = {}
+    batch_size = 50
+
+    for i in range(0, len(video_ids), batch_size):
+        chunk = video_ids[i:i + batch_size]
+        try:
+            resp = service.videos().list(
+                part="snippet,status,processingDetails,contentDetails",
+                id=",".join(chunk)
+            ).execute()
+
+            for item in resp.get("items", []):
+                vid = item.get("id")
+                if not vid:
+                    continue
+                st = item.get("status", {})
+                pr = item.get("processingDetails", {})
+                cd = item.get("contentDetails", {})
+                snip = item.get("snippet", {})
+
+                results[vid] = {
+                    "video_id": vid,
+                    "upload_status": st.get("uploadStatus"),
+                    "processing_status": pr.get("processingStatus"),
+                    "failure_reason": pr.get("processingFailureReason") or st.get("rejectionReason"),
+                    "duration": cd.get("duration"),
+                    "title": snip.get("title", ""),
+                    "published_at": snip.get("publishedAt", ""),
+                    "privacy_status": st.get("privacyStatus", "unlisted")
+                }
+        except Exception as e:
+            logger.warning("Error querying authoritative YouTube video status for batch %s: %s", chunk, e)
+
+    return results

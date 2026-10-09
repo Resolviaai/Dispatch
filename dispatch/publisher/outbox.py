@@ -10,6 +10,8 @@ from dispatch.publisher.youtube import upload_youtube_short
 from dispatch.publisher.instagram import upload_instagram_reel
 from dispatch.publisher.linkedin import upload_linkedin_video
 from dispatch.publisher.twitter import upload_x_video
+from dispatch.config import MIN_CLIP_DURATION, MAX_CLIP_DURATION
+from dispatch.ingestion.validator import probe_video
 from dispatch import db
 
 logger = logging.getLogger("dispatch.publisher.outbox")
@@ -58,6 +60,20 @@ def _process_outbox_queue_internal() -> int:
                     (job_id,)
                 )
             continue
+
+        # Strict duration verification: 5.0s <= duration <= 180.0s for valid video media
+        is_valid, meta, _ = probe_video(video_path)
+        if is_valid and meta.get("duration") is not None:
+            actual_duration = float(meta["duration"])
+            if actual_duration < MIN_CLIP_DURATION or actual_duration > MAX_CLIP_DURATION:
+                err_msg = f"Clip duration ({actual_duration:.2f}s) violates absolute duration requirements [{MIN_CLIP_DURATION}s, {MAX_CLIP_DURATION}s]"
+                logger.error("Job %s cannot be published: %s", job_id, err_msg)
+                with db.get_db_connection() as conn:
+                    conn.execute(
+                        "UPDATE publishing_outbox SET status = 'failed', last_error = ? WHERE id = ?",
+                        (err_msg, job_id)
+                    )
+                continue
 
         # Mark as uploading
         with db.get_db_connection() as conn:

@@ -1,6 +1,36 @@
-# Current Handoff for Antigravity — 2026-10-07
+# Current Handoff for Antigravity — 2026-10-10
 
 This section is the current source of truth and supersedes conflicting historical implementation notes below. Historical notes and architecture decisions are retained for context.
+
+## 0. Latest checkpoint — 2026-10-10
+
+- **Branch/base:** `main`, based on `af9c152` (`fix(reliability): camera preview, upload resumption, and ingestion gating`).
+- **Changes prepared in this checkpoint:**
+  - The PC inbox now queries authoritative YouTube processing status, defers downloads while YouTube reports processing, records processing failures, revisits waiting videos, and flags items that exceed the configured wait threshold.
+  - Android upload completion now requires a confirmed YouTube video ID; unresolved completed uploads retain their outbox and resumable-session data for reconciliation.
+  - Clip selection/rendering gained silence-aware duration handling and recovery for short moments, with related preference, prompt, layout, renderer, and persistence updates.
+- **Verification:** `python -m compileall -q dispatch tests` passed. `:app:compileDebugKotlin` passed. The focused pytest run could not start because the configured Python environment has no `pytest` module, and the Windows Python launcher reports no other installed Python runtimes. No physical-device or real-upload verification was performed.
+- **OAuth/pairing scope:** The Google OAuth login and phone-PC pairing failures in the separately supplied brief are not fixed by this checkpoint. The only OAuth-module change in this changeset is the YouTube video-processing status query; do not report the login or pairing flow as repaired.
+- **Exact code/test files in this changeset:**
+  - `android/app/src/main/java/com/resolvia/dispatch/sync/YouTubeDirectUploadWorker.kt`
+  - `dispatch/ai_clips/highlight_finder.py`
+  - `dispatch/ai_clips/preference_learner.py`
+  - `dispatch/ai_clips/prompt_templates.py`
+  - `dispatch/config.py`
+  - `dispatch/db.py`
+  - `dispatch/publisher/outbox.py`
+  - `dispatch/video_engine/reframer.py`
+  - `dispatch/video_engine/renderer.py`
+  - `dispatch/video_engine/silence.py`
+  - `dispatch/youtube_inbox/catcher.py`
+  - `dispatch/youtube_inbox/oauth.py`
+  - `dispatch/youtube_inbox/poller.py`
+  - `tests/e2e/test_tier1_features_media_ai_engine.py`
+  - `tests/test_ai_highlight_editorial_quality.py`
+  - `tests/test_layout_framing_architecture.py`
+  - `tests/test_pillar3_highlights.py`
+  - `tests/test_youtube_processing_tracker.py`
+- **Next step:** Complete the OAuth and explicitly authorized phone-pairing work as a separate scoped change, first checking the exact Python runtime and the existing pairing authorization contract. Keep real credentials private and do not alter existing YouTube videos.
 
 ## 1. Current architecture
 

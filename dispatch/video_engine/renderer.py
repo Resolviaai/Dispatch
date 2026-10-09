@@ -1,6 +1,7 @@
 """FFmpeg Video Renderer for Dispatch.
-Cuts exact time segments, applies adaptive framing, burns Roman Hinglish subtitles,
-normalizes audio, generates preview thumbnails, and updates DB status.
+Cuts exact time segments, applies dead-air silence removal with frame-accurate
+subtitle synchronization, applies adaptive framing, burns animated subtitles,
+normalizes audio, generates preview thumbnails, and enforces strict duration limits.
 """
 import subprocess
 import logging
@@ -9,6 +10,11 @@ from typing import List, Dict, Any, Optional
 from dispatch.config import CLIPS_DIR, PROCESSING_DIR, MAX_CLIP_DURATION, MIN_CLIP_DURATION
 from dispatch.video_engine.subtitle_generator import generate_ass_subtitles
 from dispatch.video_engine.reframer import build_filter_complex
+from dispatch.video_engine.silence import (
+    analyze_silence_gaps,
+    remap_timestamps_for_silence_cuts,
+    build_silence_keep_intervals
+)
 from dispatch import db
 
 logger = logging.getLogger("dispatch.renderer")
@@ -26,49 +32,49 @@ def render_clip(
 ) -> Dict[str, Any]:
     """Render a single candidate short-form video clip.
     
-    Args:
-        source_video: Path to the raw video chunk.
-        clip_id: Database clip ID.
-        start_time: Clip start in seconds.
-        end_time: Clip end in seconds.
-        aspect_ratio: Source video aspect ratio ('16:9', '9:16', 'portrait', 'landscape').
-        layout_mode: Framing layout.
-        segments: Optional transcript segments for subtitle burning.
-        subtitle_options: Optional custom typography & styling options.
-        
-    Returns:
-        Dict with paths to rendered video, thumbnail, and duration.
+    Invariants:
+      1. Minimum final duration: 5.0 seconds.
+      2. Maximum final duration: 180.0 seconds (inclusive).
+      3. Automatically removes dead-air silences (>= 3.0s) while preserving conversational
+         cadence, thinking pauses, dramatic tension, and comedic timing.
+      4. Subtitle timestamps remain frame-accurate and strictly synchronized after silence removal.
+      5. Final output file is probed; if duration is outside [5.0s, 180.0s], the clip is
+         rejected and unlinked before downstream processing or publishing.
     """
     if not source_video.exists():
         raise FileNotFoundError(f"Source video not found: {source_video}")
 
+    from dispatch.ingestion.validator import inspect_video_orientation
+    info = inspect_video_orientation(source_video)
     if not aspect_ratio or aspect_ratio == "auto":
-        from dispatch.ingestion.validator import inspect_video_orientation
-        info = inspect_video_orientation(source_video)
         if info.get("valid"):
             aspect_ratio = "9:16" if info.get("orientation") == "portrait" else "16:9"
         else:
             aspect_ratio = "16:9"
 
-    # Enforce duration constraints (hard cap 180s, min technical interval)
-    if (end_time - start_time) > MAX_CLIP_DURATION:
-        logger.warning("Clamping clip %s duration from %.2fs to MAX_CLIP_DURATION (%.1fs)",
-                       clip_id, end_time - start_time, MAX_CLIP_DURATION)
-        end_time = start_time + MAX_CLIP_DURATION
-    duration = max(0.1, round(end_time - start_time, 3))
+    has_audio = info.get("has_audio", True)
+
+    # 1. Analyze dead-air silence gaps
+    eff_duration, cuts = analyze_silence_gaps(start_time, end_time, segments)
+    has_silence_cuts = bool(cuts)
+
     output_video_path = CLIPS_DIR / f"{clip_id}.mp4"
     output_thumb_path = CLIPS_DIR / f"{clip_id}.jpg"
     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
+    temp_video_path = CLIPS_DIR / f"{clip_id}.tmp.mp4"
+    temp_thumb_path = CLIPS_DIR / f"{clip_id}.tmp.jpg"
 
-    # 1. Generate CapCut-grade ASS Subtitles if transcript segments are available
+    # 2. Subtitle generation with synchronized timeline
     sub_opts = subtitle_options or {}
     if segments and sub_opts.get("enabled", True):
+        # Remap subtitle timestamps if silence cuts occurred
+        active_segments = remap_timestamps_for_silence_cuts(segments, start_time, end_time, cuts) if has_silence_cuts else segments
         try:
             generate_ass_subtitles(
-                segments=segments,
+                segments=active_segments,
                 output_path=ass_path,
                 clip_start_time=start_time,
-                clip_end_time=end_time,
+                clip_end_time=start_time + eff_duration if has_silence_cuts else end_time,
                 font_name=sub_opts.get("font_name", "Arial Black"),
                 font_size=sub_opts.get("font_size", 54),
                 style_preset=sub_opts.get("style_preset", "yellow_pop"),
@@ -82,38 +88,87 @@ def render_clip(
     else:
         ass_path = None
 
-    # 2. Build filter complex
-    filter_complex_str, final_v_label = build_filter_complex(
-        aspect_ratio=aspect_ratio,
-        layout_mode=layout_mode,
-        ass_subtitle_path=ass_path if (ass_path and ass_path.exists()) else None
-    )
+    # 3. Construct FFmpeg command
+    keep_intervals = build_silence_keep_intervals(start_time, end_time, cuts) if has_silence_cuts else []
 
-    temp_video_path = CLIPS_DIR / f"{clip_id}.tmp.mp4"
-    temp_thumb_path = CLIPS_DIR / f"{clip_id}.tmp.jpg"
+    if has_silence_cuts and len(keep_intervals) > 1:
+        # Complex filter: trim and concatenate speech blocks, then apply framing and subtitles
+        trim_filters = []
+        concat_in = []
+        for idx, (k_s, k_e) in enumerate(keep_intervals):
+            trim_filters.append(f"[0:v]trim=start={k_s:.3f}:end={k_e:.3f},setpts=PTS-STARTPTS[v_trim_{idx}]")
+            if has_audio:
+                trim_filters.append(f"[0:a]atrim=start={k_s:.3f}:end={k_e:.3f},asetpts=PTS-STARTPTS[a_trim_{idx}]")
+                concat_in.append(f"[v_trim_{idx}][a_trim_{idx}]")
+            else:
+                concat_in.append(f"[v_trim_{idx}]")
 
-    # 3. Construct FFmpeg command with restricted threads to preserve desktop responsiveness
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", str(round(start_time, 3)),
-        "-to", str(round(end_time, 3)),
-        "-i", str(source_video),
-        "-filter_complex", filter_complex_str,
-        "-map", final_v_label,
-        "-map", "0:a?",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "20",
-        "-pix_fmt", "yuv420p",
-        "-threads", "2",
-        "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-movflags", "+faststart",
-        str(temp_video_path)
-    ]
+        a_cnt = 1 if has_audio else 0
+        concat_filter = f"{''.join(concat_in)}concat=n={len(keep_intervals)}:v=1:a={a_cnt}[concat_v]" + ("[concat_a]" if has_audio else "")
+        trim_filters.append(concat_filter)
 
-    logger.info("Executing FFmpeg atomic render for clip %s (%.1fs - %.1fs)", clip_id, start_time, end_time)
+        framing_filter, final_v_label = build_filter_complex(
+            aspect_ratio=aspect_ratio,
+            layout_mode=layout_mode,
+            ass_subtitle_path=ass_path if (ass_path and ass_path.exists()) else None,
+            input_v_label="[concat_v]"
+        )
+
+        full_filter_complex = ";".join(trim_filters) + ";" + framing_filter
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(source_video),
+            "-filter_complex", full_filter_complex,
+            "-map", final_v_label,
+        ]
+        if has_audio:
+            cmd.extend([
+                "-map", "[concat_a]",
+                "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+                "-c:a", "aac",
+                "-b:a", "192k",
+            ])
+        cmd.extend([
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-threads", "2",
+            "-movflags", "+faststart",
+            str(temp_video_path)
+        ])
+    else:
+        # Standard contiguous segment render
+        filter_complex_str, final_v_label = build_filter_complex(
+            aspect_ratio=aspect_ratio,
+            layout_mode=layout_mode,
+            ass_subtitle_path=ass_path if (ass_path and ass_path.exists()) else None,
+            input_v_label="[0:v]"
+        )
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(round(start_time, 3)),
+            "-to", str(round(end_time, 3)),
+            "-i", str(source_video),
+            "-filter_complex", filter_complex_str,
+            "-map", final_v_label,
+            "-map", "0:a?",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-threads", "2",
+            "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(temp_video_path)
+        ]
+
+    logger.info("Executing FFmpeg atomic render for clip %s (%.1fs - %.1fs, effective: %.1fs)",
+                clip_id, start_time, end_time, eff_duration)
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 
     if result.returncode != 0:
@@ -125,11 +180,36 @@ def render_clip(
             ass_path.unlink()
         raise RuntimeError(f"FFmpeg render failed: {error_msg}")
 
+    # 4. Mandatory Duration Verification on Final Output Video
+    from dispatch.ingestion.validator import probe_video
+    is_valid, meta, _ = probe_video(temp_video_path)
+    actual_duration = meta.get("duration", 0.0) if is_valid else eff_duration
+
+    if actual_duration > MAX_CLIP_DURATION:
+        logger.error("Clip %s rendered duration (%.2fs) exceeds MAX_CLIP_DURATION (%.1fs). Rejecting.",
+                     clip_id, actual_duration, MAX_CLIP_DURATION)
+        if temp_video_path.exists():
+            temp_video_path.unlink()
+        if ass_path and ass_path.exists():
+            ass_path.unlink()
+        db.reject_clip(clip_id, reason=f"Rendered duration exceeded {MAX_CLIP_DURATION}s ({actual_duration:.1f}s)")
+        raise ValueError(f"Clip {clip_id} exceeds hard duration limit ({actual_duration:.2f}s > {MAX_CLIP_DURATION}s)")
+
+    if actual_duration < MIN_CLIP_DURATION:
+        logger.error("Clip %s rendered duration (%.2fs) below MIN_CLIP_DURATION (%.1fs). Rejecting.",
+                     clip_id, actual_duration, MIN_CLIP_DURATION)
+        if temp_video_path.exists():
+            temp_video_path.unlink()
+        if ass_path and ass_path.exists():
+            ass_path.unlink()
+        db.reject_clip(clip_id, reason=f"Rendered duration below {MIN_CLIP_DURATION}s ({actual_duration:.1f}s)")
+        raise ValueError(f"Clip {clip_id} below minimum duration limit ({actual_duration:.2f}s < {MIN_CLIP_DURATION}s)")
+
     # Atomic rename: guarantees system never exposes an unplayable partial video
     temp_video_path.replace(output_video_path)
 
-    # 4. Generate preview thumbnail atomically
-    thumb_time = max(0.0, min(1.0, duration / 2.0))
+    # 5. Generate preview thumbnail atomically
+    thumb_time = max(0.0, min(1.0, actual_duration / 2.0))
     thumb_cmd = [
         "ffmpeg", "-y",
         "-ss", str(round(thumb_time, 3)),
@@ -151,7 +231,7 @@ def render_clip(
         except Exception:
             pass
 
-    # 5. Update DB with verified rendered layout
+    # 6. Update DB with verified rendered layout
     db.update_clip_media(
         clip_id=clip_id,
         video_path=str(output_video_path),
@@ -159,11 +239,11 @@ def render_clip(
         rendered_layout_mode=layout_mode
     )
 
-    logger.info("Successfully rendered clip %s -> %s", clip_id, output_video_path.name)
+    logger.info("Successfully rendered clip %s -> %s (duration: %.2fs)", clip_id, output_video_path.name, actual_duration)
 
     return {
         "clip_id": clip_id,
         "video_path": output_video_path,
         "thumbnail_path": output_thumb_path if output_thumb_path.exists() else None,
-        "duration": duration
+        "duration": actual_duration
     }

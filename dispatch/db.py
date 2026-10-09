@@ -406,11 +406,12 @@ def save_clip(
     virality_score: int,
     layout_mode: str,
     publish_mode: str = "private",
-    platform_targets: str = "youtube,instagram",
-    rendered_layout_mode: Optional[str] = None
+    platform_targets: str = "youtube",
+    rendered_layout_mode: Optional[str] = None,
+    duration: Optional[float] = None
 ) -> str:
     clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    duration = end_time - start_time
+    final_duration = round(float(duration), 2) if duration is not None else round(end_time - start_time, 2)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -420,7 +421,7 @@ def save_clip(
                 layout_mode, rendered_layout_mode, status, publish_mode, platform_targets
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?)
         """, (
-            clip_id, session_id, chunk_id, start_time, end_time, duration,
+            clip_id, session_id, chunk_id, start_time, end_time, final_duration,
             title, hook, description, hashtags, virality_score,
             layout_mode, rendered_layout_mode, publish_mode, platform_targets
         ))
@@ -750,7 +751,7 @@ def save_clip_definitions(
     video_id: str,
     clip_defs: List[Dict[str, Any]],
     publish_mode: str = "private",
-    platform_targets: str = "youtube,instagram"
+    platform_targets: str = "youtube"
 ) -> List[str]:
     """Atomically persist validated clip definitions in a single transaction.
     
@@ -777,7 +778,7 @@ def save_clip_definitions(
             clip_id = f"clip_{now_str}_{uuid.uuid4().hex[:6]}"
             start_t = float(c["start_time"])
             end_t = float(c["end_time"])
-            duration = round(end_t - start_t, 2)
+            duration = round(float(c.get("duration", end_t - start_t)), 2)
             title = c.get("title", "Dispatch Highlight")
             hook = c.get("hook", "")
             description = c.get("description", "")

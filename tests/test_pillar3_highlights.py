@@ -212,18 +212,18 @@ class TestPillar3Highlights(unittest.TestCase):
         snapped_end = snap_to_word_boundary(25.0, segments, prefer_start=False)
         self.assertEqual(snapped_end, 24.85)
 
-    # Test E: Strict 20.0s <= duration <= 90.0s constraint (REJECT, DO NOT FABRICATE)
+    # Test E: Strict 5.0s <= duration <= 180.0s constraint (REJECT, DO NOT FABRICATE)
     def test_e_duration_constraint_rejection(self):
         raw = [
-            {  # 15s duration: Too short!
+            {  # 3s duration: Too short (< 5s)!
                 "start_time": 10.0,
-                "end_time": 25.0,
+                "end_time": 13.0,
                 "title": "Too Short Clip",
                 "virality_score": 90
             },
-            {  # 120s duration: Too long!
+            {  # 250s duration: Too long (> 180s)!
                 "start_time": 0.0,
-                "end_time": 120.0,
+                "end_time": 250.0,
                 "title": "Too Long Clip",
                 "virality_score": 85
             },
@@ -234,7 +234,7 @@ class TestPillar3Highlights(unittest.TestCase):
                 "virality_score": 80
             }
         ]
-        validated = validate_and_filter_candidates(raw, segments=[], total_duration=200.0)
+        validated = validate_and_filter_candidates(raw, segments=[], total_duration=300.0)
         self.assertEqual(len(validated), 1)
         self.assertEqual(validated[0]["title"], "Perfect Duration Clip")
         self.assertEqual(validated[0]["duration"], 30.0)
