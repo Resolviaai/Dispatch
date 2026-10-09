@@ -20,13 +20,20 @@
     box-sizing: border-box;
   }
   html, body {
-    background-color: #161616 !important;
+    background-color: #161616;
     color: #EDEDED;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     letter-spacing: -0.01em;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+}
+
+/* Dedicated Native Camera Preview Transparency State (P0 fix) */
+:root.native-camera-preview,
+:root.native-camera-preview body,
+:root.native-camera-preview #root {
+  background-color: transparent !important;
 }
 
 /* 4-Layer Elevation Architecture & Dispatch Tokens */

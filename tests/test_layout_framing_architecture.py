@@ -111,9 +111,15 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
             conn.execute("DELETE FROM sessions WHERE id = ?", (self.session_id,))
             conn.commit()
         for f in CLIPS_DIR.glob(f"{self.clip_id}*"):
-            f.unlink()
+            try:
+                f.unlink()
+            except Exception:
+                pass
         for f in CLIPS_DIR.glob(f"{self.clip_id_port}*"):
-            f.unlink()
+            try:
+                f.unlink()
+            except Exception:
+                pass
 
     def test_01_source_media_endpoint_streams_raw_chunk(self):
         """GET /api/clips/{id}/source streams the raw source media with clip headers."""

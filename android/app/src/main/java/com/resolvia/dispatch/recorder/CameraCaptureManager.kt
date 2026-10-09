@@ -210,11 +210,20 @@ class CameraCaptureManager(private val context: Context) {
                     .requireLensFacing(currentLensFacing)
                     .build()
 
+                val useCases = mutableListOf<androidx.camera.core.UseCase>()
+                activePreviewView?.let { pv ->
+                    val preview = Preview.Builder().build().also {
+                        it.setSurfaceProvider(pv.surfaceProvider)
+                    }
+                    useCases.add(preview)
+                }
+                videoCapture?.let { useCases.add(it) }
+
                 cameraProvider.unbindAll()
                 camera = cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
-                    videoCapture
+                    *useCases.toTypedArray()
                 )
 
                 camera?.cameraControl?.setZoomRatio(currentZoomRatio)
@@ -234,6 +243,7 @@ class CameraCaptureManager(private val context: Context) {
 
     /**
      * Binds VideoCapture directly to LifecycleService so recording continues with screen off.
+     * Retains live PreviewView binding if the Activity View is attached.
      */
     fun bindToService(
         serviceLifecycleOwner: LifecycleOwner,
@@ -263,11 +273,20 @@ class CameraCaptureManager(private val context: Context) {
                     .requireLensFacing(currentLensFacing)
                     .build()
 
+                val serviceUseCases = mutableListOf<androidx.camera.core.UseCase>()
+                activePreviewView?.let { pv ->
+                    val preview = Preview.Builder().build().also {
+                        it.setSurfaceProvider(pv.surfaceProvider)
+                    }
+                    serviceUseCases.add(preview)
+                }
+                videoCapture?.let { serviceUseCases.add(it) }
+
                 cameraProvider.unbindAll()
                 camera = cameraProvider.bindToLifecycle(
                     serviceLifecycleOwner,
                     cameraSelector,
-                    videoCapture
+                    *serviceUseCases.toTypedArray()
                 )
 
                 camera?.cameraControl?.setZoomRatio(currentZoomRatio)

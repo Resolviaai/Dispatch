@@ -48,6 +48,7 @@ class DispatchE2EBaseTestCase(unittest.TestCase):
     def setUp(self):
         super().setUp()
         os.environ["DISPATCH_AUTH_TOKEN"] = self.auth_token
+        os.environ["DISPATCH_DISABLE_AUTO_OUTBOX"] = "1"
 
         # Initialize databases and schemas
         init_db()

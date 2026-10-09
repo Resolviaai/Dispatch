@@ -38,8 +38,8 @@ ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 # Video Processing Defaults
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
-MIN_CLIP_DURATION = 0.5  # Technical minimum positive interval (seconds)
-MAX_CLIP_DURATION = 180.0  # Hard maximum output duration (seconds)
+MIN_CLIP_DURATION = 20.0  # Canonical minimum highlight duration (seconds)
+MAX_CLIP_DURATION = 90.0  # Canonical maximum highlight duration (seconds)
 
 # Subtitle Styling Defaults (ASS)
 SUBTITLE_FONT = "Arial"

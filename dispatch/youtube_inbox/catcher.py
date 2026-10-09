@@ -260,6 +260,16 @@ class YouTubeInboxCatcher:
             local_video_path = self.download_video(video_id)
         except Exception as e:
             err = f"Download failed: {e}"
+            err_str = str(e).lower()
+            if "processing" in err_str or "check back later" in err_str:
+                logger.info("Video %s is still processing on YouTube. Transitioning to WAITING_FOR_YOUTUBE_PROCESSING.", video_id)
+                db.update_youtube_video(video_id, status="WAITING_FOR_YOUTUBE_PROCESSING", last_error=err)
+                return {
+                    "video_id": video_id,
+                    "status": "WAITING_FOR_YOUTUBE_PROCESSING",
+                    "verified": False,
+                    "processing": True
+                }
             logger.error("Download failed for video %s: %s", video_id, err)
             db.update_youtube_video(video_id, status="FAILED", last_error=err)
             raise RuntimeError(err) from e

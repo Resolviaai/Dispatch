@@ -344,23 +344,14 @@ def validate_and_filter_candidates(
             start_t = max(0.0, snapped_s - 0.15)
             end_t = min(total_duration, snapped_e + 0.20)
 
-        # Enforce technical minimum positive interval and 180s hard maximum
+        # Enforce canonical duration constraints (20.0s <= duration <= 90.0s)
         duration = round(end_t - start_t, 2)
         if duration < MIN_CLIP_DURATION:
             logger.info("Rejecting candidate '%s' (duration %.2fs < min %.2fs)", cand.title, duration, MIN_CLIP_DURATION)
             continue
         if duration > MAX_CLIP_DURATION:
-            # Enforce 180.0s hard maximum: prefer complete sentence or word boundary before 180s
-            max_allowed_end = start_t + MAX_CLIP_DURATION
-            if segments:
-                snapped_max = snap_to_word_boundary(max_allowed_end, segments, prefer_start=False)
-                if snapped_max > start_t and (snapped_max - start_t) <= MAX_CLIP_DURATION:
-                    end_t = min(total_duration, snapped_max + 0.15)
-                else:
-                    end_t = max_allowed_end
-            else:
-                end_t = max_allowed_end
-            duration = round(end_t - start_t, 2)
+            logger.info("Rejecting candidate '%s' (duration %.2fs > max %.2fs)", cand.title, duration, MAX_CLIP_DURATION)
+            continue
 
         # Clean layout recommendation
         layout = cand.layout_recommendation.lower()

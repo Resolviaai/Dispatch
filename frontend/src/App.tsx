@@ -42,6 +42,17 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Manage native camera transparency state
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      if (Bridge.isAvailable() && currentTab === 'record') {
+        document.documentElement.classList.add('native-camera-preview');
+      } else {
+        document.documentElement.classList.remove('native-camera-preview');
+      }
+    }
+  }, [currentTab]);
+
   // Check real YouTube OAuth status
   useEffect(() => {
     const checkYouTube = async () => {

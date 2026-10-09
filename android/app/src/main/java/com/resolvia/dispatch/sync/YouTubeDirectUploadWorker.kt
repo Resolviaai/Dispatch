@@ -161,59 +161,70 @@ class YouTubeDirectUploadWorker(
             .post(metadataJson.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()))
             .build()
 
-        var uploadUrl: String? = null
-        try {
-            client.newCall(initReq).execute().use { resp ->
-                if (resp.code == 401) {
-                    val freshToken = refreshYouTubeToken()
-                    if (freshToken != null) {
-                        return uploadToYouTubeDirect(freshToken, file, dispatchId, seg)
+        var uploadUrl: String? = pairingManager.getUploadSessionUrl(segId).ifBlank { null }
+
+        // If no existing resumable session URL, initiate new session
+        if (uploadUrl == null) {
+            try {
+                client.newCall(initReq).execute().use { resp ->
+                    if (resp.code == 401) {
+                        val freshToken = refreshYouTubeToken()
+                        if (freshToken != null) {
+                            return uploadToYouTubeDirect(freshToken, file, dispatchId, seg)
+                        }
+                        return DirectUploadResult(false)
                     }
-                    return DirectUploadResult(false)
+                    if (!resp.isSuccessful) {
+                        android.util.Log.e("YouTubeUploader", "Init failed: HTTP ${resp.code}")
+                        return DirectUploadResult(false)
+                    }
+                    uploadUrl = resp.header("Location")
+                    if (uploadUrl != null) {
+                        pairingManager.saveUploadSessionUrl(segId, uploadUrl!!)
+                    }
                 }
-                if (!resp.isSuccessful) {
-                    android.util.Log.e("YouTubeUploader", "Init failed: HTTP ${resp.code}")
-                    return DirectUploadResult(false)
-                }
-                uploadUrl = resp.header("Location")
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeUploader", "Failed to initiate resumable upload session: ${e.message}")
+                return DirectUploadResult(false)
             }
-        } catch (e: Exception) {
-            android.util.Log.e("YouTubeUploader", "Failed to initiate resumable upload session: ${e.message}")
-            return DirectUploadResult(false)
         }
 
-        val destination = uploadUrl ?: return DirectUploadResult(false)
+        var destination = uploadUrl ?: return DirectUploadResult(false)
 
         // 2. Chunked Resumable Upload (8 MB chunks) with persistent byte progress
         val chunkSize = 8 * 1024 * 1024L // 8MB chunks
         var currentOffset = dao.getOutboxOffset(segId) ?: 0L
 
-        // Query session status if resuming after disconnect
-        if (currentOffset > 0L) {
-            val queryReq = Request.Builder()
-                .url(destination)
-                .header("Content-Range", "bytes */$totalBytes")
-                .header("Content-Length", "0")
-                .put("".toRequestBody("video/mp4".toMediaType()))
-                .build()
+        // Query session status if resuming after disconnect or retrying existing session
+        val queryReq = Request.Builder()
+            .url(destination)
+            .header("Content-Range", "bytes */$totalBytes")
+            .header("Content-Length", "0")
+            .put("".toRequestBody("video/mp4".toMediaType()))
+            .build()
 
-            try {
-                client.newCall(queryReq).execute().use { resp ->
-                    if (resp.code == 308) {
-                        val rangeHeader = resp.header("Range")
-                        if (!rangeHeader.isNullOrBlank()) {
-                            val lastByte = rangeHeader.substringAfter("-").toLongOrNull()
-                            if (lastByte != null) {
-                                currentOffset = lastByte + 1L
-                            }
+        try {
+            client.newCall(queryReq).execute().use { resp ->
+                if (resp.code == 308) {
+                    val rangeHeader = resp.header("Range")
+                    if (!rangeHeader.isNullOrBlank()) {
+                        val lastByte = rangeHeader.substringAfter("-").toLongOrNull()
+                        if (lastByte != null) {
+                            currentOffset = lastByte + 1L
+                            dao.updateOutboxOffset(segId, currentOffset)
                         }
-                    } else if (resp.isSuccessful) {
-                        currentOffset = totalBytes
                     }
+                } else if (resp.isSuccessful) {
+                    currentOffset = totalBytes
+                } else if (resp.code == 404 || resp.code == 410) {
+                    // Session expired on YouTube: clear and restart fresh
+                    pairingManager.clearUploadSessionUrl(segId)
+                    dao.updateOutboxOffset(segId, 0L)
+                    return uploadToYouTubeDirect(accessToken, file, dispatchId, seg)
                 }
-            } catch (e: Exception) {
-                android.util.Log.w("YouTubeUploader", "Offset query failed, falling back to local: $currentOffset")
             }
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "Offset query failed, falling back to local: $currentOffset")
         }
 
         // Upload in 8MB slices
@@ -249,6 +260,7 @@ class YouTubeDirectUploadWorker(
                         200, 201 -> {
                             currentOffset = totalBytes
                             dao.updateOutboxOffset(segId, totalBytes)
+                            pairingManager.clearUploadSessionUrl(segId)
                             val bodyStr = resp.body?.string() ?: ""
                             val videoId = try {
                                 val json = gson.fromJson(bodyStr, JsonObject::class.java)

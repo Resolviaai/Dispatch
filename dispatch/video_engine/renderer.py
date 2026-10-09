@@ -55,7 +55,7 @@ def render_clip(
         logger.warning("Clamping clip %s duration from %.2fs to MAX_CLIP_DURATION (%.1fs)",
                        clip_id, end_time - start_time, MAX_CLIP_DURATION)
         end_time = start_time + MAX_CLIP_DURATION
-    duration = max(MIN_CLIP_DURATION, end_time - start_time)
+    duration = max(0.1, round(end_time - start_time, 3))
     output_video_path = CLIPS_DIR / f"{clip_id}.mp4"
     output_thumb_path = CLIPS_DIR / f"{clip_id}.jpg"
     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
@@ -129,7 +129,7 @@ def render_clip(
     temp_video_path.replace(output_video_path)
 
     # 4. Generate preview thumbnail atomically
-    thumb_time = min(1.5, duration / 2.0)
+    thumb_time = max(0.0, min(1.0, duration / 2.0))
     thumb_cmd = [
         "ffmpeg", "-y",
         "-ss", str(round(thumb_time, 3)),

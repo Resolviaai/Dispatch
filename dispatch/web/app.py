@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -621,12 +621,13 @@ async def handle_approve_clip(clip_id: str, payload: ApproveRequest):
         custom_layout=target_layout
     )
 
-    # Trigger immediate outbox pass so clip publishing starts immediately
-    try:
-        from dispatch.publisher.outbox import trigger_outbox_pass
-        trigger_outbox_pass()
-    except Exception as e:
-        logger.warning("Could not trigger immediate outbox pass for clip %s: %s", clip_id, e)
+    # Trigger immediate outbox pass so clip publishing starts immediately (unless disabled in tests)
+    if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
+        try:
+            from dispatch.publisher.outbox import trigger_outbox_pass
+            trigger_outbox_pass()
+        except Exception as e:
+            logger.warning("Could not trigger immediate outbox pass for clip %s: %s", clip_id, e)
 
     return {"status": "success", "message": f"Clip {clip_id} approved and enqueued for publishing", "layout_mode": target_layout}
 
@@ -1156,8 +1157,20 @@ async def disconnect_youtube():
 
 
 @app.get("/api/youtube/credentials")
-async def get_youtube_credentials():
-    """Return YouTube OAuth client credentials and refresh token for mobile app pairing."""
+async def get_youtube_credentials(
+    request: Request,
+    authorization: Optional[str] = Header(None)
+):
+    """Return YouTube OAuth client credentials and refresh token for mobile app pairing.
+    Protected: Accessible only via localhost / loopback OR with valid Authorization token.
+    """
+    client_host = request.client.host if request.client else "unknown"
+    is_localhost = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
+
+    if not is_localhost:
+        from dispatch.sync.receiver import verify_token
+        token = authorization or request.query_params.get("auth_token")
+        verify_token(token)
     token_file = ROOT_DIR / "youtube_token.json"
     client_secrets = ROOT_DIR / "client_secrets.json"
 

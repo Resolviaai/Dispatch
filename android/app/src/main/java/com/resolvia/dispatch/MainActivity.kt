@@ -64,7 +64,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initCameraLifecycle() {
-        runOnUiThread {
+        previewView.post {
             try {
                 cameraCaptureManager.initializeCamera(
                     lifecycleOwner = this@MainActivity,
@@ -101,19 +101,16 @@ class MainActivity : ComponentActivity() {
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
 
-        // Check required permissions on startup
-        checkAndRequestPermissions()
-
         // Set up WebViewAssetLoader to safely serve assets over https://appassets.androidplatform.net
         // This is required for Chromium to execute Vite ES modules (<script type="module">) without file:// CORS blocks.
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
 
-        // Configure hardware-accelerated full-bleed WebView with transparent background
+        // Configure full-bleed WebView with transparent background
         webView = WebView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setLayerType(View.LAYER_TYPE_NONE, null)
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
@@ -204,6 +201,9 @@ class MainActivity : ComponentActivity() {
         }
 
         setContentView(rootLayout)
+
+        // Check required permissions once views are attached to window
+        checkAndRequestPermissions()
     }
 
     private fun checkAndRequestPermissions() {

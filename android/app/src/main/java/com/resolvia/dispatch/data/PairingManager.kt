@@ -40,6 +40,17 @@ class PairingManager(context: Context) {
             .apply()
     }
 
+    fun getUploadSessionUrl(segmentId: String): String =
+        prefs.getString("session_url_$segmentId", "") ?: ""
+
+    fun saveUploadSessionUrl(segmentId: String, url: String) {
+        prefs.edit().putString("session_url_$segmentId", url).apply()
+    }
+
+    fun clearUploadSessionUrl(segmentId: String) {
+        prefs.edit().remove("session_url_$segmentId").apply()
+    }
+
     fun clearCredentials() {
         prefs.edit().clear().apply()
     }

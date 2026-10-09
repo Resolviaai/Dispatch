@@ -27,7 +27,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const [torchActive, setTorchActive] = useState(false);
   const [micActive, setMicActive] = useState(true);
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
-  const [lensOptions] = useState<number[]>([0.6, 1.0, 2.0, 3.0]);
+  const [lensOptions] = useState<number[]>([1.0, 2.0, 3.0]);
   const [cameraFacing, setCameraFacing] = useState<'back' | 'front'>('back');
   const [hasWebcam, setHasWebcam] = useState<boolean>(false);
   const [webcamError, setWebcamError] = useState<string | null>(null);
@@ -38,6 +38,19 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedBlobsRef = useRef<Blob[]>([]);
+
+  // Synchronize native recording status when running inside Dispatch Android WebView
+  useEffect(() => {
+    if (Bridge.isAvailable()) {
+      const syncRecordingState = () => {
+        const recording = Bridge.isRecording();
+        setIsRecording(recording);
+      };
+      syncRecordingState();
+      const interval = setInterval(syncRecordingState, 1000);
+      return () => clearInterval(interval);
+    }
+  }, []);
 
   // Initialize webcam for PC browser preview
   useEffect(() => {
@@ -144,6 +157,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     const finalSeconds = recordingSeconds;
     setIsRecording(false);
     Bridge.stopRecording();
+
+    if (Bridge.isAvailable()) {
+      setRecentSavedSegment(`Recording finalized (${finalSeconds}s) · Processing segment`);
+      setTimeout(() => {
+        setRecentSavedSegment(null);
+      }, 4000);
+      return;
+    }
 
     const segmentTimestamp = Date.now();
     const segmentId = `seg_${segmentTimestamp}`;

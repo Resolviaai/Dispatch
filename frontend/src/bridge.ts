@@ -31,6 +31,7 @@ declare global {
     DispatchBridge?: {
       startRecording: () => void;
       stopRecording: () => void;
+      isRecording: () => boolean;
       switchCamera: () => void;
       toggleTorch: () => boolean;
       toggleMic: () => boolean;
@@ -48,7 +49,17 @@ declare global {
 
 export const Bridge = {
   isAvailable(): boolean {
-    return typeof window !== 'undefined' && !!window.DispatchBridge;
+    return typeof window !== 'undefined' && (
+      !!(window as any).DispatchBridge ||
+      window.location.hostname === 'appassets.androidplatform.net'
+    );
+  },
+
+  isRecording(): boolean {
+    if (window.DispatchBridge?.isRecording) {
+      return window.DispatchBridge.isRecording();
+    }
+    return false;
   },
 
   startRecording(): void {

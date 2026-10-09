@@ -86,7 +86,7 @@ def build_filter_complex(
             # OPTION 1 — CROP 9:16
             # Output: 9:16. 16:9 source cropped vertically to fill 9:16 frame.
             filters.append(
-                f"[0:v]crop=ih*9/16:ih:(iw-ow)/2:0,scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}[base]"
+                f"[0:v]crop=w=trunc(ih*9/16/2)*2:h=ih:x=trunc((iw-ow)/2):y=0,scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}[base]"
             )
         elif mode == "fit_blur":
             # OPTION 2 — FIT + BLUR

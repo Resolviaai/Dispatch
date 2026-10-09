@@ -60,7 +60,7 @@ class TranscriptionWorker:
         env_interval = os.getenv("DISPATCH_TRANSCRIPTION_POLL_INTERVAL")
         self.poll_interval = poll_interval_seconds or (int(env_interval) if env_interval and env_interval.isdigit() else 15)
 
-        # Wait window for YouTube captions before Whisper fallback (default 4 hours = 14400s)
+        # Wait window for YouTube captions before Whisper fallback (default 4 hours = 14400s per Pillar 2 spec)
         env_wait = os.getenv("DISPATCH_TRANSCRIPT_WAIT_SECONDS")
         self.caption_wait_seconds = caption_wait_seconds or (int(env_wait) if env_wait and env_wait.isdigit() else 14400)
 

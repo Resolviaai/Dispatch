@@ -119,8 +119,9 @@ class SegmenterEngine(
                 }
             },
             onFinalized = { finalizedFile, durationMs ->
+                val seq = currentSequenceNumber
                 scope.launch(Dispatchers.IO) {
-                    onSegmentHardwareFinalized(segId, sessionId, finalizedFile, durationMs)
+                    onSegmentHardwareFinalized(segId, sessionId, seq, finalizedFile, durationMs)
                     if (isSessionActive) {
                         withContext(Dispatchers.Main) {
                             startNextSegment(cameraManager)
@@ -143,6 +144,7 @@ class SegmenterEngine(
     private suspend fun onSegmentHardwareFinalized(
         segId: String,
         sessId: String,
+        seqNum: Int,
         tmpFile: File,
         durationMs: Long
     ) = withContext(Dispatchers.IO) {
@@ -157,14 +159,18 @@ class SegmenterEngine(
         val fileSize = tmpFile.length()
         val sha256 = calculateSha256(tmpFile)
 
-        // Atomic commit: .tmp -> .mp4
-        tmpFile.renameTo(finalMp4)
+        // Atomic commit: .tmp -> .mp4 with safe copy fallback
+        val renamed = tmpFile.renameTo(finalMp4)
+        if (!renamed) {
+            tmpFile.copyTo(finalMp4, overwrite = true)
+            tmpFile.delete()
+        }
 
         val now = System.currentTimeMillis()
         val updatedSegment = SegmentEntity(
             segmentId = segId,
             sessionId = sessId,
-            sequenceNumber = currentSequenceNumber,
+            sequenceNumber = seqNum,
             filename = finalMp4.name,
             filepath = finalMp4.absolutePath,
             fileSizeBytes = fileSize,

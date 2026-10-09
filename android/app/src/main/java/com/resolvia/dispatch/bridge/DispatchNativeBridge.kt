@@ -72,6 +72,9 @@ class DispatchNativeBridge(
                 try {
                     segmenterEngine.stopSession(cameraManager = cameraCaptureManager)
                     segmenterEngine.triggerYouTubeUpload()
+                    cameraCaptureManager.activePreviewView?.let { pv ->
+                        cameraCaptureManager.initializeCamera(activity, pv)
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e("DispatchBridge", "stopRecording failed: ${e.message}", e)
                 }

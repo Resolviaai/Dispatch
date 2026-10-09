@@ -288,17 +288,17 @@ class HighlightWorker:
 
         # Handle zero-speech / empty transcript immediately
         if not segments or not any(s.get("text", "").strip() for s in segments):
-            logger.info("No speech detected for %s. Marking COMPLETED with 0 clips.", video_id)
+            logger.info("No speech detected for %s. Marking CLIPS_DEFINED with 0 clips.", video_id)
             db.save_clip_definitions(
                 chunk_id=chunk_id,
                 session_id=session_id,
                 video_id=video_id,
                 clip_defs=[]
             )
-            db.update_youtube_video(video_id=video_id, status="COMPLETED")
+            db.update_youtube_video(video_id=video_id, status="CLIPS_DEFINED")
             return {
                 "video_id": video_id,
-                "status": "COMPLETED",
+                "status": "CLIPS_DEFINED",
                 "clips_count": 0,
                 "model_used": None
             }
@@ -363,23 +363,23 @@ class HighlightWorker:
             # Automatic FFmpeg rendering with Roman Hinglish subtitles
             self._render_clips_for_video(video_id, saved_ids, segments, src_path)
 
-            # Reset error fields on success and transition to COMPLETED
+            # Reset error fields on success and transition to CLIPS_DEFINED
             db.update_youtube_video(
                 video_id=video_id,
-                status="COMPLETED",
+                status="CLIPS_DEFINED",
                 ai_attempt_count=0,
                 next_ai_attempt_at="",
                 last_ai_error=""
             )
 
             logger.info(
-                "Pillar 3 Highlight SUCCESS for %s -> COMPLETED (Model: %s, Raw: %d, Accepted/Rendered: %d, ClipIDs: %s)",
+                "Pillar 3 Highlight SUCCESS for %s -> CLIPS_DEFINED (Model: %s, Raw: %d, Accepted/Rendered: %d, ClipIDs: %s)",
                 video_id, model_used, len(raw_clips), len(saved_ids), saved_ids
             )
 
             return {
                 "video_id": video_id,
-                "status": "COMPLETED",
+                "status": "CLIPS_DEFINED",
                 "clips_count": len(saved_ids),
                 "clip_ids": saved_ids,
                 "model_used": model_used
