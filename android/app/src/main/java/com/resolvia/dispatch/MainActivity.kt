@@ -22,6 +22,9 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -38,6 +41,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var database: AppDatabase
     private lateinit var pairingManager: PairingManager
     private lateinit var webView: WebView
+    private lateinit var previewView: PreviewView
 
     private val permissionsToRequest = buildList {
         add(Manifest.permission.CAMERA)
@@ -60,14 +64,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initCameraLifecycle() {
-        lifecycleScope.launch {
+        runOnUiThread {
             try {
-                val ok = cameraCaptureManager.bindLifecycle(this@MainActivity)
-                if (!ok) {
-                    android.util.Log.e("MainActivity", "Failed to bind CameraX lifecycle")
-                    Toast.makeText(this@MainActivity, "Camera hardware initialization failed", Toast.LENGTH_LONG).show()
-                } else {
-                    android.util.Log.i("MainActivity", "CameraX 1080p VideoCapture bound to MainActivity.")
+                cameraCaptureManager.initializeCamera(
+                    lifecycleOwner = this@MainActivity,
+                    previewView = previewView
+                ) {
+                    android.util.Log.i("MainActivity", "CameraX 1080p VideoCapture + Preview bound successfully.")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Error binding camera lifecycle: ${e.message}", e)
@@ -88,6 +91,16 @@ class MainActivity : ComponentActivity() {
         cameraCaptureManager = CameraCaptureManager(this)
         pairingManager = PairingManager(this)
 
+        // Initialize native camera PreviewView (placed underneath WebView)
+        previewView = PreviewView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+
         // Check required permissions on startup
         checkAndRequestPermissions()
 
@@ -97,9 +110,10 @@ class MainActivity : ComponentActivity() {
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
 
-        // Configure hardware-accelerated full-bleed WebView
+        // Configure hardware-accelerated full-bleed WebView with transparent background
         webView = WebView(this).apply {
-            setBackgroundColor(Color.parseColor("#161616")) // Layer 0: bg-studio anchor
+            setBackgroundColor(Color.TRANSPARENT)
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
@@ -178,7 +192,18 @@ class MainActivity : ComponentActivity() {
         // Load canonical React application packaged in assets
         webView.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
 
-        setContentView(webView)
+        // Root container: PreviewView underneath, WebView on top
+        val rootLayout = FrameLayout(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.parseColor("#161616"))
+            addView(previewView)
+            addView(webView)
+        }
+
+        setContentView(rootLayout)
     }
 
     private fun checkAndRequestPermissions() {

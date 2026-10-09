@@ -156,8 +156,10 @@ export const App: React.FC = () => {
     }
   };
 
+  const isNative = Bridge.isAvailable();
+
   return (
-    <div className="h-[100dvh] w-full bg-studio text-text-main flex flex-col items-center overflow-hidden p-0 md:py-2 md:px-3 font-sans">
+    <div className={`h-[100dvh] w-full ${isNative && currentTab === 'record' ? 'bg-transparent' : 'bg-studio'} text-text-main flex flex-col items-center overflow-hidden p-0 md:py-2 md:px-3 font-sans`}>
       
       {/* DESKTOP REVIEW CONTROL HEADER (Layer 1: Surface 100) */}
       <header className="hidden md:flex shrink-0 items-center justify-between w-full max-w-5xl mb-1.5 px-3 py-1.5 rounded-xl bg-surface-100 border border-border shadow-sm">
@@ -199,14 +201,14 @@ export const App: React.FC = () => {
       {/* PRODUCT INTERFACE CONTAINER (Layer 1 Elevated Window / Phone Body) */}
       <div className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden">
         <main
-          className={`relative flex flex-col bg-studio overflow-hidden transition-all duration-200 ${
+          className={`relative flex flex-col ${isNative && currentTab === 'record' ? 'bg-transparent' : 'bg-studio'} overflow-hidden transition-all duration-200 ${
             isMobileFrame
               ? 'w-full h-full md:w-[393px] md:h-full md:max-h-[852px] md:rounded-[36px] md:border md:border-border md:shadow-[0_20px_50px_rgba(0,0,0,0.8)]'
               : 'w-full max-w-5xl h-full md:max-h-[92vh] md:rounded-2xl md:border md:border-border shadow-2xl'
           }`}
         >
-          {/* MOBILE HARDWARE NOTCH & STATUS BAR */}
-          {isMobileFrame && (
+          {/* MOBILE HARDWARE NOTCH & STATUS BAR (Only shown in PC desktop browser preview, hidden on Android device) */}
+          {isMobileFrame && !isNative && (
             <div className="shrink-0 h-9 px-5 flex items-center justify-between text-xs font-mono text-text-secondary select-none z-30 bg-surface-100/90 border-b border-border/40 backdrop-blur">
               <span className="font-semibold text-[12px] text-text-main">{timeStr || '12:00'}</span>
               <div className="w-20 h-3.5 rounded-full bg-studio mx-auto hidden md:block border border-border/40" />
@@ -256,8 +258,8 @@ export const App: React.FC = () => {
           <BottomNav currentTab={currentTab} onTabChange={setCurrentTab} />
         )}
 
-        {/* HOME INDICATOR BAR (Mobile View) */}
-        {isMobileFrame && (
+        {/* HOME INDICATOR BAR (Only in desktop browser preview, hidden on Android device) */}
+        {isMobileFrame && !isNative && (
           <div className={`h-4 ${isEditorOpen ? 'bg-[#16191E]' : 'bg-surface-100'} flex items-center justify-center shrink-0`}>
             <div className="w-32 h-1 rounded-full bg-surface-300" />
           </div>

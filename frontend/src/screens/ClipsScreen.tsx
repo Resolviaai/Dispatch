@@ -1022,8 +1022,8 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
 };
 
 export const ClipsScreen: React.FC<ClipsScreenProps> = ({
-  pcHost: _pcHost,
-  isMobileFrame: _isMobileFrame = true,
+  pcHost,
+  isMobileFrame = true,
   onEditorOpenChange,
 }) => {
   // Navigation Model: 3-Level Architecture

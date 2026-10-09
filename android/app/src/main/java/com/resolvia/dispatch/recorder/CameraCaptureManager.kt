@@ -114,6 +114,9 @@ class CameraCaptureManager(private val context: Context) {
     val isInitialized: Boolean
         get() = videoCapture != null
 
+    var activePreviewView: PreviewView? = null
+        private set
+
     /**
      * Binds CameraX Preview and VideoCapture to the given LifecycleOwner and PreviewView.
      */
@@ -124,6 +127,7 @@ class CameraCaptureManager(private val context: Context) {
         onReady: (() -> Unit)? = null
     ) {
         activeLifecycleOwner = lifecycleOwner
+        activePreviewView = previewView
         currentLensFacing = lensFacing
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
@@ -305,7 +309,11 @@ class CameraCaptureManager(private val context: Context) {
         isTorchEnabled = false
         isAeAfLocked = false
         val owner = activeLifecycleOwner
-        if (owner != null) {
+        val pv = activePreviewView
+        if (owner != null && pv != null) {
+            initializeCamera(owner, pv, nextLens)
+            currentLensFacing = nextLens
+        } else if (owner != null) {
             val success = bindLifecycle(owner, nextLens)
             if (success) {
                 currentLensFacing = nextLens

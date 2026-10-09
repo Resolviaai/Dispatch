@@ -234,10 +234,10 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   };
 
   return (
-    <div className="relative w-full h-full flex flex-col justify-between bg-studio text-text-main overflow-hidden select-none font-sans">
+    <div className={`relative w-full h-full flex flex-col justify-between ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-studio'} text-text-main overflow-hidden select-none font-sans`}>
       
       {/* CAMERA VIEWFINDER AREA */}
-      <div className="absolute inset-0 z-0 flex items-center justify-center bg-black overflow-hidden">
+      <div className={`absolute inset-0 z-0 flex items-center justify-center ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-black'} overflow-hidden`}>
         {hasWebcam ? (
           <video
             ref={videoRef}
@@ -249,14 +249,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             }`}
             style={{ transform: `scale(${zoomLevel})` }}
           />
-        ) : (
+        ) : Bridge.isAvailable() ? null : (
           <div className="flex flex-col items-center justify-center p-6 text-center text-text-secondary">
             <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-3 shadow-inner">
               <Video className="w-8 h-8 text-primary" />
             </div>
-            <p className="text-sm font-semibold text-text-main">POCO C65 Hardware Viewfinder</p>
+            <p className="text-sm font-semibold text-text-main">Browser Preview Mode</p>
             <p className="text-xs text-text-secondary mt-1 max-w-[260px] leading-relaxed">
-              Direct native CameraX stream runs underneath when deployed on Android.
+              Connect a webcam or open in Dispatch Android app for live CameraX hardware stream.
             </p>
             {webcamError && (
               <span className="text-[10px] text-text-muted mt-2 font-mono">
