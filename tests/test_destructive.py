@@ -51,6 +51,7 @@ AUTH_TOKEN = "dispatch_paired_secret_default"
 class TestDestructiveChaos(unittest.TestCase):
 
     def setUp(self):
+        self._orig_db_path = os.environ.get("DISPATCH_DB_PATH")
         os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
         self.temp_dir = Path(tempfile.mkdtemp(prefix="dispatch_destr_"))
         self.test_db = self.temp_dir / "test_destr.db"
@@ -65,7 +66,10 @@ class TestDestructiveChaos(unittest.TestCase):
             conn.execute("DELETE FROM sessions;")
 
     def tearDown(self):
-        os.environ.pop("DISPATCH_DB_PATH", None)
+        if self._orig_db_path is not None:
+            os.environ["DISPATCH_DB_PATH"] = self._orig_db_path
+        else:
+            os.environ.pop("DISPATCH_DB_PATH", None)
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 

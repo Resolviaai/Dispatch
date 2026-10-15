@@ -52,11 +52,16 @@ def backup_database(backup_dir: Optional[Path] = None) -> Path:
     return backup_file
 
 
+_default_db_path = DB_PATH
+
 @contextlib.contextmanager
 def get_db_connection():
     """Context manager yielding a thread-safe SQLite connection with auto-commit and guaranteed close."""
     import os
-    db_file = os.getenv("DISPATCH_DB_PATH") or str(DB_PATH)
+    if DB_PATH != _default_db_path:
+        db_file = str(DB_PATH)
+    else:
+        db_file = os.getenv("DISPATCH_DB_PATH") or str(DB_PATH)
     conn = sqlite3.connect(str(db_file), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
