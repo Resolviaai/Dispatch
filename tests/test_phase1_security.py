@@ -63,6 +63,37 @@ class TestPhase1Security(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
+    def test_hostile_prefix_origin_rejected(self):
+        """Assert requests with origins like http://localhost.evil.com or http://localhost:9999 are rejected."""
+        resp = self.client.post(
+            "/api/settings",
+            json={"publish_mode": "private"},
+            headers={"origin": "http://localhost.evil.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+        resp = self.client.post(
+            "/api/settings",
+            json={"publish_mode": "private"},
+            headers={"origin": "http://localhost:9999"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pairing_code_requires_trusted_host_and_origin(self):
+        """Assert pairing-code endpoint rejects untrusted Host header even from loopback client."""
+        resp = self.client.post(
+            "/api/integrations/youtube/pairing-code",
+            json={"understands_http_risk": True},
+            headers={"host": "attacker-rebinding.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_studio_endpoint_serves_html(self):
+        """Assert GET /studio serves 200 HTML response."""
+        resp = self.client.get("/studio")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,14 +36,16 @@ def process_outbox_queue() -> int:
 
 def _process_outbox_queue_internal() -> int:
     # 1. Recover stale uploading jobs orphaned by unexpected process restarts (> 10 min)
+    # If job has been uploading for > 10 min, do NOT blindly republish: mark 'reconciliation_required'
     try:
         with db.get_db_connection() as conn:
             conn.execute("""
                 UPDATE publishing_outbox 
-                SET status = 'queued',
-                    last_error = 'Recovered from stale uploading state after process restart'
+                SET status = 'reconciliation_required',
+                    updated_at = CURRENT_TIMESTAMP,
+                    last_error = 'Stale uploading state detected after process interruption; manual or remote reconciliation required'
                 WHERE status = 'uploading' 
-                  AND (julianday('now') - julianday(created_at)) * 1440.0 > 10.0
+                  AND (julianday('now') - julianday(COALESCE(attempt_started_at, updated_at, created_at))) * 1440.0 > 10.0
             """)
     except Exception as e:
         logger.debug("Stale outbox recovery check note: %s", e)
@@ -64,12 +66,27 @@ def _process_outbox_queue_internal() -> int:
         title = job.get("title") or "Dispatch Video"
         description = job.get("description") or ""
         hashtags = job.get("hashtags") or ""
+        attempt_count = job.get("attempt_count") or 0
+        remote_id = job.get("remote_id")
+
+        # If remote_id already exists from a previous ambiguous attempt, do not republish!
+        if remote_id:
+            logger.warning("Job %s already has remote_id %s; marking reconciliation_required rather than republishing", job_id, remote_id)
+            with db.get_db_connection() as conn:
+                conn.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'reconciliation_required',
+                        updated_at = CURRENT_TIMESTAMP,
+                        last_error = 'Job already has confirmed remote_id; reconciliation required before retry'
+                    WHERE id = ?
+                """, (job_id,))
+            continue
 
         if not video_path or not video_path.exists():
             logger.error("Job %s clip video file missing: %s", job_id, video_path)
             with db.get_db_connection() as conn:
                 conn.execute(
-                    "UPDATE publishing_outbox SET status = 'failed', last_error = 'Local video file missing' WHERE id = ?",
+                    "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = 'Local video file missing' WHERE id = ?",
                     (job_id,)
                 )
             continue
@@ -83,17 +100,27 @@ def _process_outbox_queue_internal() -> int:
                 logger.error("Job %s cannot be published: %s", job_id, err_msg)
                 with db.get_db_connection() as conn:
                     conn.execute(
-                        "UPDATE publishing_outbox SET status = 'failed', last_error = ? WHERE id = ?",
+                        "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
                         (err_msg, job_id)
                     )
                 continue
 
-        # Mark as uploading
+        # Atomically claim job as uploading
         with db.get_db_connection() as conn:
-            conn.execute("UPDATE publishing_outbox SET status = 'uploading' WHERE id = ?", (job_id,))
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'uploading',
+                    attempt_started_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'queued'
+            """, (job_id,))
+            if cursor.rowcount == 0:
+                logger.debug("Job %s already claimed by another worker; skipping", job_id)
+                continue
 
         try:
-            logger.info("Publishing clip %s to %s (Mode: %s)", clip_id, platform, publish_mode)
+            logger.info("Publishing clip %s to %s (Mode: %s, Attempt: %d)", clip_id, platform, publish_mode, attempt_count + 1)
 
             if platform in ("youtube", "youtube_shorts"):
                 privacy = "public" if publish_mode == "public" else "private"
@@ -125,7 +152,7 @@ def _process_outbox_queue_internal() -> int:
                 logger.warning("%s for job %s", err_msg, job_id)
                 with db.get_db_connection() as conn:
                     conn.execute(
-                        "UPDATE publishing_outbox SET status = 'failed', last_error = ? WHERE id = ?",
+                        "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
                         (err_msg, job_id)
                     )
                 continue
@@ -134,7 +161,11 @@ def _process_outbox_queue_internal() -> int:
             with db.get_db_connection() as conn:
                 conn.execute("""
                     UPDATE publishing_outbox 
-                    SET status = 'published', remote_id = ?, remote_url = ?, published_at = CURRENT_TIMESTAMP
+                    SET status = 'published', 
+                        remote_id = ?, 
+                        remote_url = ?, 
+                        updated_at = CURRENT_TIMESTAMP,
+                        published_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 """, (result.get("remote_id"), result.get("remote_url"), job_id))
 
@@ -150,20 +181,49 @@ def _process_outbox_queue_internal() -> int:
                 conn.execute("""
                     UPDATE publishing_outbox 
                     SET status = 'blocked_needs_auth',
+                        updated_at = CURRENT_TIMESTAMP,
                         last_error = ?
                     WHERE id = ?
                 """, (str(pe), job_id))
 
         except Exception as e:
-            logger.error("Publishing error for job %s (%s): %s", job_id, platform, e)
+            err_str = str(e)
+            logger.error("Publishing error for job %s (%s): %s", job_id, platform, err_str)
+            new_attempts = attempt_count + 1
+            # Check for ambiguous timeout or disconnect errors
+            is_ambiguous = any(term in err_str.lower() for term in ("timeout", "timed out", "connection reset", "broken pipe", "remotely closed"))
+            
             with db.get_db_connection() as conn:
-                conn.execute("""
-                    UPDATE publishing_outbox 
-                    SET status = CASE WHEN attempt_count >= 4 THEN 'failed' ELSE 'queued' END,
-                        attempt_count = attempt_count + 1,
-                        last_error = ?
-                    WHERE id = ?
-                """, (str(e), job_id))
+                if is_ambiguous and new_attempts >= 2:
+                    conn.execute("""
+                        UPDATE publishing_outbox 
+                        SET status = 'reconciliation_required',
+                            attempt_count = ?,
+                            updated_at = CURRENT_TIMESTAMP,
+                            last_error = ?
+                        WHERE id = ?
+                    """, (new_attempts, f"Ambiguous remote error: {err_str}", job_id))
+                elif new_attempts >= 5:
+                    conn.execute("""
+                        UPDATE publishing_outbox 
+                        SET status = 'failed',
+                            attempt_count = ?,
+                            updated_at = CURRENT_TIMESTAMP,
+                            last_error = ?
+                        WHERE id = ?
+                    """, (new_attempts, err_str, job_id))
+                else:
+                    # Exponential backoff: 30s, 60s, 120s, 240s...
+                    delay_seconds = min(3600, 30 * (2 ** (new_attempts - 1)))
+                    conn.execute("""
+                        UPDATE publishing_outbox 
+                        SET status = 'queued',
+                            attempt_count = ?,
+                            updated_at = CURRENT_TIMESTAMP,
+                            next_retry_at = datetime('now', ?),
+                            last_error = ?
+                        WHERE id = ?
+                    """, (new_attempts, f"+{delay_seconds} seconds", err_str, job_id))
 
     return success_count
 

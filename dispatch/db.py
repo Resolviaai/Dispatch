@@ -175,7 +175,7 @@ def init_db():
                 id TEXT PRIMARY KEY,
                 clip_id TEXT NOT NULL,
                 platform TEXT NOT NULL, -- youtube, instagram, linkedin, x
-                status TEXT NOT NULL DEFAULT 'queued', -- queued, uploading, published, failed
+                status TEXT NOT NULL DEFAULT 'queued', -- queued, uploading, published, failed, blocked_needs_auth, reconciliation_required
                 publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
                 attempt_count INTEGER DEFAULT 0,
                 last_error TEXT,
@@ -183,6 +183,9 @@ def init_db():
                 remote_id TEXT,
                 remote_url TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                attempt_started_at TIMESTAMP,
+                next_retry_at TIMESTAMP,
                 published_at TIMESTAMP,
                 FOREIGN KEY (clip_id) REFERENCES clips (id) ON DELETE CASCADE
             );
@@ -292,6 +295,16 @@ def init_db():
         if "rendered_layout_mode" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN rendered_layout_mode TEXT;")
             cursor.execute("UPDATE clips SET rendered_layout_mode = layout_mode WHERE rendered_layout_mode IS NULL AND video_path IS NOT NULL;")
+
+        # Migration: Ensure outbox columns exist if created with older schema
+        cursor.execute("PRAGMA table_info(publishing_outbox);")
+        outbox_cols = [col[1] for col in cursor.fetchall()]
+        if "updated_at" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN updated_at TIMESTAMP;")
+        if "attempt_started_at" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN attempt_started_at TIMESTAMP;")
+        if "next_retry_at" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN next_retry_at TIMESTAMP;")
 
         # Default settings if not already present
         cursor.execute("""
@@ -555,6 +568,7 @@ def get_outbox_queue() -> List[Dict[str, Any]]:
             FROM publishing_outbox po
             JOIN clips c ON po.clip_id = c.id
             WHERE po.status = 'queued'
+              AND (po.next_retry_at IS NULL OR po.next_retry_at <= CURRENT_TIMESTAMP)
             ORDER BY po.created_at ASC
         """)
         return [dict(row) for row in cursor.fetchall()]

@@ -250,5 +250,77 @@ class TestSyncEngine(unittest.TestCase):
         self.assertEqual(res.status_code, 401)
 
 
+    def test_verify_chunk_missing_file_with_db_row_returns_missing(self):
+        """P0 Regression: Ensure verify-chunk and reconcile never report VERIFIED when file is missing from disk."""
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
+        init_db()
+
+        seg_id = "seg_ghost_file_test"
+        dummy_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        nonexistent_path = PROCESSING_DIR / f"{seg_id}.mp4"
+        nonexistent_path.unlink(missing_ok=True)
+
+        # Register in database with matching hash, pointing to a nonexistent file
+        with get_db_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (id, status, notes) VALUES (?, ?, ?)",
+                ("sess_ghost", "recording", "Ghost Session")
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, status) VALUES (?, ?, ?, ?, ?, ?)",
+                (seg_id, "sess_ghost", f"{seg_id}.mp4", str(nonexistent_path), dummy_hash, "processed")
+            )
+
+        try:
+            # 1. verify-chunk must return verified: False, status: MISSING
+            res = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={dummy_hash}&file_size=100",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertFalse(data["verified"], "Must not verify chunk when physical file is missing from disk")
+            self.assertEqual(data["status"], "MISSING")
+
+            # 2. reconcile must not return VERIFIED
+            rec_res = client.post(
+                "/api/sync/reconcile",
+                json={
+                    "auth_token": AUTH_TOKEN,
+                    "manifest": [{
+                        "segment_id": seg_id,
+                        "session_id": "sess_ghost",
+                        "file_size_bytes": 100,
+                        "sha256_hash": dummy_hash
+                    }]
+                }
+            )
+            rec_data = rec_res.json()["reconciled"]
+            self.assertEqual(len(rec_data), 1)
+            self.assertNotEqual(rec_data[0]["status"], "VERIFIED", "Reconcile must not report VERIFIED without physical file")
+            self.assertEqual(rec_data[0]["status"], "MISSING")
+
+            # 3. upload/init must not return already_completed or verified: True
+            init_res = client.post(
+                "/api/sync/upload/init",
+                json={
+                    "segment_id": seg_id,
+                    "session_id": "sess_ghost",
+                    "filename": f"{seg_id}.mp4",
+                    "file_size_bytes": 100,
+                    "sha256_hash": dummy_hash,
+                    "auth_token": AUTH_TOKEN
+                }
+            )
+            self.assertEqual(init_res.status_code, 200)
+            init_data = init_res.json()
+            self.assertFalse(init_data["verified"], "Upload init must not report verified: True when physical file is missing")
+            self.assertEqual(init_data["status"], "in_progress")
+        finally:
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
+                conn.execute("DELETE FROM sessions WHERE id = 'sess_ghost'")
+
+
 if __name__ == "__main__":
     unittest.main()

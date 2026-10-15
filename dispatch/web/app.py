@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import ipaddress
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -92,23 +93,40 @@ def verify_dashboard_auth(request: Request) -> None:
 
     client_host = request.client.host if request.client else "unknown"
     if is_trusted_localhost(client_host):
-        # Prevent DNS rebinding attacks
-        host_header = request.headers.get("host", "").split(":")[0].strip().lower()
-        if host_header and host_header not in ("localhost", "127.0.0.1", "::1", "testserver"):
-            logger.warning("Rejected request to %s: untrusted host header '%s'", request.url.path, host_header)
+        # Prevent DNS rebinding attacks: strictly validate Host header against allowed loopback hosts
+        raw_host = request.headers.get("host", "").strip()
+        parsed_host = raw_host.split(":")[0].strip().lower()
+        if parsed_host and parsed_host not in ("localhost", "127.0.0.1", "::1", "testserver"):
+            logger.warning("Rejected request to %s: untrusted host header '%s'", request.url.path, raw_host)
             raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
 
-        origin_header = request.headers.get("origin", "").strip().lower()
+        origin_header = request.headers.get("origin", "").strip()
         if origin_header:
-            allowed_prefixes = (
-                "http://localhost",
-                "http://127.0.0.1",
-                "https://appassets.androidplatform.net",
-                "http://testserver",
-            )
-            if not any(origin_header.startswith(p) for p in allowed_prefixes):
-                logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
-                raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
+            try:
+                split_origin = urllib.parse.urlsplit(origin_header)
+                origin_scheme = split_origin.scheme.lower()
+                origin_hostname = (split_origin.hostname or "").lower()
+                origin_port = split_origin.port
+
+                # Only allow http on loopback/testserver, or https on appassets
+                is_valid_loopback = (
+                    origin_scheme == "http"
+                    and origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
+                    and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
+                )
+                is_valid_android = (
+                    origin_scheme == "https"
+                    and origin_hostname == "appassets.androidplatform.net"
+                )
+
+                if not (is_valid_loopback or is_valid_android):
+                    logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
+                    raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
+            except Exception as e:
+                if isinstance(e, HTTPException):
+                    raise
+                logger.warning("Malformed Origin header rejected: %s", origin_header)
+                raise HTTPException(status_code=403, detail="Forbidden: Malformed Origin header")
         return
 
     raise HTTPException(status_code=401, detail="Authentication required for this operation")
@@ -1462,6 +1480,10 @@ async def create_youtube_pairing_code(request: Request, payload: PairingCodeIssu
     client_host = request.client.host if request.client else "unknown"
     if not is_trusted_localhost(client_host):
         raise HTTPException(status_code=403, detail="Create pairing codes from the PC dashboard itself.")
+    
+    # Enforce Host and Origin header checks even for loopback clients
+    verify_dashboard_auth(request)
+
     if not payload.understands_http_risk:
         raise HTTPException(
             status_code=400,
@@ -1501,6 +1523,9 @@ async def pair_youtube_credentials(
         else:
             from dispatch.sync.receiver import verify_token
             verify_token(authorization)
+    else:
+        # Loopback caller must pass host/origin checks
+        verify_dashboard_auth(request)
 
     credentials = _youtube_credentials_response()
     if not credentials["configured"]:
@@ -1840,4 +1865,24 @@ async def get_site_manifest():
     if manifest.exists():
         return FileResponse(manifest, media_type="application/manifest+json")
     raise HTTPException(status_code=404, detail="Manifest not found")
+
+
+# React Studio Static Assets & Route (/studio)
+STUDIO_DIR = ROOT_DIR / "android" / "app" / "src" / "main" / "assets" / "web"
+if STUDIO_DIR.exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/studio/assets", StaticFiles(directory=str(STUDIO_DIR / "assets")), name="studio-assets")
+
+    @app.get("/studio", response_class=HTMLResponse)
+    @app.get("/studio/{full_path:path}", response_class=HTMLResponse)
+    async def serve_studio(full_path: str = ""):
+        # Check if requesting a direct static file in STUDIO_DIR (e.g. favicon, manifest)
+        target = (STUDIO_DIR / full_path).resolve()
+        if full_path and target.exists() and target.is_file() and str(target).startswith(str(STUDIO_DIR.resolve())):
+            return FileResponse(target)
+        index_file = STUDIO_DIR / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Studio interface not found")
+
 

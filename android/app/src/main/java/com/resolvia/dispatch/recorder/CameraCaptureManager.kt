@@ -651,10 +651,13 @@ class CameraCaptureManager(private val context: Context) {
         activeRecording = pendingRecording.start(ContextCompat.getMainExecutor(context)) { recordEvent ->
             when (recordEvent) {
                 is VideoRecordEvent.Start -> {
+                    isRecording = true
+                    RecordingForegroundService.instance?.updateNotification()
                     Log.i(TAG, "Started recording 1080p FHD video segment: ${targetTmpFile.name} ($currentOrientationMode)")
                 }
                 is VideoRecordEvent.Finalize -> {
                     isRecording = false
+                    RecordingForegroundService.instance?.updateNotification()
                     val durationMs = recordEvent.recordingStats.recordedDurationNanos / 1_000_000
                     if (!recordEvent.hasError()) {
                         if (durationMs < 1000L || targetTmpFile.length() == 0L) {
@@ -683,6 +686,7 @@ class CameraCaptureManager(private val context: Context) {
             activeRecording?.stop()
             activeRecording = null
             isRecording = false
+            RecordingForegroundService.instance?.updateNotification()
         }
     }
 

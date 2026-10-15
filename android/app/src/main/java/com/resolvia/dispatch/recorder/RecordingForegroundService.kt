@@ -138,6 +138,11 @@ class RecordingForegroundService : LifecycleService() {
         }
     }
 
+    fun updateNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.notify(NOTIFICATION_ID, createNotification())
+    }
+
     private fun createNotification(): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -146,12 +151,32 @@ class RecordingForegroundService : LifecycleService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val isActivelyRecording = cameraManager?.isRecording == true
+
+        val title = if (isActivelyRecording) {
+            "Dispatch: Recording Active"
+        } else {
+            "Dispatch: Recording Interrupted"
+        }
+
+        val content = if (isActivelyRecording) {
+            "Continuous segments saving to durable outbox"
+        } else {
+            "Camera session stopped or awaiting recovery"
+        }
+
+        val icon = if (isActivelyRecording) {
+            android.R.drawable.ic_menu_camera
+        } else {
+            android.R.drawable.ic_dialog_alert
+        }
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Dispatch: Recording Active")
-            .setContentText("Continuous segments saving to durable outbox")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setSmallIcon(icon)
             .setContentIntent(pendingIntent)
-            .setOngoing(true)
+            .setOngoing(isActivelyRecording)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }

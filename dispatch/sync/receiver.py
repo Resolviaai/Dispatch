@@ -378,10 +378,14 @@ async def verify_chunk_explicit(
         )
         row = cursor.fetchone()
         if row and (row["file_hash"] or "").lower() == sha256.lower():
-            db_path = Path(row["filepath"]) if row.get("filepath") else None
-            if db_path and db_path.exists():
+            row_dict = dict(row)
+            db_path = Path(row_dict["filepath"]) if row_dict.get("filepath") else None
+            if db_path and db_path.exists() and db_path.stat().st_size > 0:
+                if file_size is not None and db_path.stat().st_size != file_size:
+                    return {"verified": False, "reason": "size_mismatch", "status": "RETRY_REQUIRED"}
                 return {"verified": True, "segment_id": seg_id, "size": db_path.stat().st_size, "status": "VERIFIED"}
-            return {"verified": True, "segment_id": seg_id, "status": "VERIFIED_PROCESSED"}
+            logger.warning("Chunk %s found in DB with matching hash, but physical file %s is missing from disk. Reporting MISSING to protect mobile source.", seg_id, row_dict.get("filepath"))
+            return {"verified": False, "reason": "file_missing_on_disk", "status": "MISSING"}
 
     return {"verified": False, "reason": "file_not_found", "status": "MISSING"}
 
@@ -457,7 +461,13 @@ async def reconcile_manifest(payload: ReconcileRequest):
                             pass
 
             elif db_chunk and (db_chunk["file_hash"] or "").lower() == expected_sha256.lower():
-                is_verified = True
+                chunk_dict = dict(db_chunk)
+                db_path = Path(chunk_dict["filepath"]) if chunk_dict.get("filepath") else None
+                if db_path and db_path.exists() and verify_file_integrity(db_path, expected_size, expected_sha256):
+                    is_verified = True
+                else:
+                    logger.warning("Reconcile: Chunk %s recorded in DB, but physical file %s is missing from disk.", seg_id, chunk_dict.get("filepath"))
+                    is_verified = False
 
             if is_verified:
                 results.append({
@@ -516,14 +526,18 @@ async def init_upload(payload: InitUploadRequest):
     else:
         with db.get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ? OR filename LIKE ? ORDER BY created_at DESC", (final_name, f"{seg_id}%"))
+            cursor.execute("SELECT status, file_hash, filepath FROM chunks WHERE filename = ? OR filename LIKE ? ORDER BY created_at DESC", (final_name, f"{seg_id}%"))
             db_chunk = cursor.fetchone()
             if db_chunk and (db_chunk["file_hash"] or "").lower() == payload.sha256_hash.lower():
-                return {
-                    "status": "already_completed",
-                    "remote_offset": payload.file_size_bytes,
-                    "verified": True
-                }
+                chunk_dict = dict(db_chunk)
+                db_path = Path(chunk_dict["filepath"]) if chunk_dict.get("filepath") else None
+                if db_path and db_path.exists() and verify_file_integrity(db_path, payload.file_size_bytes, payload.sha256_hash):
+                    return {
+                        "status": "already_completed",
+                        "remote_offset": payload.file_size_bytes,
+                        "verified": True
+                    }
+                logger.warning("init_upload: Chunk %s found in DB, but physical file %s is missing from disk. Requesting full upload.", seg_id, chunk_dict.get("filepath"))
 
     part_file = INCOMING_DIR / f"{seg_id}.part"
     if part_file.exists():
