@@ -164,14 +164,88 @@ class DispatchNativeBridge(
     @JavascriptInterface
     fun getYouTubeStatus(): String {
         val configured = pairingManager.isYouTubeConfigured
+        if (!configured) {
+            return JsonObject().apply {
+                addProperty("connected", false)
+                addProperty("verified", false)
+            }.toString()
+        }
+
+        // Return verified channel info if cached, or verify asynchronously
+        val cachedTitle = pairingManager.youtubeChannelTitle
+        val cachedId = pairingManager.youtubeChannelId
+        val isVerified = cachedTitle.isNotBlank() && cachedId.isNotBlank()
+
         val obj = JsonObject().apply {
-            addProperty("connected", configured)
-            if (configured) {
-                addProperty("channelTitle", "YouTube Channel (Direct Ingest)")
-                addProperty("account", "Dispatch Creator")
+            addProperty("connected", isVerified)
+            addProperty("verified", isVerified)
+            if (isVerified) {
+                addProperty("channelTitle", cachedTitle)
+                addProperty("channelId", cachedId)
+                addProperty("account", cachedTitle)
+            } else {
+                addProperty("channelTitle", "Unverified Channel")
+                addProperty("message", "Credentials present but channel unverified. Reconnect to refresh.")
             }
         }
         return obj.toString()
+    }
+
+    private fun verifyYouTubeChannelRemote(accessToken: String): Pair<String, String>? {
+        return try {
+            val req = Request.Builder()
+                .url("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true")
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val bodyStr = resp.body?.string() ?: return null
+                val json = gson.fromJson(bodyStr, JsonObject::class.java)
+                val items = json.getAsJsonArray("items")
+                if (items != null && items.size() > 0) {
+                    val item = items.get(0).asJsonObject
+                    val id = item.get("id")?.asString ?: ""
+                    val title = item.getAsJsonObject("snippet")?.get("title")?.asString ?: "YouTube Channel"
+                    if (id.isNotBlank()) Pair(title, id) else null
+                } else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun refreshAccessToken(): String? {
+        val refreshToken = pairingManager.youtubeRefreshToken
+        val clientId = pairingManager.youtubeClientId
+        val clientSecret = pairingManager.youtubeClientSecret
+        if (refreshToken.isBlank() || clientId.isBlank() || clientSecret.isBlank()) return null
+
+        val formBody = okhttp3.FormBody.Builder()
+            .add("client_id", clientId)
+            .add("client_secret", clientSecret)
+            .add("refresh_token", refreshToken)
+            .add("grant_type", "refresh_token")
+            .build()
+
+        val req = Request.Builder()
+            .url("https://oauth2.googleapis.com/token")
+            .post(formBody)
+            .build()
+
+        return try {
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val body = gson.fromJson(resp.body?.string(), JsonObject::class.java)
+                val newAccessToken = body.get("access_token")?.asString
+                if (!newAccessToken.isNullOrBlank()) {
+                    pairingManager.youtubeAccessToken = newAccessToken
+                    newAccessToken
+                } else null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     @JavascriptInterface
@@ -217,10 +291,38 @@ class DispatchNativeBridge(
                     refreshToken.isNotBlank() && clientId.isNotBlank() && clientSecret.isNotBlank()
                 ) {
                     pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
-                    JsonObject().apply {
-                        addProperty("success", true)
-                        addProperty("message", "YouTube connected on this phone.")
-                    }.toString()
+
+                    // Verify account against YouTube API directly
+                    val freshToken = refreshAccessToken()
+                    val channelInfo = if (freshToken != null) verifyYouTubeChannelRemote(freshToken) else null
+                    if (channelInfo != null) {
+                        pairingManager.youtubeChannelTitle = channelInfo.first
+                        pairingManager.youtubeChannelId = channelInfo.second
+
+                        // Resume any waiting segments in Room DB
+                        activity.lifecycleScope.launch(Dispatchers.IO) {
+                            try {
+                                val waiting = database.recordingDao().getPendingUploadSegments()
+                                for (seg in waiting) {
+                                    if (seg.status == "WAITING_FOR_YOUTUBE") {
+                                        database.recordingDao().updateSegmentStatus(seg.segmentId, "QUEUED_FOR_UPLOAD")
+                                    }
+                                }
+                                segmenterEngine.triggerYouTubeUpload()
+                            } catch (_: Exception) {}
+                        }
+
+                        JsonObject().apply {
+                            addProperty("success", true)
+                            addProperty("channelTitle", channelInfo.first)
+                            addProperty("message", "Connected to verified YouTube channel: ${channelInfo.first}")
+                        }.toString()
+                    } else {
+                        JsonObject().apply {
+                            addProperty("success", false)
+                            addProperty("message", "Credentials received but YouTube account verification failed. Check Google OAuth permissions.")
+                        }.toString()
+                    }
                 } else {
                     JsonObject().apply {
                         addProperty("success", false)

@@ -96,22 +96,46 @@ class YouTubeDirectUploadWorker(
                 val result = uploadToYouTubeDirect(accessToken, file, dispatchId, seg)
 
                 if (result.success && !result.youtubeVideoId.isNullOrBlank()) {
-                    val updated = seg.copy(
-                        status = "UPLOADED_TO_YOUTUBE",
-                        youtubeVideoId = result.youtubeVideoId
-                    )
-                    dao.updateSegment(updated)
-                    dao.deleteOutboxItem(seg.segmentId)
-                    pairingManager.clearUploadSessionUrl(seg.segmentId)
-                    try {
-                        if (file.exists()) {
-                            file.delete()
-                            android.util.Log.i("YouTubeUploader", "Cleaned up local file after successful upload: ${file.name}")
-                        }
-                    } catch (e: Exception) {
-                        android.util.Log.w("YouTubeUploader", "Could not delete local file ${file.name}: ${e.message}")
+                    val videoId = result.youtubeVideoId
+                    // CRITICAL FORENSIC FIX: Receipt of videoId alone does NOT mean YouTube has finished processing!
+                    // Check videos.list(part=processingDetails,status,id=videoId)
+                    val processingStatus = checkYouTubeProcessingStatus(accessToken, videoId)
+                    android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} (Video: $videoId) processing status: $processingStatus")
+
+                    if (processingStatus == "succeeded") {
+                        val updated = seg.copy(
+                            status = "PROCESSED_ON_YOUTUBE",
+                            youtubeVideoId = videoId
+                        )
+                        dao.updateSegment(updated)
+                        dao.deleteOutboxItem(seg.segmentId)
+                        pairingManager.clearUploadSessionUrl(seg.segmentId)
+                        // Local file is preserved until durable PC ingestion acknowledgement, never prematurely deleted!
+                        android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} processed successfully on YouTube. Local media preserved until PC ingestion.")
+                    } else if (processingStatus == "processing" || processingStatus == "uploaded") {
+                        val updated = seg.copy(
+                            status = "UPLOADED_AWAITING_PROCESSING",
+                            youtubeVideoId = videoId
+                        )
+                        dao.updateSegment(updated)
+                        dao.deleteOutboxItem(seg.segmentId)
+                        pairingManager.clearUploadSessionUrl(seg.segmentId)
+                        android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} uploaded; awaiting YouTube processing ($processingStatus). File retained.")
+                    } else if (processingStatus == "failed") {
+                        android.util.Log.e("YouTubeUploader", "Segment ${seg.segmentId} video $videoId failed processing on YouTube.")
+                        dao.updateSegmentStatus(seg.segmentId, "FAILED_YOUTUBE_PROCESSING")
+                        failedInThisRun.add(seg.segmentId)
+                        hasFailures = true
+                    } else {
+                        // Ambiguous processing state: retain file and outbox status
+                        val updated = seg.copy(
+                            status = "UPLOADED_TO_YOUTUBE",
+                            youtubeVideoId = videoId
+                        )
+                        dao.updateSegment(updated)
+                        pairingManager.clearUploadSessionUrl(seg.segmentId)
+                        android.util.Log.w("YouTubeUploader", "Segment ${seg.segmentId} uploaded; processing check was ambiguous. File retained.")
                     }
-                    android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} successfully confirmed uploaded with ID ${result.youtubeVideoId}.")
                 } else {
                     hasFailures = true
                     failedInThisRun.add(seg.segmentId)
@@ -139,12 +163,13 @@ class YouTubeDirectUploadWorker(
         dispatchId: String,
         seg: com.resolvia.dispatch.data.SegmentEntity
     ): DirectUploadResult {
+        var currentAccessToken = accessToken
         val segId = seg.segmentId
         val totalBytes = file.length()
         if (totalBytes == 0L) return DirectUploadResult(false)
 
         // 0. Idempotency protection: check if video was already published to YouTube during previous attempt
-        val existingVideoId = findExistingUploadByDispatchId(accessToken, dispatchId)
+        val existingVideoId = findExistingUploadByDispatchId(currentAccessToken, dispatchId)
         if (!existingVideoId.isNullOrBlank()) {
             android.util.Log.i("YouTubeUploader", "Upload already confirmed on YouTube for $dispatchId: $existingVideoId")
             return DirectUploadResult(success = true, youtubeVideoId = existingVideoId)
@@ -179,7 +204,7 @@ class YouTubeDirectUploadWorker(
         val initUrl = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
         val initReq = Request.Builder()
             .url(initUrl)
-            .header("Authorization", "Bearer $accessToken")
+            .header("Authorization", "Bearer $currentAccessToken")
             .header("X-Upload-Content-Type", "video/mp4")
             .header("X-Upload-Content-Length", totalBytes.toString())
             .post(metadataJson.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()))
@@ -222,6 +247,7 @@ class YouTubeDirectUploadWorker(
         // Query session status if resuming after disconnect or retrying existing session
         val queryReq = Request.Builder()
             .url(destination)
+            .header("Authorization", "Bearer $currentAccessToken")
             .header("Content-Range", "bytes */$totalBytes")
             .header("Content-Length", "0")
             .put("".toRequestBody("video/mp4".toMediaType()))
@@ -244,7 +270,7 @@ class YouTubeDirectUploadWorker(
                     // Session expired on YouTube: clear and restart fresh
                     pairingManager.clearUploadSessionUrl(segId)
                     dao.updateOutboxOffset(segId, 0L)
-                    return uploadToYouTubeDirect(accessToken, file, dispatchId, seg)
+                    return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg)
                 }
             }
         } catch (e: Exception) {
@@ -253,6 +279,7 @@ class YouTubeDirectUploadWorker(
 
         // Upload in 8MB slices
         var raf: RandomAccessFile? = null
+        var tokenRefreshAttempts = 0
         try {
             raf = RandomAccessFile(file, "r")
             while (currentOffset < totalBytes) {
@@ -267,7 +294,7 @@ class YouTubeDirectUploadWorker(
                 val chunkBody = buffer.toRequestBody("video/mp4".toMediaType(), 0, chunkLen)
                 val chunkReq = Request.Builder()
                     .url(destination)
-                    .header("Authorization", "Bearer $accessToken")
+                    .header("Authorization", "Bearer $currentAccessToken")
                     .header("Content-Length", chunkLen.toString())
                     .header("Content-Range", "bytes $start-$end/$totalBytes")
                     .put(chunkBody)
@@ -277,7 +304,13 @@ class YouTubeDirectUploadWorker(
                 client.newCall(chunkReq).execute().use { resp ->
                     when (resp.code) {
                         308 -> {
-                            currentOffset = end + 1L
+                            // FORENSIC FIX: Validate server's Range header instead of blind end + 1
+                            val rangeHeader = resp.header("Range")
+                            val confirmedByte = if (!rangeHeader.isNullOrBlank()) {
+                                rangeHeader.substringAfter("-").toLongOrNull()
+                            } else null
+
+                            currentOffset = if (confirmedByte != null) confirmedByte + 1L else end + 1L
                             dao.updateOutboxOffset(segId, currentOffset)
                             android.util.Log.i("YouTubeUploader", "Chunk uploaded for $segId: $start-$end ($currentOffset/$totalBytes)")
                         }
@@ -290,7 +323,7 @@ class YouTubeDirectUploadWorker(
                                 json.get("id")?.asString
                             } catch (_: Exception) {
                                 null
-                            } ?: findExistingUploadByDispatchId(accessToken, dispatchId)
+                            } ?: findExistingUploadByDispatchId(currentAccessToken, dispatchId)
 
                             if (!videoId.isNullOrBlank()) {
                                 pairingManager.clearUploadSessionUrl(segId)
@@ -302,10 +335,17 @@ class YouTubeDirectUploadWorker(
                             }
                         }
                         401 -> {
-                            val freshToken = refreshYouTubeToken()
-                            if (freshToken != null) {
-                                retryWithNewToken = true
+                            if (tokenRefreshAttempts < 2) {
+                                val freshToken = refreshYouTubeToken()
+                                if (freshToken != null) {
+                                    currentAccessToken = freshToken
+                                    tokenRefreshAttempts++
+                                    retryWithNewToken = true
+                                } else {
+                                    return DirectUploadResult(false)
+                                }
                             } else {
+                                android.util.Log.e("YouTubeUploader", "Exceeded token refresh attempts on 401 for $segId")
                                 return DirectUploadResult(false)
                             }
                         }
@@ -366,6 +406,41 @@ class YouTubeDirectUploadWorker(
             android.util.Log.w("YouTubeUploader", "Error checking existing upload for $dispatchId: ${e.message}")
         }
         return null
+    }
+
+    private suspend fun checkYouTubeProcessingStatus(accessToken: String, videoId: String): String {
+        return try {
+            val url = "https://www.googleapis.com/youtube/v3/videos?part=processingDetails,status&id=$videoId"
+            val req = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return "unknown"
+                val bodyStr = resp.body?.string() ?: return "unknown"
+                val json = gson.fromJson(bodyStr, JsonObject::class.java)
+                val items = json.getAsJsonArray("items")
+                if (items == null || items.size() == 0) return "not_found"
+
+                val item = items.get(0).asJsonObject
+                val statusObj = item.getAsJsonObject("status")
+                val uploadStatus = statusObj?.get("uploadStatus")?.asString ?: ""
+
+                val processingObj = item.getAsJsonObject("processingDetails")
+                val procStatus = processingObj?.get("processingStatus")?.asString ?: ""
+
+                when {
+                    procStatus == "succeeded" -> "succeeded"
+                    procStatus == "processing" || uploadStatus == "uploaded" -> "processing"
+                    procStatus == "failed" || uploadStatus == "rejected" || uploadStatus == "failed" -> "failed"
+                    else -> procStatus.ifBlank { uploadStatus.ifBlank { "unknown" } }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "Could not check video $videoId processing status: ${e.message}")
+            "unknown"
+        }
     }
 
     private fun refreshYouTubeToken(): String? {

@@ -381,9 +381,21 @@ async def verify_chunk_explicit(
             row_dict = dict(row)
             db_path = Path(row_dict["filepath"]) if row_dict.get("filepath") else None
             if db_path and db_path.exists() and db_path.stat().st_size > 0:
-                if file_size is not None and db_path.stat().st_size != file_size:
+                actual_db_size = db_path.stat().st_size
+                if file_size is not None and actual_db_size != file_size:
                     return {"verified": False, "reason": "size_mismatch", "status": "RETRY_REQUIRED"}
-                return {"verified": True, "segment_id": seg_id, "size": db_path.stat().st_size, "status": "VERIFIED"}
+                
+                # CRITICAL FORENSIC FIX: Never trust stored DB hash metadata alone without verifying physical bytes!
+                hasher = hashlib.sha256()
+                with open(db_path, "rb") as f:
+                    while chunk := f.read(1024 * 1024):
+                        hasher.update(chunk)
+                actual_db_hash = hasher.hexdigest()
+                if actual_db_hash.lower() == sha256.lower():
+                    return {"verified": True, "segment_id": seg_id, "size": actual_db_size, "status": "VERIFIED"}
+                else:
+                    logger.warning("Chunk %s file on disk has hash mismatch with expected: disk=%s expected=%s", seg_id, actual_db_hash, sha256)
+                    return {"verified": False, "reason": "sha256_mismatch", "status": "CORRUPT_RETRY_REQUIRED"}
             logger.warning("Chunk %s found in DB with matching hash, but physical file %s is missing from disk. Reporting MISSING to protect mobile source.", seg_id, row_dict.get("filepath"))
             return {"verified": False, "reason": "file_missing_on_disk", "status": "MISSING"}
 

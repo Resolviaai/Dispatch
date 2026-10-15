@@ -30,6 +30,15 @@ storage/youtube_inbox/*
 *.jpg
 *.jpeg
 *.png
+!branding/**/*.png
+!branding/**/*.ico
+!branding/**/*.svg
+!android/app/src/main/res/**/*.png
+!dispatch/web/static/**/*.png
+!dispatch/web/static/**/*.ico
+!android/app/src/main/assets/**/*.png
+!android/app/src/main/assets/**/*.ico
+
 
 # Environment & credentials
 .env

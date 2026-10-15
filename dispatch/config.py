@@ -12,7 +12,7 @@ load_dotenv()
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 # Storage directories
-STORAGE_DIR = ROOT_DIR / "storage"
+STORAGE_DIR = Path(os.getenv("DISPATCH_STORAGE_DIR", str(ROOT_DIR / "storage")))
 INCOMING_DIR = STORAGE_DIR / "incoming"
 PROCESSING_DIR = STORAGE_DIR / "processing"
 CLIPS_DIR = STORAGE_DIR / "clips"
@@ -25,7 +25,7 @@ for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR, QUARANTINE_D
     path.mkdir(parents=True, exist_ok=True)
 
 # Database path
-DB_PATH = DATABASE_DIR / "dispatch.db"
+DB_PATH = Path(os.getenv("DISPATCH_DB_PATH", str(DATABASE_DIR / "dispatch.db")))
 
 # Canonical YouTube OAuth Token Path
 YOUTUBE_TOKEN_PATH = ROOT_DIR / "youtube_token.json"

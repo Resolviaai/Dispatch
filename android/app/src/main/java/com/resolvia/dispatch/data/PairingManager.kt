@@ -71,6 +71,14 @@ class PairingManager(context: Context) {
         get() = prefs.getString("client_secret", "") ?: ""
         set(value) = prefs.edit().putString("client_secret", value).apply()
 
+    var youtubeChannelTitle: String
+        get() = prefs.getString("channel_title", "") ?: ""
+        set(value) = prefs.edit().putString("channel_title", value).apply()
+
+    var youtubeChannelId: String
+        get() = prefs.getString("channel_id", "") ?: ""
+        set(value) = prefs.edit().putString("channel_id", value).apply()
+
     val isYouTubeConfigured: Boolean
         get() = youtubeRefreshToken.isNotBlank() &&
             youtubeClientId.isNotBlank() && youtubeClientSecret.isNotBlank()
@@ -85,6 +93,8 @@ class PairingManager(context: Context) {
             .putString("client_id", clientId.trim())
             .putString("client_secret", clientSecret.trim())
             .putString("access_token", "")
+            .remove("channel_title")
+            .remove("channel_id")
             .apply()
     }
 

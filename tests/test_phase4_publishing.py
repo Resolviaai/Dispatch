@@ -81,7 +81,7 @@ class TestPhase4Publishing(unittest.TestCase):
             self.assertIn("confirmed remote_id", row["last_error"])
 
     def test_ambiguous_error_transitions_to_reconciliation_required(self):
-        """Verify that ambiguous timeouts on retry transition to reconciliation_required."""
+        """Verify that ambiguous timeouts even on the FIRST attempt transition to reconciliation_required."""
         clip_id = "test_clip_timeout_recon"
         with db.get_db_connection() as conn:
             conn.execute("""
@@ -91,7 +91,7 @@ class TestPhase4Publishing(unittest.TestCase):
             conn.execute("""
                 INSERT OR REPLACE INTO publishing_outbox 
                 (id, clip_id, platform, status, idempotency_key, attempt_count)
-                VALUES ('job_timeout_recon', ?, 'youtube', 'queued', 'idem_timeout_recon', 1)
+                VALUES ('job_timeout_recon', ?, 'youtube', 'queued', 'idem_timeout_recon', 0)
             """, (clip_id,))
             conn.commit()
 

@@ -10,6 +10,7 @@ from dispatch import db
 
 class TestPhase1Security(unittest.TestCase):
     def setUp(self):
+        db.init_db()
         self.client = TestClient(app)
 
     def test_default_web_host_is_localhost(self):
@@ -88,11 +89,37 @@ class TestPhase1Security(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
-    def test_studio_endpoint_serves_html(self):
-        """Assert GET /studio serves 200 HTML response."""
-        resp = self.client.get("/studio")
+    def test_credentials_post_rejects_untrusted_host_and_origin(self):
+        """Assert POST /api/youtube/credentials rejects untrusted Host and Origin headers."""
+        resp = self.client.post(
+            "/api/youtube/credentials",
+            json={"pairing_code": "123456"},
+            headers={"host": "attacker-rebinding.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+        resp = self.client.post(
+            "/api/youtube/credentials",
+            json={"pairing_code": "123456"},
+            headers={"origin": "http://evil-attacker.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_studio_endpoint_serves_html_and_assets(self):
+        """Assert GET /studio redirects to /studio/ and GET /studio/ serves 200 HTML with valid assets."""
+        resp = self.client.get("/studio", follow_redirects=False)
+        self.assertEqual(resp.status_code, 307)
+        self.assertEqual(resp.headers.get("location"), "/studio/")
+
+        resp = self.client.get("/studio/", follow_redirects=True)
         self.assertEqual(resp.status_code, 200)
         self.assertIn("text/html", resp.headers.get("content-type", ""))
+
+        # Check that assets referenced by index.html actually return HTTP 200
+        css_resp = self.client.get("/studio/assets/index-D0mR6DDN.css")
+        self.assertEqual(css_resp.status_code, 200)
+        js_resp = self.client.get("/studio/assets/index-CWv134Sm.js")
+        self.assertEqual(js_resp.status_code, 200)
 
 
 if __name__ == "__main__":

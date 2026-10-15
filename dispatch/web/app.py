@@ -3,6 +3,7 @@ Provides the local PC dashboard for reviewing, approving, and publishing clips.
 """
 import os
 import json
+import asyncio
 import psutil
 import logging
 import threading
@@ -16,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -714,7 +715,8 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
     end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
 
     try:
-        render_res = render_clip(
+        render_res = await asyncio.to_thread(
+            render_clip,
             source_video=source_path,
             clip_id=clip_id,
             start_time=start_t,
@@ -817,7 +819,8 @@ async def handle_approve_clip(clip_id: str, payload: ApproveRequest, request: Re
         end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
 
         try:
-            render_res = render_clip(
+            render_res = await asyncio.to_thread(
+                render_clip,
                 source_video=source_path,
                 clip_id=clip_id,
                 start_time=start_t,
@@ -1510,8 +1513,42 @@ async def pair_youtube_credentials(
     payload: PairingCredentialsRequest,
     authorization: Optional[str] = Header(None),
 ):
-    """Transfer uploader credentials after explicit one-time code or existing Bearer auth."""
     client_host = request.client.host if request.client else "unknown"
+    # CRITICAL FORENSIC FIX: Validate Host and Origin headers for ALL clients (LAN and loopback)
+    # to prevent DNS rebinding and cross-site request forgery attacks on credential transfer.
+    raw_host = request.headers.get("host", "").strip()
+    parsed_host = raw_host.split(":")[0].strip().lower()
+    # For loopback callers, parsed_host must be trusted loopback
+    if is_trusted_localhost(client_host):
+        if parsed_host and parsed_host not in ("localhost", "127.0.0.1", "::1", "testserver"):
+            raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
+    
+    # Origin check if browser/webview origin header is supplied
+    origin_header = request.headers.get("origin", "").strip()
+    if origin_header:
+        try:
+            split_origin = urllib.parse.urlsplit(origin_header)
+            origin_scheme = split_origin.scheme.lower()
+            origin_hostname = (split_origin.hostname or "").lower()
+            origin_port = split_origin.port
+
+            is_valid_loopback = (
+                origin_scheme == "http"
+                and origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
+                and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
+            )
+            is_valid_android = (
+                origin_scheme == "https"
+                and origin_hostname == "appassets.androidplatform.net"
+            )
+            if not (is_valid_loopback or is_valid_android):
+                logger.warning("Rejected credential request: untrusted origin '%s'", origin_header)
+                raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(status_code=403, detail="Forbidden: Malformed Origin header")
+
     if not is_trusted_localhost(client_host):
         if payload.pairing_code:
             if not _is_local_network_peer(client_host):
@@ -1524,7 +1561,7 @@ async def pair_youtube_credentials(
             from dispatch.sync.receiver import verify_token
             verify_token(authorization)
     else:
-        # Loopback caller must pass host/origin checks
+        # Loopback caller must pass dashboard auth
         verify_dashboard_auth(request)
 
     credentials = _youtube_credentials_response()
@@ -1873,7 +1910,12 @@ if STUDIO_DIR.exists():
     from fastapi.staticfiles import StaticFiles
     app.mount("/studio/assets", StaticFiles(directory=str(STUDIO_DIR / "assets")), name="studio-assets")
 
-    @app.get("/studio", response_class=HTMLResponse)
+    @app.get("/studio")
+    async def redirect_studio_slash():
+        """Redirect /studio to /studio/ so relative asset paths like ./assets/ resolve to /studio/assets/."""
+        return RedirectResponse(url="/studio/", status_code=307)
+
+    @app.get("/studio/", response_class=HTMLResponse)
     @app.get("/studio/{full_path:path}", response_class=HTMLResponse)
     async def serve_studio(full_path: str = ""):
         # Check if requesting a direct static file in STUDIO_DIR (e.g. favicon, manifest)

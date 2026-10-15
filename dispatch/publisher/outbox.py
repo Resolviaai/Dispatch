@@ -122,19 +122,24 @@ def _process_outbox_queue_internal() -> int:
         try:
             logger.info("Publishing clip %s to %s (Mode: %s, Attempt: %d)", clip_id, platform, publish_mode, attempt_count + 1)
 
+            idempotency_key = job.get("idempotency_key") or f"idem_{clip_id}_{platform}"
+            idempotency_marker = f"dispatch_idempotency_key:{idempotency_key}"
+
             if platform in ("youtube", "youtube_shorts"):
                 privacy = "public" if publish_mode == "public" else "private"
+                # Include idempotency key marker in description
+                full_desc = f"{description}\n\n{hashtags}\n\n{idempotency_marker}".strip()
                 result = upload_youtube_short(
                     video_path=video_path,
                     title=title,
-                    description=f"{description}\n\n{hashtags}",
+                    description=full_desc,
                     tags=hashtags,
                     privacy_status=privacy
                 )
             elif platform == "instagram":
                 result = upload_instagram_reel(
                     video_path=video_path,
-                    caption=f"{title}\n\n{description}\n\n{hashtags}"
+                    caption=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}"
                 )
             elif platform == "linkedin":
                 result = upload_linkedin_video(
@@ -194,7 +199,9 @@ def _process_outbox_queue_internal() -> int:
             is_ambiguous = any(term in err_str.lower() for term in ("timeout", "timed out", "connection reset", "broken pipe", "remotely closed"))
             
             with db.get_db_connection() as conn:
-                if is_ambiguous and new_attempts >= 2:
+                if is_ambiguous:
+                    # CRITICAL FORENSIC FIX: Even on the FIRST ambiguous timeout/disconnect, NEVER blindly republish!
+                    # Move immediately to reconciliation_required to prevent duplicate posts.
                     conn.execute("""
                         UPDATE publishing_outbox 
                         SET status = 'reconciliation_required',
@@ -202,7 +209,7 @@ def _process_outbox_queue_internal() -> int:
                             updated_at = CURRENT_TIMESTAMP,
                             last_error = ?
                         WHERE id = ?
-                    """, (new_attempts, f"Ambiguous remote error: {err_str}", job_id))
+                    """, (new_attempts, f"Ambiguous remote error (reconciliation required before retry): {err_str}", job_id))
                 elif new_attempts >= 5:
                     conn.execute("""
                         UPDATE publishing_outbox 
@@ -213,7 +220,7 @@ def _process_outbox_queue_internal() -> int:
                         WHERE id = ?
                     """, (new_attempts, err_str, job_id))
                 else:
-                    # Exponential backoff: 30s, 60s, 120s, 240s...
+                    # Exponential backoff for definitive non-ambiguous transient errors: 30s, 60s, 120s, 240s...
                     delay_seconds = min(3600, 30 * (2 ** (new_attempts - 1)))
                     conn.execute("""
                         UPDATE publishing_outbox 

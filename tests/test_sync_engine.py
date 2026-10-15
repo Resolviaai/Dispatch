@@ -321,6 +321,40 @@ class TestSyncEngine(unittest.TestCase):
                 conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
                 conn.execute("DELETE FROM sessions WHERE id = 'sess_ghost'")
 
+    def test_verify_chunk_modified_bytes_same_size_fails_hash_check(self):
+        """Verify that verify-chunk strictly verifies physical file bytes, failing modified files of same size."""
+        seg_id = "test_tampered_seg_123"
+        correct_hash = hashlib.sha256(b"original clean audio content").hexdigest()
+        tampered_bytes = b"tampered evil audio content!"  # exactly same length: 28 bytes
+        self.assertEqual(len(b"original clean audio content"), len(tampered_bytes))
+
+        tampered_file = Path("storage/processing") / f"{seg_id}.mp4"
+        tampered_file.parent.mkdir(parents=True, exist_ok=True)
+        tampered_file.write_bytes(tampered_bytes)
+
+        try:
+            with get_db_connection() as conn:
+                conn.execute("INSERT OR REPLACE INTO sessions (id, status) VALUES ('sess_tamper', 'active')")
+                conn.execute("""
+                    INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, duration, status)
+                    VALUES (?, 'sess_tamper', ?, ?, ?, 10.0, 'verified')
+                """, (seg_id, f"{seg_id}.mp4", str(tampered_file), correct_hash))
+                conn.commit()
+
+            # Client queries verify-chunk with expected hash
+            res = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={correct_hash}&file_size={len(tampered_bytes)}",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertFalse(data["verified"], "Tampered file on disk with identical size must not be verified")
+            self.assertEqual(data["status"], "CORRUPT_RETRY_REQUIRED")
+        finally:
+            tampered_file.unlink(missing_ok=True)
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
+
 
 if __name__ == "__main__":
     unittest.main()
