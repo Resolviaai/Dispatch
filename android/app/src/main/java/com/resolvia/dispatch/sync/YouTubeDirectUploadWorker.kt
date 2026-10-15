@@ -13,7 +13,10 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.io.FileInputStream
 import java.io.RandomAccessFile
+import java.security.MessageDigest
+import android.media.MediaMetadataRetriever
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -48,6 +51,9 @@ class YouTubeDirectUploadWorker(
         var hasFailures = false
         val failedInThisRun = mutableSetOf<String>()
 
+        // 0. Recover any interrupted sessions from prior crashes before draining
+        recoverInterruptedSessions(applicationContext)
+
         // Reliable drain loop: processes all pending segments including ones added during upload
         while (true) {
             val pendingSegments = dao.getPendingUploadSegments().filter { it.segmentId !in failedInThisRun }
@@ -72,6 +78,10 @@ class YouTubeDirectUploadWorker(
                 // If already uploaded or already has YouTube ID, clean outbox and skip
                 if (seg.status == "UPLOADED_TO_YOUTUBE" || !seg.youtubeVideoId.isNullOrBlank()) {
                     dao.deleteOutboxItem(seg.segmentId)
+                    val f = File(seg.filepath)
+                    if (f.exists()) {
+                        try { f.delete() } catch (_: Exception) {}
+                    }
                     continue
                 }
 
@@ -93,6 +103,14 @@ class YouTubeDirectUploadWorker(
                     dao.updateSegment(updated)
                     dao.deleteOutboxItem(seg.segmentId)
                     pairingManager.clearUploadSessionUrl(seg.segmentId)
+                    try {
+                        if (file.exists()) {
+                            file.delete()
+                            android.util.Log.i("YouTubeUploader", "Cleaned up local file after successful upload: ${file.name}")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("YouTubeUploader", "Could not delete local file ${file.name}: ${e.message}")
+                    }
                     android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} successfully confirmed uploaded with ID ${result.youtubeVideoId}.")
                 } else {
                     hasFailures = true
@@ -382,4 +400,84 @@ class YouTubeDirectUploadWorker(
             null
         }
     }
+
+    private suspend fun recoverInterruptedSessions(context: Context) {
+        try {
+            val interrupted = dao.getInterruptedSessions()
+            val recordingsDir = File(context.getExternalFilesDir(null), "recordings")
+
+            for (sess in interrupted) {
+                val unfinalized = dao.getUnfinalizedSegments(sess.sessionId)
+                for (seg in unfinalized) {
+                    val tmp = File(recordingsDir, "${seg.segmentId}.tmp")
+                    val finalMp4 = File(recordingsDir, "${seg.segmentId}.mp4")
+
+                    if (tmp.exists() && tmp.length() > 0L) {
+                        var hasValidVideo = false
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(tmp.absolutePath)
+                            val hasVideo = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
+                            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                            if (hasVideo == "yes" && duration > 0L) {
+                                hasValidVideo = true
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.w("YouTubeUploader", "Corrupt .tmp segment ${seg.segmentId}: ${e.message}")
+                            hasValidVideo = false
+                        } finally {
+                            try { retriever.release() } catch (_: Exception) {}
+                        }
+
+                        if (hasValidVideo) {
+                            val size = tmp.length()
+                            val sha = calculateSha256(tmp)
+                            if (tmp.renameTo(finalMp4)) {
+                                dao.updateSegment(
+                                    seg.copy(
+                                        filepath = finalMp4.absolutePath,
+                                        fileSizeBytes = size,
+                                        sha256Hash = sha,
+                                        status = "QUEUED_FOR_UPLOAD",
+                                        finalizedAt = System.currentTimeMillis()
+                                    )
+                                )
+                                dao.insertOutbox(
+                                    com.resolvia.dispatch.data.OutboxEntity(
+                                        segmentId = seg.segmentId,
+                                        sessionId = sess.sessionId,
+                                        status = "QUEUED_FOR_UPLOAD"
+                                    )
+                                )
+                                android.util.Log.i("YouTubeUploader", "Recovered crash segment ${seg.segmentId} as valid mp4.")
+                            }
+                        } else {
+                            android.util.Log.w("YouTubeUploader", "Discarding unplayable crash segment ${seg.segmentId}")
+                            try { tmp.delete() } catch (_: Exception) {}
+                            dao.updateSegmentStatus(seg.segmentId, "FAILED_CORRUPT")
+                        }
+                    } else if (tmp.exists() && tmp.length() == 0L) {
+                        try { tmp.delete() } catch (_: Exception) {}
+                        dao.updateSegmentStatus(seg.segmentId, "FAILED_EMPTY")
+                    }
+                }
+                dao.updateSession(sess.copy(status = "CRASH_RECOVERED"))
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("YouTubeUploader", "Session recovery error: ${e.message}", e)
+        }
+    }
+
+    private fun calculateSha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { fis ->
+            val buf = ByteArray(65536)
+            var n: Int
+            while (fis.read(buf).also { n = it } != -1) {
+                digest.update(buf, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 }
+

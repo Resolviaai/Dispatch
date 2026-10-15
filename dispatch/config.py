@@ -27,6 +27,9 @@ for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR, QUARANTINE_D
 # Database path
 DB_PATH = DATABASE_DIR / "dispatch.db"
 
+# Canonical YouTube OAuth Token Path
+YOUTUBE_TOKEN_PATH = ROOT_DIR / "youtube_token.json"
+
 # Gemini API configuration
 # Strictly loaded from environment variable (.env) - never hardcoded
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -50,5 +53,13 @@ SUBTITLE_HIGHLIGHT_COLOR = "&H0000FFFF"  # Yellow for active word
 
 # Default Application Modes
 DEFAULT_PUBLISH_MODE = os.getenv("DISPATCH_PUBLISH_MODE", "private")  # "private" or "public"
-WEB_HOST = os.getenv("DISPATCH_WEB_HOST", "0.0.0.0")
+WEB_HOST = os.getenv("DISPATCH_WEB_HOST", "127.0.0.1")
 WEB_PORT = int(os.getenv("DISPATCH_WEB_PORT", "8000"))
+
+if WEB_HOST not in ("127.0.0.1", "localhost", "::1"):
+    import logging
+    logging.getLogger("dispatch.config").warning(
+        "DISPATCH_WEB_HOST is set to non-loopback address '%s'. Server is exposed to the local network.",
+        WEB_HOST
+    )
+

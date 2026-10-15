@@ -75,12 +75,16 @@ def extract_dispatch_id(description: str, tags: Optional[List[str]] = None) -> O
     return None
 
 
+from dispatch.config import ROOT_DIR, YOUTUBE_TOKEN_PATH
+
 def get_youtube_service(token_path: Optional[Path] = None):
     """Return authenticated YouTube Data API v3 service resource if credentials exist."""
     candidates = [
         token_path,
+        Path(os.getenv("DISPATCH_YOUTUBE_TOKEN_PATH", str(YOUTUBE_TOKEN_PATH))),
+        YOUTUBE_TOKEN_PATH,
+        ROOT_DIR / "youtube_token.json",
         Path("youtube_token.json"),
-        Path(os.getenv("DISPATCH_YOUTUBE_TOKEN_PATH", "youtube_token.json")),
     ]
 
     token_file = None
@@ -92,9 +96,19 @@ def get_youtube_service(token_path: Optional[Path] = None):
     try:
         from googleapiclient.discovery import build
         from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request as GoogleAuthRequest
 
         if token_file and token_file.exists():
             creds = Credentials.from_authorized_user_file(str(token_file))
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleAuthRequest())
+                    if hasattr(creds, "to_json"):
+                        with open(token_file, "w", encoding="utf-8") as f:
+                            f.write(creds.to_json())
+                        logger.info("Refreshed and persisted YouTube OAuth token to %s", token_file)
+                except Exception as refresh_err:
+                    logger.warning("Failed to refresh YouTube OAuth token: %s", refresh_err)
             return build("youtube", "v3", credentials=creds)
 
         # Check environment variables
@@ -111,6 +125,11 @@ def get_youtube_service(token_path: Optional[Path] = None):
                 client_id=client_id,
                 client_secret=client_secret
             )
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleAuthRequest())
+                except Exception as refresh_err:
+                    logger.warning("Failed to refresh env-based YouTube OAuth token: %s", refresh_err)
             return build("youtube", "v3", credentials=creds)
 
     except Exception as e:

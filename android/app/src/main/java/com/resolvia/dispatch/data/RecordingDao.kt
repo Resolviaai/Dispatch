@@ -23,7 +23,7 @@ interface RecordingDao {
     @Query("SELECT * FROM segments WHERE sessionId = :sessionId AND status = 'RECORDING'")
     suspend fun getUnfinalizedSegments(sessionId: String): List<SegmentEntity>
 
-    @Query("SELECT * FROM segments WHERE status IN ('QUEUED_FOR_UPLOAD', 'FAILED_RETRY') ORDER BY sequenceNumber ASC")
+    @Query("SELECT * FROM segments WHERE status IN ('QUEUED_FOR_UPLOAD', 'FAILED_RETRY', 'WAITING_FOR_YOUTUBE') ORDER BY sequenceNumber ASC")
     suspend fun getPendingUploadSegments(): List<SegmentEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

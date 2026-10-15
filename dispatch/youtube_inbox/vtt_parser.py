@@ -149,10 +149,15 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
         if last_text and text.startswith(last_text):
             remainder = text[len(last_text):].strip()
             if remainder:
-                # Filter words belonging to remainder if inline words exist
-                rem_words = [w for w in cue["words"] if w["word"] in remainder.split()] if cue["words"] else []
+                prefix_word_count = len(last_text.split())
+                cue_words = cue.get("words", [])
+                if len(cue_words) > prefix_word_count:
+                    rem_words = cue_words[prefix_word_count:]
+                else:
+                    rem_words = [w for w in cue_words if w.get("word") in remainder.split()]
+                start_time = rem_words[0]["start"] if rem_words else cue["start"]
                 deduped_cues.append({
-                    "start": cue["start"],
+                    "start": start_time,
                     "end": cue["end"],
                     "text": remainder,
                     "words": rem_words

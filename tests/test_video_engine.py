@@ -1,4 +1,5 @@
 """Unit test for video reframing, subtitle generation, and rendering."""
+import unittest
 import subprocess
 from pathlib import Path
 from dispatch.config import PROCESSING_DIR, CLIPS_DIR
@@ -8,80 +9,84 @@ from dispatch.video_engine.renderer import render_clip
 from dispatch.ingestion.validator import probe_video
 from dispatch.db import init_db, save_clip
 
-def test_video_engine():
-    init_db()
 
-    # 1. Generate 3-second 16:9 test video (1280x720) with audio
-    test_src = PROCESSING_DIR / "unit_test_render_src.mp4"
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
-        "-f", "lavfi", "-i", "sine=frequency=440",
-        "-t", "3",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        str(test_src)
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+class TestVideoEngine(unittest.TestCase):
+    def setUp(self):
+        init_db()
 
-    # 2. Mock transcript segments
-    mock_segments = [
-        {
-            "id": 0, "start": 0.5, "end": 2.5,
-            "text": "Yeh Dispatch automation test hai",
-            "words": [
-                {"word": "Yeh", "start": 0.5, "end": 0.8},
-                {"word": "Dispatch", "start": 0.9, "end": 1.4},
-                {"word": "automation", "start": 1.5, "end": 2.0},
-                {"word": "test", "start": 2.1, "end": 2.4},
-            ]
-        }
-    ]
+    def test_video_engine(self):
+        # 1. Generate 7-second 16:9 test video (1280x720) with audio
+        test_src = PROCESSING_DIR / "unit_test_render_src.mp4"
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "7",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(test_src)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # Save mock clip in DB
-    clip_id = save_clip(
-        session_id=None,
-        chunk_id=None,
-        start_time=0.5,
-        end_time=2.8,
-        title="Yeh Dispatch automation test hai",
-        hook="Opening test",
-        description="Description",
-        hashtags="#Test",
-        virality_score=88,
-        layout_mode="fit_blur"
-    )
+        # 2. Mock transcript segments
+        mock_segments = [
+            {
+                "id": 0, "start": 0.5, "end": 5.5,
+                "text": "Yeh Dispatch automation test hai jo video engine ko verify karta hai",
+                "words": [
+                    {"word": "Yeh", "start": 0.5, "end": 0.8},
+                    {"word": "Dispatch", "start": 0.9, "end": 1.4},
+                    {"word": "automation", "start": 1.5, "end": 2.0},
+                    {"word": "test", "start": 2.1, "end": 2.4},
+                    {"word": "hai", "start": 2.5, "end": 3.0},
+                ]
+            }
+        ]
 
-    # 3. Render clip
-    render_result = render_clip(
-        source_video=test_src,
-        clip_id=clip_id,
-        start_time=0.5,
-        end_time=2.8,
-        aspect_ratio="16:9",
-        layout_mode="fit_blur",
-        segments=mock_segments
-    )
+        # Save mock clip in DB
+        clip_id = save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.5,
+            end_time=6.0,
+            title="Yeh Dispatch automation test hai",
+            hook="Opening test",
+            description="Description",
+            hashtags="#Test",
+            virality_score=88,
+            layout_mode="fit_blur"
+        )
 
-    out_video = render_result["video_path"]
-    out_thumb = render_result["thumbnail_path"]
+        # 3. Render clip
+        render_result = render_clip(
+            source_video=test_src,
+            clip_id=clip_id,
+            start_time=0.5,
+            end_time=6.0,
+            aspect_ratio="16:9",
+            layout_mode="fit_blur",
+            segments=mock_segments
+        )
 
-    assert out_video.exists(), f"Rendered video does not exist: {out_video}"
-    assert out_thumb.exists(), f"Thumbnail does not exist: {out_thumb}"
+        out_video = render_result["video_path"]
+        out_thumb = render_result["thumbnail_path"]
 
-    # 4. Probe rendered vertical video
-    valid, meta, err = probe_video(out_video)
-    assert valid, f"Rendered video is invalid: {err}"
-    assert meta["width"] == 1080, f"Expected width 1080, got {meta['width']}"
-    assert meta["height"] == 1920, f"Expected height 1920, got {meta['height']}"
-    assert meta["aspect_ratio"] == "9:16", f"Expected 9:16, got {meta['aspect_ratio']}"
+        self.assertTrue(out_video.exists(), f"Rendered video does not exist: {out_video}")
+        self.assertTrue(out_thumb.exists(), f"Thumbnail does not exist: {out_thumb}")
 
-    # Clean up test artifacts
-    test_src.unlink()
-    out_video.unlink()
-    out_thumb.unlink()
+        # 4. Probe rendered vertical video
+        valid, meta, err = probe_video(out_video)
+        self.assertTrue(valid, f"Rendered video is invalid: {err}")
+        self.assertEqual(meta["width"], 1080, f"Expected width 1080, got {meta['width']}")
+        self.assertEqual(meta["height"], 1920, f"Expected height 1920, got {meta['height']}")
+        self.assertEqual(meta["aspect_ratio"], "9:16", f"Expected 9:16, got {meta['aspect_ratio']}")
 
-    print("ALL VIDEO ENGINE TESTS PASSED SUCCESSFULLY!")
+        # Clean up test artifacts
+        test_src.unlink()
+        out_video.unlink()
+        out_thumb.unlink()
+
 
 if __name__ == "__main__":
-    test_video_engine()
+    unittest.main()
+

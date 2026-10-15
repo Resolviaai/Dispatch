@@ -43,6 +43,8 @@ declare global {
       retryUpload: (segmentId: string) => void;
       getStorageInfo: () => string;
       pingPc: (pcHost: string) => string;
+      getWifiOnly: () => boolean;
+      setWifiOnly: (enabled: boolean) => void;
     };
   }
 }
@@ -182,6 +184,23 @@ export const Bridge = {
       }
     }
     return { success: false, message: 'Native bridge unavailable' };
+  },
+
+  getWifiOnly(): boolean {
+    if (window.DispatchBridge?.getWifiOnly) {
+      return window.DispatchBridge.getWifiOnly();
+    }
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_wifi_only') : null;
+    return saved !== null ? saved === 'true' : true;
+  },
+
+  setWifiOnly(enabled: boolean): void {
+    if (window.DispatchBridge?.setWifiOnly) {
+      window.DispatchBridge.setWifiOnly(enabled);
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('dispatch_wifi_only', String(enabled));
+    }
   }
 };
 

@@ -62,5 +62,20 @@ frontend/dist/
 
 # Android binary release
 storage/dispatch.apk
+storage/download/
 *.apk
 
+# Runtime logs & locks
+*.log
+storage/*.log
+storage/*.lock
+
+# Agent scratchpads & non-runtime research
+.agents/teamwork/
+design_research/transcripts/
+
+
+
+audit_bundle_*.txt
+antigravity_diff_verify.txt
+file_structure.txt

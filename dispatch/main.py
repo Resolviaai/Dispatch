@@ -1,30 +1,89 @@
-"""Dispatch PC daemon: YouTube upload polling, local clip processing, and dashboard."""
 import sys
 import shutil
 import logging
 import time
+import os
+import atexit
+from logging.handlers import RotatingFileHandler
 
 import uvicorn
 
 from dispatch.config import (
     WEB_HOST,
     WEB_PORT,
+    STORAGE_DIR,
 )
 from dispatch import db
 from dispatch.governor.resource_governor import ResourceGovernor
 from dispatch.youtube_inbox.poller import YouTubeInboxPoller
+from dispatch.orchestrator.recovery import recover_laptop_orchestrator
 from dispatch.web.app import app
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-    datefmt="%H:%M:%S"
-)
+# Configure logging with both console and rotating file output
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+log_file = STORAGE_DIR / "dispatch_daemon.log"
+
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] [%(name)s] %(message)s", datefmt="%H:%M:%S")
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Console handler
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+root_logger.addHandler(console_handler)
+
+# Rotating file handler (10 MB per file, max 5 backups)
+file_handler = RotatingFileHandler(str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+file_handler.setFormatter(formatter)
+root_logger.addHandler(file_handler)
+
 logger = logging.getLogger("dispatch.master")
 governor = ResourceGovernor()
+
+LOCK_FILE = STORAGE_DIR / "dispatch.lock"
+
+
+def acquire_single_instance_lock() -> bool:
+    """Enforce single-instance execution via lock file and PID inspection."""
+    import psutil
+    if LOCK_FILE.exists():
+        try:
+            content = LOCK_FILE.read_text().strip()
+            if content.isdigit():
+                old_pid = int(content)
+                if old_pid != os.getpid() and psutil.pid_exists(old_pid):
+                    proc = psutil.Process(old_pid)
+                    if "python" in proc.name().lower():
+                        logger.warning("Another Dispatch instance is already active (PID %d). Halting launch.", old_pid)
+                        return False
+        except Exception as e:
+            logger.debug("Lock file read check exception: %s", e)
+
+    try:
+        LOCK_FILE.write_text(str(os.getpid()))
+        atexit.register(release_single_instance_lock)
+        return True
+    except Exception as e:
+        logger.warning("Could not write instance lock file %s: %s", LOCK_FILE, e)
+        return True
+
+
+def release_single_instance_lock():
+    """Remove lock file on clean shutdown."""
+    try:
+        if LOCK_FILE.exists():
+            content = LOCK_FILE.read_text().strip()
+            if content == str(os.getpid()):
+                LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def start_dispatch(run_web: bool = True):
     """Start all Dispatch autonomous services with crash recovery and resource governance."""
+    if not acquire_single_instance_lock():
+        sys.exit(0)
+
     logger.info("=" * 60)
     logger.info("BOOTING DISPATCH: AUTONOMOUS PERSONAL CONTENT ENGINE")
     logger.info("=" * 60)
@@ -33,39 +92,48 @@ def start_dispatch(run_web: bool = True):
     db.init_db()
     logger.info("Database initialized at %s", db.DB_PATH)
 
-    # 2. Adjust process priority to low/background to prevent laptop freezing
+    # 2. Crash & reboot recovery: reclaim stale leases and clean temporary files
+    try:
+        recovery_stats = recover_laptop_orchestrator()
+        logger.info("Boot recovery: %d stale job leases reclaimed, %d temp files cleaned",
+                    len(recovery_stats.get("reclaimed_jobs", [])),
+                    recovery_stats.get("cleaned_temp_files", 0))
+    except Exception as e:
+        logger.error("Boot crash recovery encountered error: %s", e)
+
+    # 3. Adjust process priority to low/background to prevent laptop freezing
     governor.set_low_process_priority()
 
-    # 3. Verify FFmpeg
+    # 4. Verify FFmpeg
     if not shutil.which("ffmpeg"):
         logger.critical("FFmpeg executable not found in PATH! Exiting.")
         sys.exit(1)
     logger.info("FFmpeg verified in system PATH")
 
-    # 4. YouTube is the only automatic video ingest path on PC (Pillar 1).
+    # 5. YouTube is the only automatic video ingest path on PC (Pillar 1).
     youtube_poller = YouTubeInboxPoller()
     youtube_poller.start()
     logger.info("Autonomous YouTube Cloud Inbox poller active (Checks immediately on boot + every 10 min)")
 
-    # 5. Pillar 2: Autonomous Transcription Worker (YouTube captions with Whisper fallback)
+    # 6. Pillar 2: Autonomous Transcription Worker (YouTube captions with Whisper fallback)
     from dispatch.transcription.worker import TranscriptionWorker
     transcription_worker = TranscriptionWorker()
     transcription_worker.start()
     logger.info("Autonomous Transcription worker active (Consumes DOWNLOADED -> WAITING_FOR_TRANSCRIPT -> TRANSCRIBED)")
 
-    # 6. Pillar 3: Autonomous AI Highlight Selection Worker (Gemini Semantic Extraction)
+    # 7. Pillar 3: Autonomous AI Highlight Selection Worker (Gemini Semantic Extraction)
     from dispatch.ai_clips.worker import HighlightWorker
     highlight_worker = HighlightWorker()
     highlight_worker.start()
     logger.info("Autonomous AI Highlight worker active (Consumes TRANSCRIBED -> ANALYZING -> CLIPS_DEFINED)")
 
-    # 7. Pillar 6: Autonomous Publishing Outbox Worker (YouTube Shorts publishing)
+    # 8. Pillar 6: Autonomous Publishing Outbox Worker (YouTube Shorts publishing)
     from dispatch.publisher.outbox import PublishingOutboxWorker
     outbox_worker = PublishingOutboxWorker()
     outbox_worker.start()
     logger.info("Autonomous Publishing Outbox worker active (Consumes queued -> uploading -> published/failed)")
 
-    # 8. Start Web Dashboard
+    # 9. Start Web Dashboard
     if run_web:
         logger.info("Launching Web Dashboard on http://%s:%d", WEB_HOST, WEB_PORT)
         logger.info("Review clips on PC: http://localhost:%d", WEB_PORT)
@@ -77,6 +145,7 @@ def start_dispatch(run_web: bool = True):
             highlight_worker.stop()
             transcription_worker.stop()
             youtube_poller.stop()
+            release_single_instance_lock()
     else:
         logger.info("Running in headless daemon mode. Press Ctrl+C to stop.")
         try:
@@ -88,6 +157,7 @@ def start_dispatch(run_web: bool = True):
             highlight_worker.stop()
             transcription_worker.stop()
             youtube_poller.stop()
+            release_single_instance_lock()
             logger.info("Dispatch daemon stopped.")
 
 

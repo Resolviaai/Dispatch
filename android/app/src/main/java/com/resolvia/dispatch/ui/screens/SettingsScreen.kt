@@ -53,7 +53,7 @@ fun SettingsScreen(
     var isConnected by remember { mutableStateOf(pairingManager.isYouTubeConfigured) }
     var channelName by remember { mutableStateOf("") }
     var isSyncing by remember { mutableStateOf(false) }
-    var wifiOnly by remember { mutableStateOf(true) }
+    var wifiOnly by remember { mutableStateOf(pairingManager.isWifiOnlyEnabled) }
 
     // Check YouTube credentials on load
     LaunchedEffect(Unit) {
@@ -236,7 +236,10 @@ fun SettingsScreen(
 
                 Switch(
                     checked = wifiOnly,
-                    onCheckedChange = { wifiOnly = it },
+                    onCheckedChange = {
+                        wifiOnly = it
+                        pairingManager.isWifiOnlyEnabled = it
+                    },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = PrimarySky,

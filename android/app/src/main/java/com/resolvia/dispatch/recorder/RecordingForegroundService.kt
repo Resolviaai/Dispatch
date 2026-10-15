@@ -74,13 +74,13 @@ class RecordingForegroundService : LifecycleService() {
         instance = this
         createNotificationChannel()
 
-        // P0 fix: acquire WakeLock with NO timeout (does not die after 1 hour)
+        // Acquire WakeLock bounded to 6 hours to prevent indefinite battery drain on crash
         val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         wakeLock = powerManager?.newWakeLock(
             android.os.PowerManager.PARTIAL_WAKE_LOCK,
             "Dispatch:RecordingWakeLock"
         )
-        wakeLock?.acquire()
+        wakeLock?.acquire(6 * 60 * 60 * 1000L)
 
         // Bind CameraX VideoCapture to this service's lifecycle if manager available
         cameraManager?.let { mgr ->

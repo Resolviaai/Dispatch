@@ -349,9 +349,11 @@ class TestDispatchChaosEngineering(unittest.TestCase):
         reject_clip(clip_id=clip_id, reason="Lacks energy, hook is too slow")
 
         # Verify rejection is saved
-        rejections = get_all_rejections(limit=5)
+        rejections = get_all_rejections(limit=10)
         self.assertGreaterEqual(len(rejections), 1)
-        self.assertIn("Lacks energy", rejections[0]["reason"])
+        clip_rejections = [r for r in rejections if r["clip_id"] == clip_id]
+        self.assertTrue(len(clip_rejections) > 0, f"Expected rejection record for clip {clip_id}")
+        self.assertIn("Lacks energy", clip_rejections[0]["reason"])
 
         # Verify negative feedback prompt contains the rejected pattern
         neg_prompt = get_negative_feedback_prompt()

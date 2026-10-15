@@ -66,24 +66,37 @@ def render_clip(
 
     # 2. Subtitle generation with synchronized timeline
     sub_opts = subtitle_options or {}
-    if segments and sub_opts.get("enabled", True):
-        # Remap subtitle timestamps if silence cuts occurred
-        active_segments = remap_timestamps_for_silence_cuts(segments, start_time, end_time, cuts) if has_silence_cuts else segments
-        try:
-            generate_ass_subtitles(
-                segments=active_segments,
-                output_path=ass_path,
-                clip_start_time=start_time,
-                clip_end_time=start_time + eff_duration if has_silence_cuts else end_time,
-                font_name=sub_opts.get("font_name", "Arial Black"),
-                font_size=sub_opts.get("font_size", 54),
-                style_preset=sub_opts.get("style_preset", "yellow_pop"),
-                position=sub_opts.get("position", "bottom"),
-                enable_pop_bounce=sub_opts.get("enable_pop_bounce", True),
-                words_per_card=sub_opts.get("words_per_card", 3)
-            )
-        except Exception as e:
-            logger.warning("Failed to generate subtitles: %s", e)
+    if sub_opts.get("enabled", True):
+        existing_cap_json = db.get_clip_caption_data(clip_id)
+        if existing_cap_json and not has_silence_cuts:
+            try:
+                import json
+                from dispatch.captions.model import CaptionTrack
+                from dispatch.captions.exporter import export_to_ass
+                track = CaptionTrack.from_dict(json.loads(existing_cap_json))
+                export_to_ass(track, ass_path)
+            except Exception as e:
+                logger.warning("Failed to export existing CaptionTrack for clip %s: %s", clip_id, e)
+                ass_path = None
+        elif segments:
+            # Remap subtitle timestamps if silence cuts occurred
+            active_segments = remap_timestamps_for_silence_cuts(segments, start_time, end_time, cuts) if has_silence_cuts else segments
+            try:
+                import json
+                from dispatch.captions import group_words_into_captions, export_to_ass
+                track = group_words_into_captions(
+                    raw_segments=active_segments,
+                    clip_start=start_time,
+                    clip_end=start_time + eff_duration if has_silence_cuts else end_time,
+                    clip_id=clip_id,
+                    preset_id=sub_opts.get("style_preset", "yellow_pop")
+                )
+                export_to_ass(track, ass_path)
+                db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
+            except Exception as e:
+                logger.warning("Failed to generate subtitles via CaptionTrack: %s", e)
+                ass_path = None
+        else:
             ass_path = None
     else:
         ass_path = None
@@ -169,7 +182,7 @@ def render_clip(
 
     logger.info("Executing FFmpeg atomic render for clip %s (%.1fs - %.1fs, effective: %.1fs)",
                 clip_id, start_time, end_time, eff_duration)
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=300)
 
     if result.returncode != 0:
         error_msg = result.stderr.strip()
@@ -218,7 +231,7 @@ def render_clip(
         "-q:v", "2",
         str(temp_thumb_path)
     ]
-    thumb_res = subprocess.run(thumb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    thumb_res = subprocess.run(thumb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
     if thumb_res.returncode == 0 and temp_thumb_path.exists():
         temp_thumb_path.replace(output_thumb_path)
     elif temp_thumb_path.exists():

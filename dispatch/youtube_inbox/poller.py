@@ -10,11 +10,34 @@ import logging
 import threading
 from typing import Dict, Any, List, Optional
 
+from datetime import datetime, timezone
 from dispatch import db
 from dispatch.youtube_inbox.oauth import list_authenticated_user_uploads
 from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
 
 logger = logging.getLogger("dispatch.youtube_inbox.poller")
+
+
+def parse_iso_datetime(ts_val: Any) -> Optional[datetime]:
+    """Parse ISO-8601 timestamps supporting optional timezone and fractional seconds."""
+    if not ts_val:
+        return None
+    s = str(ts_val).strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
 
 
 class YouTubeInboxPoller:
@@ -56,7 +79,7 @@ class YouTubeInboxPoller:
             logger.info("YouTube Cloud Inbox poller stopped.")
 
     def _run_loop(self):
-        """Main daemon loop. Runs immediately on boot, then waits poll_interval."""
+        """Main daemon loop. Runs immediately on boot, then waits poll_interval with backoff on failure."""
         # 1. IMMEDIATE RUN ON BOOT: Catch recordings uploaded while laptop was off
         logger.info("Laptop boot discovery: Checking YouTube for recordings created while laptop was asleep/off...")
         try:
@@ -64,16 +87,26 @@ class YouTubeInboxPoller:
         except Exception as e:
             logger.error("Initial YouTube boot scan error: %s", e)
 
-        # 2. PERIODIC RUN: Wake up every poll_interval
+        # 2. PERIODIC RUN: Wake up every poll_interval with error backoff
+        consecutive_errors = 0
         while not self._stop_event.is_set():
-            # Wait with interruptibility
-            if self._stop_event.wait(timeout=self.poll_interval):
+            sleep_duration = self.poll_interval
+            if consecutive_errors > 0:
+                backoff_extra = min(300, 30 * (2 ** min(consecutive_errors - 1, 4)))
+                sleep_duration += backoff_extra
+                logger.info("Poller backoff active (%d consecutive errors): waiting %ds before next poll",
+                            consecutive_errors, sleep_duration)
+
+            if self._stop_event.wait(timeout=sleep_duration):
                 break
 
             try:
                 self.poll_once()
+                consecutive_errors = 0
             except Exception as e:
-                logger.error("Error during scheduled YouTube inbox poll: %s", e)
+                consecutive_errors += 1
+                logger.error("Error during scheduled YouTube inbox poll (failures=%d): %s",
+                             consecutive_errors, e)
 
     def poll_once(self) -> List[Dict[str, Any]]:
         """Execute a single check against YouTube and process newly discovered or ready videos."""
@@ -172,18 +205,11 @@ class YouTubeInboxPoller:
                         start_time_str = pub_time or (existing.get("discovered_at") if existing else None)
                         elapsed_min = 0.0
                         if start_time_str:
-                            try:
-                                clean_ts = str(start_time_str).replace("+00:00", "Z")
-                                for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-                                    try:
-                                        parsed = datetime.strptime(clean_ts, fmt)
-                                        elapsed_sec = (datetime.utcnow() - parsed).total_seconds()
-                                        elapsed_min = max(0.0, elapsed_sec / 60.0)
-                                        break
-                                    except ValueError:
-                                        pass
-                            except Exception:
-                                pass
+                            dt = parse_iso_datetime(start_time_str)
+                            if dt:
+                                now_utc = datetime.now(timezone.utc)
+                                elapsed_sec = (now_utc - dt).total_seconds()
+                                elapsed_min = max(0.0, elapsed_sec / 60.0)
 
                         if elapsed_min >= timeout_minutes:
                             warn_msg = (

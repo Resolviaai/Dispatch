@@ -81,7 +81,8 @@
 .creator-scrubber {
   -webkit-appearance: none;
   appearance: none;
-  height: 32px;
+  height: 44px;
+  min-height: 44px;
   background: transparent;
   cursor: pointer;
   touch-action: none;

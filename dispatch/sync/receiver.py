@@ -213,6 +213,7 @@ def get_pairing_pin() -> str:
 @router.get("/pairing/config")
 async def get_pairing_config(
     request: Request,
+    pin: Optional[str] = None,
     auth_token: Optional[str] = Header(None, alias="x-auth-token"),
     x_pairing_pin: Optional[str] = Header(None, alias="x-pairing-pin"),
     mask: bool = False
@@ -233,7 +234,7 @@ async def get_pairing_config(
     if provided_token and provided_token.startswith("Bearer "):
         provided_token = provided_token[7:].strip()
 
-    provided_pin = x_pairing_pin
+    provided_pin = pin or x_pairing_pin
 
     is_authenticated = False
 
@@ -273,6 +274,7 @@ async def get_pairing_config(
                 "auth_token": None,
                 "pairing_pin": None,
                 "connection_string": None,
+                "yt_token": None,
                 "authenticated": False,
                 "requires_pairing": True,
                 "message": "Authentication required. Provide valid x-auth-token or pairing PIN."
@@ -291,6 +293,7 @@ async def get_pairing_config(
         "lan_url": lan_url,
         "tailscale_url": tailscale_url,
         "auth_token": token_val,
+        "pairing_pin": current_pin,
         "connection_string": connection_string,
         "authenticated": True
     }

@@ -40,6 +40,16 @@ def extract_youtube_video_id(url_or_id: str) -> Optional[str]:
     return None
 
 
+def _apply_auth_opts(ydl_opts: Dict[str, Any]) -> None:
+    """Apply cookie authentication options if configured via environment variables."""
+    cookies_file = os.getenv("DISPATCH_YTDLP_COOKIES_FILE")
+    cookies_browser = os.getenv("DISPATCH_YTDLP_COOKIES_BROWSER")
+    if cookies_file and Path(cookies_file).exists():
+        ydl_opts["cookiefile"] = str(Path(cookies_file).resolve())
+    elif cookies_browser:
+        ydl_opts["cookiesfrombrowser"] = (cookies_browser,)
+
+
 class YouTubeInboxCatcher:
     """Manages downloading, transcript extraction, and end-to-end processing of YouTube videos."""
 
@@ -55,6 +65,7 @@ class YouTubeInboxCatcher:
             "no_warnings": True,
             "skip_download": True,
         }
+        _apply_auth_opts(ydl_opts)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             return {
@@ -82,6 +93,7 @@ class YouTubeInboxCatcher:
             "quiet": True,
             "no_warnings": True,
         }
+        _apply_auth_opts(ydl_opts)
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -89,41 +101,65 @@ class YouTubeInboxCatcher:
 
             # Look for written .vtt files
             vtt_files = list(self.storage_dir.glob(f"sub_{video_id}*.vtt"))
-            if not vtt_files:
-                logger.info("No YouTube caption files found for video %s", video_id)
-                return None
-
-            # Choose preferred language: 1. English (en.*), 2. Hindi (hi.*), 3. First available
-            target_file = None
-            for f in vtt_files:
-                fname = f.name.lower()
-                if ".en." in fname or fname.endswith(".en.vtt") or ".en-" in fname:
-                    target_file = f
-                    break
-            if not target_file:
+            if vtt_files:
+                # Choose preferred language: 1. English (en.*), 2. Hindi (hi.*), 3. First available
+                target_file = None
                 for f in vtt_files:
                     fname = f.name.lower()
-                    if ".hi." in fname or fname.endswith(".hi.vtt") or ".hi-" in fname:
+                    if ".en." in fname or fname.endswith(".en.vtt") or ".en-" in fname:
                         target_file = f
                         break
-            if not target_file:
-                target_file = vtt_files[0]
+                if not target_file:
+                    for f in vtt_files:
+                        fname = f.name.lower()
+                        if ".hi." in fname or fname.endswith(".hi.vtt") or ".hi-" in fname:
+                            target_file = f
+                            break
+                if not target_file:
+                    target_file = vtt_files[0]
 
-            logger.info("Found YouTube caption file %s for video %s", target_file.name, video_id)
-            segments = parse_vtt_file(target_file)
+                logger.info("Found YouTube caption file %s for video %s", target_file.name, video_id)
+                segments = parse_vtt_file(target_file)
 
-            # Cleanup sub files
-            for f in vtt_files:
-                try:
-                    f.unlink()
-                except Exception:
-                    pass
+                # Cleanup sub files
+                for f in vtt_files:
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
 
-            if segments:
-                return segments
+                if segments:
+                    return segments
 
         except Exception as e:
-            logger.warning("Error fetching YouTube captions for %s: %s", video_id, e)
+            logger.warning("Error fetching YouTube captions via yt-dlp for %s: %s", video_id, e)
+
+        # YouTube Data API v3 fallback for authorized channels
+        try:
+            from dispatch.youtube_inbox.oauth import get_youtube_service
+            service = get_youtube_service()
+            if service:
+                captions_resp = service.captions().list(part="snippet", videoId=video_id).execute()
+                items = captions_resp.get("items", [])
+                if items:
+                    target_cid = None
+                    for it in items:
+                        snip = it.get("snippet", {})
+                        lang = snip.get("language", "").lower()
+                        if lang.startswith("en") or lang.startswith("hi"):
+                            target_cid = it.get("id")
+                            break
+                    if not target_cid and items:
+                        target_cid = items[0].get("id")
+                    if target_cid:
+                        caption_content = service.captions().download(id=target_cid, tfmt="vtt").execute()
+                        cap_str = caption_content.decode("utf-8", errors="replace") if isinstance(caption_content, bytes) else str(caption_content)
+                        parsed = parse_vtt_content(cap_str)
+                        if parsed:
+                            logger.info("Retrieved %d segments via YouTube Data API caption track for %s", len(parsed), video_id)
+                            return parsed
+        except Exception as api_err:
+            logger.debug("YouTube Data API caption retrieval fallback failed for %s: %s", video_id, api_err)
 
         return None
 
@@ -144,6 +180,7 @@ class YouTubeInboxCatcher:
             "quiet": True,
             "no_warnings": True,
         }
+        _apply_auth_opts(ydl_opts)
 
         logger.info("Starting yt-dlp download for video %s", video_id)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -151,17 +188,29 @@ class YouTubeInboxCatcher:
 
         if not target_path.exists():
             # Check if downloaded with different container and convert/rename
-            candidates = list(self.storage_dir.glob(f"{video_id}.*"))
+            # Exclude incomplete downloads, transcripts, and audio-only/video-only DASH splits
+            ignored_patterns = re.compile(r"(\.part$|\.ytdl$|\.vtt$|\.aria2$|\.tmp$|\.temp$|\.f\d+\.)", re.IGNORECASE)
+            candidates = [
+                f for f in self.storage_dir.glob(f"{video_id}.*")
+                if f != target_path and not ignored_patterns.search(f.name) and f.stat().st_size > 1024
+            ]
             if candidates:
+                # Pick the largest candidate file
+                candidates.sort(key=lambda f: f.stat().st_size, reverse=True)
                 cand = candidates[0]
-                if cand.suffix != ".mp4":
-                    # Convert to MP4
-                    subprocess.run(
+                if cand.suffix.lower() != ".mp4":
+                    # Convert/remux to MP4
+                    proc = subprocess.run(
                         ["ffmpeg", "-y", "-i", str(cand), "-c", "copy", str(target_path)],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         check=False
                     )
+                    if proc.returncode == 0 and target_path.exists() and target_path.stat().st_size > 1024:
+                        cand.unlink(missing_ok=True)
+                    else:
+                        target_path.unlink(missing_ok=True)
+                        raise RuntimeError(f"FFmpeg remux of candidate {cand.name} to MP4 failed with exit code {proc.returncode}")
                 else:
                     cand.rename(target_path)
 
@@ -196,7 +245,11 @@ class YouTubeInboxCatcher:
 
         existing = db.get_youtube_video(video_id)
         # Idempotency check: If already DOWNLOADED or completed downstream, return existing record
-        if existing and existing["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIPT_FETCHED", "CLIPS_CREATED", "COMPLETED"):
+        if existing and existing["status"] in (
+            "DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED",
+            "TRANSCRIPT_FETCHED", "ANALYZING", "CLIPS_DEFINED",
+            "CLIPS_CREATED", "COMPLETED"
+        ):
             local_path = Path(existing["local_video_path"]) if existing.get("local_video_path") else None
             if local_path and local_path.exists() and local_path.stat().st_size > 0:
                 is_valid, _, _ = probe_video(local_path)

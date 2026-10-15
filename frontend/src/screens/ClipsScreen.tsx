@@ -1420,8 +1420,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         body: JSON.stringify({
           title: titleDraft.trim(),
           hashtags: captionDraft.trim(),
-          publish_mode: 'public',
-          platforms: selectedPlatforms.join(','),
+          publish_mode: currentClip.publish_mode || 'private',
+          platforms: selectedPlatforms.map((p) => p === 'youtube_shorts' ? 'youtube' : p).join(','),
           layout_mode: layoutMode,
         }),
       });

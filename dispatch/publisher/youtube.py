@@ -39,8 +39,21 @@ def upload_youtube_short(
     tag_list = [t.strip().lstrip("#") for t in safe_tags.replace(",", " ").split() if t.strip()]
 
     # Check for credentials
-    token_file = credentials_path or Path("youtube_token.json")
-    if not token_file.exists() and not os.getenv("YOUTUBE_ACCESS_TOKEN"):
+    from dispatch.config import ROOT_DIR, YOUTUBE_TOKEN_PATH
+    candidates = [
+        credentials_path,
+        Path(os.getenv("DISPATCH_YOUTUBE_TOKEN_PATH", str(YOUTUBE_TOKEN_PATH))),
+        YOUTUBE_TOKEN_PATH,
+        ROOT_DIR / "youtube_token.json",
+        Path("youtube_token.json"),
+    ]
+    token_file = None
+    for c in candidates:
+        if c and c.exists():
+            token_file = c
+            break
+
+    if not token_file and not os.getenv("YOUTUBE_ACCESS_TOKEN"):
         raise PermissionError("YouTube OAuth credentials missing (youtube_token.json). Please authenticate via Settings.")
 
     # If real credentials exist, execute actual Google API client upload
@@ -48,8 +61,33 @@ def upload_youtube_short(
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
         from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request as GoogleAuthRequest
 
-        creds = Credentials.from_authorized_user_file(str(token_file))
+        if token_file and token_file.exists():
+            creds = Credentials.from_authorized_user_file(str(token_file))
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleAuthRequest())
+                    if hasattr(creds, "to_json"):
+                        with open(token_file, "w", encoding="utf-8") as f:
+                            f.write(creds.to_json())
+                        logger.info("Refreshed and persisted YouTube OAuth token in publisher to %s", token_file)
+                except Exception as refresh_err:
+                    logger.warning("Failed to refresh YouTube OAuth token in publisher: %s", refresh_err)
+        else:
+            creds = Credentials(
+                token=os.getenv("YOUTUBE_ACCESS_TOKEN"),
+                refresh_token=os.getenv("YOUTUBE_REFRESH_TOKEN"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+                client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+            )
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleAuthRequest())
+                except Exception as refresh_err:
+                    logger.warning("Failed to refresh env-based token in publisher: %s", refresh_err)
+
         youtube = build("youtube", "v3", credentials=creds)
 
         body = {

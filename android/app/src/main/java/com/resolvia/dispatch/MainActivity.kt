@@ -118,11 +118,10 @@ class MainActivity : ComponentActivity() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
-                databaseEnabled = true
-                allowFileAccess = true
-                allowContentAccess = true
-                allowFileAccessFromFileURLs = true
-                allowUniversalAccessFromFileURLs = true
+                allowFileAccess = false
+                allowContentAccess = false
+                allowFileAccessFromFileURLs = false
+                allowUniversalAccessFromFileURLs = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 mediaPlaybackRequiresUserGesture = false
                 loadWithOverviewMode = true
@@ -219,6 +218,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cameraCaptureManager.destroy()
         if (::webView.isInitialized) {
             webView.destroy()
         }

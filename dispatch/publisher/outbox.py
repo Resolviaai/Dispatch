@@ -35,6 +35,19 @@ def process_outbox_queue() -> int:
 
 
 def _process_outbox_queue_internal() -> int:
+    # 1. Recover stale uploading jobs orphaned by unexpected process restarts (> 10 min)
+    try:
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'queued',
+                    last_error = 'Recovered from stale uploading state after process restart'
+                WHERE status = 'uploading' 
+                  AND (julianday('now') - julianday(created_at)) * 1440.0 > 10.0
+            """)
+    except Exception as e:
+        logger.debug("Stale outbox recovery check note: %s", e)
+
     queue = db.get_outbox_queue()
     if not queue:
         return 0
@@ -82,7 +95,7 @@ def _process_outbox_queue_internal() -> int:
         try:
             logger.info("Publishing clip %s to %s (Mode: %s)", clip_id, platform, publish_mode)
 
-            if platform == "youtube":
+            if platform in ("youtube", "youtube_shorts"):
                 privacy = "public" if publish_mode == "public" else "private"
                 result = upload_youtube_short(
                     video_path=video_path,
@@ -108,7 +121,13 @@ def _process_outbox_queue_internal() -> int:
                     text=f"{title}\n\n{hashtags}"
                 )
             else:
-                logger.warning("Unsupported platform %s for job %s", platform, job_id)
+                err_msg = f"Unsupported publishing platform '{platform}'"
+                logger.warning("%s for job %s", err_msg, job_id)
+                with db.get_db_connection() as conn:
+                    conn.execute(
+                        "UPDATE publishing_outbox SET status = 'failed', last_error = ? WHERE id = ?",
+                        (err_msg, job_id)
+                    )
                 continue
 
             # Update job record to published

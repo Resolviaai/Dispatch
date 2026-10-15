@@ -77,6 +77,9 @@ dependencies {
     // WorkManager (Reliable background YouTube uploads)
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
+    // Security (EncryptedSharedPreferences / Android Keystore)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // OkHttp (YouTube Data API resumable upload)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")

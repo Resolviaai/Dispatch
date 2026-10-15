@@ -250,9 +250,18 @@ class DispatchNativeBridge(
     }
 
     @JavascriptInterface
+    fun getWifiOnly(): Boolean = pairingManager.isWifiOnlyEnabled
+
+    @JavascriptInterface
+    fun setWifiOnly(enabled: Boolean) {
+        pairingManager.isWifiOnlyEnabled = enabled
+    }
+
+    @JavascriptInterface
     fun getStorageInfo(): String {
         return try {
-            val stat = StatFs(activity.filesDir.absolutePath)
+            val storagePath = activity.getExternalFilesDir(null)?.absolutePath ?: activity.filesDir.absolutePath
+            val stat = StatFs(storagePath)
             val bytesAvailable = stat.availableBlocksLong * stat.blockSizeLong
             val bytesTotal = stat.blockCountLong * stat.blockSizeLong
             val freeGb = (bytesAvailable / (1024 * 1024 * 1024L)).toInt()

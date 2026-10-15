@@ -14,7 +14,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
-from dispatch.config import DEFAULT_PUBLISH_MODE, GEMINI_API_KEY, PROCESSING_DIR
+import dispatch.config
+from dispatch.config import DEFAULT_PUBLISH_MODE, PROCESSING_DIR, GEMINI_API_KEY
 from dispatch.video_engine.renderer import render_clip
 from dispatch.captions import group_words_into_captions, export_to_ass
 from dispatch.ai_clips.highlight_finder import (
@@ -156,7 +157,22 @@ class HighlightWorker:
                                     src_path = cp
 
                     self._render_clips_for_video(video_id, clip_ids, segments, src_path)
-                    db.update_youtube_video(video_id=video_id, status="COMPLETED")
+                    # Verify rendered outputs exist on disk before marking COMPLETED
+                    if clip_ids:
+                        all_rendered = True
+                        for cid in clip_ids:
+                            c_row = db.get_clip_by_id(cid)
+                            vp = Path(c_row["video_path"]) if (c_row and c_row.get("video_path")) else None
+                            if not vp or not vp.exists() or vp.stat().st_size == 0:
+                                all_rendered = False
+                                break
+                        if all_rendered:
+                            db.update_youtube_video(video_id=video_id, status="COMPLETED")
+                            logger.info("All %d clips rendered and verified for video %s -> COMPLETED", len(clip_ids), video_id)
+                        else:
+                            logger.warning("Not all clips rendered yet for video %s; maintaining CLIPS_DEFINED", video_id)
+                    else:
+                        db.update_youtube_video(video_id=video_id, status="COMPLETED")
                 except Exception as e:
                     logger.error("Error rendering CLIPS_DEFINED item %s: %s", video_id, e)
 
@@ -326,6 +342,11 @@ class HighlightWorker:
 
         attempt_count = int(item.get("ai_attempt_count") or 0) + 1
 
+        if not GEMINI_API_KEY:
+            err_msg = "GEMINI_API_KEY is not configured or is empty. Cannot extract highlights."
+            db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
+            raise RuntimeError(err_msg)
+
         try:
             # Strictly call Gemini API: NO fallback to extract_clips_local_heuristic
             raw_clips, model_used = call_gemini_generate_content(user_prompt)
@@ -349,20 +370,6 @@ class HighlightWorker:
                 publish_mode=publish_mode
             )
 
-            # Resolve source video file path for auto-rendering
-            local_path_str = item.get("local_video_path")
-            src_path = Path(local_path_str) if local_path_str else None
-            if not src_path or not src_path.exists():
-                if chunk_id:
-                    chk = db.get_chunk_by_id(chunk_id)
-                    if chk and chk.get("filepath"):
-                        cp = Path(chk["filepath"])
-                        if cp.exists():
-                            src_path = cp
-
-            # Automatic FFmpeg rendering with Roman Hinglish subtitles
-            self._render_clips_for_video(video_id, saved_ids, segments, src_path)
-
             # Reset error fields on success and transition to CLIPS_DEFINED
             db.update_youtube_video(
                 video_id=video_id,
@@ -373,7 +380,7 @@ class HighlightWorker:
             )
 
             logger.info(
-                "Pillar 3 Highlight SUCCESS for %s -> CLIPS_DEFINED (Model: %s, Raw: %d, Accepted/Rendered: %d, ClipIDs: %s)",
+                "Pillar 3 Highlight SUCCESS for %s -> CLIPS_DEFINED (Model: %s, Raw: %d, Accepted: %d, ClipIDs: %s)",
                 video_id, model_used, len(raw_clips), len(saved_ids), saved_ids
             )
 
@@ -391,8 +398,9 @@ class HighlightWorker:
                          video_id, attempt_count, self.max_attempts, err_msg)
 
             # Determine whether error is permanent or retryable
+            current_gemini_key = os.getenv("GEMINI_API_KEY", "")
             is_permanent = (
-                not GEMINI_API_KEY
+                not current_gemini_key
                 or "API_KEY" in err_msg.upper()
                 or "AUTHENTICATION FAILED" in err_msg.upper()
                 or attempt_count >= self.max_attempts

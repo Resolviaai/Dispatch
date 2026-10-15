@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from dispatch.config import (
@@ -24,6 +25,7 @@ from dispatch.config import (
     DEFAULT_PUBLISH_MODE,
     PROCESSING_DIR,
     INCOMING_DIR,
+    STORAGE_DIR,
     MAX_CLIP_DURATION,
     MIN_CLIP_DURATION
 )
@@ -54,7 +56,63 @@ from dispatch.sync.receiver import is_trusted_localhost
 logger = logging.getLogger("dispatch.web")
 
 app = FastAPI(title="Dispatch Dashboard", version="1.0.0")
+
+ALLOWED_ORIGINS = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://appassets.androidplatform.net",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(sync_router)
+
+
+def verify_dashboard_auth(request: Request) -> None:
+    """Enforce token validation or secure localhost origin/host matching.
+    Protects mutating endpoints and sensitive routes against LAN attackers,
+    unauthorized callers, CSRF, and DNS rebinding attacks.
+    """
+    token = request.headers.get("x-auth-token") or request.headers.get("authorization")
+    if token:
+        try:
+            from dispatch.sync.receiver import verify_token
+            verify_token(token)
+            return
+        except HTTPException:
+            pass
+
+    client_host = request.client.host if request.client else "unknown"
+    if is_trusted_localhost(client_host):
+        # Prevent DNS rebinding attacks
+        host_header = request.headers.get("host", "").split(":")[0].strip().lower()
+        if host_header and host_header not in ("localhost", "127.0.0.1", "::1", "testserver"):
+            logger.warning("Rejected request to %s: untrusted host header '%s'", request.url.path, host_header)
+            raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
+
+        origin_header = request.headers.get("origin", "").strip().lower()
+        if origin_header:
+            allowed_prefixes = (
+                "http://localhost",
+                "http://127.0.0.1",
+                "https://appassets.androidplatform.net",
+                "http://testserver",
+            )
+            if not any(origin_header.startswith(p) for p in allowed_prefixes):
+                logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
+                raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
+        return
+
+    raise HTTPException(status_code=401, detail="Authentication required for this operation")
+
 
 _YOUTUBE_AUTH_LOCK = threading.Lock()
 _YOUTUBE_AUTH_PROCESS: Optional[subprocess.Popen] = None
@@ -181,19 +239,26 @@ class SettingsRequest(BaseModel):
 
 @app.get("/clips/{filename}")
 async def get_clip_file(filename: str):
-    """Stream clip video or image thumbnail directly from storage."""
-    file_path = CLIPS_DIR / filename
-    if not file_path.exists():
+    """Stream clip video or image thumbnail directly from storage with path traversal protection."""
+    target_path = (CLIPS_DIR / filename).resolve()
+    if not target_path.is_relative_to(CLIPS_DIR.resolve()):
+        raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+    if not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     media_type = "video/mp4" if filename.endswith(".mp4") else "image/jpeg"
-    return FileResponse(file_path, media_type=media_type)
+    return FileResponse(target_path, media_type=media_type)
 
 
 @app.get("/download/dispatch.apk")
 async def download_android_apk():
     """Download the native Dispatch Android APK compiled for POCO C65."""
-    apk_path = ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
-    if not apk_path.exists():
+    candidates = [
+        ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+        STORAGE_DIR / "dispatch.apk",
+        STORAGE_DIR / "download" / "dispatch.apk",
+    ]
+    apk_path = next((p for p in candidates if p.exists() and p.is_file() and p.stat().st_size > 0), None)
+    if not apk_path:
         raise HTTPException(
             status_code=404,
             detail="The Android APK is currently compiling or not built yet."
@@ -208,7 +273,30 @@ async def download_android_apk():
 @app.get("/api/pipeline/jobs")
 async def get_pipeline_jobs():
     """Return live checkpointed jobs with current stage, status, leases, and retry timers."""
-    return {"jobs": db.get_active_pipeline_jobs()}
+    jobs = list(db.get_active_pipeline_jobs())
+    try:
+        active_inbox = db.list_youtube_inbox(limit=25)
+        for item in active_inbox:
+            st = item.get("status")
+            if st in (
+                "DOWNLOADING", "VALIDATING", "WAITING_FOR_TRANSCRIPT",
+                "TRANSCRIBED", "ANALYZING", "CLIPS_DEFINED",
+                "RENDERING", "WAITING_FOR_YOUTUBE_PROCESSING"
+            ):
+                jobs.append({
+                    "id": f"yt_{item['video_id']}",
+                    "chunk_id": item.get("dispatch_id") or item["video_id"],
+                    "session_id": item.get("session_id") or "",
+                    "current_stage": st.lower(),
+                    "status": "processing",
+                    "title": item.get("title", ""),
+                    "video_id": item["video_id"],
+                    "created_at": item.get("discovered_at") or item.get("upload_time"),
+                    "updated_at": item.get("updated_at")
+                })
+    except Exception as e:
+        logger.debug("Error aggregating youtube_inbox into pipeline jobs: %s", e)
+    return {"jobs": jobs}
 
 
 @app.get("/api/status")
@@ -473,14 +561,29 @@ async def get_clip_detail(clip_id: str):
 
 @app.get("/api/clips/{clip_id}/source")
 async def get_clip_source_media(clip_id: str):
-    """Safely resolve and stream the original raw source video chunk for this clip.
+    """Safely resolve and stream the original raw source video chunk for this clip or chunk.
     Supports HTTP Range requests (206 Partial Content) for smooth HTML5 video scrubbing.
     """
     clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    source_path = None
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=3600",
+    }
+    if clip:
+        source_path = resolve_clip_source_path(clip)
+        headers["X-Clip-Start"] = str(clip.get("start_time", 0.0))
+        headers["X-Clip-End"] = str(clip.get("end_time", clip.get("duration", 0.0)))
+        headers["X-Clip-Duration"] = str(clip.get("duration", 0.0))
+    else:
+        # Check if clip_id is actually a chunk_id
+        chunk = db.get_chunk_by_id(clip_id)
+        if chunk and chunk.get("filepath"):
+            cp = Path(chunk["filepath"])
+            if cp.exists():
+                source_path = cp
+                headers["X-Clip-Duration"] = str(chunk.get("duration", 0.0))
 
-    source_path = resolve_clip_source_path(clip)
     if not source_path or not source_path.exists():
         raise HTTPException(status_code=404, detail="Source media chunk not found on disk")
 
@@ -491,13 +594,7 @@ async def get_clip_source_media(clip_id: str):
     return FileResponse(
         path=str(resolved_path),
         media_type="video/mp4",
-        headers={
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=3600",
-            "X-Clip-Start": str(clip.get("start_time", 0.0)),
-            "X-Clip-End": str(clip.get("end_time", clip.get("duration", 0.0))),
-            "X-Clip-Duration": str(clip.get("duration", 0.0)),
-        }
+        headers=headers
     )
 
 
@@ -516,8 +613,9 @@ def is_matching_layout(a: Optional[str], b: Optional[str]) -> bool:
 
 
 @app.post("/api/clips/{clip_id}/layout")
-async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest):
+async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, request: Request):
     """Persist chosen layout framing mode for a clip immediately."""
+    verify_dashboard_auth(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -554,8 +652,9 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest):
 
 
 @app.post("/api/clips/{clip_id}/render")
-async def handle_render_clip(clip_id: str, payload: Optional[LayoutModeRequest] = None):
+async def handle_render_clip(clip_id: str, request: Request, payload: Optional[LayoutModeRequest] = None):
     """Explicitly re-render a clip from source media using the current or specified layout_mode."""
+    verify_dashboard_auth(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -637,10 +736,11 @@ async def handle_render_clip(clip_id: str, payload: Optional[LayoutModeRequest] 
 
 
 @app.post("/api/clips/{clip_id}/approve")
-async def handle_approve_clip(clip_id: str, payload: ApproveRequest):
+async def handle_approve_clip(clip_id: str, payload: ApproveRequest, request: Request):
     """Approve a clip and enqueue it to the publishing outbox.
     Ensures rendered media matches the chosen layout_mode before approval.
     """
+    verify_dashboard_auth(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -739,8 +839,12 @@ async def handle_approve_clip(clip_id: str, payload: ApproveRequest):
 
 
 @app.post("/api/clips/{clip_id}/reject")
-async def handle_reject_clip(clip_id: str, payload: RejectRequest):
+async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Request):
     """Reject a clip and record negative preference learning data."""
+    verify_dashboard_auth(request)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
     db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected")
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
 
@@ -765,23 +869,27 @@ async def get_clip_filmstrip(clip_id: str):
     # Extract dynamically if video exists on disk
     vpath = clip.get("video_path")
     if vpath and Path(vpath).exists():
-        count = 8
-        dur = max(1.0, float(clip.get("duration") or 10.0))
-        frames = []
-        for i in range(count):
-            t = (i + 0.5) * (dur / count)
-            frame_name = f"{clip_id}_frame_{i}.jpg"
-            out_path = CLIPS_DIR / frame_name
-            try:
-                subprocess.run([
-                    "ffmpeg", "-y", "-ss", str(t), "-i", str(vpath),
-                    "-frames:v", "1", "-q:v", "3", "-vf", "scale=160:-1",
-                    str(out_path)
-                ], capture_output=True, timeout=5)
-                if out_path.exists():
-                    frames.append(f"/clips/{frame_name}")
-            except Exception:
-                pass
+        def _extract_frames() -> List[str]:
+            count = 8
+            dur = max(1.0, float(clip.get("duration") or 10.0))
+            dyn_frames = []
+            for i in range(count):
+                t = (i + 0.5) * (dur / count)
+                frame_name = f"{clip_id}_frame_{i}.jpg"
+                out_path = CLIPS_DIR / frame_name
+                try:
+                    subprocess.run([
+                        "ffmpeg", "-y", "-ss", str(t), "-i", str(vpath),
+                        "-frames:v", "1", "-q:v", "3", "-vf", "scale=160:-1",
+                        str(out_path)
+                    ], capture_output=True, timeout=5)
+                    if out_path.exists():
+                        dyn_frames.append(f"/clips/{frame_name}")
+                except Exception:
+                    pass
+            return dyn_frames
+
+        frames = await asyncio.to_thread(_extract_frames)
         if frames:
             return {"frames": frames}
 
@@ -921,21 +1029,27 @@ async def get_clip_captions(clip_id: str):
 @app.post("/api/clips/{clip_id}/captions")
 async def save_clip_captions(clip_id: str, request: Request):
     """Save customized CaptionTrack JSON and export updated ASS file for FFmpeg render parity."""
+    verify_dashboard_auth(request)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
     data = await request.json()
     track = CaptionTrack.from_dict(data)
     track_dict = track.to_dict()
     db.save_clip_caption_data(clip_id, json.dumps(track_dict))
 
     # Export ASS file with exact parity
-    ass_path = Path("storage/processing") / f"{clip_id}.ass"
+    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
     export_to_ass(track, ass_path)
 
     return {"status": "success", "message": "Captions saved and exported to ASS"}
 
 
 @app.post("/api/recordings/upload")
-async def upload_web_recording(file: UploadFile = File(...)):
+async def upload_web_recording(request: Request, file: UploadFile = File(...)):
     """Accept test recording from browser camera, save to storage, register session and chunk, extract clip, and prepare for review."""
+    verify_dashboard_auth(request)
     import subprocess
     import shutil
     from dispatch.ingestion.validator import inspect_video_orientation, calculate_file_hash
@@ -945,11 +1059,23 @@ async def upload_web_recording(file: UploadFile = File(...)):
     chunk_id = f"chk_web_{timestamp}"
     clip_id = f"clip_web_{timestamp}"
 
-    # 1. Save uploaded WebM file
-    content = await file.read()
+    # 1. Save uploaded WebM file using chunked streaming with size limit (max 500MB)
+    MAX_RECORDING_UPLOAD_BYTES = 500 * 1024 * 1024
     temp_webm = PROCESSING_DIR / f"{chunk_id}.webm"
-    with open(temp_webm, "wb") as f:
-        f.write(content)
+    total_bytes = 0
+    try:
+        with open(temp_webm, "wb") as f:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_RECORDING_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Upload file exceeds maximum limit of 500MB")
+                f.write(chunk)
+    except Exception:
+        temp_webm.unlink(missing_ok=True)
+        raise
 
     # 2. Standardize raw source chunk to MP4 in PROCESSING_DIR
     chunk_path = PROCESSING_DIR / f"{chunk_id}.mp4"
@@ -1123,7 +1249,8 @@ async def get_settings():
 
 
 @app.post("/api/settings")
-async def update_settings(payload: SettingsRequest):
+async def update_settings(payload: SettingsRequest, request: Request):
+    verify_dashboard_auth(request)
     if payload.publish_mode:
         db.set_setting("publish_mode", payload.publish_mode)
     if payload.auto_process:
@@ -1138,8 +1265,9 @@ async def get_youtube_inbox_items():
 
 
 @app.post("/api/youtube/ingest")
-async def ingest_youtube_video(payload: YouTubeIngestRequest):
+async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
     """Trigger on-demand download, transcription, and clip rendering from a YouTube video URL/ID."""
+    verify_dashboard_auth(request)
     video_id = extract_youtube_video_id(payload.url)
     if not video_id:
         raise HTTPException(status_code=400, detail="Invalid YouTube URL or Video ID")
@@ -1225,11 +1353,19 @@ async def get_integrations_status():
 
 
 @app.post("/api/integrations/gemini")
-async def update_gemini_key(payload: GeminiKeyRequest):
+async def update_gemini_key(payload: GeminiKeyRequest, request: Request):
     """Save and activate a Gemini API key directly from the dashboard."""
+    verify_dashboard_auth(request)
     new_key = payload.api_key.strip()
     if not new_key:
         raise HTTPException(status_code=400, detail="API key cannot be empty")
+
+    if any(c in new_key for c in ("\r", "\n", "\x00")):
+        raise HTTPException(status_code=400, detail="Invalid character in API key")
+
+    gemini_key_regex = re.compile(r"^(AIza[\w-]{30,50}|AQ\.[\w.-]{20,120})$")
+    if not gemini_key_regex.match(new_key):
+        raise HTTPException(status_code=400, detail="Invalid Gemini API key format")
 
     env_path = ROOT_DIR / ".env"
     env_content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
@@ -1239,6 +1375,7 @@ async def update_gemini_key(payload: GeminiKeyRequest):
         env_content += f"\nGEMINI_API_KEY={new_key}\n"
     env_path.write_text(env_content, encoding="utf-8")
 
+    os.environ["GEMINI_API_KEY"] = new_key
     import dispatch.config
     dispatch.config.GEMINI_API_KEY = new_key
     import dispatch.ai_clips.highlight_finder
@@ -1248,8 +1385,9 @@ async def update_gemini_key(payload: GeminiKeyRequest):
 
 
 @app.post("/api/integrations/youtube/start-auth")
-async def start_youtube_auth():
+async def start_youtube_auth(request: Request):
     """Start one desktop OAuth flow using this Dispatch runtime's Python interpreter."""
+    verify_dashboard_auth(request)
     global _YOUTUBE_AUTH_PROCESS
     client_secrets = ROOT_DIR / "client_secrets.json"
     if not client_secrets.exists():
@@ -1299,8 +1437,9 @@ async def get_youtube_auth_status():
 
 
 @app.post("/api/integrations/youtube/disconnect")
-async def disconnect_youtube():
+async def disconnect_youtube(request: Request):
     """Disconnect YouTube by removing the cached token."""
+    verify_dashboard_auth(request)
     token_file = ROOT_DIR / "youtube_token.json"
     if token_file.exists():
         token_file.unlink()
@@ -1313,10 +1452,7 @@ async def get_youtube_credentials(
     authorization: Optional[str] = Header(None)
 ):
     """Legacy read path, restricted to loopback or an existing Bearer device token."""
-    client_host = request.client.host if request.client else "unknown"
-    if not is_trusted_localhost(client_host):
-        from dispatch.sync.receiver import verify_token
-        verify_token(authorization)
+    verify_dashboard_auth(request)
     return _youtube_credentials_response()
 
 

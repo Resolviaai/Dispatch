@@ -105,6 +105,11 @@ class CameraCaptureManager(private val context: Context) {
 
     fun toggleAudio(): Boolean {
         isAudioEnabled = !isAudioEnabled
+        try {
+            activeRecording?.mute(!isAudioEnabled)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to mute/unmute active recording: ${e.message}")
+        }
         return isAudioEnabled
     }
 
@@ -501,6 +506,11 @@ class CameraCaptureManager(private val context: Context) {
      */
     fun toggleMic(): Boolean {
         isAudioEnabled = !isAudioEnabled
+        try {
+            activeRecording?.mute(!isAudioEnabled)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to mute/unmute active recording: ${e.message}")
+        }
         return isAudioEnabled
     }
 

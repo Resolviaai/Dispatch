@@ -160,6 +160,7 @@ def complete_stage_checkpoint(
                     status = ?,
                     worker_id = NULL,
                     lease_expires_at = NULL,
+                    attempt_count = 0,
                     updated_at = ?
                 WHERE job_id = ? 
                   AND worker_id = ? 
@@ -179,6 +180,7 @@ def complete_stage_checkpoint(
                     status = ?,
                     worker_id = NULL,
                     lease_expires_at = NULL,
+                    attempt_count = 0,
                     updated_at = ?
                 WHERE job_id = ?
             """, (next_stage.value, next_status, now_str, job_id))

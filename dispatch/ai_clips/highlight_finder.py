@@ -9,7 +9,7 @@ import json
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 import requests
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from dispatch.config import GEMINI_API_KEY, MIN_CLIP_DURATION, MAX_CLIP_DURATION
 from dispatch.ai_clips.prompt_templates import HIGHLIGHT_SYSTEM_PROMPT, build_highlight_user_prompt
@@ -42,6 +42,12 @@ class HighlightCandidate(BaseModel):
     virality_score: int = Field(default=70, ge=1, le=100)
     layout_recommendation: str = Field(default="fit_blur")
     reason: Optional[str] = ""
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> "HighlightCandidate":
+        if self.end_time <= self.start_time:
+            raise ValueError(f"end_time ({self.end_time}) must be strictly greater than start_time ({self.start_time})")
+        return self
 
 
 def get_configured_gemini_models() -> List[str]:
@@ -203,9 +209,66 @@ def has_devanagari(text: str) -> bool:
     return bool(DEVANAGARI_REGEX.search(text))
 
 
+_DEVANAGARI_MAP = {
+    # Independent vowels
+    '\u0905': 'a', '\u0906': 'aa', '\u0907': 'i', '\u0908': 'ee', '\u0909': 'u',
+    '\u090a': 'oo', '\u090b': 'ri', '\u090f': 'e', '\u0910': 'ai', '\u0913': 'o',
+    '\u0914': 'au',
+    # Consonants
+    '\u0915': 'k', '\u0916': 'kh', '\u0917': 'g', '\u0918': 'gh', '\u0919': 'ng',
+    '\u091a': 'ch', '\u091b': 'chh', '\u091c': 'j', '\u091d': 'jh', '\u091e': 'ny',
+    '\u091f': 't', '\u0920': 'th', '\u0921': 'd', '\u0922': 'dh', '\u0923': 'n',
+    '\u0924': 't', '\u0925': 'th', '\u0926': 'd', '\u0927': 'dh', '\u0928': 'n',
+    '\u092a': 'p', '\u092b': 'ph', '\u092c': 'b', '\u092d': 'bh', '\u092e': 'm',
+    '\u092f': 'y', '\u0930': 'r', '\u0932': 'l', '\u0935': 'v', '\u0936': 'sh',
+    '\u0937': 'sh', '\u0938': 's', '\u0939': 'h',
+    # Nukta consonants
+    '\u0958': 'q', '\u0959': 'kh', '\u095a': 'g', '\u095b': 'z', '\u095c': 'r',
+    '\u095d': 'rh', '\u095e': 'f',
+    # Dependent vowel signs (matras)
+    '\u093e': 'aa', '\u093f': 'i', '\u0940': 'ee', '\u0941': 'u', '\u0942': 'oo',
+    '\u0943': 'ri', '\u0947': 'e', '\u0948': 'ai', '\u094b': 'o', '\u094c': 'au',
+    # Modifiers
+    '\u0902': 'n', '\u0901': 'n', '\u0903': 'h',
+}
+_HALANT = '\u094d'
+_CONSONANTS = set('\u0915\u0916\u0917\u0918\u0919\u091a\u091b\u091c\u091d\u091e\u091f\u0920\u0921\u0922\u0923\u0924\u0925\u0926\u0927\u0928\u092a\u092b\u092c\u092d\u092e\u092f\u0930\u0932\u0935\u0936\u0937\u0938\u0939\u0958\u0959\u095a\u095b\u095c\u095d\u095e')
+_MATRAS = set('\u093e\u093f\u0940\u0941\u0942\u0943\u0947\u0948\u094b\u094c')
+
+
+def phonetic_devanagari_to_roman(text: str) -> str:
+    """Deterministic phonetic transliteration of Devanagari Hindi into readable Roman Hinglish."""
+    if not text:
+        return ""
+    result = []
+    chars = list(text)
+    n = len(chars)
+    for i, ch in enumerate(chars):
+        if ch in _CONSONANTS:
+            base = _DEVANAGARI_MAP.get(ch, '')
+            next_ch = chars[i + 1] if i + 1 < n else None
+            if next_ch == _HALANT:
+                result.append(base)
+            elif next_ch in _MATRAS:
+                result.append(base)
+            elif next_ch and next_ch in _CONSONANTS:
+                result.append(base + 'a')
+            elif next_ch is None:
+                result.append(base)
+            else:
+                result.append(base + 'a')
+        elif ch in _DEVANAGARI_MAP:
+            result.append(_DEVANAGARI_MAP[ch])
+        elif ch == _HALANT:
+            pass
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
 def transliterate_tokens_to_hinglish(tokens: List[str], timeout: int = 25) -> List[str]:
-    """Transliterate a list of Devanagari tokens into Roman Hinglish with 1:1 token preservation using configured Gemini models.
-    Reuses Dispatch's configured Gemini integration, model hierarchy, and structured validation.
+    """Transliterate a list of Devanagari tokens into Roman Hinglish with 1:1 token preservation.
+    Uses Gemini when available, with deterministic phonetic fallback if offline or failed.
     Preserves exact list length to ensure word timestamp alignment."""
     if not tokens or not any(has_devanagari(t) for t in tokens):
         return tokens
@@ -241,13 +304,14 @@ def transliterate_tokens_to_hinglish(tokens: List[str], timeout: int = 25) -> Li
             return [str(t) for t in candidate_list]
 
         logger.warning(
-            "Gemini model '%s' transliteration returned unexpected structure or count (%s, expected %d). Preserving original tokens.",
+            "Gemini model '%s' transliteration returned unexpected structure or count (%s, expected %d). Using phonetic fallback.",
             winning_model, len(candidate_list) if candidate_list is not None else type(raw_result).__name__, len(tokens)
         )
     except Exception as e:
-        logger.warning("Gemini transliteration failed across configured models (%s). Preserving original tokens.", e)
+        logger.warning("Gemini transliteration failed across configured models (%s). Using phonetic fallback.", e)
 
-    return tokens
+    # Deterministic phonetic fallback preserves font rendering safety without missing glyph tofu boxes
+    return [phonetic_devanagari_to_roman(t) if has_devanagari(t) else t for t in tokens]
 
 
 def transliterate_segments_to_hinglish(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -521,7 +585,7 @@ def call_gemini_generate_content(
     Raises:
       RuntimeError: If authentication fails, quota exhausted, or all models fail.
     """
-    key = api_key or GEMINI_API_KEY
+    key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not configured or is empty. Cannot extract highlights.")
 

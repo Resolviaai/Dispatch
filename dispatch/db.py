@@ -515,13 +515,13 @@ def get_clip_by_id(clip_id: str) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
-def reject_clip(clip_id: str, reason: str = "User rejected"):
+def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
         clip = cursor.fetchone()
         if not clip:
-            return
+            return False
 
         cursor.execute("UPDATE clips SET status = 'rejected' WHERE id = ?", (clip_id,))
         # Store in rejections for negative preference learning
@@ -530,12 +530,13 @@ def reject_clip(clip_id: str, reason: str = "User rejected"):
             VALUES (?, ?, ?, ?, ?)
         """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason))
         conn.commit()
+        return True
 
 
 def get_all_rejections(limit: int = 20) -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM rejections ORDER BY created_at DESC LIMIT ?", (limit,))
+        cursor.execute("SELECT * FROM rejections ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -734,8 +735,8 @@ def is_youtube_video_processed(video_id: str) -> bool:
         row = cursor.fetchone()
         if not row:
             return False
-        # If completed downstream, return True directly
-        if row["status"] in ("CLIPS_DEFINED", "CLIPS_CREATED", "COMPLETED"):
+        # If completed or analyzing downstream, return True directly
+        if row["status"] in ("ANALYZING", "CLIPS_DEFINED", "CLIPS_CREATED", "COMPLETED"):
             return True
         # If in progress with downloaded media, check if local file is intact
         if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED", "TRANSCRIPT_FETCHED"):

@@ -6,7 +6,23 @@ Set FSO = CreateObject("Scripting.FileSystemObject")
 strScriptPath = FSO.GetParentFolderName(WScript.ScriptFullName)
 strProjectRoot = FSO.GetParentFolderName(strScriptPath)
 
-' Launch Python dispatch master daemon silently (Window style 0 = Hidden)
+' Check for virtual environment python
+strVenvPython = strProjectRoot & "\.venv\Scripts\python.exe"
+If FSO.FileExists(strVenvPython) Then
+    strPyExe = """" & strVenvPython & """"
+Else
+    strPyExe = "python"
+End If
+
+' Ensure storage directory exists for logs
+strStorageDir = strProjectRoot & "\storage"
+If Not FSO.FolderExists(strStorageDir) Then
+    FSO.CreateFolder(strStorageDir)
+End If
+
+strLogFile = strStorageDir & "\dispatch_daemon.log"
 WshShell.CurrentDirectory = strProjectRoot
-strCommand = "cmd.exe /c python -m dispatch.main"
+
+' Launch Python dispatch master daemon silently with stderr/stdout redirection
+strCommand = "cmd.exe /c " & strPyExe & " -m dispatch.main >> """ & strLogFile & """ 2>&1"
 WshShell.Run strCommand, 0, False

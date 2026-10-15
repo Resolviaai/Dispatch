@@ -19,7 +19,7 @@
 
     <application
         android:name=".DispatchApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="Dispatch"
         android:roundIcon="@mipmap/ic_launcher_round"

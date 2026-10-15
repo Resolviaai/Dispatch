@@ -81,6 +81,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
   useEffect(() => {
     fetchYouTubeStatus();
+    setWifiOnly(Bridge.getWifiOnly());
     if (Bridge.isAvailable()) {
       setStorageInfo(Bridge.getStorageInfo());
     }
@@ -379,7 +380,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
             {/* 44px Hitbox Toggle */}
             <button
-              onClick={() => setWifiOnly(!wifiOnly)}
+              onClick={() => {
+                const nextVal = !wifiOnly;
+                setWifiOnly(nextVal);
+                Bridge.setWifiOnly(nextVal);
+              }}
               className="w-12 h-11 flex items-center justify-center active:scale-[0.98] transition-all duration-150"
               title="Toggle Wi-Fi upload"
             >
