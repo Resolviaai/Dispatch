@@ -16,6 +16,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.RandomAccessFile
 import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import android.media.MediaMetadataRetriever
 import java.text.SimpleDateFormat
 import java.util.*
@@ -82,14 +84,16 @@ class YouTubeDirectUploadWorker(
                 if (seg.status == "UPLOADED_TO_YOUTUBE" || seg.status == "PROCESSED_ON_YOUTUBE" || !seg.youtubeVideoId.isNullOrBlank()) {
                     val videoId = seg.youtubeVideoId
                     val dispatchId = "dsp_${seg.finalizedAt ?: seg.createdAt}_${seg.segmentId.takeLast(6)}"
+                    val f = File(seg.filepath)
+                    val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else (if (f.exists()) calculateSha256(f) else "")
+                    val fSize = if (seg.fileSizeBytes > 0L) seg.fileSizeBytes else (if (f.exists()) f.length() else 0L)
                     val pcAck = if (pairingManager.pcHost.isNotBlank() && !videoId.isNullOrBlank()) {
-                        checkPcAcknowledgement(pairingManager.pcHost, videoId, dispatchId, seg.segmentId)
+                        checkPcAcknowledgement(pairingManager.pcHost, videoId, dispatchId, seg.segmentId, sha, fSize)
                     } else false
 
                     if (pcAck) {
                         dao.updateSegmentStatus(seg.segmentId, "VERIFIED_BY_LAPTOP")
                         dao.deleteOutboxItem(seg.segmentId)
-                        val f = File(seg.filepath)
                         if (f.exists()) {
                             try { f.delete() } catch (_: Exception) {}
                         }
@@ -130,8 +134,9 @@ class YouTubeDirectUploadWorker(
                         pairingManager.clearUploadSessionUrl(seg.segmentId)
                         
                         // Check for immediate durable PC acknowledgement if PC is reachable
+                        val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else calculateSha256(file)
                         val pcAck = if (pairingManager.pcHost.isNotBlank()) {
-                            checkPcAcknowledgement(pairingManager.pcHost, videoId, dispatchId, seg.segmentId)
+                            checkPcAcknowledgement(pairingManager.pcHost, videoId, dispatchId, seg.segmentId, sha, file.length())
                         } else false
 
                         if (pcAck) {
@@ -212,7 +217,8 @@ class YouTubeDirectUploadWorker(
 
         val timestampStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
         val title = "[DISPATCH] Session ${seg.sessionId.takeLast(6)} - Part ${seg.sequenceNumber} ($timestampStr)"
-        val description = "dispatch_id: $dispatchId\nsession_id: ${seg.sessionId}\nsegment_id: ${seg.segmentId}\nsequence_number: ${seg.sequenceNumber}\nAutonomous mobile recording uploaded by Dispatch."
+        val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else calculateSha256(file)
+        val description = "dispatch_id: $dispatchId\nsession_id: ${seg.sessionId}\nsegment_id: ${seg.segmentId}\nsequence_number: ${seg.sequenceNumber}\nsource_sha256: $sha\nsource_file_size: ${file.length()}\nAutonomous mobile recording uploaded by Dispatch."
 
         // 1. Resumable Upload Initiation Request
         val metadataJson = JsonObject().apply {
@@ -224,6 +230,9 @@ class YouTubeDirectUploadWorker(
                     add("dispatch_id_$dispatchId")
                     add("dispatch_session_${seg.sessionId}")
                     add("dispatch_seg_${seg.sequenceNumber}")
+                    if (sha.isNotBlank()) {
+                        add("sha256_$sha")
+                    }
                 }
                 add("tags", tags)
                 addProperty("categoryId", "22")
@@ -286,7 +295,7 @@ class YouTubeDirectUploadWorker(
             pairingManager.clearUploadSessionUrl(segId)
             dao.updateOutboxOffset(segId, 0L)
             return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg)
-        } else if (probedOffset != null) {
+        } else if (probedOffset != null && probedOffset > currentOffset) {
             currentOffset = probedOffset
             dao.updateOutboxOffset(segId, currentOffset)
         }
@@ -323,17 +332,17 @@ class YouTubeDirectUploadWorker(
                             val rangeHeader = resp.header("Range")
                             val confirmedOffset = parseConfirmedRangeOffset(rangeHeader, totalBytes)
 
-                            if (confirmedOffset != null && confirmedOffset >= currentOffset) {
+                            if (confirmedOffset != null && confirmedOffset > currentOffset) {
                                 currentOffset = confirmedOffset
                                 dao.updateOutboxOffset(segId, currentOffset)
                                 android.util.Log.i("YouTubeUploader", "Chunk uploaded for $segId: $start-$end ($currentOffset/$totalBytes)")
                             } else {
                                 android.util.Log.w("YouTubeUploader", "308 with missing/invalid/non-advancing Range header ('$rangeHeader') for $segId; querying server status.")
                                 val probed = queryUploadStatus(destination, currentAccessToken, totalBytes)
-                                if (probed != null && probed >= 0L) {
+                                if (probed != null && probed > currentOffset) {
                                     currentOffset = probed
+                                    dao.updateOutboxOffset(segId, currentOffset)
                                 }
-                                dao.updateOutboxOffset(segId, currentOffset)
                             }
                         }
                         200, 201 -> {
@@ -376,6 +385,7 @@ class YouTubeDirectUploadWorker(
                             return DirectUploadResult(false)
                         }
                     }
+                    Unit
                 }
 
                 if (retryWithNewToken) {
@@ -577,33 +587,95 @@ class YouTubeDirectUploadWorker(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    private fun verifyHmacReceipt(
+        secret: String,
+        canonicalId: String,
+        sha256: String,
+        status: String,
+        receivedReceipt: String
+    ): Boolean {
+        if (secret.isBlank() || receivedReceipt.isBlank() || sha256.isBlank()) return false
+        return try {
+            val mac = Mac.getInstance("HmacSHA256")
+            val keySpec = SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256")
+            mac.init(keySpec)
+            val msg = "$canonicalId:${sha256.lowercase()}:$status:VERIFIED".toByteArray(Charsets.UTF_8)
+            val expectedBytes = mac.doFinal(msg)
+            val expectedHex = expectedBytes.joinToString("") { "%02x".format(it) }
+            MessageDigest.isEqual(
+                expectedHex.toByteArray(Charsets.UTF_8),
+                receivedReceipt.trim().lowercase().toByteArray(Charsets.UTF_8)
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("YouTubeUploader", "HMAC verification exception: ${e.message}")
+            false
+        }
+    }
+
     private suspend fun checkPcAcknowledgement(
         pcHost: String,
         videoId: String?,
         dispatchId: String?,
-        segmentId: String
+        segmentId: String,
+        sha256Hash: String = "",
+        fileSizeBytes: Long = 0L
     ): Boolean = withContext(Dispatchers.IO) {
         if (pcHost.isBlank()) return@withContext false
+        val token = pairingManager.pcAuthToken
+        if (token.isBlank()) {
+            android.util.Log.w("YouTubeUploader", "Cannot check PC acknowledgement: pcAuthToken is blank")
+            return@withContext false
+        }
         try {
             val cleanHost = pcHost.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
             val queryParams = mutableListOf<String>()
             if (!videoId.isNullOrBlank()) queryParams.add("video_id=$videoId")
             if (!dispatchId.isNullOrBlank()) queryParams.add("dispatch_id=$dispatchId")
             queryParams.add("segment_id=$segmentId")
+            if (sha256Hash.isNotBlank()) queryParams.add("sha256=$sha256Hash")
+            if (fileSizeBytes > 0L) queryParams.add("file_size=$fileSizeBytes")
+
             val url = "http://$cleanHost/api/sync/youtube-ack?${queryParams.joinToString("&")}"
 
             val reqBuilder = Request.Builder().url(url).get()
-            if (pairingManager.pcAuthToken.isNotBlank()) {
-                reqBuilder.header("x-auth-token", pairingManager.pcAuthToken)
-            }
+            reqBuilder.header("x-auth-token", token)
 
             client.newCall(reqBuilder.build()).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext false
+                if (!resp.isSuccessful) {
+                    android.util.Log.w("YouTubeUploader", "PC ack returned HTTP ${resp.code} for $segmentId")
+                    return@withContext false
+                }
                 val bodyStr = resp.body?.string() ?: return@withContext false
                 val json = gson.fromJson(bodyStr, JsonObject::class.java)
                 val acknowledged = json.get("acknowledged")?.asBoolean == true
                 val ingested = json.get("ingested")?.asBoolean == true
-                acknowledged && ingested
+                if (!acknowledged || !ingested) return@withContext false
+
+                // Cryptographic Receipt & Hash Validation
+                val returnedSha = json.get("sha256")?.asString?.trim()?.lowercase() ?: ""
+                if (sha256Hash.isNotBlank()) {
+                    if (returnedSha.isBlank() || returnedSha != sha256Hash.trim().lowercase()) {
+                        android.util.Log.e("YouTubeUploader", "PC ack hash mismatch for $segmentId: expected $sha256Hash, got $returnedSha")
+                        return@withContext false
+                    }
+                }
+
+                val receipt = json.get("receipt")?.asString ?: ""
+                val canonicalId = json.get("canonical_id")?.asString
+                    ?: json.get("segment_id")?.asString
+                    ?: json.get("dispatch_id")?.asString
+                    ?: json.get("video_id")?.asString
+                    ?: segmentId
+                val status = json.get("status")?.asString ?: "DOWNLOADED"
+
+                val isReceiptValid = verifyHmacReceipt(token, canonicalId, returnedSha.ifBlank { sha256Hash }, status, receipt)
+                if (!isReceiptValid) {
+                    android.util.Log.e("YouTubeUploader", "PC ack signature verification FAILED for $segmentId! Refusing to acknowledge.")
+                    return@withContext false
+                }
+
+                android.util.Log.i("YouTubeUploader", "PC ack cryptographically verified for $segmentId (receipt: ${receipt.take(8)}...)")
+                true
             }
         } catch (e: Exception) {
             android.util.Log.w("YouTubeUploader", "Failed to verify PC acknowledgement from $pcHost: ${e.message}")
@@ -622,11 +694,13 @@ class YouTubeDirectUploadWorker(
             for (seg in awaiting) {
                 val videoId = seg.youtubeVideoId
                 val dispatchId = "dsp_${seg.finalizedAt ?: seg.createdAt}_${seg.segmentId.takeLast(6)}"
-                val pcAck = checkPcAcknowledgement(pcHost, videoId, dispatchId, seg.segmentId)
+                val f = File(seg.filepath)
+                val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else (if (f.exists()) calculateSha256(f) else "")
+                val fSize = if (seg.fileSizeBytes > 0L) seg.fileSizeBytes else (if (f.exists()) f.length() else 0L)
+                val pcAck = checkPcAcknowledgement(pcHost, videoId, dispatchId, seg.segmentId, sha, fSize)
                 if (pcAck) {
                     dao.updateSegmentStatus(seg.segmentId, "VERIFIED_BY_LAPTOP")
                     dao.deleteOutboxItem(seg.segmentId)
-                    val f = File(seg.filepath)
                     if (f.exists()) {
                         try { f.delete() } catch (_: Exception) {}
                     }
@@ -695,7 +769,7 @@ class YouTubeDirectUploadWorker(
                         return if (rangeHeader.isNullOrBlank()) {
                             0L
                         } else {
-                            parseConfirmedRangeOffset(rangeHeader, totalBytes) ?: 0L
+                            parseConfirmedRangeOffset(rangeHeader, totalBytes)
                         }
                     } else if (it.isSuccessful) {
                         return totalBytes

@@ -216,7 +216,12 @@ def _load_youtube_pairing_credentials() -> Dict[str, str]:
 def _youtube_credentials_response() -> Dict[str, Any]:
     credentials = _load_youtube_pairing_credentials()
     configured = all(credentials.values())
-    return {"configured": configured, **credentials}
+    from dispatch.sync.receiver import get_auth_token
+    return {
+        "configured": configured,
+        "auth_token": get_auth_token(),
+        **credentials,
+    }
 
 
 def _is_local_network_peer(client_host: str) -> bool:

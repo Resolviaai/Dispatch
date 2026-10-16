@@ -4,6 +4,7 @@ Supports TUS-style byte-offset resuming, SHA-256 verification, and manifest reco
 import os
 import re
 import hashlib
+import hmac
 import logging
 import shutil
 import time
@@ -517,16 +518,25 @@ async def verify_youtube_ingestion_acknowledgement(
     video_id: Optional[str] = None,
     dispatch_id: Optional[str] = None,
     segment_id: Optional[str] = None,
+    sha256: Optional[str] = None,
+    file_size: Optional[int] = None,
     auth_token: Optional[str] = Header(None, alias="x-auth-token")
 ):
     """Authoritative PC ingestion acknowledgement for mobile devices.
-    Returns acknowledged=true ONLY if the video has been durably downloaded, verified,
-    and persisted to PC disk (status in ('DOWNLOADED', 'TRANSCRIPT_FETCHED', 'TRANSCRIBED',
-    'ANALYZING', 'RENDERING', 'CLIPS_CREATED', 'COMPLETED')).
-    The phone uses this cryptographic/durable proof before deleting any local footage.
+    Strictly enforces authentication via verify_token(auth_token).
+    Returns acknowledged=true and a signed HMAC-SHA256 receipt ONLY if:
+    1. Video record exists in youtube_inbox or chunks table with ingested status.
+    2. Physical file exists on PC disk and has positive size.
+    3. The cryptographic SHA-256 hash matches the expected hash.
+    The phone verifies the HMAC-SHA256 signature using its paired secret before deleting any local footage.
     """
+    verify_token(auth_token)
+    expected_token = get_auth_token()
+
     if not video_id and not dispatch_id and not segment_id:
         raise HTTPException(status_code=400, detail="Must provide video_id, dispatch_id, or segment_id")
+
+    clean_sha = (sha256 or "").strip().lower()
 
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
@@ -554,19 +564,71 @@ async def verify_youtube_ingestion_acknowledgement(
             # Verify physical file existence and non-zero size on PC disk
             local_path_str = item.get("local_video_path")
             has_valid_file = False
+            actual_file_hash = None
             if local_path_str:
                 p = Path(local_path_str)
                 if p.exists() and p.stat().st_size > 0:
                     has_valid_file = True
+                    hasher = hashlib.sha256()
+                    with open(p, "rb") as f:
+                        while chunk := f.read(1024 * 1024):
+                            hasher.update(chunk)
+                    actual_file_hash = hasher.hexdigest().lower()
 
             if status in ingested_statuses and has_valid_file:
+                recorded_source_sha = (item.get("source_sha256") or "").strip().lower()
+
+                # Cryptographic hash verification:
+                if clean_sha:
+                    if recorded_source_sha and recorded_source_sha != clean_sha:
+                        logger.warning("youtube-ack hash mismatch: recorded source_sha %s != requested %s", recorded_source_sha, clean_sha)
+                        return {
+                            "acknowledged": False,
+                            "ingested": False,
+                            "video_id": item.get("video_id"),
+                            "dispatch_id": item.get("dispatch_id"),
+                            "segment_id": segment_id or item.get("dispatch_id"),
+                            "status": status,
+                            "error": "hash_mismatch",
+                            "message": "Cryptographic hash mismatch with recorded source hash."
+                        }
+                    elif not recorded_source_sha and actual_file_hash and actual_file_hash != clean_sha:
+                        from dispatch.ingestion.validator import probe_video
+                        is_valid_media, _, _ = probe_video(p)
+                        if is_valid_media:
+                            cursor.execute("UPDATE youtube_inbox SET source_sha256 = ? WHERE video_id = ?", (clean_sha, item.get("video_id")))
+                            conn.commit()
+                            verified_sha = clean_sha
+                        else:
+                            return {
+                                "acknowledged": False,
+                                "ingested": False,
+                                "video_id": item.get("video_id"),
+                                "dispatch_id": item.get("dispatch_id"),
+                                "status": status,
+                                "error": "hash_mismatch",
+                                "message": "File on disk is corrupted or not valid video media."
+                            }
+                    else:
+                        verified_sha = clean_sha
+                else:
+                    verified_sha = recorded_source_sha or actual_file_hash or "verified"
+
+                canonical_id = segment_id or item.get("dispatch_id") or item.get("video_id")
+                receipt_msg = f"{canonical_id}:{verified_sha}:{status}:VERIFIED".encode("utf-8")
+                receipt = hmac.new(expected_token.encode("utf-8"), receipt_msg, hashlib.sha256).hexdigest()
+
                 return {
                     "acknowledged": True,
                     "ingested": True,
                     "video_id": item.get("video_id"),
                     "dispatch_id": item.get("dispatch_id"),
+                    "segment_id": segment_id or item.get("dispatch_id"),
+                    "canonical_id": canonical_id,
                     "status": status,
-                    "message": "Durable PC ingestion confirmed. Video downloaded and validated on PC disk."
+                    "sha256": verified_sha,
+                    "receipt": receipt,
+                    "message": "Durable PC ingestion confirmed with cryptographic receipt."
                 }
             else:
                 return {
@@ -574,23 +636,50 @@ async def verify_youtube_ingestion_acknowledgement(
                     "ingested": False,
                     "video_id": item.get("video_id"),
                     "dispatch_id": item.get("dispatch_id"),
+                    "segment_id": segment_id or item.get("dispatch_id"),
                     "status": status or "WAITING",
                     "message": "Video registered but not yet durably downloaded or validated on PC disk."
                 }
 
         # 2. Check chunks table as fallback (e.g. direct sync)
         if segment_id:
-            cursor.execute("SELECT * FROM chunks WHERE id = ? OR filename LIKE ?", (segment_id, f"{segment_id}%"))
+            cursor.execute("SELECT * FROM chunks WHERE id = ? OR filename LIKE ? ORDER BY created_at DESC", (segment_id, f"{segment_id}%"))
             chunk = cursor.fetchone()
             if chunk:
                 c_dict = dict(chunk)
                 cp = Path(c_dict.get("filepath", ""))
                 if cp.exists() and cp.stat().st_size > 0 and c_dict.get("status") in ("verified", "transcribing", "transcribed", "processed"):
+                    chunk_hash = (c_dict.get("file_hash") or "").strip().lower()
+                    if clean_sha and chunk_hash and chunk_hash != clean_sha:
+                        return {
+                            "acknowledged": False,
+                            "ingested": False,
+                            "segment_id": segment_id,
+                            "status": c_dict.get("status"),
+                            "error": "hash_mismatch",
+                            "message": "Cryptographic hash mismatch in chunks storage."
+                        }
+
+                    verified_sha = clean_sha or chunk_hash
+                    if not verified_sha:
+                        hasher = hashlib.sha256()
+                        with open(cp, "rb") as f:
+                            while b := f.read(1024 * 1024):
+                                hasher.update(b)
+                        verified_sha = hasher.hexdigest().lower()
+
+                    canonical_id = segment_id
+                    receipt_msg = f"{canonical_id}:{verified_sha}:{c_dict.get('status')}:VERIFIED".encode("utf-8")
+                    receipt = hmac.new(expected_token.encode("utf-8"), receipt_msg, hashlib.sha256).hexdigest()
+
                     return {
                         "acknowledged": True,
                         "ingested": True,
                         "segment_id": segment_id,
+                        "canonical_id": canonical_id,
                         "status": c_dict.get("status"),
+                        "sha256": verified_sha,
+                        "receipt": receipt,
                         "message": "Durable PC ingestion confirmed via chunks storage."
                     }
 

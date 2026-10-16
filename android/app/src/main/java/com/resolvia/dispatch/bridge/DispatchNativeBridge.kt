@@ -287,10 +287,14 @@ class DispatchNativeBridge(
                 val refreshToken = response.get("refresh_token")?.asString ?: ""
                 val clientId = response.get("client_id")?.asString ?: ""
                 val clientSecret = response.get("client_secret")?.asString ?: ""
+                val authToken = response.get("auth_token")?.asString ?: ""
                 if (response.get("configured")?.asBoolean == true &&
                     refreshToken.isNotBlank() && clientId.isNotBlank() && clientSecret.isNotBlank()
                 ) {
                     pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
+                    if (authToken.isNotBlank()) {
+                        pairingManager.pcAuthToken = authToken
+                    }
                     pairingManager.pcHost = cleanHost
 
                     // Verify account against YouTube API directly

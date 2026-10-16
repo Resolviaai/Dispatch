@@ -266,12 +266,16 @@ class YouTubeInboxCatcher:
 
         # 1. Fetch metadata & register DISCOVERED
         info = {}
+        s_sha = None
+        s_sz = None
         try:
             info = self.fetch_video_info(video_id)
             desc = info.get("description", "")
             if not dispatch_id:
                 dispatch_id = extract_dispatch_id(desc)
             s_sess, s_seg, s_seq = extract_session_metadata(desc)
+            from dispatch.youtube_inbox.oauth import extract_source_hash_and_size
+            s_sha, s_sz = extract_source_hash_and_size(desc)
             if not session_id:
                 session_id = s_sess
             if sequence_number is None:
@@ -287,7 +291,9 @@ class YouTubeInboxCatcher:
                 duration=info.get("duration", 0.0),
                 dispatch_id=dispatch_id,
                 session_id=session_id,
-                sequence_number=sequence_number
+                sequence_number=sequence_number,
+                source_sha256=s_sha,
+                source_file_size=s_sz
             )
         except Exception as e:
             logger.warning("Could not fetch remote info for video %s (%s). Registering placeholder.", video_id, e)
@@ -304,7 +310,9 @@ class YouTubeInboxCatcher:
             status="DISCOVERED",
             dispatch_id=dispatch_id,
             session_id=session_id,
-            sequence_number=sequence_number
+            sequence_number=sequence_number,
+            source_sha256=s_sha,
+            source_file_size=s_sz
         )
 
         # 1.5 Authoritative YouTube Data API status check before download attempt
@@ -462,6 +470,9 @@ class YouTubeInboxCatcher:
                 if not dispatch_id and s_seg:
                     dispatch_id = s_seg
 
+            from dispatch.youtube_inbox.oauth import extract_source_hash_and_size
+            s_sha, s_sz = extract_source_hash_and_size(desc)
+
             db.register_youtube_video(
                 video_id=video_id,
                 title=info["title"],
@@ -469,7 +480,9 @@ class YouTubeInboxCatcher:
                 upload_time=info["upload_date"],
                 duration=info["duration"],
                 dispatch_id=dispatch_id,
-                session_id=session_id
+                session_id=session_id,
+                source_sha256=s_sha,
+                source_file_size=s_sz
             )
         except Exception as e:
             logger.error("Failed to fetch info for video %s: %s", video_id, e)
@@ -481,7 +494,14 @@ class YouTubeInboxCatcher:
             )
             info = {"title": f"YouTube Video {video_id}", "duration": 0.0}
 
-        db.update_youtube_video(video_id, status="DOWNLOADING", dispatch_id=dispatch_id, session_id=session_id)
+        db.update_youtube_video(
+            video_id,
+            status="DOWNLOADING",
+            dispatch_id=dispatch_id,
+            session_id=session_id,
+            source_sha256=s_sha if 's_sha' in locals() else None,
+            source_file_size=s_sz if 's_sz' in locals() else None
+        )
 
         # 2. Download media
         try:

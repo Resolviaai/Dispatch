@@ -16,6 +16,35 @@ DISPATCH_ID_REGEX = re.compile(r"dispatch_id[:=]\s*([a-zA-Z0-9_-]+)", re.IGNOREC
 SESSION_ID_REGEX = re.compile(r"session_id[:=]\s*([a-zA-Z0-9_-]+)", re.IGNORECASE)
 SEGMENT_ID_REGEX = re.compile(r"segment_id[:=]\s*([a-zA-Z0-9_-]+)", re.IGNORECASE)
 SEQUENCE_NUM_REGEX = re.compile(r"sequence_number[:=]\s*(\d+)", re.IGNORECASE)
+SOURCE_SHA256_REGEX = re.compile(r"source_sha256[:=]\s*([a-fA-F0-9]{64})", re.IGNORECASE)
+SOURCE_SIZE_REGEX = re.compile(r"source_file_size[:=]\s*(\d+)", re.IGNORECASE)
+
+
+def extract_source_hash_and_size(description: str, tags: Optional[List[str]] = None) -> Tuple[Optional[str], Optional[int]]:
+    """Extract source_sha256 and source_file_size from video description or tags."""
+    sha256 = None
+    size = None
+    if description:
+        m_sha = SOURCE_SHA256_REGEX.search(description)
+        if m_sha:
+            sha256 = m_sha.group(1).strip().lower()
+        m_sz = SOURCE_SIZE_REGEX.search(description)
+        if m_sz:
+            try:
+                size = int(m_sz.group(1).strip())
+            except ValueError:
+                pass
+
+    if tags and not sha256:
+        for t in tags:
+            t_clean = t.strip()
+            if t_clean.lower().startswith("sha256_"):
+                candidate = t_clean[7:].strip()
+                if len(candidate) == 64:
+                    sha256 = candidate.lower()
+                    break
+
+    return sha256, size
 
 
 def extract_session_metadata(description: str, tags: Optional[List[str]] = None) -> Tuple[Optional[str], Optional[str], Optional[int]]:
@@ -216,6 +245,7 @@ def list_authenticated_user_uploads(
                     if not dispatch_id:
                         dispatch_id = f"dsp_{published_at[:10]}_{video_id[:6]}"
 
+                    source_sha, source_sz = extract_source_hash_and_size(description, tags)
                     discovered.append({
                         "video_id": video_id,
                         "dispatch_id": dispatch_id,
@@ -224,7 +254,9 @@ def list_authenticated_user_uploads(
                         "title": title,
                         "description": description,
                         "published_at": published_at,
-                        "privacy_status": privacy
+                        "privacy_status": privacy,
+                        "source_sha256": source_sha,
+                        "source_file_size": source_sz
                     })
 
                     # Check if this video is already ingested/completed in the database

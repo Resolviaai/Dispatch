@@ -356,32 +356,46 @@ class TestSyncEngine(unittest.TestCase):
                 conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
 
     def test_youtube_ingestion_acknowledgement_requires_disk_file(self):
-        """Test that /api/sync/youtube-ack strictly requires physical downloaded video on PC disk."""
+        """Test that /api/sync/youtube-ack strictly enforces auth, file existence, and HMAC receipt."""
+        import hmac
+        from dispatch.sync.receiver import get_auth_token
+        auth_token = get_auth_token()
+        headers = {"x-auth-token": auth_token}
+
         video_id = "test_yt_vid_98765"
         dispatch_id = "dsp_123456789_seg99"
         dummy_file = Path(tempfile.gettempdir()) / f"dispatch_test_yt_{video_id}.mp4"
+        dummy_bytes = b"YOUTUBE_VERIFIED_PC_INGESTED_BYTES"
+        dummy_sha256 = hashlib.sha256(dummy_bytes).hexdigest().lower()
 
         try:
-            # 1. Unregistered video returns acknowledged: False
-            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            # 1. Unauthenticated request returns 401
+            unauth_res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            self.assertEqual(unauth_res.status_code, 401)
+
+            bad_auth_res = client.get(f"/api/sync/youtube-ack?video_id={video_id}", headers={"x-auth-token": "wrong_secret"})
+            self.assertEqual(bad_auth_res.status_code, 401)
+
+            # 2. Unregistered video returns acknowledged: False
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}", headers=headers)
             self.assertEqual(res.status_code, 200)
             self.assertFalse(res.json()["acknowledged"])
             self.assertFalse(res.json()["ingested"])
 
-            # 2. Registered in youtube_inbox with status='WAITING' returns acknowledged: False
+            # 3. Registered in youtube_inbox with status='WAITING' returns acknowledged: False
             with get_db_connection() as conn:
                 conn.execute("""
-                    INSERT OR REPLACE INTO youtube_inbox (video_id, dispatch_id, status, title)
-                    VALUES (?, ?, 'WAITING', 'Test YouTube Video')
-                """, (video_id, dispatch_id))
+                    INSERT OR REPLACE INTO youtube_inbox (video_id, dispatch_id, status, title, source_sha256)
+                    VALUES (?, ?, 'WAITING', 'Test YouTube Video', ?)
+                """, (video_id, dispatch_id, dummy_sha256))
                 conn.commit()
 
-            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={dummy_sha256}", headers=headers)
             self.assertEqual(res.status_code, 200)
             self.assertFalse(res.json()["acknowledged"])
             self.assertFalse(res.json()["ingested"])
 
-            # 3. Status='DOWNLOADED' but physical file missing returns acknowledged: False
+            # 4. Status='DOWNLOADED' but physical file missing returns acknowledged: False
             with get_db_connection() as conn:
                 conn.execute("""
                     UPDATE youtube_inbox 
@@ -391,23 +405,38 @@ class TestSyncEngine(unittest.TestCase):
                 conn.commit()
 
             dummy_file.unlink(missing_ok=True)
-            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={dummy_sha256}", headers=headers)
             self.assertEqual(res.status_code, 200)
             self.assertFalse(res.json()["acknowledged"], "Must not acknowledge without physical file on PC disk")
             self.assertFalse(res.json()["ingested"])
 
-            # 4. Physical file exists on PC disk with positive size returns acknowledged: True
-            dummy_file.write_bytes(b"YOUTUBE_VERIFIED_PC_INGESTED_BYTES")
-            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            # 5. File exists, but with wrong SHA-256 returns acknowledged: False
+            dummy_file.write_bytes(dummy_bytes)
+            res_wrong_hash = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={'0'*64}", headers=headers)
+            self.assertEqual(res_wrong_hash.status_code, 200)
+            self.assertFalse(res_wrong_hash.json()["acknowledged"])
+            self.assertEqual(res_wrong_hash.json().get("error"), "hash_mismatch")
+
+            # 6. Physical file exists on PC disk with matching hash returns acknowledged: True with HMAC receipt
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={dummy_sha256}", headers=headers)
             self.assertEqual(res.status_code, 200)
             self.assertTrue(res.json()["acknowledged"])
             self.assertTrue(res.json()["ingested"])
+            self.assertIn("receipt", res.json())
 
-            # Query by dispatch_id also succeeds
-            res_disp = client.get(f"/api/sync/youtube-ack?dispatch_id={dispatch_id}")
+            # Verify the HMAC receipt format and signature
+            receipt = res.json()["receipt"]
+            canonical_id = res.json().get("canonical_id")
+            expected_msg = f"{canonical_id}:{dummy_sha256}:DOWNLOADED:VERIFIED".encode("utf-8")
+            expected_receipt = hmac.new(auth_token.encode("utf-8"), expected_msg, hashlib.sha256).hexdigest()
+            self.assertEqual(receipt, expected_receipt)
+
+            # 7. Query by dispatch_id also succeeds with verified receipt
+            res_disp = client.get(f"/api/sync/youtube-ack?dispatch_id={dispatch_id}&sha256={dummy_sha256}", headers=headers)
             self.assertEqual(res_disp.status_code, 200)
             self.assertTrue(res_disp.json()["acknowledged"])
             self.assertTrue(res_disp.json()["ingested"])
+            self.assertIn("receipt", res_disp.json())
 
         finally:
             dummy_file.unlink(missing_ok=True)

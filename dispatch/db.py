@@ -277,7 +277,9 @@ def init_db():
                 next_caption_probe_at TIMESTAMP,
                 ai_attempt_count INTEGER DEFAULT 0,
                 next_ai_attempt_at TIMESTAMP,
-                last_ai_error TEXT
+                last_ai_error TEXT,
+                source_sha256 TEXT,
+                source_file_size INTEGER
             );
         """)
         cursor.execute("""
@@ -306,6 +308,10 @@ def init_db():
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_ai_attempt_at TIMESTAMP;")
         if "last_ai_error" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN last_ai_error TEXT;")
+        if "source_sha256" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_sha256 TEXT;")
+        if "source_file_size" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_file_size INTEGER;")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
@@ -626,7 +632,9 @@ def register_youtube_video(
     duration: float = 0.0,
     dispatch_id: Optional[str] = None,
     session_id: Optional[str] = None,
-    sequence_number: Optional[int] = None
+    sequence_number: Optional[int] = None,
+    source_sha256: Optional[str] = None,
+    source_file_size: Optional[int] = None
 ) -> bool:
     """Register discovered YouTube video in inbox idempotently.
     Returns True if newly inserted, False if already present.
@@ -641,9 +649,9 @@ def register_youtube_video(
             cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
 
         cursor.execute("""
-            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED')
-        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration))
+            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status, source_sha256, source_file_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED', ?, ?)
+        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, source_sha256, source_file_size))
         conn.commit()
         return True
 
@@ -681,7 +689,9 @@ def update_youtube_video(
     next_caption_probe_at: Optional[str] = None,
     ai_attempt_count: Optional[int] = None,
     next_ai_attempt_at: Optional[str] = None,
-    last_ai_error: Optional[str] = None
+    last_ai_error: Optional[str] = None,
+    source_sha256: Optional[str] = None,
+    source_file_size: Optional[int] = None
 ):
     """Update status, paths, errors, or retry schedule on YouTube inbox item."""
     with get_db_connection() as conn:
@@ -737,6 +747,14 @@ def update_youtube_video(
         if last_ai_error is not None:
             updates.append("last_ai_error = ?")
             params.append(last_ai_error)
+
+        if source_sha256 is not None:
+            updates.append("source_sha256 = ?")
+            params.append(source_sha256)
+
+        if source_file_size is not None:
+            updates.append("source_file_size = ?")
+            params.append(source_file_size)
 
         if last_error is not None:
             updates.append("last_error = ?")
