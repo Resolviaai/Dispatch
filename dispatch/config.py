@@ -11,6 +11,40 @@ load_dotenv()
 # Root directory of the project
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
+# Test environment detection & automatic sandbox isolation
+# Guarantees tests run under 'python -m unittest discover -s tests' or pytest NEVER touch production database
+import sys
+import tempfile
+import atexit
+import shutil
+
+_is_test_env = (
+    "unittest" in sys.modules
+    or "pytest" in sys.modules
+    or any("unittest" in str(arg).lower() or "pytest" in str(arg).lower() for arg in sys.argv)
+    or any(str(arg).endswith(".py") and "test" in Path(str(arg)).stem.lower() for arg in sys.argv)
+)
+
+if _is_test_env and not os.getenv("DISPATCH_STORAGE_DIR"):
+    _test_sandbox_dir = tempfile.mkdtemp(prefix="dispatch_test_sandbox_")
+    _sandbox_storage = Path(_test_sandbox_dir) / "storage"
+    _sandbox_db_dir = _sandbox_storage / "database"
+    _sandbox_db_dir.mkdir(parents=True, exist_ok=True)
+    _sandbox_db_path = _sandbox_db_dir / "test_dispatch.db"
+
+    os.environ["DISPATCH_STORAGE_DIR"] = str(_sandbox_storage)
+    os.environ["DISPATCH_DB_PATH"] = str(_sandbox_db_path)
+    os.environ["DISPATCH_DISABLE_AUTO_OUTBOX"] = "1"
+    os.environ["DISPATCH_DISABLE_BACKGROUND_POLLERS"] = "1"
+
+    def _cleanup_test_sandbox():
+        try:
+            shutil.rmtree(_test_sandbox_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    atexit.register(_cleanup_test_sandbox)
+
 # Storage directories
 STORAGE_DIR = Path(os.getenv("DISPATCH_STORAGE_DIR", str(ROOT_DIR / "storage")))
 INCOMING_DIR = STORAGE_DIR / "incoming"

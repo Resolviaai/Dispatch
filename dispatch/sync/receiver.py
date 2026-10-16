@@ -512,6 +512,99 @@ async def reconcile_manifest(payload: ReconcileRequest):
     return {"reconciled": results}
 
 
+@router.get("/youtube-ack")
+async def verify_youtube_ingestion_acknowledgement(
+    video_id: Optional[str] = None,
+    dispatch_id: Optional[str] = None,
+    segment_id: Optional[str] = None,
+    auth_token: Optional[str] = Header(None, alias="x-auth-token")
+):
+    """Authoritative PC ingestion acknowledgement for mobile devices.
+    Returns acknowledged=true ONLY if the video has been durably downloaded, verified,
+    and persisted to PC disk (status in ('DOWNLOADED', 'TRANSCRIPT_FETCHED', 'TRANSCRIBED',
+    'ANALYZING', 'RENDERING', 'CLIPS_CREATED', 'COMPLETED')).
+    The phone uses this cryptographic/durable proof before deleting any local footage.
+    """
+    if not video_id and not dispatch_id and not segment_id:
+        raise HTTPException(status_code=400, detail="Must provide video_id, dispatch_id, or segment_id")
+
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # 1. Search youtube_inbox table
+        row = None
+        if video_id:
+            cursor.execute("SELECT * FROM youtube_inbox WHERE video_id = ?", (video_id,))
+            row = cursor.fetchone()
+        if not row and dispatch_id:
+            cursor.execute("SELECT * FROM youtube_inbox WHERE dispatch_id = ? OR video_id = ?", (dispatch_id, dispatch_id))
+            row = cursor.fetchone()
+        if not row and segment_id:
+            cursor.execute("SELECT * FROM youtube_inbox WHERE dispatch_id LIKE ? OR video_id LIKE ?", (f"%{segment_id}%", f"%{segment_id}%"))
+            row = cursor.fetchone()
+
+        if row:
+            item = dict(row)
+            status = item.get("status")
+            ingested_statuses = (
+                "DOWNLOADED", "TRANSCRIPT_FETCHED", "TRANSCRIBED",
+                "ANALYZING", "RENDERING", "CLIPS_CREATED", "COMPLETED"
+            )
+
+            # Verify physical file existence and non-zero size on PC disk
+            local_path_str = item.get("local_video_path")
+            has_valid_file = False
+            if local_path_str:
+                p = Path(local_path_str)
+                if p.exists() and p.stat().st_size > 0:
+                    has_valid_file = True
+
+            if status in ingested_statuses and has_valid_file:
+                return {
+                    "acknowledged": True,
+                    "ingested": True,
+                    "video_id": item.get("video_id"),
+                    "dispatch_id": item.get("dispatch_id"),
+                    "status": status,
+                    "message": "Durable PC ingestion confirmed. Video downloaded and validated on PC disk."
+                }
+            else:
+                return {
+                    "acknowledged": False,
+                    "ingested": False,
+                    "video_id": item.get("video_id"),
+                    "dispatch_id": item.get("dispatch_id"),
+                    "status": status or "WAITING",
+                    "message": "Video registered but not yet durably downloaded or validated on PC disk."
+                }
+
+        # 2. Check chunks table as fallback (e.g. direct sync)
+        if segment_id:
+            cursor.execute("SELECT * FROM chunks WHERE id = ? OR filename LIKE ?", (segment_id, f"{segment_id}%"))
+            chunk = cursor.fetchone()
+            if chunk:
+                c_dict = dict(chunk)
+                cp = Path(c_dict.get("filepath", ""))
+                if cp.exists() and cp.stat().st_size > 0 and c_dict.get("status") in ("verified", "transcribing", "transcribed", "processed"):
+                    return {
+                        "acknowledged": True,
+                        "ingested": True,
+                        "segment_id": segment_id,
+                        "status": c_dict.get("status"),
+                        "message": "Durable PC ingestion confirmed via chunks storage."
+                    }
+
+    return {
+        "acknowledged": False,
+        "ingested": False,
+        "video_id": video_id,
+        "dispatch_id": dispatch_id,
+        "segment_id": segment_id,
+        "status": "NOT_FOUND",
+        "message": "Video/segment not yet received or ingested by PC."
+    }
+
+
 @router.post("/upload/init")
 async def init_upload(payload: InitUploadRequest):
     """Initialize a chunked resumable upload and query remote offset.

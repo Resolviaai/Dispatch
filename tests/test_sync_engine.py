@@ -355,6 +355,65 @@ class TestSyncEngine(unittest.TestCase):
             with get_db_connection() as conn:
                 conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
 
+    def test_youtube_ingestion_acknowledgement_requires_disk_file(self):
+        """Test that /api/sync/youtube-ack strictly requires physical downloaded video on PC disk."""
+        video_id = "test_yt_vid_98765"
+        dispatch_id = "dsp_123456789_seg99"
+        dummy_file = Path(tempfile.gettempdir()) / f"dispatch_test_yt_{video_id}.mp4"
+
+        try:
+            # 1. Unregistered video returns acknowledged: False
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            self.assertEqual(res.status_code, 200)
+            self.assertFalse(res.json()["acknowledged"])
+            self.assertFalse(res.json()["ingested"])
+
+            # 2. Registered in youtube_inbox with status='WAITING' returns acknowledged: False
+            with get_db_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO youtube_inbox (video_id, dispatch_id, status, title)
+                    VALUES (?, ?, 'WAITING', 'Test YouTube Video')
+                """, (video_id, dispatch_id))
+                conn.commit()
+
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            self.assertEqual(res.status_code, 200)
+            self.assertFalse(res.json()["acknowledged"])
+            self.assertFalse(res.json()["ingested"])
+
+            # 3. Status='DOWNLOADED' but physical file missing returns acknowledged: False
+            with get_db_connection() as conn:
+                conn.execute("""
+                    UPDATE youtube_inbox 
+                    SET status = 'DOWNLOADED', local_video_path = ?
+                    WHERE video_id = ?
+                """, (str(dummy_file), video_id))
+                conn.commit()
+
+            dummy_file.unlink(missing_ok=True)
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            self.assertEqual(res.status_code, 200)
+            self.assertFalse(res.json()["acknowledged"], "Must not acknowledge without physical file on PC disk")
+            self.assertFalse(res.json()["ingested"])
+
+            # 4. Physical file exists on PC disk with positive size returns acknowledged: True
+            dummy_file.write_bytes(b"YOUTUBE_VERIFIED_PC_INGESTED_BYTES")
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["acknowledged"])
+            self.assertTrue(res.json()["ingested"])
+
+            # Query by dispatch_id also succeeds
+            res_disp = client.get(f"/api/sync/youtube-ack?dispatch_id={dispatch_id}")
+            self.assertEqual(res_disp.status_code, 200)
+            self.assertTrue(res_disp.json()["acknowledged"])
+            self.assertTrue(res_disp.json()["ingested"])
+
+        finally:
+            dummy_file.unlink(missing_ok=True)
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM youtube_inbox WHERE video_id = ?", (video_id,))
+
 
 if __name__ == "__main__":
     unittest.main()

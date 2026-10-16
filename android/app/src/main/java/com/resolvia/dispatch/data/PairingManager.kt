@@ -79,6 +79,14 @@ class PairingManager(context: Context) {
         get() = prefs.getString("channel_id", "") ?: ""
         set(value) = prefs.edit().putString("channel_id", value).apply()
 
+    var pcHost: String
+        get() = prefs.getString("pc_host", "") ?: ""
+        set(value) = prefs.edit().putString("pc_host", value.trim()).apply()
+
+    var pcAuthToken: String
+        get() = prefs.getString("pc_auth_token", "") ?: ""
+        set(value) = prefs.edit().putString("pc_auth_token", value.trim()).apply()
+
     val isYouTubeConfigured: Boolean
         get() = youtubeRefreshToken.isNotBlank() &&
             youtubeClientId.isNotBlank() && youtubeClientSecret.isNotBlank()

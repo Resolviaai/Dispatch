@@ -64,4 +64,7 @@ interface RecordingDao {
 
     @Query("DELETE FROM segments WHERE segmentId = :segmentId")
     suspend fun deleteSegment(segmentId: String)
+
+    @Query("SELECT * FROM segments WHERE status IN ('UPLOADED_TO_YOUTUBE', 'PROCESSED_ON_YOUTUBE', 'UPLOADED_AWAITING_PROCESSING') AND status != 'VERIFIED_BY_LAPTOP' ORDER BY sequenceNumber ASC")
+    suspend fun getSegmentsAwaitingPcAck(): List<SegmentEntity>
 }

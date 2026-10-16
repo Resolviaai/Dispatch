@@ -4,8 +4,19 @@ Ensures durable, idempotent publishing to YouTube and Instagram with automatic c
 import time
 import logging
 import threading
+import socket
+import http.client
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+try:
+    import requests
+except ImportError:
+    requests = None
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
 from dispatch.publisher.youtube import upload_youtube_short
 from dispatch.publisher.instagram import upload_instagram_reel
 from dispatch.publisher.linkedin import upload_linkedin_video
@@ -16,6 +27,95 @@ from dispatch import db
 
 logger = logging.getLogger("dispatch.publisher.outbox")
 _processing_lock = threading.Lock()
+
+
+def is_ambiguous_network_error(exc: Exception) -> bool:
+    """Classify whether an exception represents an ambiguous outcome where bytes may have
+    reached the remote platform, but the response was lost, dropped, or timed out.
+    Enforces that ambiguous errors are NEVER blindly retried.
+    """
+    if exc is None:
+        return False
+
+    # 1. Native Python network & socket timeout/disconnect types
+    ambiguous_types = [
+        TimeoutError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+        BrokenPipeError,
+        http.client.RemoteDisconnected,
+        http.client.IncompleteRead,
+    ]
+    if hasattr(socket, "timeout"):
+        ambiguous_types.append(socket.timeout)
+
+    # 2. Third-party HTTP client libraries
+    if requests is not None:
+        ambiguous_types.extend([
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+        ])
+    if httpx is not None:
+        ambiguous_types.extend([
+            httpx.TimeoutException,
+            httpx.NetworkError,
+        ])
+
+    for t in ambiguous_types:
+        if isinstance(exc, t):
+            return True
+
+    # 3. OSError / Windows Socket error codes (e.g. WSAECONNABORTED 10053, WSAECONNRESET 10054, WSAETIMEDOUT 10060)
+    if isinstance(exc, OSError):
+        ambiguous_errnos = {
+            10053,  # WSAECONNABORTED
+            10054,  # WSAECONNRESET
+            10060,  # WSAETIMEDOUT
+            54,     # ECONNRESET (BSD/macOS)
+            104,    # ECONNRESET (Linux)
+            32,     # EPIPE
+            110,    # ETIMEDOUT (Linux)
+        }
+        if getattr(exc, "winerror", None) in ambiguous_errnos or getattr(exc, "errno", None) in ambiguous_errnos:
+            return True
+
+    # 4. Check nested __cause__ or __context__
+    if getattr(exc, "__cause__", None) and is_ambiguous_network_error(exc.__cause__):
+        return True
+    if getattr(exc, "__context__", None) and is_ambiguous_network_error(exc.__context__):
+        return True
+
+    # 5. String signature fallback
+    err_str = str(exc).lower()
+    ambiguous_patterns = (
+        "timeout", "timed out", "connection reset", "connection aborted",
+        "broken pipe", "remotely closed", "remote disconnected",
+        "winerror 10053", "winerror 10054", "forcibly closed"
+    )
+    return any(p in err_str for p in ambiguous_patterns)
+
+
+def reconcile_youtube_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Query YouTube Data API search for dispatch_idempotency_key to determine if video was uploaded."""
+    from dispatch.youtube_inbox.oauth import get_youtube_service
+    service = get_youtube_service()
+    if not service:
+        return {"reconciled": False, "reason": "YouTube service unavailable"}
+
+    idempotency_key = job.get("idempotency_key") or f"idem_{job['clip_id']}_{job['platform']}"
+    marker = f"dispatch_idempotency_key:{idempotency_key}"
+    try:
+        req = service.search().list(part="snippet", forMine=True, q=marker, type="video", maxResults=5)
+        resp = req.execute()
+        items = resp.get("items", [])
+        if items:
+            vid = items[0]["id"]["videoId"]
+            vurl = f"https://www.youtube.com/watch?v={vid}"
+            return {"reconciled": True, "published": True, "remote_id": vid, "remote_url": vurl}
+        return {"reconciled": True, "published": False}
+    except Exception as e:
+        return {"reconciled": False, "reason": str(e)}
 
 
 def process_outbox_queue() -> int:
@@ -196,7 +296,7 @@ def _process_outbox_queue_internal() -> int:
             logger.error("Publishing error for job %s (%s): %s", job_id, platform, err_str)
             new_attempts = attempt_count + 1
             # Check for ambiguous timeout or disconnect errors
-            is_ambiguous = any(term in err_str.lower() for term in ("timeout", "timed out", "connection reset", "broken pipe", "remotely closed"))
+            is_ambiguous = is_ambiguous_network_error(e)
             
             with db.get_db_connection() as conn:
                 if is_ambiguous:

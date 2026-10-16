@@ -291,6 +291,7 @@ class DispatchNativeBridge(
                     refreshToken.isNotBlank() && clientId.isNotBlank() && clientSecret.isNotBlank()
                 ) {
                     pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
+                    pairingManager.pcHost = cleanHost
 
                     // Verify account against YouTube API directly
                     val freshToken = refreshAccessToken()
@@ -298,6 +299,7 @@ class DispatchNativeBridge(
                     if (channelInfo != null) {
                         pairingManager.youtubeChannelTitle = channelInfo.first
                         pairingManager.youtubeChannelId = channelInfo.second
+                        pairingManager.pcHost = cleanHost
 
                         // Resume any waiting segments in Room DB
                         activity.lifecycleScope.launch(Dispatchers.IO) {
@@ -386,6 +388,7 @@ class DispatchNativeBridge(
             val req = Request.Builder().url(url).build()
             val resp = httpClient.newCall(req).execute()
             if (resp.isSuccessful) {
+                pairingManager.pcHost = cleanHost
                 JsonObject().apply {
                     addProperty("success", true)
                     addProperty("message", "PC Server reachable (${resp.code})")

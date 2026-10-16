@@ -256,6 +256,13 @@ class SettingsRequest(BaseModel):
     auto_process: Optional[str] = None
 
 
+class ResolveReconciliationRequest(BaseModel):
+    action: str  # "mark_published", "retry", "mark_failed"
+    remote_id: Optional[str] = None
+    remote_url: Optional[str] = None
+    note: Optional[str] = None
+
+
 @app.get("/clips/{filename}")
 async def get_clip_file(filename: str):
     """Stream clip video or image thumbnail directly from storage with path traversal protection."""
@@ -868,6 +875,163 @@ async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Requ
         raise HTTPException(status_code=404, detail="Clip not found")
     db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected")
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
+
+
+@app.get("/api/publisher/outbox")
+async def get_publisher_outbox(status: Optional[str] = None):
+    """List publishing outbox jobs, optionally filtered by status."""
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        if status:
+            cursor.execute("SELECT * FROM publishing_outbox WHERE status = ? ORDER BY created_at DESC", (status,))
+        else:
+            cursor.execute("SELECT * FROM publishing_outbox ORDER BY created_at DESC")
+        jobs = [dict(row) for row in cursor.fetchall()]
+    return {"jobs": jobs, "count": len(jobs)}
+
+
+@app.get("/api/publisher/reconcile")
+async def get_reconcile_jobs():
+    """List outbox jobs that require manual or automated reconciliation before retry."""
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM publishing_outbox WHERE status = 'reconciliation_required' ORDER BY updated_at DESC")
+        jobs = [dict(row) for row in cursor.fetchall()]
+    return {"jobs": jobs, "count": len(jobs)}
+
+
+@app.post("/api/publisher/reconcile/{job_id}/resolve")
+async def resolve_reconciliation_job(job_id: str, payload: ResolveReconciliationRequest, request: Request):
+    """Manually resolve a reconciliation_required outbox job."""
+    verify_dashboard_auth(request)
+    action = payload.action.lower()
+    if action not in ("mark_published", "retry", "mark_failed"):
+        raise HTTPException(status_code=400, detail="Action must be one of: 'mark_published', 'retry', 'mark_failed'")
+
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM publishing_outbox WHERE id = ?", (job_id,))
+        job = cursor.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Outbox job not found")
+
+        job_dict = dict(job)
+        if action == "mark_published":
+            remote_id = payload.remote_id or job_dict.get("remote_id") or "manual_resolution"
+            remote_url = payload.remote_url or job_dict.get("remote_url") or ""
+            cursor.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'published',
+                    remote_id = ?,
+                    remote_url = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    published_at = CURRENT_TIMESTAMP,
+                    last_error = ?
+                WHERE id = ?
+            """, (remote_id, remote_url, f"Resolved manually: {payload.note or 'Confirmed published'}", job_id))
+            from dispatch.publisher.outbox import check_and_finalize_clip
+            vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
+            check_and_finalize_clip(job_dict["clip_id"], vpath)
+            return {"status": "success", "message": f"Job {job_id} marked as published", "action": action}
+
+        elif action == "retry":
+            cursor.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'queued',
+                    updated_at = CURRENT_TIMESTAMP,
+                    next_retry_at = CURRENT_TIMESTAMP,
+                    last_error = ?
+                WHERE id = ?
+            """, (f"Reconciliation resolved: retry queued. Note: {payload.note or 'Manual retry'}", job_id))
+            if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
+                from dispatch.publisher.outbox import trigger_outbox_pass
+                trigger_outbox_pass()
+            return {"status": "success", "message": f"Job {job_id} requeued for publishing", "action": action}
+
+        elif action == "mark_failed":
+            cursor.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'failed',
+                    updated_at = CURRENT_TIMESTAMP,
+                    last_error = ?
+                WHERE id = ?
+            """, (f"Reconciliation resolved as failed: {payload.note or 'User marked failed'}", job_id))
+            return {"status": "success", "message": f"Job {job_id} marked as failed", "action": action}
+
+
+@app.post("/api/publisher/reconcile/{job_id}/auto-reconcile")
+async def auto_reconcile_job(job_id: str, request: Request):
+    """Automatically reconcile an outbox job against platform API."""
+    verify_dashboard_auth(request)
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM publishing_outbox WHERE id = ?", (job_id,))
+        job = cursor.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Outbox job not found")
+        job_dict = dict(job)
+
+    platform = job_dict.get("platform", "").lower()
+    if platform not in ("youtube", "youtube_shorts"):
+        return {
+            "status": "unsupported",
+            "message": f"Automated remote reconciliation is currently only supported for YouTube. Platform '{platform}' requires manual resolution.",
+            "reconciled": False
+        }
+
+    from dispatch.publisher.outbox import reconcile_youtube_job, check_and_finalize_clip
+    result = reconcile_youtube_job(job_dict)
+
+    if not result.get("reconciled"):
+        return {
+            "status": "inconclusive",
+            "message": f"Automated reconciliation inconclusive: {result.get('reason')}",
+            "reconciled": False
+        }
+
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        if result.get("published"):
+            vid = result["remote_id"]
+            vurl = result.get("remote_url", f"https://www.youtube.com/watch?v={vid}")
+            cursor.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'published',
+                    remote_id = ?,
+                    remote_url = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    published_at = CURRENT_TIMESTAMP,
+                    last_error = 'Auto-reconciled: found confirmed upload on YouTube'
+                WHERE id = ?
+            """, (vid, vurl, job_id))
+            vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
+            check_and_finalize_clip(job_dict["clip_id"], vpath)
+            return {
+                "status": "success",
+                "message": f"Upload verified on YouTube (Video ID: {vid}). Marked published.",
+                "reconciled": True,
+                "published": True,
+                "remote_id": vid,
+                "remote_url": vurl
+            }
+        else:
+            cursor.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'queued',
+                    next_retry_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP,
+                    last_error = 'Auto-reconciled: confirmed absent on YouTube; safe to retry'
+                WHERE id = ?
+            """, (job_id,))
+            if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
+                from dispatch.publisher.outbox import trigger_outbox_pass
+                trigger_outbox_pass()
+            return {
+                "status": "success",
+                "message": "Video confirmed absent on YouTube. Requeued for safe publishing retry.",
+                "reconciled": True,
+                "published": False
+            }
 
 
 @app.get("/api/clips/{clip_id}/filmstrip")

@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Autonomous Direct YouTube Cloud Uploader for Dispatch Mobile.
- * Uploads finalized video recordings directly to YouTube Data API v3 as Unlisted,
+ * Uploads finalized video recordings directly to YouTube Data API v3 as Private,
  * using chunked resumable PUT (8 MB chunks) with byte offset tracking in SQLite Room.
  * If network drops, queries Content-Range: bytes * /total and resumes without repeating data.
  */
@@ -54,6 +54,9 @@ class YouTubeDirectUploadWorker(
         // 0. Recover any interrupted sessions from prior crashes before draining
         recoverInterruptedSessions(applicationContext)
 
+        // Reconcile any previously uploaded segments awaiting PC ingestion acknowledgement
+        reconcilePendingPcAcknowledgements()
+
         // Reliable drain loop: processes all pending segments including ones added during upload
         while (true) {
             val pendingSegments = dao.getPendingUploadSegments().filter { it.segmentId !in failedInThisRun }
@@ -75,12 +78,27 @@ class YouTubeDirectUploadWorker(
 
             // 2. Iterate and upload recordings directly to YouTube (Non-blocking batch)
             for (seg in pendingSegments) {
-                // If already uploaded or already has YouTube ID, clean outbox and skip
-                if (seg.status == "UPLOADED_TO_YOUTUBE" || !seg.youtubeVideoId.isNullOrBlank()) {
-                    dao.deleteOutboxItem(seg.segmentId)
-                    val f = File(seg.filepath)
-                    if (f.exists()) {
-                        try { f.delete() } catch (_: Exception) {}
+                // If already uploaded or already has YouTube ID, check for durable PC acknowledgement before deleting
+                if (seg.status == "UPLOADED_TO_YOUTUBE" || seg.status == "PROCESSED_ON_YOUTUBE" || !seg.youtubeVideoId.isNullOrBlank()) {
+                    val videoId = seg.youtubeVideoId
+                    val dispatchId = "dsp_${seg.finalizedAt ?: seg.createdAt}_${seg.segmentId.takeLast(6)}"
+                    val pcAck = if (pairingManager.pcHost.isNotBlank() && !videoId.isNullOrBlank()) {
+                        checkPcAcknowledgement(pairingManager.pcHost, videoId, dispatchId, seg.segmentId)
+                    } else false
+
+                    if (pcAck) {
+                        dao.updateSegmentStatus(seg.segmentId, "VERIFIED_BY_LAPTOP")
+                        dao.deleteOutboxItem(seg.segmentId)
+                        val f = File(seg.filepath)
+                        if (f.exists()) {
+                            try { f.delete() } catch (_: Exception) {}
+                        }
+                        android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} durably acknowledged by PC. Safely removed local file.")
+                    } else {
+                        // CRITICAL: NEVER delete local footage without verified PC storage acknowledgement!
+                        dao.updateSegmentStatus(seg.segmentId, "PROCESSED_ON_YOUTUBE")
+                        dao.deleteOutboxItem(seg.segmentId)
+                        android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} already uploaded (Video: $videoId), awaiting PC ingestion acknowledgement. Local recording preserved.")
                     }
                     continue
                 }
@@ -110,8 +128,22 @@ class YouTubeDirectUploadWorker(
                         dao.updateSegment(updated)
                         dao.deleteOutboxItem(seg.segmentId)
                         pairingManager.clearUploadSessionUrl(seg.segmentId)
-                        // Local file is preserved until durable PC ingestion acknowledgement, never prematurely deleted!
-                        android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} processed successfully on YouTube. Local media preserved until PC ingestion.")
+                        
+                        // Check for immediate durable PC acknowledgement if PC is reachable
+                        val pcAck = if (pairingManager.pcHost.isNotBlank()) {
+                            checkPcAcknowledgement(pairingManager.pcHost, videoId, dispatchId, seg.segmentId)
+                        } else false
+
+                        if (pcAck) {
+                            dao.updateSegmentStatus(seg.segmentId, "VERIFIED_BY_LAPTOP")
+                            val f = File(seg.filepath)
+                            if (f.exists()) {
+                                try { f.delete() } catch (_: Exception) {}
+                            }
+                            android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} durably acknowledged by PC. Safely removed local file.")
+                        } else {
+                            android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} processed successfully on YouTube. Local media preserved until PC ingestion.")
+                        }
                     } else if (processingStatus == "processing" || processingStatus == "uploaded") {
                         val updated = seg.copy(
                             status = "UPLOADED_AWAITING_PROCESSING",
@@ -149,6 +181,9 @@ class YouTubeDirectUploadWorker(
                 }
             }
         }
+
+        // Final sweep: Reconcile any previously uploaded segments awaiting PC ingestion acknowledgement
+        reconcilePendingPcAcknowledgements()
 
         if (hasFailures) {
             Result.retry()
@@ -194,7 +229,7 @@ class YouTubeDirectUploadWorker(
                 addProperty("categoryId", "22")
             }
             val status = JsonObject().apply {
-                addProperty("privacyStatus", "unlisted")
+                addProperty("privacyStatus", "private")
                 addProperty("selfDeclaredMadeForKids", false)
             }
             add("snippet", snippet)
@@ -245,36 +280,15 @@ class YouTubeDirectUploadWorker(
         var currentOffset = dao.getOutboxOffset(segId) ?: 0L
 
         // Query session status if resuming after disconnect or retrying existing session
-        val queryReq = Request.Builder()
-            .url(destination)
-            .header("Authorization", "Bearer $currentAccessToken")
-            .header("Content-Range", "bytes */$totalBytes")
-            .header("Content-Length", "0")
-            .put("".toRequestBody("video/mp4".toMediaType()))
-            .build()
-
-        try {
-            client.newCall(queryReq).execute().use { resp ->
-                if (resp.code == 308) {
-                    val rangeHeader = resp.header("Range")
-                    if (!rangeHeader.isNullOrBlank()) {
-                        val lastByte = rangeHeader.substringAfter("-").toLongOrNull()
-                        if (lastByte != null) {
-                            currentOffset = lastByte + 1L
-                            dao.updateOutboxOffset(segId, currentOffset)
-                        }
-                    }
-                } else if (resp.isSuccessful) {
-                    currentOffset = totalBytes
-                } else if (resp.code == 404 || resp.code == 410) {
-                    // Session expired on YouTube: clear and restart fresh
-                    pairingManager.clearUploadSessionUrl(segId)
-                    dao.updateOutboxOffset(segId, 0L)
-                    return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg)
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("YouTubeUploader", "Offset query failed, falling back to local: $currentOffset")
+        val probedOffset = queryUploadStatus(destination, currentAccessToken, totalBytes)
+        if (probedOffset == -1L) {
+            // Session expired on YouTube: clear and restart fresh
+            pairingManager.clearUploadSessionUrl(segId)
+            dao.updateOutboxOffset(segId, 0L)
+            return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg)
+        } else if (probedOffset != null) {
+            currentOffset = probedOffset
+            dao.updateOutboxOffset(segId, currentOffset)
         }
 
         // Upload in 8MB slices
@@ -304,15 +318,23 @@ class YouTubeDirectUploadWorker(
                 client.newCall(chunkReq).execute().use { resp ->
                     when (resp.code) {
                         308 -> {
-                            // FORENSIC FIX: Validate server's Range header instead of blind end + 1
+                            // Validate server's Range header.
+                            // If Range header is absent or invalid, never optimistically advance offset!
                             val rangeHeader = resp.header("Range")
-                            val confirmedByte = if (!rangeHeader.isNullOrBlank()) {
-                                rangeHeader.substringAfter("-").toLongOrNull()
-                            } else null
+                            val confirmedOffset = parseConfirmedRangeOffset(rangeHeader, totalBytes)
 
-                            currentOffset = if (confirmedByte != null) confirmedByte + 1L else end + 1L
-                            dao.updateOutboxOffset(segId, currentOffset)
-                            android.util.Log.i("YouTubeUploader", "Chunk uploaded for $segId: $start-$end ($currentOffset/$totalBytes)")
+                            if (confirmedOffset != null && confirmedOffset >= currentOffset) {
+                                currentOffset = confirmedOffset
+                                dao.updateOutboxOffset(segId, currentOffset)
+                                android.util.Log.i("YouTubeUploader", "Chunk uploaded for $segId: $start-$end ($currentOffset/$totalBytes)")
+                            } else {
+                                android.util.Log.w("YouTubeUploader", "308 with missing/invalid/non-advancing Range header ('$rangeHeader') for $segId; querying server status.")
+                                val probed = queryUploadStatus(destination, currentAccessToken, totalBytes)
+                                if (probed != null && probed >= 0L) {
+                                    currentOffset = probed
+                                }
+                                dao.updateOutboxOffset(segId, currentOffset)
+                            }
                         }
                         200, 201 -> {
                             currentOffset = totalBytes
@@ -553,6 +575,141 @@ class YouTubeDirectUploadWorker(
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private suspend fun checkPcAcknowledgement(
+        pcHost: String,
+        videoId: String?,
+        dispatchId: String?,
+        segmentId: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (pcHost.isBlank()) return@withContext false
+        try {
+            val cleanHost = pcHost.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
+            val queryParams = mutableListOf<String>()
+            if (!videoId.isNullOrBlank()) queryParams.add("video_id=$videoId")
+            if (!dispatchId.isNullOrBlank()) queryParams.add("dispatch_id=$dispatchId")
+            queryParams.add("segment_id=$segmentId")
+            val url = "http://$cleanHost/api/sync/youtube-ack?${queryParams.joinToString("&")}"
+
+            val reqBuilder = Request.Builder().url(url).get()
+            if (pairingManager.pcAuthToken.isNotBlank()) {
+                reqBuilder.header("x-auth-token", pairingManager.pcAuthToken)
+            }
+
+            client.newCall(reqBuilder.build()).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext false
+                val bodyStr = resp.body?.string() ?: return@withContext false
+                val json = gson.fromJson(bodyStr, JsonObject::class.java)
+                val acknowledged = json.get("acknowledged")?.asBoolean == true
+                val ingested = json.get("ingested")?.asBoolean == true
+                acknowledged && ingested
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "Failed to verify PC acknowledgement from $pcHost: ${e.message}")
+            false
+        }
+    }
+
+    private suspend fun reconcilePendingPcAcknowledgements() {
+        val pcHost = pairingManager.pcHost
+        if (pcHost.isBlank()) return
+
+        try {
+            val awaiting = dao.getSegmentsAwaitingPcAck()
+            if (awaiting.isEmpty()) return
+
+            for (seg in awaiting) {
+                val videoId = seg.youtubeVideoId
+                val dispatchId = "dsp_${seg.finalizedAt ?: seg.createdAt}_${seg.segmentId.takeLast(6)}"
+                val pcAck = checkPcAcknowledgement(pcHost, videoId, dispatchId, seg.segmentId)
+                if (pcAck) {
+                    dao.updateSegmentStatus(seg.segmentId, "VERIFIED_BY_LAPTOP")
+                    dao.deleteOutboxItem(seg.segmentId)
+                    val f = File(seg.filepath)
+                    if (f.exists()) {
+                        try { f.delete() } catch (_: Exception) {}
+                    }
+                    android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} verified by PC. Local footage safely removed.")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "Error during PC acknowledgement reconciliation: ${e.message}")
+        }
+    }
+
+    /**
+     * Parses and strictly validates YouTube Resumable Upload Range header.
+     * Expected format: "bytes=0-<end>" where 0 <= end < totalBytes.
+     * Returns (end + 1L) as the next byte offset to send, or null if missing, invalid, or out of bounds.
+     */
+    private fun parseConfirmedRangeOffset(rangeHeader: String?, totalBytes: Long): Long? {
+        if (rangeHeader.isNullOrBlank()) return null
+        val match = Regex("""bytes=(\d+)-(\d+)""").find(rangeHeader.trim()) ?: return null
+        val (startStr, endStr) = match.destructured
+        val start = startStr.toLongOrNull() ?: return null
+        val end = endStr.toLongOrNull() ?: return null
+
+        if (start != 0L) {
+            android.util.Log.w("YouTubeUploader", "Invalid Range start $start in '$rangeHeader'")
+            return null
+        }
+        if (end < 0L || (totalBytes > 0L && end >= totalBytes)) {
+            android.util.Log.w("YouTubeUploader", "Range end $end out of bounds for total $totalBytes")
+            return null
+        }
+        return end + 1L
+    }
+
+    /**
+     * Probes upload session status via Content-Range: bytes * / totalBytes.
+     * Handles 401 with refreshed access token.
+     * Returns:
+     * - next confirmed byte offset (>= 0L)
+     * - -1L if session is permanently expired (404 / 410)
+     * - null if network or ambiguous error occurred
+     */
+    private fun queryUploadStatus(uploadUrl: String, accessToken: String, totalBytes: Long): Long? {
+        var token = accessToken
+        for (attempt in 0..1) {
+            val queryReq = Request.Builder()
+                .url(uploadUrl)
+                .header("Authorization", "Bearer $token")
+                .header("Content-Range", "bytes */$totalBytes")
+                .header("Content-Length", "0")
+                .put("".toRequestBody("video/mp4".toMediaType()))
+                .build()
+
+            try {
+                val resp = client.newCall(queryReq).execute()
+                resp.use {
+                    if (it.code == 401 && attempt == 0) {
+                        val freshToken = refreshYouTubeToken()
+                        if (freshToken != null) {
+                            token = freshToken
+                            return@use // retry with refreshed token in next iteration
+                        }
+                    }
+                    if (it.code == 308) {
+                        val rangeHeader = it.header("Range")
+                        return if (rangeHeader.isNullOrBlank()) {
+                            0L
+                        } else {
+                            parseConfirmedRangeOffset(rangeHeader, totalBytes) ?: 0L
+                        }
+                    } else if (it.isSuccessful) {
+                        return totalBytes
+                    } else if (it.code == 404 || it.code == 410) {
+                        return -1L
+                    } else {
+                        return null
+                    }
+                }
+            } catch (e: Exception) {
+                return null
+            }
+        }
+        return null
     }
 }
 
