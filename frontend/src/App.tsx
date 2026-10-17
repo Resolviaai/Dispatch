@@ -6,6 +6,7 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { BottomNav, TabType } from './components/BottomNav';
 import { RecordingItem, Bridge, apiUrl } from './bridge';
 import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
+import { StudioWorkstation } from './studio/StudioWorkstation';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
@@ -27,7 +28,16 @@ export const App: React.FC = () => {
     }
     return 'localhost:8000';
   });
-  const [isMobileFrame, setIsMobileFrame] = useState<boolean>(true);
+  const [isMobileFrame, setIsMobileFrame] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      if ((window as any).DispatchBridge) return true;
+      const saved = localStorage.getItem('dispatch_view_mode');
+      if (saved === 'mobile') return true;
+      if (saved === 'desktop') return false;
+      return window.innerWidth < 1024;
+    }
+    return false;
+  });
   
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [isYouTubeConnected, setIsYouTubeConnected] = useState<boolean>(false);
@@ -173,6 +183,21 @@ export const App: React.FC = () => {
 
   const isNative = Bridge.isAvailable();
 
+  // Desktop Review Studio Workstation (Primary Experience for PC)
+  if (!isNative && !isMobileFrame) {
+    return (
+      <StudioWorkstation
+        pcHost={pcHost}
+        onSwitchToMobileFrame={() => {
+          setIsMobileFrame(true);
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('dispatch_view_mode', 'mobile');
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className={`h-[100dvh] w-full ${isNative && currentTab === 'record' ? 'bg-transparent' : 'bg-studio'} text-text-main flex flex-col items-center overflow-hidden p-0 md:py-2 md:px-3 font-sans`}>
       
@@ -188,7 +213,10 @@ export const App: React.FC = () => {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setIsMobileFrame(true)}
+            onClick={() => {
+              setIsMobileFrame(true);
+              if (typeof localStorage !== 'undefined') localStorage.setItem('dispatch_view_mode', 'mobile');
+            }}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition-all active:scale-[0.98] ${
               isMobileFrame 
                 ? 'bg-primary/15 border border-primary/50 text-[#60A5FA] font-medium shadow-hero-sm' 
@@ -200,7 +228,10 @@ export const App: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setIsMobileFrame(false)}
+            onClick={() => {
+              setIsMobileFrame(false);
+              if (typeof localStorage !== 'undefined') localStorage.setItem('dispatch_view_mode', 'desktop');
+            }}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition-all active:scale-[0.98] ${
               !isMobileFrame 
                 ? 'bg-primary/15 border border-primary/50 text-[#60A5FA] font-medium shadow-hero-sm' 

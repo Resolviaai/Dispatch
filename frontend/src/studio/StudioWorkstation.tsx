@@ -1,0 +1,600 @@
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { StudioHeader } from './StudioHeader';
+import { QueuePane } from './QueuePane';
+import { PreviewStage } from './PreviewStage';
+import { CaptionDock } from './CaptionDock';
+import { InspectorPane } from './InspectorPane';
+import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
+import { BatchConfirmModal } from './BatchConfirmModal';
+import {
+  ClipItem,
+  SystemStatus,
+  IntegrationsStatus,
+  LayoutMode,
+} from './types';
+import { CaptionTrack, CaptionGroup, StyleConfig } from '../captions/types';
+import { apiUrl, getAuthHeaders } from '../bridge';
+
+interface StudioWorkstationProps {
+  pcHost: string;
+  onSwitchToMobileFrame: () => void;
+}
+
+export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
+  pcHost,
+  onSwitchToMobileFrame,
+}) => {
+  // --- Data States ---
+  const [clips, setClips] = useState<ClipItem[]>([]);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [track, setTrack] = useState<CaptionTrack | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+
+  // --- Telemetry States ---
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [integrations, setIntegrations] = useState<IntegrationsStatus | null>(null);
+  const [publishMode, setPublishMode] = useState<'private' | 'public'>('private');
+
+  // --- Playback States ---
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [duration, setDuration] = useState<number>(30);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+
+  // --- Layout & Workspace Dimensions ---
+  const [isLeftCollapsed, setIsLeftCollapsed] = useState<boolean>(() => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('dispatch_left_collapsed') === 'true';
+    }
+    return false;
+  });
+  const [isRightCollapsed, setIsRightCollapsed] = useState<boolean>(() => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('dispatch_right_collapsed') === 'true';
+    }
+    return false;
+  });
+  const [isFocusMode, setIsFocusMode] = useState<boolean>(false);
+  const [leftWidth, setLeftWidth] = useState<number>(310);
+  const [rightWidth, setRightWidth] = useState<number>(380);
+
+  // --- Modal & Async Action States ---
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
+  const [batchModal, setBatchModal] = useState<{ isOpen: boolean; actionType: 'approve' | 'reject' }>({
+    isOpen: false,
+    actionType: 'approve',
+  });
+  const [isApproving, setIsApproving] = useState<boolean>(false);
+  const [isRejecting, setIsRejecting] = useState<boolean>(false);
+  const [isSavingCaptions, setIsSavingCaptions] = useState<boolean>(false);
+  const [isRendering, setIsRendering] = useState<boolean>(false);
+  const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const prevCollapsedStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // 1. Fetch Clips
+  const fetchClips = useCallback(async () => {
+    try {
+      const res = await fetch(apiUrl('/api/clips', pcHost));
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setClips(data);
+          // If no clip selected or selected clip no longer exists, default to first clip
+          setSelectedClipId(prev => {
+            if (prev && data.some(c => c.id === prev)) return prev;
+            return data.length > 0 ? data[0].id : null;
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch clips:', err);
+    }
+  }, [pcHost]);
+
+  // 2. Fetch System Status & Integrations
+  const fetchTelemetry = useCallback(async () => {
+    try {
+      const [resStatus, resInteg] = await Promise.all([
+        fetch(apiUrl('/api/status', pcHost)),
+        fetch(apiUrl('/api/integrations/status', pcHost)),
+      ]);
+      if (resStatus.ok) {
+        const sData = await resStatus.json();
+        setSystemStatus(sData);
+        if (sData.publish_mode) {
+          setPublishMode(sData.publish_mode);
+        }
+      }
+      if (resInteg.ok) {
+        const iData = await resInteg.json();
+        setIntegrations(iData);
+      }
+    } catch {
+      // ignore offline telemetry errors
+    }
+  }, [pcHost]);
+
+  // Initial and recurring poll
+  useEffect(() => {
+    fetchClips();
+    fetchTelemetry();
+    const interval = setInterval(() => {
+      fetchClips();
+      fetchTelemetry();
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [fetchClips, fetchTelemetry]);
+
+  // 3. Derived current selected clip
+  const currentClip = useMemo(() => {
+    return clips.find(c => c.id === selectedClipId) || clips[0] || null;
+  }, [clips, selectedClipId]);
+
+  // 4. Fetch CaptionTrack for selected clip
+  useEffect(() => {
+    if (!currentClip) {
+      setTrack(null);
+      return;
+    }
+    const controller = new AbortController();
+    fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { signal: controller.signal })
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (data) {
+          setTrack(data);
+          if (data.groups && data.groups.length > 0) {
+            setSelectedGroupId(data.groups[0].id);
+          }
+        }
+      })
+      .catch(() => {});
+
+    setCurrentTime(0);
+    setIsPlaying(false);
+
+    return () => controller.abort();
+  }, [currentClip?.id, pcHost]);
+
+  // Responsive collapsing at narrower viewports
+  useEffect(() => {
+    const handleResize = () => {
+      const w = window.innerWidth;
+      if (w < 1180 && !isRightCollapsed) {
+        setIsRightCollapsed(true);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isRightCollapsed]);
+
+  // Focus Mode Toggle (collapses or restores both panes)
+  const handleToggleFocusMode = () => {
+    if (!isFocusMode) {
+      prevCollapsedStateRef.current = { left: isLeftCollapsed, right: isRightCollapsed };
+      setIsLeftCollapsed(true);
+      setIsRightCollapsed(true);
+      setIsFocusMode(true);
+    } else {
+      setIsLeftCollapsed(prevCollapsedStateRef.current.left);
+      setIsRightCollapsed(prevCollapsedStateRef.current.right);
+      setIsFocusMode(false);
+    }
+  };
+
+  // Keyboard Navigation & Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Strict rule: NEVER trigger shortcuts when typing in inputs/textareas
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target as HTMLElement)?.isContentEditable;
+      if (isInput) return;
+
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        setIsPlaying(prev => !prev);
+      } else if (e.key === 'j' || e.key === 'J') {
+        e.preventDefault();
+        setCurrentTime(prev => Math.max(0, prev - 5));
+      } else if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault();
+        setIsPlaying(false);
+      } else if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        setCurrentTime(prev => Math.min(duration, prev + 5));
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (clips.length > 0 && selectedClipId) {
+          const idx = clips.findIndex(c => c.id === selectedClipId);
+          if (idx > 0) {
+            setSelectedClipId(clips[idx - 1].id);
+          }
+        }
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (clips.length > 0 && selectedClipId) {
+          const idx = clips.findIndex(c => c.id === selectedClipId);
+          if (idx >= 0 && idx < clips.length - 1) {
+            setSelectedClipId(clips[idx + 1].id);
+          }
+        }
+      } else if (e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        handleApproveCurrentClip();
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        handleRejectCurrentClip();
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        handleToggleFocusMode();
+      } else if (e.key === '?') {
+        e.preventDefault();
+        setIsShortcutsOpen(prev => !prev);
+      } else if (e.key === 'Escape') {
+        if (isShortcutsOpen) setIsShortcutsOpen(false);
+        if (batchModal.isOpen) setBatchModal({ isOpen: false, actionType: 'approve' });
+        if (isFocusMode) handleToggleFocusMode();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [clips, selectedClipId, duration, isFocusMode, isShortcutsOpen, batchModal.isOpen]);
+
+  // --- Mutating Operations ---
+
+  // 1. Approve Selected Clip
+  const handleApproveCurrentClip = async () => {
+    if (!currentClip || isApproving) return;
+    setIsApproving(true);
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/approve`, pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          title: currentClip.title,
+          hashtags: currentClip.hashtags,
+          publish_mode: publishMode,
+          platforms: currentClip.platform_targets || 'youtube',
+          layout_mode: currentClip.layout_mode,
+        }),
+      });
+      if (res.ok) {
+        showToast(`Clip Approved: Queued into Publishing Outbox (${publishMode})`);
+        setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, status: 'approved' } : c));
+      } else {
+        showToast(`Approval failed (HTTP ${res.status})`);
+      }
+    } catch (err: any) {
+      showToast(`Error approving clip: ${err?.message || 'Network error'}`);
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  // 2. Reject Selected Clip
+  const handleRejectCurrentClip = async (reason = 'User rejected') => {
+    if (!currentClip || isRejecting) return;
+    setIsRejecting(true);
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/reject`, pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ reason }),
+      });
+      if (res.ok) {
+        showToast('Clip marked as Rejected');
+        setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, status: 'rejected' } : c));
+      } else {
+        showToast(`Rejection failed (HTTP ${res.status})`);
+      }
+    } catch (err: any) {
+      showToast(`Error rejecting clip: ${err?.message || 'Network error'}`);
+    } finally {
+      setIsRejecting(false);
+    }
+  };
+
+  // 3. Change Framing / Layout Mode
+  const handleLayoutChange = async (mode: LayoutMode) => {
+    if (!currentClip) return;
+    // Optimistic update
+    setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, layout_mode: mode } : c));
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ layout_mode: mode }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Framing mode updated to ${mode}`);
+        if (data.clip) {
+          setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, ...data.clip } : c));
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to update layout mode:', err);
+    }
+  };
+
+  // 4. Save Captions
+  const handleSaveCaptions = async () => {
+    if (!currentClip || !track || isSavingCaptions) return;
+    setIsSavingCaptions(true);
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(track),
+      });
+      if (res.ok) {
+        showToast('Captions & Subtitle styling persisted');
+      } else {
+        showToast(`Save captions failed (HTTP ${res.status})`);
+      }
+    } catch (err: any) {
+      showToast(`Error saving captions: ${err?.message || 'Network error'}`);
+    } finally {
+      setIsSavingCaptions(false);
+    }
+  };
+
+  // 5. Trigger Atomic FFmpeg Re-render
+  const handleTriggerRender = async () => {
+    if (!currentClip || isRendering) return;
+    setIsRendering(true);
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/render`, pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ layout_mode: currentClip.layout_mode }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast('FFmpeg atomic render complete!');
+        if (data.video_url) {
+          setClips(prev => prev.map(c => c.id === currentClip.id ? {
+            ...c,
+            video_url: data.video_url,
+            is_render_stale: false
+          } : c));
+        }
+      } else {
+        showToast(`Render failed (HTTP ${res.status})`);
+      }
+    } catch (err: any) {
+      showToast(`Render error: ${err?.message || 'Server error'}`);
+    } finally {
+      setIsRendering(false);
+    }
+  };
+
+  // 6. Update Clip Metadata Draft (local cache update)
+  const handleUpdateClipMetadata = (patch: Partial<ClipItem>) => {
+    if (!currentClip) return;
+    setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, ...patch } : c));
+  };
+
+  // 7. Update Track Style
+  const handleUpdateTrackStyle = (stylePatch: Partial<StyleConfig>) => {
+    if (!track) return;
+    const updatedStyle = { ...track.default_style, ...stylePatch };
+    const updatedGroups = track.groups.map(g => ({
+      ...g,
+      style: { ...(g.style || track.default_style), ...stylePatch },
+    }));
+    setTrack({
+      ...track,
+      default_style: updatedStyle,
+      groups: updatedGroups,
+    });
+  };
+
+  // 8. Update Track Group
+  const handleUpdateTrackGroup = (groupId: string, patch: Partial<CaptionGroup>) => {
+    if (!track) return;
+    const updatedGroups = track.groups.map(g => g.id === groupId ? { ...g, ...patch } : g);
+    setTrack({ ...track, groups: updatedGroups });
+  };
+
+  // --- Batch Operations ---
+  const handleToggleSelectId = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAllVisible = (ids: string[]) => {
+    const isAll = ids.every(id => selectedIds.has(id));
+    if (isAll) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(ids));
+    }
+  };
+
+  const handleSelectByScoreThreshold = (threshold: number) => {
+    const matchIds = clips.filter(c => c.virality_score >= threshold && c.status === 'ready_review').map(c => c.id);
+    setSelectedIds(new Set(matchIds));
+    showToast(`Selected ${matchIds.length} ready clips with score ≥ ${threshold}`);
+  };
+
+  const handleExecuteBatchConfirm = async () => {
+    const targetClips = clips.filter(c => selectedIds.has(c.id));
+    if (targetClips.length === 0) return;
+
+    setIsBatchProcessing(true);
+    let successCount = 0;
+
+    for (const clipItem of targetClips) {
+      try {
+        if (batchModal.actionType === 'approve') {
+          const res = await fetch(apiUrl(`/api/clips/${clipItem.id}/approve`, pcHost), {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              title: clipItem.title,
+              hashtags: clipItem.hashtags,
+              publish_mode: publishMode,
+              platforms: clipItem.platform_targets || 'youtube',
+              layout_mode: clipItem.layout_mode,
+            }),
+          });
+          if (res.ok) successCount++;
+        } else {
+          const res = await fetch(apiUrl(`/api/clips/${clipItem.id}/reject`, pcHost), {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ reason: 'Batch rejection' }),
+          });
+          if (res.ok) successCount++;
+        }
+      } catch {
+        // continue batch
+      }
+    }
+
+    setIsBatchProcessing(false);
+    setBatchModal({ isOpen: false, actionType: 'approve' });
+    setSelectedIds(new Set());
+    fetchClips();
+    showToast(`Batch ${batchModal.actionType}: ${successCount} of ${targetClips.length} clips processed`);
+  };
+
+  return (
+    <div className="h-[100dvh] w-full bg-[#0D0F12] text-[#F3F4F6] flex flex-col overflow-hidden font-sans select-none">
+      {/* 1. COMPACT GLOBAL HEADER */}
+      <StudioHeader
+        systemStatus={systemStatus}
+        integrations={integrations}
+        selectedClip={currentClip}
+        totalClipsCount={clips.length}
+        readyClipsCount={clips.filter(c => c.status === 'ready_review').length}
+        isFocusMode={isFocusMode}
+        onToggleFocusMode={handleToggleFocusMode}
+        onOpenShortcuts={() => setIsShortcutsOpen(true)}
+        onSwitchToMobileFrame={onSwitchToMobileFrame}
+        publishMode={publishMode}
+        onTogglePublishMode={setPublishMode}
+      />
+
+      {/* 2. THREE-PANE DESKTOP WORKSTATION GRID */}
+      <div className="flex-1 min-h-0 w-full flex overflow-hidden">
+        {/* LEFT PANE: MEDIA QUEUE */}
+        <QueuePane
+          clips={clips}
+          selectedClipId={selectedClipId}
+          onSelectClip={(c) => setSelectedClipId(c.id)}
+          selectedIds={selectedIds}
+          onToggleSelectId={handleToggleSelectId}
+          onSelectAllVisible={handleSelectAllVisible}
+          onClearSelection={() => setSelectedIds(new Set())}
+          onSelectByScoreThreshold={handleSelectByScoreThreshold}
+          onRequestBatchApprove={() => setBatchModal({ isOpen: true, actionType: 'approve' })}
+          onRequestBatchReject={() => setBatchModal({ isOpen: true, actionType: 'reject' })}
+          isCollapsed={isLeftCollapsed}
+          onToggleCollapse={() => {
+            const next = !isLeftCollapsed;
+            setIsLeftCollapsed(next);
+            if (typeof localStorage !== 'undefined') localStorage.setItem('dispatch_left_collapsed', String(next));
+          }}
+          width={leftWidth}
+          pcHost={pcHost}
+        />
+
+        {/* CENTER PANE: VIDEO PREVIEW STAGE + DOCKED CAPTION TIMELINE */}
+        <div className="flex-1 min-w-0 h-full flex flex-col bg-[#0D0F12] overflow-hidden">
+          {/* Top Video Stage */}
+          <PreviewStage
+            clip={currentClip}
+            track={track}
+            currentTime={currentTime}
+            duration={duration}
+            isPlaying={isPlaying}
+            onTimeUpdate={setCurrentTime}
+            onDurationChange={setDuration}
+            onTogglePlay={() => setIsPlaying(prev => !prev)}
+            onSeek={setCurrentTime}
+            onUpdateTrackGroup={handleUpdateTrackGroup}
+            selectedGroupId={selectedGroupId}
+            onSelectGroup={setSelectedGroupId}
+            onLayoutChange={handleLayoutChange}
+            onTriggerRender={handleTriggerRender}
+            isRendering={isRendering}
+            pcHost={pcHost}
+          />
+
+          {/* Bottom Docked Caption Timeline */}
+          <CaptionDock
+            track={track}
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={setCurrentTime}
+            onUpdateTrack={setTrack}
+            selectedGroupId={selectedGroupId}
+            onSelectGroup={setSelectedGroupId}
+          />
+        </div>
+
+        {/* RIGHT PANE: INSPECTOR & PUBLISHING */}
+        <InspectorPane
+          clip={currentClip}
+          track={track}
+          integrations={integrations}
+          onUpdateClipMetadata={handleUpdateClipMetadata}
+          onSaveCaptions={handleSaveCaptions}
+          onUpdateTrackStyle={handleUpdateTrackStyle}
+          onApproveClip={handleApproveCurrentClip}
+          onRejectClip={handleRejectCurrentClip}
+          isApproving={isApproving}
+          isRejecting={isRejecting}
+          isSavingCaptions={isSavingCaptions}
+          publishMode={publishMode}
+          isCollapsed={isRightCollapsed}
+          onToggleCollapse={() => {
+            const next = !isRightCollapsed;
+            setIsRightCollapsed(next);
+            if (typeof localStorage !== 'undefined') localStorage.setItem('dispatch_right_collapsed', String(next));
+          }}
+          width={rightWidth}
+        />
+      </div>
+
+      {/* TOAST NOTIFICATION DECK */}
+      {toastMessage && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-[#1C1F24] border border-[#2563EB]/50 text-white text-xs font-medium shadow-2xl animate-in slide-in-from-bottom-2 duration-150 flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-[#2563EB] shadow-hero-sm animate-pulse" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* KEYBOARD SHORTCUTS MODAL */}
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
+      />
+
+      {/* BATCH CONFIRMATION MODAL */}
+      <BatchConfirmModal
+        isOpen={batchModal.isOpen}
+        onClose={() => setBatchModal({ isOpen: false, actionType: 'approve' })}
+        actionType={batchModal.actionType}
+        selectedClips={clips.filter(c => selectedIds.has(c.id))}
+        onConfirm={handleExecuteBatchConfirm}
+        isProcessing={isBatchProcessing}
+        publishMode={publishMode}
+      />
+    </div>
+  );
+};
