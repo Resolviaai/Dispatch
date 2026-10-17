@@ -23,7 +23,7 @@ export const App: React.FC = () => {
       window.location.hostname === 'appassets.androidplatform.net' ||
       !!(window as any).DispatchBridge
     )) {
-      return '192.168.0.102:8000';
+      return '192.168.0.200:8000';
     }
     return 'localhost:8000';
   });
