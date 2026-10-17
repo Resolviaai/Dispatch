@@ -87,52 +87,52 @@ class YouTubeInboxCatcher:
             "skip_download": True,
             "writeautomaticsub": True,
             "writesubtitles": True,
-            "subtitleslangs": ["en.*", "hi.*", "en", "hi"],
+            "subtitleslangs": ["en", "hi", "en-orig", "hi-orig"],
             "subtitlesformat": "vtt",
             "outtmpl": f"{temp_sub_prefix}.%(ext)s",
             "quiet": True,
             "no_warnings": True,
+            "ignoreerrors": True,
         }
         _apply_auth_opts(ydl_opts)
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
+        except Exception as e:
+            logger.warning("yt-dlp subtitle download note for %s: %s", video_id, e)
 
-            # Look for written .vtt files
-            vtt_files = list(self.storage_dir.glob(f"sub_{video_id}*.vtt"))
-            if vtt_files:
-                # Choose preferred language: 1. English (en.*), 2. Hindi (hi.*), 3. First available
-                target_file = None
+        # Check for written .vtt files (can be present even if a secondary language returned an error)
+        vtt_files = list(self.storage_dir.glob(f"sub_{video_id}*.vtt"))
+        if vtt_files:
+            # Choose preferred language: 1. English, 2. Hindi, 3. First available
+            target_file = None
+            for f in vtt_files:
+                fname = f.name.lower()
+                if ".en" in fname or "en-orig" in fname:
+                    target_file = f
+                    break
+            if not target_file:
                 for f in vtt_files:
                     fname = f.name.lower()
-                    if ".en." in fname or fname.endswith(".en.vtt") or ".en-" in fname:
+                    if ".hi" in fname or "hi-orig" in fname:
                         target_file = f
                         break
-                if not target_file:
-                    for f in vtt_files:
-                        fname = f.name.lower()
-                        if ".hi." in fname or fname.endswith(".hi.vtt") or ".hi-" in fname:
-                            target_file = f
-                            break
-                if not target_file:
-                    target_file = vtt_files[0]
+            if not target_file:
+                target_file = vtt_files[0]
 
-                logger.info("Found YouTube caption file %s for video %s", target_file.name, video_id)
-                segments = parse_vtt_file(target_file)
+            logger.info("Found YouTube caption file %s for video %s", target_file.name, video_id)
+            segments = parse_vtt_file(target_file)
 
-                # Cleanup sub files
-                for f in vtt_files:
-                    try:
-                        f.unlink()
-                    except Exception:
-                        pass
+            # Cleanup sub files
+            for f in vtt_files:
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
-                if segments:
-                    return segments
-
-        except Exception as e:
-            logger.warning("Error fetching YouTube captions via yt-dlp for %s: %s", video_id, e)
+            if segments:
+                return segments
 
         # YouTube Data API v3 fallback for authorized channels
         try:

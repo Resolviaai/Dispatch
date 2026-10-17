@@ -22,8 +22,6 @@ logger = logging.getLogger("dispatch.ai_clips")
 # Configurable default list of candidate Gemini models in priority order
 DEFAULT_GEMINI_MODELS = [
     "gemini-flash-latest",
-    "gemini-3.5-flash",
-    "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite"
 ]

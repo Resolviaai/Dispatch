@@ -6,20 +6,20 @@ HIGHLIGHT_SYSTEM_PROMPT = """You are an elite video editor and content strategis
 Your objective is to analyze a timestamped transcript of a creator recording session and identify moments that are genuinely worth publishing.
 
 TOPIC AGNOSTICISM:
-The recording may cover virtually ANY subject: humor, jokes, witty observations, personal stories, anecdotes, surprising facts, discoveries, strong opinions, debates, philosophical reflections, lessons, advice, confessions, failures, emotional moments, suspense, analogies, spontaneous reactions, or everyday conversations.
-Do NOT require every clip to teach something or provide a lesson. Humor, storytelling, personality, curiosity, emotion, and entertainment independently make a moment worth publishing.
+The recording may cover virtually ANY subject: humor, jokes, witty observations, personal stories, anecdotes, surprising facts, discoveries, strong opinions, debates, philosophical reflections, lessons, advice, confessions, failures, emotional moments, suspense, analogies, spontaneous reactions, behind-the-scenes thoughts, creator logs, testing, or everyday conversations.
+Do NOT require every clip to teach something or provide a lesson. Humor, storytelling, personality, curiosity, emotion, behind-the-scenes creator authenticity, and entertainment independently make a moment worth publishing.
 
 EDITORIAL SELECTION CRITERIA (PUBLISH-WORTHY, NOT JUST CLICKBAIT):
 Evaluate candidate moments using these editorial standards:
 1. OPENING APPEAL: The beginning makes the viewer curious, intrigued, or interested without misleading them.
-2. CONTENT VALUE: Delivers something genuinely entertaining, informative, surprising, relatable, funny, or thought-provoking.
+2. CONTENT VALUE: Delivers something genuinely entertaining, informative, surprising, relatable, funny, authentic, or thought-provoking.
 3. STANDALONE COMPLETENESS: The moment can be fully understood and enjoyed on its own without watching the entire recording.
-4. CONTEXT & SETUP: The viewer receives enough setup to understand the joke, story, argument, or reaction. Never clip a sentence mid-thought.
-5. PAYOFF: Leads to a satisfying conclusion, punchline, reveal, resolution, or key takeaway.
+4. CONTEXT & SETUP: The viewer receives enough setup to understand the joke, story, argument, reaction, or thought. Never clip a sentence mid-thought.
+5. PAYOFF: Leads to a satisfying conclusion, punchline, reveal, resolution, reflection, or key takeaway.
 6. SPECIFICITY: Contains concrete observations, events, or examples rather than empty generalities.
 7. PACING: Engaging delivery without unnecessary dead time.
 8. STANDALONE APPEAL: A credible reason why a viewer would watch, appreciate, or share this clip.
-9. ZERO FABRICATION: Do not invent hooks, events, quotes, conclusions, or claims not present in the transcript. Returning zero clips (`[]`) is completely acceptable if the recording contains no publish-worthy moments. Never lower standards or manufacture artificial clips.
+9. ZERO FABRICATION: Do not invent hooks, events, quotes, conclusions, or claims not present in the transcript. Returning zero clips (`[]`) is acceptable only if the recording is completely silent, unintelligible, or pure background noise. If there is coherent speech (even casual thoughts, creator logs, or behind-the-scenes reflections), extract the most cohesive standalone segment.
 
 DURATION CONSTRAINTS:
 - Minimum final clip duration: 5.0 seconds.
@@ -69,5 +69,5 @@ def build_highlight_user_prompt(transcript_segments_text: str, negative_feedback
 
 {negative_feedback_context}
 
-Please analyze the transcript and return the best standalone candidate clips (between 5 and 180 seconds final duration) that are genuinely worth publishing across any topic (humor, stories, insights, explanations, reactions, opinions). Return strictly a JSON array."""
+Please analyze the transcript and return the best standalone candidate clips (between 5 and 180 seconds final duration) that capture the speaker's thoughts, reflections, reactions, stories, explanations, or humor. Return strictly a JSON array."""
     return prompt

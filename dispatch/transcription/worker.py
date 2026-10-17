@@ -60,13 +60,13 @@ class TranscriptionWorker:
         env_interval = os.getenv("DISPATCH_TRANSCRIPTION_POLL_INTERVAL")
         self.poll_interval = poll_interval_seconds or (int(env_interval) if env_interval and env_interval.isdigit() else 15)
 
-        # Wait window for YouTube captions before Whisper fallback (default 4 hours = 14400s per Pillar 2 spec)
+        # Wait window for YouTube captions before Whisper fallback (default 6 hours = 21600s per user spec)
         env_wait = os.getenv("DISPATCH_TRANSCRIPT_WAIT_SECONDS")
-        self.caption_wait_seconds = caption_wait_seconds or (int(env_wait) if env_wait and env_wait.isdigit() else 14400)
+        self.caption_wait_seconds = caption_wait_seconds or (int(env_wait) if env_wait and env_wait.isdigit() else 21600)
 
-        # Reprobe backoff interval for checking YouTube captions (default 5 minutes = 300s)
+        # Reprobe interval for checking YouTube captions (default 2 minutes = 120s)
         env_reprobe = os.getenv("DISPATCH_CAPTION_REPROBE_SECONDS")
-        self.caption_reprobe_seconds = caption_reprobe_seconds or (int(env_reprobe) if env_reprobe and env_reprobe.isdigit() else 300)
+        self.caption_reprobe_seconds = caption_reprobe_seconds or (int(env_reprobe) if env_reprobe and env_reprobe.isdigit() else 120)
 
         self.catcher = catcher or YouTubeInboxCatcher()
         self._stop_event = threading.Event()
