@@ -84,14 +84,19 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       const res = await fetch(apiUrl('/api/clips', pcHost));
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data)) {
-          setClips(data);
-          // If no clip selected or selected clip no longer exists, default to first clip
-          setSelectedClipId(prev => {
-            if (prev && data.some(c => c.id === prev)) return prev;
-            return data.length > 0 ? data[0].id : null;
-          });
-        }
+        const allClips: ClipItem[] = Array.isArray(data)
+          ? data
+          : [
+              ...(Array.isArray(data.ready) ? data.ready : []),
+              ...(Array.isArray(data.recent_approved) ? data.recent_approved : []),
+              ...(Array.isArray(data.ready_for_review) ? data.ready_for_review : []),
+            ];
+        setClips(allClips);
+        // If no clip selected or selected clip no longer exists, default to first clip
+        setSelectedClipId(prev => {
+          if (prev && allClips.some(c => c.id === prev)) return prev;
+          return allClips.length > 0 ? allClips[0].id : null;
+        });
       }
     } catch (err) {
       console.warn('Failed to fetch clips:', err);
