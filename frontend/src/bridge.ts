@@ -45,6 +45,7 @@ declare global {
       pingPc: (pcHost: string) => string;
       getWifiOnly: () => boolean;
       setWifiOnly: (enabled: boolean) => void;
+      getPcHost?: () => string;
     };
   }
 }
@@ -210,7 +211,8 @@ export function getApiBaseUrl(pcHost?: string): string {
     window.location.hostname === 'appassets.androidplatform.net' ||
     !!(window as any).DispatchBridge
   )) {
-    const host = pcHost || (typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_pc_host') : null) || '192.168.0.102:8000';
+    const nativeHost = window.DispatchBridge?.getPcHost?.()?.trim() || null;
+    const host = pcHost || nativeHost || (typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_pc_host') : null) || '192.168.0.102:8000';
     const cleanHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
     return `http://${cleanHost}`;
   }

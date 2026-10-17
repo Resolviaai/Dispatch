@@ -51,6 +51,9 @@ class DispatchNativeBridge(
     fun getDeviceModel(): String = "${Build.MANUFACTURER} ${Build.MODEL}"
 
     @JavascriptInterface
+    fun getPcHost(): String = pairingManager.pcHost
+
+    @JavascriptInterface
     fun startRecording() {
         activity.runOnUiThread {
             activity.lifecycleScope.launch {

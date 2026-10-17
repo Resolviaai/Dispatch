@@ -10,6 +10,10 @@ import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
   const [pcHost, setPcHost] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const native = (window as any).DispatchBridge?.getPcHost?.()?.trim();
+      if (native) return native;
+    }
     if (typeof localStorage !== 'undefined') {
       const saved = localStorage.getItem('dispatch_pc_host');
       if (saved) return saved;

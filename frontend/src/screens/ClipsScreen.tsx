@@ -1131,7 +1131,21 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   useEffect(() => {
     fetchClips();
-  }, [pcHost]);
+    if (viewMode !== 'library') return;
+    const interval = setInterval(() => {
+      fetch(apiUrl('/api/clips', pcHost))
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data) return;
+          const rList = Array.isArray(data.ready) ? data.ready : [];
+          const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
+          setReadyClips(rList);
+          setApprovedClips(aList);
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [pcHost, viewMode]);
 
   // 2. Synchronize Selected Clip State & Defensively Clear Stale Captions
   useEffect(() => {

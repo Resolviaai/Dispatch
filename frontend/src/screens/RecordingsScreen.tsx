@@ -94,11 +94,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   }, [pcHost]);
 
   const getSessionClips = (item: RecordingItem) => {
-    return clips.filter(c => 
-      (c.session_id && (c.session_id === item.sessionId || c.session_id === item.segmentId)) ||
-      (c.chunk_id && (c.chunk_id === item.segmentId || c.chunk_id === item.sessionId)) ||
-      (item.youtubeVideoId && c.session_id === item.youtubeVideoId)
-    );
+    return clips.filter(c => {
+      if (c.session_id && (c.session_id === item.sessionId || c.session_id === item.segmentId)) return true;
+      if (c.chunk_id && (c.chunk_id === item.segmentId || c.chunk_id === item.sessionId)) return true;
+      if (item.youtubeVideoId && c.session_id === item.youtubeVideoId) return true;
+      if (item.youtubeVideoId && c.chunk_id && c.chunk_id.includes(item.youtubeVideoId)) return true;
+      return false;
+    });
   };
 
   const queuedRecordings = recordings.filter(item => !isUploadedSegment(item));
