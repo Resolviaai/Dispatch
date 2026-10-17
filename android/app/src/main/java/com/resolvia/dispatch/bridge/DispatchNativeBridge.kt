@@ -51,7 +51,21 @@ class DispatchNativeBridge(
     fun getDeviceModel(): String = "${Build.MANUFACTURER} ${Build.MODEL}"
 
     @JavascriptInterface
-    fun getPcHost(): String = pairingManager.pcHost
+    fun getPcHost(): String {
+        val host = pairingManager.pcHost
+        return if (host.isNotBlank()) host else "192.168.0.200:8000"
+    }
+
+    @JavascriptInterface
+    fun setPcHost(host: String): Boolean {
+        val cleanHost = host.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
+        if (cleanHost.isNotBlank()) {
+            pairingManager.pcHost = cleanHost
+            android.util.Log.i("DispatchBridge", "Native PC host updated to $cleanHost")
+            return true
+        }
+        return false
+    }
 
     @JavascriptInterface
     fun getAuthToken(): String = pairingManager.pcAuthToken

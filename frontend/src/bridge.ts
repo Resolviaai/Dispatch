@@ -46,6 +46,7 @@ declare global {
       getWifiOnly: () => boolean;
       setWifiOnly: (enabled: boolean) => void;
       getPcHost?: () => string;
+      setPcHost?: (pcHost: string) => boolean;
       getAuthToken?: () => string;
     };
   }
@@ -176,16 +177,43 @@ export const Bridge = {
     return { freeGb: 48, totalGb: 128 };
   },
 
-  pingPc(pcHost: string): { success: boolean; message: string } {
+  async pingPc(pcHost: string): Promise<{ success: boolean; message: string }> {
+    const cleanHost = pcHost.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
     if (window.DispatchBridge?.pingPc) {
       try {
-        const res = window.DispatchBridge.pingPc(pcHost);
+        const res = window.DispatchBridge.pingPc(cleanHost);
         return JSON.parse(res);
       } catch (e: any) {
         return { success: false, message: e.message || 'Error pinging PC' };
       }
     }
-    return { success: false, message: 'Native bridge unavailable' };
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(`http://${cleanHost}/api/status`, { mode: 'cors', signal: controller.signal });
+      clearTimeout(t);
+      if (res.ok) {
+        return { success: true, message: `PC reachable (HTTP ${res.status})` };
+      }
+      return { success: false, message: `PC returned HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, message: e.message || 'Host unreachable' };
+    }
+  },
+
+  setPcHost(pcHost: string): void {
+    const clean = pcHost.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (!clean) return;
+    if (window.DispatchBridge?.setPcHost) {
+      try {
+        window.DispatchBridge.setPcHost(clean);
+      } catch (e) {
+        console.warn('Failed to call native setPcHost', e);
+      }
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('dispatch_pc_host', clean);
+    }
   },
 
   getWifiOnly(): boolean {

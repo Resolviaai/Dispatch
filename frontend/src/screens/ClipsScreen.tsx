@@ -25,7 +25,9 @@ import {
   CheckCircle2,
   Share2,
   Pencil,
-  RotateCw
+  RotateCw,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig } from '../captions/types';
 import { CaptionTimeline } from '../captions/CaptionTimeline';
@@ -90,6 +92,7 @@ interface ClipsScreenProps {
   pcHost: string;
   isMobileFrame?: boolean;
   onEditorOpenChange?: (open: boolean) => void;
+  isPcOnline?: boolean;
 }
 
 // Brand Social Media SVGs
@@ -1030,6 +1033,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   pcHost,
   isMobileFrame = true,
   onEditorOpenChange,
+  isPcOnline,
 }) => {
   // Navigation Model: 3-Level Architecture
   // 'library' (landing) -> 'detail' -> 'studio' | 'publish'
@@ -1053,6 +1057,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   // Playback & Video Sync
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1119,11 +1124,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
         setReadyClips(rList);
         setApprovedClips(aList);
+        setConnectionError(null);
       } else {
-        throw new Error(`Server returned status ${res.status}`);
+        throw new Error(`Server returned HTTP ${res.status}`);
       }
     } catch (e) {
-      setFeedback(e instanceof Error ? e.message : 'Failed to connect to backend.');
+      const errMsg = e instanceof Error ? e.message : 'Failed to connect to backend';
+      setConnectionError(errMsg);
     } finally {
       setIsLoading(false);
     }
@@ -1141,6 +1148,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
           setReadyClips(rList);
           setApprovedClips(aList);
+          setConnectionError(null);
         })
         .catch(() => {});
     }, 4000);
@@ -1601,9 +1609,19 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <Film size={15} className="text-primary" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-[15px] font-semibold tracking-tight text-text-main truncate leading-tight">
-                Clips
-              </h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-[15px] font-semibold tracking-tight text-text-main truncate leading-tight">
+                  Clips
+                </h1>
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono tabular-nums border ${
+                  (isPcOnline ?? !connectionError)
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    : 'bg-red-500/10 border-red-500/20 text-red-400'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${(isPcOnline ?? !connectionError) ? 'bg-emerald-400 shadow-[0_0_6px_#34D399]' : 'bg-red-400'}`} />
+                  {(isPcOnline ?? !connectionError) ? 'Studio Online' : 'Offline'}
+                </span>
+              </div>
               <p className="text-[11px] text-text-secondary truncate">
                 {readyClips.length} ready to review &bull; {allClips.length} total from {uniqueSessionCount} session{uniqueSessionCount === 1 ? '' : 's'}
               </p>
@@ -1676,24 +1694,45 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             ))}
           </div>
         ) : filteredClips.length === 0 ? (
-          /* Empty State */
-          <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
-            <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-4 text-text-muted">
-              <Film size={26} />
+          connectionError ? (
+            /* Connection Error State */
+            <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
+              <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-red-500/30 flex items-center justify-center mb-4 text-red-400">
+                <WifiOff size={26} />
+              </div>
+              <h2 className="text-[17px] font-semibold tracking-tight text-text-main">Cannot connect to PC Studio</h2>
+              <p className="text-[12px] text-text-secondary mt-1.5 max-w-[290px] leading-relaxed">
+                Attempting to reach <span className="font-mono text-text-main">{pcHost}</span>. Ensure your PC Dispatch server is running and both devices are on the same Wi-Fi network.
+              </p>
+              <button
+                type="button"
+                onClick={fetchClips}
+                className="mt-5 min-h-[44px] px-5 rounded-xl bg-primary text-white text-[13px] font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-sm"
+              >
+                <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
+                <span>Retry Connection</span>
+              </button>
             </div>
-            <h2 className="text-[17px] font-semibold tracking-tight text-text-main">No clips yet</h2>
-            <p className="text-[12px] text-text-secondary mt-1.5 max-w-[280px]">
-              Dispatch will show generated clips here after processing a recording session.
-            </p>
-            <button
-              type="button"
-              onClick={fetchClips}
-              className="mt-5 min-h-[44px] px-5 rounded-xl bg-surface-200 border border-border text-[13px] font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
-            >
-              <RefreshCw size={15} />
-              <span>Refresh Clips</span>
-            </button>
-          </div>
+          ) : (
+            /* Normal Empty State */
+            <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
+              <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-4 text-text-muted">
+                <Film size={26} />
+              </div>
+              <h2 className="text-[17px] font-semibold tracking-tight text-text-main">No clips yet</h2>
+              <p className="text-[12px] text-text-secondary mt-1.5 max-w-[280px]">
+                Dispatch will show generated clips here after processing a recording session.
+              </p>
+              <button
+                type="button"
+                onClick={fetchClips}
+                className="mt-5 min-h-[44px] px-5 rounded-xl bg-surface-200 border border-border text-[13px] font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
+              >
+                <RefreshCw size={15} />
+                <span>Refresh Clips</span>
+              </button>
+            </div>
+          )
         ) : (
           /* Grouped Sessions */
           groupedSessions.map(([sessionId, clipsInSession]) => (

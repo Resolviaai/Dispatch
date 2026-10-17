@@ -8,7 +8,8 @@ import {
   HardDrive,
   Copy,
   KeyRound,
-  ShieldAlert
+  ShieldAlert,
+  RefreshCw
 } from 'lucide-react';
 import { Bridge, StorageInfo, apiUrl } from '../bridge';
 
@@ -172,12 +173,30 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     setFeedback('YouTube disconnected.');
   };
 
-  const handleSaveHost = () => {
+  const [isSavingHost, setIsSavingHost] = useState(false);
+
+  const handleSaveHost = async () => {
     const clean = inputHost.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
-    if (clean) {
-      localStorage.setItem('dispatch_pc_host', clean);
-      if (onPcHostChange) onPcHostChange(clean);
+    if (!clean) return;
+
+    setIsSavingHost(true);
+    setFeedback(`Testing connection to ${clean}...`);
+
+    // Synchronize to native EncryptedSharedPreferences and WebView localStorage
+    Bridge.setPcHost(clean);
+    if (onPcHostChange) onPcHostChange(clean);
+
+    try {
+      const res = await Bridge.pingPc(clean);
+      if (res.success) {
+        setFeedback(`Connected to PC Studio at ${clean} (Online)`);
+      } else {
+        setFeedback(`Saved ${clean}. Ping: ${res.message}. Ensure PC server is running and on same Wi-Fi.`);
+      }
+    } catch {
       setFeedback(`PC Studio Host updated to ${clean}`);
+    } finally {
+      setIsSavingHost(false);
     }
   };
 
@@ -259,16 +278,19 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 id="pc-host"
                 value={inputHost}
                 onChange={(event) => setInputHost(event.target.value)}
-                placeholder="192.168.1.20:8000"
+                placeholder="192.168.0.200:8000"
                 autoCapitalize="none"
                 autoCorrect="off"
-                className="w-full min-h-[44px] rounded-lg bg-surface-200 border border-border px-3 text-xs font-mono text-text-main placeholder:text-text-muted"
+                className="w-full min-h-[44px] rounded-lg bg-surface-200 border border-border px-3 text-xs font-mono text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
               />
               <button
+                type="button"
                 onClick={handleSaveHost}
-                className="w-full min-h-[44px] rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-text-muted font-mono text-xs transition-all duration-150 active:scale-[0.98]"
+                disabled={isSavingHost}
+                className="w-full min-h-[44px] rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-text-main font-mono text-xs transition-all duration-150 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Save PC address
+                {isSavingHost ? <RefreshCw size={14} className="animate-spin text-primary" /> : null}
+                <span>{isSavingHost ? 'Verifying Host...' : 'Save PC address'}</span>
               </button>
 
               <label className="block text-xs font-mono text-text-main" htmlFor="youtube-pairing-code">

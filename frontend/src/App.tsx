@@ -43,6 +43,65 @@ export const App: React.FC = () => {
   const [isYouTubeConnected, setIsYouTubeConnected] = useState<boolean>(false);
   const [isEditorOpen, setIsEditorOpen] = useState<boolean>(false);
 
+  const [isPcOnline, setIsPcOnline] = useState<boolean>(false);
+
+  // Autonomous Connection Healthcheck & Dynamic Self-Healing
+  useEffect(() => {
+    let isCancelled = false;
+
+    const probeConnection = async () => {
+      // 1. Probe the current configured pcHost
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        const res = await fetch(apiUrl('/api/status', pcHost), { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          if (!isCancelled) setIsPcOnline(true);
+          return;
+        }
+      } catch {
+        // Current host did not respond
+      }
+
+      if (!isCancelled) setIsPcOnline(false);
+
+      // 2. If running on mobile/native WebView and current host failed, probe static LAN anchor
+      const isMobileOrNative = typeof window !== 'undefined' && (
+        !!(window as any).DispatchBridge ||
+        window.location.hostname === 'appassets.androidplatform.net' ||
+        window.location.protocol === 'file:'
+      );
+
+      const staticAnchor = '192.168.0.200:8000';
+      if (isMobileOrNative && pcHost !== staticAnchor) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 2500);
+          const res = await fetch(`http://${staticAnchor}/api/status`, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            console.info(`[Dispatch] Auto-healed connection from offline host (${pcHost}) to static anchor (${staticAnchor})`);
+            Bridge.setPcHost(staticAnchor);
+            if (!isCancelled) {
+              setPcHost(staticAnchor);
+              setIsPcOnline(true);
+            }
+          }
+        } catch {
+          // Static anchor also unreachable
+        }
+      }
+    };
+
+    probeConnection();
+    const interval = setInterval(probeConnection, 8000);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [pcHost]);
+
   // Current system time for phone top bar
   const [timeStr, setTimeStr] = useState<string>('');
 
@@ -86,7 +145,7 @@ export const App: React.FC = () => {
     checkYouTube();
     const interval = setInterval(checkYouTube, 6000);
     return () => clearInterval(interval);
-  }, []);
+  }, [pcHost]);
 
   // Poll recordings: from Android bridge if running on device, or from backend /api/recordings on web
   useEffect(() => {
@@ -293,6 +352,7 @@ export const App: React.FC = () => {
               pcHost={pcHost} 
               isMobileFrame={isMobileFrame} 
               onEditorOpenChange={setIsEditorOpen} 
+              isPcOnline={isPcOnline}
             />
           )}
 

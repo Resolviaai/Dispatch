@@ -149,7 +149,7 @@ fun SettingsScreen(
                                 val client = OkHttpClient.Builder()
                                     .connectTimeout(5, TimeUnit.SECONDS)
                                     .build()
-                                val host = if (pairingManager.pcHost.isNotBlank()) pairingManager.pcHost else "192.168.0.102:8000"
+                                val host = if (pairingManager.pcHost.isNotBlank()) pairingManager.pcHost else "192.168.0.200:8000"
                                 val req = Request.Builder()
                                     .url("http://$host/api/youtube/credentials")
                                     .build()
@@ -174,7 +174,7 @@ fun SettingsScreen(
                                             }
                                         }
                                     } catch (e: Exception) {
-                                        Pair(false, "Cannot connect to PC (192.168.0.103:8000): ${e.message}")
+                                        Pair(false, "Cannot connect to PC ($host): ${e.message}")
                                     }
                                 }
                                 Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
