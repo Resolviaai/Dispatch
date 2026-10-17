@@ -149,8 +149,9 @@ fun SettingsScreen(
                                 val client = OkHttpClient.Builder()
                                     .connectTimeout(5, TimeUnit.SECONDS)
                                     .build()
+                                val host = if (pairingManager.pcHost.isNotBlank()) pairingManager.pcHost else "192.168.0.102:8000"
                                 val req = Request.Builder()
-                                    .url("http://192.168.0.103:8000/api/youtube/credentials")
+                                    .url("http://$host/api/youtube/credentials")
                                     .build()
                                 val (ok, msg) = withContext(Dispatchers.IO) {
                                     try {
