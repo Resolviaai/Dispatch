@@ -131,11 +131,15 @@ def normalize_video_orientation(
         cid, width, height, rotation, orientation
     )
 
-    if norm_rotation == 0:
-        # Already physically upright, no transcode needed
+    norm_rotation = info.get("norm_rotation", 0)
+    video_codec = (info.get("video_codec") or "").lower()
+    needs_codec_norm = bool(video_codec and video_codec not in ("h264", "avc1"))
+
+    if norm_rotation == 0 and not needs_codec_norm:
+        # Already physically upright and H.264 compatible, no transcode needed
         logger.info(
-            "MEDIA_ORIENTATION_NORMALIZED: chunk_id=%s, input=%dx%d, output=%dx%d (already upright, skipped)",
-            cid, width, height, width, height
+            "MEDIA_ORIENTATION_NORMALIZED: chunk_id=%s, input=%dx%d, output=%dx%d, codec=%s (already upright and compatible, skipped)",
+            cid, width, height, width, height, video_codec
         )
         return True, filepath, info
 
