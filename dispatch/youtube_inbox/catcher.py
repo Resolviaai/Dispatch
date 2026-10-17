@@ -174,7 +174,7 @@ class YouTubeInboxCatcher:
         outtmpl = str(self.storage_dir / f"{video_id}.%(ext)s")
 
         ydl_opts = {
-            "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            "format": "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
             "outtmpl": outtmpl,
             "merge_output_format": "mp4",
             "quiet": True,
