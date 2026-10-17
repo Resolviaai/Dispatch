@@ -32,7 +32,7 @@ import { CaptionTimeline } from '../captions/CaptionTimeline';
 import { CaptionStudio, ActivePanel } from '../captions/CaptionStudio';
 import { DispatchCaptionRenderer } from '../captions/DispatchCaptionRenderer';
 import { useCaptionHistory } from '../captions/useCaptionHistory';
-import { apiUrl } from '../bridge';
+import { apiUrl, getAuthHeaders } from '../bridge';
 
 export type LayoutMode = 'fit_black' | 'fit_blur' | 'native_916' | 'crop_916' | 'crop_follow' | 'native_169' | 'landscape';
 export type ViewMode = 'library' | 'detail' | 'studio' | 'publish';
@@ -1384,7 +1384,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     try {
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ layout_mode: newMode }),
       });
       if (res.ok) {
@@ -1474,14 +1474,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       if (captionTrack) {
         await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(),
           body: JSON.stringify(captionTrack),
         });
       }
 
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/approve`, pcHost), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           title: titleDraft.trim(),
           hashtags: captionDraft.trim(),
@@ -1525,7 +1525,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     try {
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/reject`, pcHost), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ reason: 'Rejected from review studio' }),
       });
 

@@ -54,6 +54,9 @@ class DispatchNativeBridge(
     fun getPcHost(): String = pairingManager.pcHost
 
     @JavascriptInterface
+    fun getAuthToken(): String = pairingManager.pcAuthToken
+
+    @JavascriptInterface
     fun startRecording() {
         activity.runOnUiThread {
             activity.lifecycleScope.launch {

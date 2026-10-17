@@ -46,6 +46,7 @@ declare global {
       getWifiOnly: () => boolean;
       setWifiOnly: (enabled: boolean) => void;
       getPcHost?: () => string;
+      getAuthToken?: () => string;
     };
   }
 }
@@ -224,4 +225,16 @@ export function apiUrl(path: string, pcHost?: string): string {
   if (!base) return path;
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${base}${cleanPath}`;
+}
+
+export function getAuthHeaders(custom?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(custom || {}),
+  };
+  const token = typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null;
+  if (token && token.trim().length > 0) {
+    headers['x-auth-token'] = token.trim();
+  }
+  return headers;
 }

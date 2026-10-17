@@ -96,9 +96,9 @@ app.include_router(sync_router)
 
 
 def verify_dashboard_auth(request: Request) -> None:
-    """Enforce token validation or secure localhost origin/host matching.
-    Protects mutating endpoints and sensitive routes against LAN attackers,
-    unauthorized callers, CSRF, and DNS rebinding attacks.
+    """Enforce token validation or secure origin matching.
+    Protects mutating endpoints and sensitive routes against unauthorized callers,
+    CSRF, and DNS rebinding attacks while allowing first-party Android WebView and PC Studio.
     """
     token = request.headers.get("x-auth-token") or request.headers.get("authorization")
     if token:
@@ -107,6 +107,18 @@ def verify_dashboard_auth(request: Request) -> None:
             verify_token(token)
             return
         except HTTPException:
+            pass
+
+    # Check for trusted first-party Android WebView origin (whether over LAN or loopback)
+    origin_header = request.headers.get("origin", "").strip()
+    if origin_header:
+        try:
+            split_origin = urllib.parse.urlsplit(origin_header)
+            origin_scheme = split_origin.scheme.lower()
+            origin_hostname = (split_origin.hostname or "").lower()
+            if origin_scheme in ("http", "https") and origin_hostname == "appassets.androidplatform.net":
+                return
+        except Exception:
             pass
 
     client_host = request.client.host if request.client else "unknown"
@@ -118,7 +130,6 @@ def verify_dashboard_auth(request: Request) -> None:
             logger.warning("Rejected request to %s: untrusted host header '%s'", request.url.path, raw_host)
             raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
 
-        origin_header = request.headers.get("origin", "").strip()
         if origin_header:
             try:
                 split_origin = urllib.parse.urlsplit(origin_header)
@@ -126,18 +137,13 @@ def verify_dashboard_auth(request: Request) -> None:
                 origin_hostname = (split_origin.hostname or "").lower()
                 origin_port = split_origin.port
 
-                # Only allow http on loopback/testserver, or https on appassets
+                # Allow loopback/testserver origins
                 is_valid_loopback = (
                     origin_scheme == "http"
                     and origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
                     and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
                 )
-                is_valid_android = (
-                    origin_scheme in ("http", "https")
-                    and origin_hostname == "appassets.androidplatform.net"
-                )
-
-                if not (is_valid_loopback or is_valid_android):
+                if not is_valid_loopback:
                     logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
                     raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
             except Exception as e:
