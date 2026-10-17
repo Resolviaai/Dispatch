@@ -773,7 +773,7 @@ interface FramedVideoStageProps {
   isPlaying: boolean;
   onTogglePlay: () => void;
   onTimeUpdate?: () => void;
-  onLoadedMetadata?: () => void;
+  onLoadedMetadata?: (isSourceTimebase?: boolean) => void;
   videoRef: React.RefObject<HTMLVideoElement>;
   bgVideoRef: React.RefObject<HTMLVideoElement>;
   setIsPlaying: (playing: boolean) => void;
@@ -782,6 +782,7 @@ interface FramedVideoStageProps {
   maxHeight?: string;
   isCompact?: boolean;
   isDetail?: boolean;
+  preferRendered?: boolean;
 }
 
 export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
@@ -802,16 +803,20 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   maxHeight,
   isCompact = false,
   isDetail = false,
+  preferRendered = false,
 }) => {
   const [sourceFailed, setSourceFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
-  // High-reliability media resolution: prefer raw source chunk for real-time framing,
-  // fall back gracefully to rendered clip MP4 so real creator footage never shows "Source video unavailable".
-  const activeVideoUrl = (!sourceFailed && sourceVideoUrl)
-    ? sourceVideoUrl
-    : (!videoFailed && _videoUrl ? _videoUrl : null);
+  // High-reliability media resolution:
+  // If preferRendered is requested (reviewing pre-rendered clips in detail mode) and _videoUrl exists, use it!
+  // Otherwise, attempt sourceVideoUrl first with graceful fallback to _videoUrl.
+  const activeVideoUrl = preferRendered
+    ? (!videoFailed && _videoUrl ? _videoUrl : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null))
+    : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : (!videoFailed && _videoUrl ? _videoUrl : null));
+
+  const isSourceTimebase = activeVideoUrl === sourceVideoUrl;
 
   // Determine whether the container must be 16:9 widescreen or 9:16 vertical
   const isTarget169 = useMemo(() => {
@@ -903,7 +908,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   useEffect(() => {
     setSourceFailed(false);
     setVideoFailed(false);
-  }, [sourceVideoUrl, _videoUrl]);
+  }, [sourceVideoUrl, _videoUrl, preferRendered]);
 
   const computedMaxHeight = maxHeight || (isCompact ? '220px' : '100%');
 
@@ -957,11 +962,11 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 if (v.videoWidth > 0 && v.videoHeight > 0) {
                   setVideoDimensions({ width: v.videoWidth, height: v.videoHeight });
                 }
-                onLoadedMetadata?.();
+                onLoadedMetadata?.(isSourceTimebase);
               }}
               onTimeUpdate={onTimeUpdate}
               onError={() => {
-                if (!sourceFailed && sourceVideoUrl) {
+                if (isSourceTimebase) {
                   setSourceFailed(true);
                 } else {
                   setVideoFailed(true);
@@ -1055,6 +1060,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
+  const [isSourceTimebase, setIsSourceTimebase] = useState<boolean>(true);
   const [filmstripFrames, setFilmstripFrames] = useState<string[]>([]);
   const [mainVideoVolume, setMainVideoVolume] = useState<number>(100);
   const [isMainVideoMuted, setIsMainVideoMuted] = useState<boolean>(false);
@@ -1211,15 +1217,22 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const clipEnd = currentClip ? (currentClip.end_time || (clipStart + (currentClip.duration || 40))) : 40;
   const clipDuration = currentClip ? Math.max(0.1, currentClip.duration || (clipEnd - clipStart)) : 40;
 
-  // 3. Playback Controls & Dual-Layer Video Sync with Source Time Mapping
+  // 3. Playback Controls & Dual-Layer Video Sync with Adaptive Timebase Mapping
   const handleTogglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
 
     if (video.paused) {
-      if (video.currentTime >= clipEnd - 0.1 || video.currentTime < clipStart - 0.2) {
-        video.currentTime = clipStart;
-        if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
+      if (isSourceTimebase) {
+        if (video.currentTime >= clipEnd - 0.1 || video.currentTime < clipStart - 0.2) {
+          video.currentTime = clipStart;
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
+        }
+      } else {
+        if (video.currentTime >= clipDuration - 0.1) {
+          video.currentTime = 0;
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
+        }
       }
       video.play().then(() => {
         setIsPlaying(true);
@@ -1236,62 +1249,100 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const safeTarget = clamp(targetSec, 0, clipDuration);
     lastTimeUpdateRef.current = safeTarget;
     setCurrentTime(safeTarget);
-    const sourceTarget = clipStart + safeTarget;
+    const actualTarget = isSourceTimebase ? (clipStart + safeTarget) : safeTarget;
     if (videoRef.current) {
-      videoRef.current.currentTime = sourceTarget;
+      videoRef.current.currentTime = actualTarget;
     }
     if (bgVideoRef.current && layoutMode === 'fit_blur') {
-      bgVideoRef.current.currentTime = sourceTarget;
+      bgVideoRef.current.currentTime = actualTarget;
     }
   };
 
   const handleTimeUpdate = () => {
     const video = videoRef.current;
     if (!video) return;
-    const sourceCur = video.currentTime;
+    const cur = video.currentTime;
 
-    // Enforce clip bounds: stop when end of clip is reached
-    if (sourceCur >= clipEnd) {
-      video.pause();
-      video.currentTime = clipStart;
-      if (bgVideoRef.current) {
-        bgVideoRef.current.pause();
-        bgVideoRef.current.currentTime = clipStart;
+    if (isSourceTimebase) {
+      // Source bounds: stop when end of clip is reached
+      if (cur >= clipEnd) {
+        video.pause();
+        video.currentTime = clipStart;
+        if (bgVideoRef.current) {
+          bgVideoRef.current.pause();
+          bgVideoRef.current.currentTime = clipStart;
+        }
+        setIsPlaying(false);
+        lastTimeUpdateRef.current = 0;
+        setCurrentTime(0);
+        return;
       }
-      setIsPlaying(false);
-      lastTimeUpdateRef.current = 0;
-      setCurrentTime(0);
-      return;
-    }
 
-    if (sourceCur < clipStart - 0.2) {
-      video.currentTime = clipStart;
-      if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
-      lastTimeUpdateRef.current = 0;
-      setCurrentTime(0);
-      return;
-    }
+      if (cur < clipStart - 0.2) {
+        video.currentTime = clipStart;
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
+        lastTimeUpdateRef.current = 0;
+        setCurrentTime(0);
+        return;
+      }
 
-    const localTime = Math.max(0, sourceCur - clipStart);
-    if (Math.abs(localTime - lastTimeUpdateRef.current) >= 0.04 || sourceCur <= clipStart + 0.05) {
-      lastTimeUpdateRef.current = localTime;
-      setCurrentTime(localTime);
-    }
+      const localTime = Math.max(0, cur - clipStart);
+      if (Math.abs(localTime - lastTimeUpdateRef.current) >= 0.04 || cur <= clipStart + 0.05) {
+        lastTimeUpdateRef.current = localTime;
+        setCurrentTime(localTime);
+      }
 
-    if (bgVideoRef.current && layoutMode === 'fit_blur') {
-      const diff = Math.abs(bgVideoRef.current.currentTime - sourceCur);
-      if (diff > 0.4) {
-        bgVideoRef.current.currentTime = sourceCur;
+      if (bgVideoRef.current && layoutMode === 'fit_blur') {
+        const diff = Math.abs(bgVideoRef.current.currentTime - cur);
+        if (diff > 0.4) {
+          bgVideoRef.current.currentTime = cur;
+        }
+      }
+    } else {
+      // 0-based timebase for pre-rendered clip files
+      if (cur >= clipDuration) {
+        video.pause();
+        video.currentTime = 0;
+        if (bgVideoRef.current) {
+          bgVideoRef.current.pause();
+          bgVideoRef.current.currentTime = 0;
+        }
+        setIsPlaying(false);
+        lastTimeUpdateRef.current = 0;
+        setCurrentTime(0);
+        return;
+      }
+
+      if (Math.abs(cur - lastTimeUpdateRef.current) >= 0.04 || cur <= 0.05) {
+        lastTimeUpdateRef.current = cur;
+        setCurrentTime(cur);
+      }
+
+      if (bgVideoRef.current && layoutMode === 'fit_blur') {
+        const diff = Math.abs(bgVideoRef.current.currentTime - cur);
+        if (diff > 0.4) {
+          bgVideoRef.current.currentTime = cur;
+        }
       }
     }
   };
 
-  const handleLoadedMetadata = () => {
+  const handleLoadedMetadata = (isSource?: boolean) => {
+    const isSourceEffective = (typeof isSource === 'boolean') ? isSource : isSourceTimebase;
+    setIsSourceTimebase(isSourceEffective);
     const video = videoRef.current;
     if (video) {
-      video.currentTime = clipStart;
-      if (bgVideoRef.current) {
-        bgVideoRef.current.currentTime = clipStart;
+      if (isSourceEffective) {
+        if (video.duration >= clipStart && clipStart > 0) {
+          video.currentTime = clipStart;
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
+        } else {
+          video.currentTime = 0;
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
+        }
+      } else {
+        video.currentTime = 0;
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
       }
     }
     setCurrentTime(0);
@@ -1795,6 +1846,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <FramedVideoStage
               sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
               videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
+              preferRendered={Boolean(currentClip.video_url && !currentClip.is_render_stale)}
               clipStart={clipStart}
               clipEnd={clipEnd}
               clipDuration={clipDuration}
@@ -1811,12 +1863,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               showPlayPauseOverlay={true}
               isDetail={true}
             >
-              <DispatchCaptionRenderer
-                track={visibleCaptionTrack}
-                currentTime={currentTime}
-                layoutMode={layoutMode}
-                showBoundingBox={false}
-              />
+              {isSourceTimebase && (
+                <DispatchCaptionRenderer
+                  track={visibleCaptionTrack}
+                  currentTime={currentTime}
+                  layoutMode={layoutMode}
+                  showBoundingBox={false}
+                />
+              )}
             </FramedVideoStage>
           </div>
 
@@ -2188,6 +2242,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <FramedVideoStage
                 sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
                 videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
+                preferRendered={Boolean(currentClip.video_url && !currentClip.is_render_stale)}
                 clipStart={clipStart}
                 clipEnd={clipEnd}
                 clipDuration={clipDuration}
@@ -2204,12 +2259,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 showPlayPauseOverlay={true}
                 maxHeight="75vh"
               >
-                <DispatchCaptionRenderer
-                  track={visibleCaptionTrack}
-                  currentTime={currentTime}
-                  layoutMode={layoutMode}
-                  showBoundingBox={false}
-                />
+                {isSourceTimebase && (
+                  <DispatchCaptionRenderer
+                    track={visibleCaptionTrack}
+                    currentTime={currentTime}
+                    layoutMode={layoutMode}
+                    showBoundingBox={false}
+                  />
+                )}
               </FramedVideoStage>
             </div>
 

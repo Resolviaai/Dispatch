@@ -77,6 +77,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info("--> [HTTP REQ] %s %s from %s (Origin: %s, Range: %s)",
+                request.method, request.url.path, client_ip,
+                request.headers.get("origin"), request.headers.get("range"))
+    try:
+        response = await call_next(request)
+        logger.info("<-- [HTTP RES] %s %s status=%d", request.method, request.url.path, response.status_code)
+        return response
+    except Exception as e:
+        logger.error("<-- [HTTP ERR] %s %s error: %s", request.method, request.url.path, e)
+        raise
+
 app.include_router(sync_router)
 
 
@@ -270,7 +284,7 @@ class ResolveReconciliationRequest(BaseModel):
     note: Optional[str] = None
 
 
-@app.get("/clips/{filename}")
+@app.api_route("/clips/{filename}", methods=["GET", "HEAD"])
 async def get_clip_file(filename: str):
     """Stream clip video or image thumbnail directly from storage with path traversal protection."""
     target_path = (CLIPS_DIR / filename).resolve()
@@ -282,7 +296,7 @@ async def get_clip_file(filename: str):
     return FileResponse(target_path, media_type=media_type)
 
 
-@app.get("/download/dispatch.apk")
+@app.api_route("/download/dispatch.apk", methods=["GET", "HEAD"])
 async def download_android_apk():
     """Download the native Dispatch Android APK compiled for POCO C65."""
     candidates = [
@@ -592,7 +606,7 @@ async def get_clip_detail(clip_id: str):
     return clip
 
 
-@app.get("/api/clips/{clip_id}/source")
+@app.api_route("/api/clips/{clip_id}/source", methods=["GET", "HEAD"])
 async def get_clip_source_media(clip_id: str):
     """Safely resolve and stream the original raw source video chunk for this clip or chunk.
     Supports HTTP Range requests (206 Partial Content) for smooth HTML5 video scrubbing.

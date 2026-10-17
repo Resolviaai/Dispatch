@@ -101,9 +101,11 @@ class MainActivity : ComponentActivity() {
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
 
-        // Set up WebViewAssetLoader to safely serve assets over https://appassets.androidplatform.net
-        // This is required for Chromium to execute Vite ES modules (<script type="module">) without file:// CORS blocks.
+        // Set up WebViewAssetLoader to safely serve assets over http://appassets.androidplatform.net
+        // Using HTTP scheme eliminates Chromium mixed-content auto-upgrade so local LAN HTTP video streaming works seamlessly.
         val assetLoader = WebViewAssetLoader.Builder()
+            .setDomain("appassets.androidplatform.net")
+            .setHttpAllowed(true)
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
 
@@ -186,7 +188,7 @@ class MainActivity : ComponentActivity() {
         })
 
         // Load canonical React application packaged in assets
-        webView.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
+        webView.loadUrl("http://appassets.androidplatform.net/assets/web/index.html")
 
         // Root container: PreviewView underneath, WebView on top
         val rootLayout = FrameLayout(this).apply {

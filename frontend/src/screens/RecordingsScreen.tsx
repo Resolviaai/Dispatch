@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Film, 
   RotateCw,
@@ -9,22 +9,38 @@ import {
   Video,
   Download,
   Maximize2,
-  X
+  X,
+  Sparkles,
+  CheckCircle2
 } from 'lucide-react';
 import { Bridge, RecordingItem, apiUrl } from '../bridge';
+
+export const isUploadedSegment = (item: RecordingItem): boolean => {
+  if (item.youtubeVideoId && item.youtubeVideoId.trim().length > 0) return true;
+  return (
+    item.status === 'UPLOADED_TO_YOUTUBE' ||
+    item.status === 'PROCESSED_ON_YOUTUBE' ||
+    item.status === 'UPLOADED_AWAITING_PROCESSING' ||
+    item.status === 'VERIFIED_BY_LAPTOP'
+  );
+};
 
 interface RecordingsScreenProps {
   recordings: RecordingItem[];
   isYouTubeConnected: boolean;
   onNavigateToSettings: () => void;
   onRetryUpload: (segmentId: string) => void;
+  onNavigateToClips?: () => void;
+  pcHost?: string;
 }
 
 export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({ 
   recordings, 
   isYouTubeConnected,
   onNavigateToSettings,
-  onRetryUpload 
+  onRetryUpload,
+  onNavigateToClips,
+  pcHost
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'queued' | 'uploaded'>('all');
@@ -51,16 +67,59 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const [clips, setClips] = useState<{ id: string; session_id?: string; chunk_id?: string; status: string }[]>([]);
+
+  useEffect(() => {
+    if (!pcHost) return;
+    let isMounted = true;
+    const fetchClips = async () => {
+      try {
+        const res = await fetch(apiUrl('/api/clips', pcHost));
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          const ready = Array.isArray(data.ready) ? data.ready : [];
+          const approved = Array.isArray(data.recent_approved) ? data.recent_approved : [];
+          setClips([...ready, ...approved]);
+        }
+      } catch {
+        // silent offline fallback
+      }
+    };
+    fetchClips();
+    const interval = setInterval(fetchClips, 4000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [pcHost]);
+
+  const getSessionClips = (item: RecordingItem) => {
+    return clips.filter(c => 
+      (c.session_id && (c.session_id === item.sessionId || c.session_id === item.segmentId)) ||
+      (c.chunk_id && (c.chunk_id === item.segmentId || c.chunk_id === item.sessionId)) ||
+      (item.youtubeVideoId && c.session_id === item.youtubeVideoId)
+    );
+  };
+
+  const queuedRecordings = recordings.filter(item => !isUploadedSegment(item));
+  const uploadedRecordings = recordings.filter(item => isUploadedSegment(item));
+
   const filteredRecordings = recordings.filter(item => {
-    if (filter === 'uploaded') return item.status === 'UPLOADED_TO_YOUTUBE';
-    if (filter === 'queued') return item.status !== 'UPLOADED_TO_YOUTUBE';
+    const isUp = isUploadedSegment(item);
+    if (filter === 'uploaded') return isUp;
+    if (filter === 'queued') return !isUp;
     return true;
   });
 
   const totalBytes = recordings.reduce((acc, r) => acc + (r.fileSizeBytes || 0), 0);
 
   const renderStatusBadge = (item: RecordingItem) => {
-    if (Bridge.isAvailable() && !isYouTubeConnected && item.status === 'QUEUED_FOR_UPLOAD') {
+    const isUploaded = isUploadedSegment(item);
+    const sessionClips = getSessionClips(item);
+    const hasApprovedClip = sessionClips.some(c => c.status === 'approved' || c.status === 'published');
+
+    // 1. YouTube connection warning if device queued and no YouTube linked
+    if (Bridge.isAvailable() && !isYouTubeConnected && item.status === 'QUEUED_FOR_UPLOAD' && !item.youtubeVideoId) {
       return (
         <button
           onClick={(e) => {
@@ -75,14 +134,54 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       );
     }
 
-    switch (item.status) {
-      case 'UPLOADED_TO_YOUTUBE':
+    // 2. Active Lifecycle for Uploaded / Ingested recordings
+    if (isUploaded) {
+      if (hasApprovedClip) {
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            Uploaded
+            <CheckCircle2 size={11} className="text-emerald-400" />
+            Clips Approved
           </span>
         );
+      }
+
+      if (sessionClips.length > 0) {
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-purple-500/15 border border-purple-500/30 text-purple-300">
+            <Sparkles size={11} className="text-purple-400" />
+            {sessionClips.length} {sessionClips.length === 1 ? 'Clip' : 'Clips'} Ready
+          </span>
+        );
+      }
+
+      if (item.status === 'VERIFIED_BY_LAPTOP') {
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-blue-500/15 border border-blue-500/30 text-blue-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+            Synced to Laptop
+          </span>
+        );
+      }
+
+      if (item.status === 'UPLOADED_AWAITING_PROCESSING') {
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-amber-500/15 border border-amber-500/30 text-amber-300">
+            <RotateCw size={10} className="text-amber-400 animate-spin" />
+            Processing on YouTube
+          </span>
+        );
+      }
+
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          Uploaded
+        </span>
+      );
+    }
+
+    // 3. Queued / In-flight states
+    switch (item.status) {
       case 'UPLOADING':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-blue-500/15 border border-blue-500/30 text-blue-300">
@@ -97,12 +196,21 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             Queued
           </span>
         );
+      case 'RECORDING':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-red-500/15 border border-red-500/30 text-red-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+            Recording…
+          </span>
+        );
       case 'RECORDED':
+      case 'FINALIZED':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-surface-200 border border-border text-text-muted">
             Recorded
           </span>
         );
+      case 'FAILED_RETRY':
       case 'FAILED_RECORDING':
       default:
         return (
@@ -166,7 +274,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   : 'text-text-muted hover:text-text-main bg-surface-100 border border-border'
               }`}
             >
-              Queued ({recordings.filter(r => r.status !== 'UPLOADED_TO_YOUTUBE').length})
+              Queued ({queuedRecordings.length})
             </button>
             <button
               onClick={() => setFilter('uploaded')}
@@ -176,7 +284,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   : 'text-text-muted hover:text-text-main bg-surface-100 border border-border'
               }`}
             >
-              Uploaded ({recordings.filter(r => r.status === 'UPLOADED_TO_YOUTUBE').length})
+              Uploaded ({uploadedRecordings.length})
             </button>
           </div>
         )}
@@ -218,6 +326,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
           filteredRecordings.map((item, index) => {
             const isExpanded = expandedId === item.segmentId;
             const hasVideo = !!item.videoUrl;
+            const sessionClips = getSessionClips(item);
 
             return (
               <div
@@ -327,6 +436,17 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                           <ExternalLink size={13} />
                           <span>YouTube</span>
                         </a>
+                      )}
+
+                      {sessionClips.length > 0 && onNavigateToClips && (
+                        <button
+                          type="button"
+                          onClick={onNavigateToClips}
+                          className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-primary/15 hover:bg-primary/25 border border-primary/30 text-xs text-primary font-medium transition-all duration-150 active:scale-[0.98]"
+                        >
+                          <Sparkles size={13} />
+                          <span>{sessionClips.length} {sessionClips.length === 1 ? 'Clip' : 'Clips'}</span>
+                        </button>
                       )}
                     </div>
 

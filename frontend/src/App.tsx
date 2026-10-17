@@ -248,6 +248,8 @@ export const App: React.FC = () => {
               isYouTubeConnected={isYouTubeConnected}
               onNavigateToSettings={() => setCurrentTab('settings')}
               onRetryUpload={handleRetryUpload} 
+              onNavigateToClips={() => setCurrentTab('clips')}
+              pcHost={pcHost}
             />
           )}
 
