@@ -7,10 +7,13 @@ import sqlite3
 import json
 import uuid
 import contextlib
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from dispatch.config import DB_PATH, DATABASE_DIR, DEFAULT_PUBLISH_MODE
+
+logger = logging.getLogger("dispatch.db")
 
 CURRENT_SCHEMA_VERSION = 2
 
@@ -177,6 +180,8 @@ def init_db():
                 platform_targets TEXT DEFAULT 'youtube,instagram',
                 video_path TEXT,
                 thumbnail_path TEXT,
+                padded_start REAL,
+                padded_end REAL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 approved_at TIMESTAMP,
                 published_at TIMESTAMP,
@@ -330,6 +335,10 @@ def init_db():
         if "rendered_layout_mode" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN rendered_layout_mode TEXT;")
             cursor.execute("UPDATE clips SET rendered_layout_mode = layout_mode WHERE rendered_layout_mode IS NULL AND video_path IS NOT NULL;")
+        if "padded_start" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN padded_start REAL;")
+        if "padded_end" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN padded_end REAL;")
 
         # Migration: Ensure outbox columns exist if created with older schema
         cursor.execute("PRAGMA table_info(publishing_outbox);")
@@ -456,25 +465,63 @@ def save_clip(
     publish_mode: str = "private",
     platform_targets: str = "youtube",
     rendered_layout_mode: Optional[str] = None,
-    duration: Optional[float] = None
+    duration: Optional[float] = None,
+    padded_start: Optional[float] = None,
+    padded_end: Optional[float] = None
 ) -> str:
     clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     final_duration = round(float(duration), 2) if duration is not None else round(end_time - start_time, 2)
+    p_start = padded_start if padded_start is not None else max(0.0, start_time - 4.0)
+    p_end = padded_end if padded_end is not None else end_time + 4.0
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO clips (
                 id, session_id, chunk_id, start_time, end_time, duration,
                 title, hook, description, hashtags, virality_score,
-                layout_mode, rendered_layout_mode, status, publish_mode, platform_targets
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?)
+                layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
+                padded_start, padded_end
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?)
         """, (
             clip_id, session_id, chunk_id, start_time, end_time, final_duration,
             title, hook, description, hashtags, virality_score,
-            layout_mode, rendered_layout_mode, publish_mode, platform_targets
+            layout_mode, rendered_layout_mode, publish_mode, platform_targets,
+            p_start, p_end
         ))
         conn.commit()
     return clip_id
+
+
+def update_clip_trim(
+    clip_id: str,
+    start_time: float,
+    end_time: float
+) -> bool:
+    """Update clip active trim boundaries within padded safety margins."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT padded_start, padded_end, duration FROM clips WHERE id = ?", (clip_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+
+        p_start = float(row["padded_start"]) if row["padded_start"] is not None else max(0.0, start_time - 4.0)
+        p_end = float(row["padded_end"]) if row["padded_end"] is not None else (end_time + 4.0)
+
+        clamped_start = max(p_start, round(start_time, 3))
+        clamped_end = min(p_end, round(end_time, 3))
+        if clamped_end <= clamped_start:
+            return False
+
+        new_duration = round(clamped_end - clamped_start, 2)
+        cursor.execute("""
+            UPDATE clips 
+            SET start_time = ?, end_time = ?, duration = ?
+            WHERE id = ?
+        """, (clamped_start, clamped_end, new_duration, clip_id))
+        conn.commit()
+        return True
 
 
 def update_clip_media(
@@ -564,6 +611,10 @@ def get_clip_by_id(clip_id: str) -> Optional[Dict[str, Any]]:
 
 
 def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
+    """Reject a clip: immediately unlinks physical MP4 & thumbnail files from disk,
+    records rejection in rejections table for negative preference learning,
+    and updates clip status to 'rejected'.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
@@ -571,14 +622,67 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
         if not clip:
             return False
 
-        cursor.execute("UPDATE clips SET status = 'rejected' WHERE id = ?", (clip_id,))
-        # Store in rejections for negative preference learning
+        # 1. Immediately delete physical rendered media files (MP4 & thumbnail) from disk
+        for file_key in ("video_path", "thumbnail_path"):
+            val = clip[file_key]
+            if val:
+                try:
+                    p = Path(val)
+                    if p.exists() and p.is_file():
+                        p.unlink()
+                        logger.info("Deleted %s (%s) for rejected clip %s", file_key, p.name, clip_id)
+                except Exception as e:
+                    logger.warning("Failed to delete %s for rejected clip %s: %s", file_key, clip_id, e)
+
+        # 2. Record in rejections table for negative preference learning
         cursor.execute("""
             INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason)
             VALUES (?, ?, ?, ?, ?)
         """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason))
+
+        # 3. Mark status as 'rejected' and clear file paths
+        cursor.execute("UPDATE clips SET status = 'rejected', video_path = NULL, thumbnail_path = NULL WHERE id = ?", (clip_id,))
         conn.commit()
         return True
+
+
+def cleanup_expired_published_clips(retention_days: int = 7) -> int:
+    """Purge heavy local rendered MP4 files for published clips older than retention_days.
+    Strictly PRESERVES thumbnail_path, remote_url, and clip metadata so creator still
+    has full thumbnail preview and redirection to the published live video.
+    """
+    purged_count = 0
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Find published clips with published_at older than retention_days that still have a local video_path
+        cursor.execute("""
+            SELECT id, video_path, thumbnail_path, published_at, created_at 
+            FROM clips 
+            WHERE status IN ('published', 'approved') 
+              AND video_path IS NOT NULL 
+              AND datetime(COALESCE(published_at, approved_at, created_at)) <= datetime('now', '-' || ? || ' days')
+        """, (retention_days,))
+        expired_clips = cursor.fetchall()
+
+        for c in expired_clips:
+            vpath = c["video_path"]
+            if vpath:
+                try:
+                    vp = Path(vpath)
+                    if vp.exists() and vp.is_file():
+                        vp.unlink()
+                        logger.info("Purged expired local video file %s (Published > %d days ago)", vp.name, retention_days)
+                except Exception as e:
+                    logger.warning("Failed to unlink video file %s: %s", vpath, e)
+            
+            # Clear video_path from DB while PRESERVING thumbnail_path and all clip records
+            cursor.execute("UPDATE clips SET video_path = NULL WHERE id = ?", (c["id"],))
+            purged_count += 1
+
+        if purged_count > 0:
+            conn.commit()
+
+    return purged_count
 
 
 def get_all_rejections(limit: int = 20) -> List[Dict[str, Any]]:
@@ -848,17 +952,21 @@ def save_clip_definitions(
             virality_score = int(c.get("virality_score", 70))
             layout_mode = c.get("layout_recommendation", "fit_blur")
 
+            p_start = float(c.get("padded_start", max(0.0, start_t - 4.0)))
+            p_end = float(c.get("padded_end", end_t + 4.0))
+
             cursor.execute("""
                 INSERT INTO clips (
                     id, session_id, chunk_id, start_time, end_time, duration,
                     title, hook, description, hashtags, virality_score,
                     layout_mode, status, publish_mode, platform_targets,
-                    video_path, thumbnail_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL)
+                    video_path, thumbnail_path, padded_start, padded_end
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?)
             """, (
                 clip_id, session_id, chunk_id, start_t, end_t, duration,
                 title, hook, description, hashtags, virality_score,
-                layout_mode, publish_mode, platform_targets
+                layout_mode, publish_mode, platform_targets,
+                p_start, p_end
             ))
             saved_clip_ids.append(clip_id)
 
@@ -872,4 +980,41 @@ def save_clip_definitions(
         conn.commit()
 
     return saved_clip_ids
+
+
+def get_queued_transcription_clips(limit: int = 50) -> List[Dict[str, Any]]:
+    """Retrieve clips waiting in FIFO backlog for transcription quota reset."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM clips 
+            WHERE status = 'queued_transcription' 
+            ORDER BY created_at ASC 
+            LIMIT ?
+        """, (limit,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_transcription_queue_stats() -> Dict[str, Any]:
+    """Return ready count, backlog queue depth, and daily transcribe quota usage."""
+    from datetime import datetime, timezone
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    current_date = get_setting("transcribe_quota_date", "")
+    current_count = int(get_setting("transcribe_quota_count", "0") or 0) if current_date == today_utc else 0
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM clips WHERE status = 'queued_transcription'")
+        queued_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM clips WHERE status = 'ready_review'")
+        ready_count = cursor.fetchone()[0]
+
+    return {
+        "ready_count": ready_count,
+        "queued_count": queued_count,
+        "daily_quota_used": current_count,
+        "daily_quota_max": 25,
+        "quota_date": today_utc
+    }
+
 

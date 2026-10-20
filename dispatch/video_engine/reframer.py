@@ -4,7 +4,7 @@ original session input orientation.
 """
 from pathlib import Path
 from typing import Optional, Tuple
-from dispatch.config import TARGET_WIDTH, TARGET_HEIGHT
+from dispatch.config import TARGET_WIDTH, TARGET_HEIGHT, FONTS_DIR
 
 # Output resolution standards
 PORTRAIT_WIDTH = TARGET_WIDTH     # 1080
@@ -66,11 +66,12 @@ def build_filter_complex(
             )
         elif mode == "fit_blur":
             # OPTION 2 — LONG FORM / 16:9 + BLUR
-            # Output: 16:9. Source fully visible in center with blurred pillarbox bars.
+            # Output: 16:9. Source fully visible in center with blurred & darkened pillarbox bars.
+            # Uses boxblur=30:3 and colorchannelmixer=rr=0.75:gg=0.75:bb=0.75 for exact parity with CSS blur-2xl brightness-75
             filters.append(
                 f"{in_v}split=2[bg_in][fg_in];"
                 f"[bg_in]scale={WIDE_WIDTH}:{WIDE_HEIGHT}:force_original_aspect_ratio=increase,"
-                f"crop={WIDE_WIDTH}:{WIDE_HEIGHT},boxblur=25:5[bg];"
+                f"crop={WIDE_WIDTH}:{WIDE_HEIGHT},boxblur=30:3,colorchannelmixer=rr=0.75:gg=0.75:bb=0.75[bg];"
                 f"[fg_in]scale=-2:{WIDE_HEIGHT}[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2[base]"
             )
@@ -93,11 +94,12 @@ def build_filter_complex(
             )
         elif mode == "fit_blur":
             # OPTION 2 — FIT + BLUR
-            # Output: 9:16. 16:9 source in center with blurred top/bottom letterbox.
+            # Output: 9:16. 16:9 source in center with blurred & darkened top/bottom letterbox.
+            # Uses boxblur=30:3 and colorchannelmixer=rr=0.75:gg=0.75:bb=0.75 for exact parity with CSS blur-2xl brightness-75
             filters.append(
                 f"{in_v}split=2[bg_in][fg_in];"
                 f"[bg_in]scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}:force_original_aspect_ratio=increase,"
-                f"crop={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT},boxblur=25:5[bg];"
+                f"crop={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT},boxblur=30:3,colorchannelmixer=rr=0.75:gg=0.75:bb=0.75[bg];"
                 f"[fg_in]scale={PORTRAIT_WIDTH}:-2[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2[base]"
             )
@@ -120,7 +122,11 @@ def build_filter_complex(
 
     if ass_subtitle_path and ass_subtitle_path.exists():
         escaped_sub = escape_ffmpeg_filter_path(ass_subtitle_path)
-        filters.append(f"{current_label}subtitles='{escaped_sub}'[outv]")
+        sub_filter = f"subtitles='{escaped_sub}'"
+        if FONTS_DIR and FONTS_DIR.exists():
+            escaped_fonts = escape_ffmpeg_filter_path(FONTS_DIR)
+            sub_filter += f":fontsdir='{escaped_fonts}'"
+        filters.append(f"{current_label}{sub_filter}[outv]")
         final_label = "[outv]"
     else:
         final_label = current_label

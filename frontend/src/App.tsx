@@ -42,6 +42,12 @@ export const App: React.FC = () => {
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [isYouTubeConnected, setIsYouTubeConnected] = useState<boolean>(false);
   const [isEditorOpen, setIsEditorOpen] = useState<boolean>(false);
+  const [sessionFilter, setSessionFilter] = useState<string | null>(null);
+
+  const handleNavigateToClips = (sessionId?: string) => {
+    setSessionFilter(sessionId || null);
+    setCurrentTab('clips');
+  };
 
   const [isPcOnline, setIsPcOnline] = useState<boolean>(false);
 
@@ -342,7 +348,8 @@ export const App: React.FC = () => {
               isYouTubeConnected={isYouTubeConnected}
               onNavigateToSettings={() => setCurrentTab('settings')}
               onRetryUpload={handleRetryUpload} 
-              onNavigateToClips={() => setCurrentTab('clips')}
+              onNavigateToClips={handleNavigateToClips}
+              onNavigateToRecord={() => setCurrentTab('record')}
               pcHost={pcHost}
             />
           )}
@@ -353,6 +360,8 @@ export const App: React.FC = () => {
               isMobileFrame={isMobileFrame} 
               onEditorOpenChange={setIsEditorOpen} 
               isPcOnline={isPcOnline}
+              sessionFilter={sessionFilter}
+              onClearSessionFilter={() => setSessionFilter(null)}
             />
           )}
 

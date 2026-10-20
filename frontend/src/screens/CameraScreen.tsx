@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Zap, 
   ZapOff, 
@@ -9,13 +9,24 @@ import {
   Square,
   AlertCircle,
   Video,
-  CheckCircle2
+  CheckCircle2,
+  Sun,
+  Lock
 } from 'lucide-react';
-import { Bridge, RecordingItem } from '../bridge';
+import { Bridge, RecordingItem, ExposureInfo } from '../bridge';
 
 interface CameraScreenProps {
   onRecordingComplete?: (item: RecordingItem) => void;
   onRecordingStatusUpdate?: (segmentId: string, status: string, extra?: Partial<RecordingItem>) => void;
+}
+
+interface FocusExposureState {
+  x: number;
+  y: number;
+  normX: number;
+  normY: number;
+  isLocked: boolean;
+  triggerId: number;
 }
 
 export const CameraScreen: React.FC<CameraScreenProps> = ({ 
@@ -27,17 +38,43 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const [torchActive, setTorchActive] = useState(false);
   const [micActive, setMicActive] = useState(true);
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
-  const [lensOptions] = useState<number[]>([1.0, 2.0, 3.0]);
+  const [lensOptions, setLensOptions] = useState<number[]>([1.0, 2.0, 3.0]);
   const [cameraFacing, setCameraFacing] = useState<'back' | 'front'>('back');
   const [hasWebcam, setHasWebcam] = useState<boolean>(false);
   const [webcamError, setWebcamError] = useState<string | null>(null);
   const [recentSavedSegment, setRecentSavedSegment] = useState<string | null>(null);
+
+  // Focus & Exposure states
+  const [focusState, setFocusState] = useState<FocusExposureState | null>(null);
+  const [isIndicatorVisible, setIsIndicatorVisible] = useState(false);
+  const [isDraggingExposure, setIsDraggingExposure] = useState(false);
+  const [exposureIndex, setExposureIndex] = useState(0);
+  const [exposureInfo, setExposureInfo] = useState<ExposureInfo>({
+    minIndex: -4,
+    maxIndex: 4,
+    currentIndex: 0,
+    stepEv: 0.5,
+    isSupported: true,
+  });
+  const [viewfinderBounds, setViewfinderBounds] = useState<{ width: number; height: number }>({
+    width: typeof window !== 'undefined' ? window.innerWidth : 360,
+    height: typeof window !== 'undefined' ? window.innerHeight : 640
+  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const timerRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedBlobsRef = useRef<Blob[]>([]);
+
+  const viewfinderRef = useRef<HTMLDivElement | null>(null);
+  const fadeTimeoutRef = useRef<any>(null);
+  const longPressTimerRef = useRef<any>(null);
+  const isLongPressHandledRef = useRef(false);
+  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
+  const startExposureIndexRef = useRef<number>(0);
+  const isDraggingRef = useRef<boolean>(false);
+  const isInteractingWithSliderRef = useRef<boolean>(false);
 
   // Synchronize native recording status when running inside Dispatch Android WebView
   useEffect(() => {
@@ -94,6 +131,263 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
   };
 
+  // Reliable camera hardware capability synchronization (exposure, zoom, facing)
+  const syncCameraHardwareState = useCallback(() => {
+    const info = Bridge.getExposureInfo();
+    if (info) {
+      setExposureInfo(info);
+      setExposureIndex(info.currentIndex);
+    }
+
+    const zoomInfo = Bridge.getZoomInfo();
+    if (zoomInfo.minZoom <= 0.75) {
+      setLensOptions([0.6, 1.0, 2.0]);
+    } else {
+      setLensOptions([1.0, 2.0, 3.0]);
+    }
+  }, []);
+
+  // Sync exposure info and zoom range whenever camera facing or mode updates
+  useEffect(() => {
+    syncCameraHardwareState();
+    // CameraX rebinds asynchronously in native Android; poll at intervals to catch when hardware is ready
+    const t1 = setTimeout(syncCameraHardwareState, 300);
+    const t2 = setTimeout(syncCameraHardwareState, 750);
+    const t3 = setTimeout(syncCameraHardwareState, 1500);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [cameraFacing, syncCameraHardwareState]);
+
+  // Keep track of viewfinder bounds for coordinate clamping
+  useEffect(() => {
+    const updateBounds = () => {
+      if (viewfinderRef.current) {
+        const rect = viewfinderRef.current.getBoundingClientRect();
+        setViewfinderBounds({ width: rect.width, height: rect.height });
+      }
+    };
+    updateBounds();
+    window.addEventListener('resize', updateBounds);
+    return () => {
+      window.removeEventListener('resize', updateBounds);
+      if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
+
+  const startFadeTimer = (ms = 3500) => {
+    if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
+    fadeTimeoutRef.current = setTimeout(() => {
+      setIsIndicatorVisible(false);
+    }, ms);
+  };
+
+  const checkIsNearSliderOrReticle = (
+    touchX: number,
+    touchY: number,
+    focus: FocusExposureState,
+    bounds: { width: number; height: number }
+  ) => {
+    const boxSize = 64;
+    const halfBox = boxSize / 2;
+    const cw = bounds.width || (typeof window !== 'undefined' ? window.innerWidth : 360);
+    const ch = bounds.height || (typeof window !== 'undefined' ? window.innerHeight : 640);
+    const clampedX = Math.max(halfBox + 16, Math.min(cw - halfBox - 56, focus.x));
+    const clampedY = Math.max(halfBox + 40, Math.min(ch - halfBox - 80, focus.y));
+
+    const placeSliderOnLeft = (clampedX + halfBox + 48) > cw;
+    const trackX = placeSliderOnLeft ? (clampedX - halfBox - 22) : (clampedX + halfBox + 22);
+    const trackHeight = 90;
+    const trackTop = clampedY - trackHeight / 2;
+    const trackBottom = clampedY + trackHeight / 2;
+
+    const nearBox = Math.abs(touchX - clampedX) <= 44 && Math.abs(touchY - clampedY) <= 44;
+    const nearTrack = Math.abs(touchX - trackX) <= 36 && touchY >= (trackTop - 24) && touchY <= (trackBottom + 24);
+
+    return nearBox || nearTrack;
+  };
+
+  const handleViewfinderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+    // Refresh hardware exposure parameters dynamically on touch
+    const freshExp = Bridge.getExposureInfo();
+    if (freshExp) {
+      setExposureInfo(freshExp);
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const bounds = { width: rect.width, height: rect.height };
+    setViewfinderBounds(bounds);
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const normX = Math.max(0, Math.min(1, x / rect.width));
+    const normY = Math.max(0, Math.min(1, y / rect.height));
+
+    pointerDownPosRef.current = { x: clientX, y: clientY };
+    isLongPressHandledRef.current = false;
+    isDraggingRef.current = false;
+    startExposureIndexRef.current = freshExp ? freshExp.currentIndex : exposureIndex;
+
+    if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+
+    // Check if user is touching existing reticle or exposure slider
+    const isTouchingSlider = isIndicatorVisible && focusState && checkIsNearSliderOrReticle(x, y, focusState, bounds);
+    if (isTouchingSlider) {
+      isInteractingWithSliderRef.current = true;
+      isDraggingRef.current = true;
+      setIsDraggingExposure(true);
+      return;
+    }
+
+    isInteractingWithSliderRef.current = false;
+
+    // Long press (>= 400ms) for AE/AF lock
+    longPressTimerRef.current = setTimeout(() => {
+      isLongPressHandledRef.current = true;
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try { navigator.vibrate(50); } catch {}
+      }
+      Bridge.lockAeAfAtPoint(normX, normY);
+      setFocusState({
+        x,
+        y,
+        normX,
+        normY,
+        isLocked: true,
+        triggerId: Date.now()
+      });
+      setIsIndicatorVisible(true);
+    }, 400);
+  };
+
+  const handleViewfinderPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pointerDownPosRef.current) return;
+
+    const dx = e.clientX - pointerDownPosRef.current.x;
+    const dy = e.clientY - pointerDownPosRef.current.y;
+    const dist = Math.hypot(dx, dy);
+
+    // Cancel long press if moved past touch slop (8px)
+    if (dist > 8 && longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+
+    // Vertical drag for exposure adjustment
+    if (exposureInfo.isSupported) {
+      const isDirectSlider = isInteractingWithSliderRef.current;
+      const isVerticalMotion = Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx) * 0.8;
+      if (isDirectSlider || isDraggingRef.current || isVerticalMotion) {
+        if (!isDraggingRef.current) {
+          isDraggingRef.current = true;
+          setIsDraggingExposure(true);
+          if (!isIndicatorVisible || !focusState) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const startX = pointerDownPosRef.current.x - rect.left;
+            const startY = pointerDownPosRef.current.y - rect.top;
+            const normX = Math.max(0, Math.min(1, startX / rect.width));
+            const normY = Math.max(0, Math.min(1, startY / rect.height));
+            Bridge.focusOnPoint(normX, normY);
+            setFocusState({
+              x: startX,
+              y: startY,
+              normX,
+              normY,
+              isLocked: false,
+              triggerId: Date.now()
+            });
+          }
+          setIsIndicatorVisible(true);
+        }
+
+        // Dragging 160px vertically spans full EV index range
+        const totalDragDistancePx = 160;
+        const range = Math.max(1, exposureInfo.maxIndex - exposureInfo.minIndex);
+        const indexOffset = (-dy / totalDragDistancePx) * range;
+        const targetIndex = Math.min(
+          exposureInfo.maxIndex,
+          Math.max(exposureInfo.minIndex, Math.round(startExposureIndexRef.current + indexOffset))
+        );
+
+        if (targetIndex !== exposureIndex) {
+          Bridge.setExposureIndex(targetIndex);
+          setExposureIndex(targetIndex);
+        }
+      }
+    }
+  };
+
+  const handleViewfinderPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {}
+
+    const wasDirectSlider = isInteractingWithSliderRef.current;
+    const wasDragging = isDraggingRef.current;
+    isInteractingWithSliderRef.current = false;
+    isDraggingRef.current = false;
+    setIsDraggingExposure(false);
+
+    if (wasDirectSlider || wasDragging) {
+      pointerDownPosRef.current = null;
+      if (!focusState?.isLocked) {
+        startFadeTimer(3500);
+      }
+      return;
+    }
+
+    if (isLongPressHandledRef.current) {
+      isLongPressHandledRef.current = false;
+      pointerDownPosRef.current = null;
+      return;
+    }
+
+    // Single Tap detected
+    if (pointerDownPosRef.current) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const normX = Math.max(0, Math.min(1, x / rect.width));
+      const normY = Math.max(0, Math.min(1, y / rect.height));
+
+      if (focusState?.isLocked) {
+        // Unlock on tap if already locked
+        Bridge.unlockAeAf();
+      }
+      Bridge.focusOnPoint(normX, normY);
+      setFocusState({
+        x,
+        y,
+        normX,
+        normY,
+        isLocked: false,
+        triggerId: Date.now()
+      });
+      setIsIndicatorVisible(true);
+      startFadeTimer(3500);
+    }
+
+    pointerDownPosRef.current = null;
+  };
+
   const handleToggleTorch = () => {
     const nextState = !torchActive;
     setTorchActive(nextState);
@@ -109,6 +403,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const handleSwitchCamera = () => {
     const nextFacing = cameraFacing === 'back' ? 'front' : 'back';
     setCameraFacing(nextFacing);
+    setIsIndicatorVisible(false);
+    setFocusState(null);
     Bridge.switchCamera();
   };
 
@@ -256,28 +552,42 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
   return (
     <div className={`relative w-full h-full flex flex-col justify-between ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-studio'} text-text-main overflow-hidden select-none font-sans`}>
+      <style>{`
+        @keyframes reticlePop {
+          0% { transform: scale(1.3); opacity: 0.8; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+      `}</style>
       
-      {/* CAMERA VIEWFINDER AREA */}
-      <div className={`absolute inset-0 z-0 flex items-center justify-center ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-black'} overflow-hidden`}>
+      {/* CAMERA VIEWFINDER AREA WITH TOUCH-TO-FOCUS & EXPOSURE GESTURES */}
+      <div 
+        ref={viewfinderRef}
+        onPointerDown={handleViewfinderPointerDown}
+        onPointerMove={handleViewfinderPointerMove}
+        onPointerUp={handleViewfinderPointerUp}
+        onPointerCancel={handleViewfinderPointerUp}
+        style={{ touchAction: 'none' }}
+        className={`absolute inset-0 z-0 flex items-center justify-center ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-black'} overflow-hidden cursor-crosshair`}
+      >
         {hasWebcam ? (
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-cover transition-transform duration-200 ${
+            className={`w-full h-full object-cover transition-transform duration-200 pointer-events-none ${
               cameraFacing === 'front' ? 'scale-x-[-1]' : ''
             }`}
             style={{ transform: `scale(${zoomLevel})` }}
           />
         ) : Bridge.isAvailable() ? null : (
-          <div className="flex flex-col items-center justify-center p-6 text-center text-text-secondary">
+          <div className="flex flex-col items-center justify-center p-6 text-center text-text-secondary pointer-events-none">
             <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-3 shadow-inner">
               <Video className="w-8 h-8 text-primary" />
             </div>
             <p className="text-sm font-semibold text-text-main">Browser Preview Mode</p>
             <p className="text-xs text-text-secondary mt-1 max-w-[260px] leading-relaxed">
-              Connect a webcam or open in Dispatch Android app for live CameraX hardware stream.
+              Tap screen to focus, drag vertically for exposure slider, or hold to lock AE/AF.
             </p>
             {webcamError && (
               <span className="text-[10px] text-text-muted mt-2 font-mono">
@@ -304,10 +614,133 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           <div className="border-r border-b border-white/[0.06]" />
           <div />
         </div>
+
+        {/* Interactive Focus Reticle & Exposure Slider Overlay */}
+        {isIndicatorVisible && focusState && (
+          <div 
+            className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+            style={{ opacity: isIndicatorVisible ? 1 : 0 }}
+          >
+            {(() => {
+              const boxSize = 64;
+              const halfBox = boxSize / 2;
+              const cw = viewfinderBounds.width || (typeof window !== 'undefined' ? window.innerWidth : 360);
+              const ch = viewfinderBounds.height || (typeof window !== 'undefined' ? window.innerHeight : 640);
+              const clampedX = Math.max(halfBox + 16, Math.min(cw - halfBox - 56, focusState.x));
+              const clampedY = Math.max(halfBox + 40, Math.min(ch - halfBox - 80, focusState.y));
+              
+              const placeSliderOnLeft = (clampedX + halfBox + 48) > cw;
+              const trackX = placeSliderOnLeft ? (clampedX - halfBox - 22) : (clampedX + halfBox + 22);
+              const trackHeight = 90;
+              const trackTop = clampedY - trackHeight / 2;
+              const trackBottom = clampedY + trackHeight / 2;
+              
+              const rangeSpan = Math.max(1, exposureInfo.maxIndex - exposureInfo.minIndex);
+              const normExp = (exposureIndex - exposureInfo.minIndex) / rangeSpan;
+              const sunY = trackBottom - normExp * (trackBottom - trackTop);
+              
+              return (
+                <>
+                  {/* AE/AF Lock Icon Badge */}
+                  {focusState.isLocked && (
+                    <div 
+                      className="absolute transform -translate-x-1/2 flex items-center justify-center w-7 h-7 rounded-full bg-amber-400 text-black shadow-[0_2px_10px_rgba(0,0,0,0.7)] border border-amber-300 animate-in fade-in zoom-in-95 duration-150"
+                      style={{
+                        left: `${clampedX}px`,
+                        top: `${clampedY - halfBox - 28}px`,
+                      }}
+                      aria-label="AE/AF Locked"
+                    >
+                      <Lock size={14} strokeWidth={2.6} className="text-black" />
+                    </div>
+                  )}
+
+                  {/* Focus Reticle Square with 4 Corner Brackets */}
+                  <div 
+                    key={focusState.triggerId}
+                    className={`absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-150 ${
+                      isDraggingExposure ? 'scale-95' : 'scale-100'
+                    }`}
+                    style={{
+                      left: `${clampedX}px`,
+                      top: `${clampedY}px`,
+                      width: `${boxSize}px`,
+                      height: `${boxSize}px`,
+                    }}
+                  >
+                    <svg 
+                      className="w-full h-full drop-shadow-[0_0_2px_rgba(0,0,0,0.9)] animate-[reticlePop_140ms_ease-out]" 
+                      viewBox="0 0 64 64" 
+                      fill="none"
+                    >
+                      {/* Corner Brackets */}
+                      {/* Top-Left */}
+                      <path d="M 4 16 L 4 4 L 16 4" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      {/* Top-Right */}
+                      <path d="M 48 4 L 60 4 L 60 16" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      {/* Bottom-Right */}
+                      <path d="M 60 48 L 60 60 L 48 60" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      {/* Bottom-Left */}
+                      <path d="M 16 60 L 4 60 L 4 48" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      
+                      {/* Center Dot */}
+                      <circle cx="32" cy="32" r="1.5" fill="#FACC15" />
+                    </svg>
+                  </div>
+
+                  {/* Exposure Slider Track & Sun */}
+                  {exposureInfo.isSupported && (
+                    <div 
+                      className="absolute pointer-events-none"
+                      style={{
+                        left: `${trackX}px`,
+                        top: `${trackTop}px`,
+                        width: '2px',
+                        height: `${trackHeight}px`,
+                      }}
+                    >
+                      {/* Track line background shadow */}
+                      <div className="absolute inset-0 bg-black/60 rounded-full w-[3px] -left-[0.5px]" />
+                      {/* Track line white foreground */}
+                      <div 
+                        className={`absolute inset-0 rounded-full transition-opacity ${
+                          isDraggingExposure ? 'bg-white opacity-95 w-[2px]' : 'bg-white/70 opacity-70 w-[1.5px]'
+                        }`} 
+                        />
+                      {/* Top and Bottom notch caps */}
+                      <div className="absolute top-0 -left-[3px] w-2 h-[1.5px] bg-white/80 rounded-full shadow" />
+                      <div className="absolute bottom-0 -left-[3px] w-2 h-[1.5px] bg-white/80 rounded-full shadow" />
+
+                      {/* Sun Icon */}
+                      <div 
+                        className={`absolute -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-transform duration-75 ${
+                          isDraggingExposure ? 'scale-125' : 'scale-100'
+                        }`}
+                        style={{
+                          left: '1px',
+                          top: `${sunY - trackTop}px`,
+                        }}
+                      >
+                        <div className="relative w-6 h-6 flex items-center justify-center">
+                          <Sun size={20} className="text-amber-400 drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] fill-amber-400/30" strokeWidth={2} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
       </div>
 
       {/* TOP CONTROLS BAR */}
-      <div className="relative z-10 flex items-center justify-between px-5 pt-4 pb-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent">
+      <div 
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerMove={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+        className="relative z-10 flex items-center justify-between px-5 pt-4 pb-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent"
+      >
         {/* Left: Quality & Recording Status & Audio VU */}
         <div className="flex items-center gap-2">
           {isRecording ? (

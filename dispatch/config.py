@@ -53,10 +53,19 @@ CLIPS_DIR = STORAGE_DIR / "clips"
 DATABASE_DIR = STORAGE_DIR / "database"
 QUARANTINE_DIR = STORAGE_DIR / "quarantine"
 YOUTUBE_INBOX_DIR = STORAGE_DIR / "youtube_inbox"
+FONTS_DIR = STORAGE_DIR / "fonts"
+BUNDLED_FONTS_DIR = ROOT_DIR / "storage" / "fonts"
 
 # Ensure directories exist
-for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR, QUARANTINE_DIR, YOUTUBE_INBOX_DIR]:
+for path in [INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR, DATABASE_DIR, QUARANTINE_DIR, YOUTUBE_INBOX_DIR, FONTS_DIR]:
     path.mkdir(parents=True, exist_ok=True)
+
+# Seed font manifest into test sandbox or fresh storage if present in project
+if FONTS_DIR != BUNDLED_FONTS_DIR and (BUNDLED_FONTS_DIR / "fonts_manifest.json").exists() and not (FONTS_DIR / "fonts_manifest.json").exists():
+    try:
+        shutil.copy2(BUNDLED_FONTS_DIR / "fonts_manifest.json", FONTS_DIR / "fonts_manifest.json")
+    except Exception:
+        pass
 
 # Database path
 DB_PATH = Path(os.getenv("DISPATCH_DB_PATH", str(DATABASE_DIR / "dispatch.db")))

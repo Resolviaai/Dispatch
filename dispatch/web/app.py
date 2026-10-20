@@ -13,10 +13,11 @@ import subprocess
 import sys
 import ipaddress
 import urllib.parse
+import email.utils
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, Response
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -28,11 +29,18 @@ from dispatch.config import (
     PROCESSING_DIR,
     INCOMING_DIR,
     STORAGE_DIR,
+    FONTS_DIR,
     MAX_CLIP_DURATION,
     MIN_CLIP_DURATION
 )
 from dispatch import db
-from dispatch.video_engine.renderer import render_clip
+from dispatch.video_engine import (
+    render_clip,
+    ensure_clip_thumbnail,
+    resolve_clip_source_path,
+    resolve_active_clip_video,
+    populate_clip_media_urls,
+)
 from dispatch.youtube_inbox.catcher import (
     YouTubeInboxCatcher,
     extract_youtube_video_id
@@ -271,6 +279,11 @@ class RejectRequest(BaseModel):
     reason: Optional[str] = "User rejected"
 
 
+class TrimClipRequest(BaseModel):
+    start_time: float
+    end_time: float
+
+
 class LayoutModeRequest(BaseModel):
     layout_mode: str
 
@@ -293,15 +306,84 @@ class ResolveReconciliationRequest(BaseModel):
 
 
 @app.api_route("/clips/{filename}", methods=["GET", "HEAD"])
-async def get_clip_file(filename: str):
-    """Stream clip video or image thumbnail directly from storage with path traversal protection."""
+async def get_clip_file(filename: str, request: Request):
+    """Stream clip video or image thumbnail directly from storage with path traversal protection,
+    freshness validation, and HTTP cache invalidation (RFC 9111 ETag & 304 Not Modified).
+    """
     target_path = (CLIPS_DIR / filename).resolve()
     if not target_path.is_relative_to(CLIPS_DIR.resolve()):
         raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+
+    # If an image thumbnail is requested, ensure freshness on disk against active video
+    is_image = filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+    if is_image:
+        stem = Path(filename).stem
+        cand_ids = [stem]
+        if stem.startswith("thumb_"):
+            cand_ids.append(stem[6:])
+        elif stem.startswith("thumbnail_"):
+            cand_ids.append(stem[10:])
+
+        for cid in cand_ids:
+            try:
+                fresh_p = ensure_clip_thumbnail(cid)
+                if fresh_p and fresh_p.exists():
+                    target_path = fresh_p
+                    break
+            except Exception as e:
+                logger.debug("Failed ensuring thumbnail for %s in get_clip_file: %s", cid, e)
+
     if not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+
+    st = target_path.stat()
+    mtime = int(st.st_mtime)
+    size = st.st_size
+    etag = f'"{mtime}-{size}"'
+    last_modified = email.utils.formatdate(mtime, usegmt=True)
+
+    is_versioned = bool(request.query_params.get("v"))
+    if is_versioned:
+        cache_control = "public, max-age=86400, stale-while-revalidate=60"
+    else:
+        cache_control = "no-cache, must-revalidate"
+
+    # Handle conditional GET for non-range requests
+    if not request.headers.get("range") and request.method in ("GET", "HEAD"):
+        if_none_match = request.headers.get("if-none-match")
+        if_modified_since = request.headers.get("if-modified-since")
+        is_not_modified = False
+
+        if if_none_match:
+            clean_inm = if_none_match.strip()
+            if clean_inm in (etag, f"W/{etag}", "*"):
+                is_not_modified = True
+        elif if_modified_since:
+            try:
+                parsed_time = email.utils.parsedate_to_datetime(if_modified_since)
+                if parsed_time and parsed_time.timestamp() >= mtime:
+                    is_not_modified = True
+            except Exception:
+                pass
+
+        if is_not_modified:
+            return Response(
+                status_code=304,
+                headers={
+                    "ETag": etag,
+                    "Last-Modified": last_modified,
+                    "Cache-Control": cache_control,
+                }
+            )
+
     media_type = "video/mp4" if filename.endswith(".mp4") else "image/jpeg"
-    return FileResponse(target_path, media_type=media_type)
+    headers = {
+        "ETag": etag,
+        "Last-Modified": last_modified,
+        "Cache-Control": cache_control,
+        "Accept-Ranges": "bytes",
+    }
+    return FileResponse(target_path, media_type=media_type, headers=headers)
 
 
 @app.api_route("/download/dispatch.apk", methods=["GET", "HEAD"])
@@ -550,11 +632,7 @@ async def list_clips():
     """List clips grouped by status with source media URLs and stale render flags."""
     ready_clips = db.get_clips_for_review()
     for c in ready_clips:
-        if c.get("video_path"):
-            c["video_url"] = f"/clips/{Path(c['video_path']).name}"
-        if c.get("thumbnail_path"):
-            c["thumbnail_url"] = f"/clips/{Path(c['thumbnail_path']).name}"
-        c["source_video_url"] = f"/api/clips/{c['id']}/source"
+        populate_clip_media_urls(c)
         ctx = get_clip_framing_context(c)
         c["source_orientation"] = ctx["source_orientation"]
         c["source_aspect_ratio"] = ctx["source_aspect_ratio"]
@@ -565,16 +643,29 @@ async def list_clips():
             c.get("rendered_layout_mode") and c["layout_mode"] != c.get("rendered_layout_mode")
         )
 
+    # 1. Trigger 7-day storage cleanup for expired local videos (preserves thumbnails!)
+    try:
+        db.cleanup_expired_published_clips(retention_days=7)
+    except Exception as e:
+        logger.warning("Auto-cleanup of expired published clips failed: %s", e)
+
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM clips WHERE status IN ('approved', 'published') ORDER BY created_at DESC LIMIT 20")
+        cursor.execute("""
+            SELECT cl.*, 
+                   COALESCE(po.remote_url, CASE WHEN po.remote_id IS NOT NULL THEN 'https://youtu.be/' || po.remote_id END) as remote_url,
+                   po.remote_id
+            FROM clips cl 
+            LEFT JOIN publishing_outbox po ON po.clip_id = cl.id AND po.status = 'published'
+            WHERE cl.status IN ('approved', 'published') 
+            GROUP BY cl.id
+            ORDER BY COALESCE(cl.published_at, cl.approved_at, cl.created_at) DESC 
+            LIMIT 50
+        """)
         published_clips = [dict(r) for r in cursor.fetchall()]
         for c in published_clips:
-            if c.get("video_path"):
-                c["video_url"] = f"/clips/{Path(c['video_path']).name}"
-            if c.get("thumbnail_path"):
-                c["thumbnail_url"] = f"/clips/{Path(c['thumbnail_path']).name}"
-            c["source_video_url"] = f"/api/clips/{c['id']}/source"
+            populate_clip_media_urls(c)
+            c["published_at"] = str(c.get("published_at") or c.get("approved_at") or c.get("created_at") or "")
             ctx = get_clip_framing_context(c)
             c["source_orientation"] = ctx["source_orientation"]
             c["source_aspect_ratio"] = ctx["source_aspect_ratio"]
@@ -585,9 +676,14 @@ async def list_clips():
                 c.get("rendered_layout_mode") and c["layout_mode"] != c.get("rendered_layout_mode")
             )
 
+    queued_clips = db.get_queued_transcription_clips(limit=50)
+    queue_stats = db.get_transcription_queue_stats()
+
     return {
         "ready": ready_clips,
-        "recent_approved": published_clips
+        "recent_approved": published_clips,
+        "queued": queued_clips,
+        "queue_stats": queue_stats
     }
 
 
@@ -597,11 +693,7 @@ async def get_clip_detail(clip_id: str):
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if clip.get("video_path"):
-        clip["video_url"] = f"/clips/{Path(clip['video_path']).name}"
-    if clip.get("thumbnail_path"):
-        clip["thumbnail_url"] = f"/clips/{Path(clip['thumbnail_path']).name}"
-    clip["source_video_url"] = f"/api/clips/{clip['id']}/source"
+    populate_clip_media_urls(clip)
     ctx = get_clip_framing_context(clip)
     clip["source_orientation"] = ctx["source_orientation"]
     clip["source_aspect_ratio"] = ctx["source_aspect_ratio"]
@@ -615,15 +707,15 @@ async def get_clip_detail(clip_id: str):
 
 
 @app.api_route("/api/clips/{clip_id}/source", methods=["GET", "HEAD"])
-async def get_clip_source_media(clip_id: str):
+async def get_clip_source_media(clip_id: str, request: Request):
     """Safely resolve and stream the original raw source video chunk for this clip or chunk.
-    Supports HTTP Range requests (206 Partial Content) for smooth HTML5 video scrubbing.
+    Supports HTTP Range requests (206 Partial Content) for smooth HTML5 video scrubbing
+    and conditional RFC 9111 revalidation (ETag, 304 Not Modified).
     """
     clip = db.get_clip_by_id(clip_id)
     source_path = None
     headers = {
         "Accept-Ranges": "bytes",
-        "Cache-Control": "public, max-age=3600",
     }
     if clip:
         source_path = resolve_clip_source_path(clip)
@@ -638,6 +730,14 @@ async def get_clip_source_media(clip_id: str):
             if cp.exists():
                 source_path = cp
                 headers["X-Clip-Duration"] = str(chunk.get("duration", 0.0))
+        if not source_path:
+            clean_yt_id = clip_id.replace("yt_", "").strip()
+            yt_row = db.get_youtube_video(clean_yt_id)
+            if yt_row and yt_row.get("local_video_path"):
+                yp = Path(yt_row["local_video_path"])
+                if yp.exists():
+                    source_path = yp
+                    headers["X-Clip-Duration"] = str(yt_row.get("duration", 0.0))
 
     if not source_path or not source_path.exists():
         raise HTTPException(status_code=404, detail="Source media chunk not found on disk")
@@ -646,11 +746,61 @@ async def get_clip_source_media(clip_id: str):
     if not resolved_path.is_file():
         raise HTTPException(status_code=404, detail="Invalid source media file")
 
+    st = resolved_path.stat()
+    mtime = int(st.st_mtime)
+    size = st.st_size
+    etag = f'"{mtime}-{size}"'
+    last_modified = email.utils.formatdate(mtime, usegmt=True)
+
+    is_versioned = bool(request.query_params.get("v"))
+    if is_versioned:
+        cache_control = "public, max-age=86400, stale-while-revalidate=60"
+    else:
+        cache_control = "no-cache, must-revalidate"
+
+    headers["ETag"] = etag
+    headers["Last-Modified"] = last_modified
+    headers["Cache-Control"] = cache_control
+
+    # Handle conditional GET for non-range requests
+    if not request.headers.get("range") and request.method in ("GET", "HEAD"):
+        if_none_match = request.headers.get("if-none-match")
+        if_modified_since = request.headers.get("if-modified-since")
+        is_not_modified = False
+
+        if if_none_match:
+            clean_inm = if_none_match.strip()
+            if clean_inm in (etag, f"W/{etag}", "*"):
+                is_not_modified = True
+        elif if_modified_since:
+            try:
+                parsed_time = email.utils.parsedate_to_datetime(if_modified_since)
+                if parsed_time and parsed_time.timestamp() >= mtime:
+                    is_not_modified = True
+            except Exception:
+                pass
+
+        if is_not_modified:
+            return Response(
+                status_code=304,
+                headers={
+                    "ETag": etag,
+                    "Last-Modified": last_modified,
+                    "Cache-Control": cache_control,
+                }
+            )
+
     return FileResponse(
         path=str(resolved_path),
         media_type="video/mp4",
         headers=headers
     )
+
+
+@app.api_route("/api/recordings/{segment_id}/source", methods=["GET", "HEAD"])
+async def get_recording_source_media(segment_id: str, request: Request):
+    """Safely stream the original raw source video chunk for a session segment."""
+    return await get_clip_source_media(segment_id, request)
 
 
 def is_matching_layout(a: Optional[str], b: Optional[str]) -> bool:
@@ -788,6 +938,30 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
         "rendered_layout_mode": target_layout,
         "video_url": f"/clips/{out_file.name}",
         "is_render_stale": False
+    }
+
+
+@app.post("/api/clips/{clip_id}/trim")
+async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Request):
+    """Update clip active trim boundaries (CapCut-style trimming with safety handles)."""
+    verify_dashboard_auth(request)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    success = db.update_clip_trim(clip_id, payload.start_time, payload.end_time)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid trim boundaries (end must be > start)")
+
+    updated = db.get_clip_by_id(clip_id)
+    return {
+        "status": "success",
+        "clip_id": clip_id,
+        "start_time": updated["start_time"],
+        "end_time": updated["end_time"],
+        "duration": updated["duration"],
+        "padded_start": updated.get("padded_start"),
+        "padded_end": updated.get("padded_end")
     }
 
 
@@ -1065,24 +1239,33 @@ async def auto_reconcile_job(job_id: str, request: Request):
 
 @app.get("/api/clips/{clip_id}/filmstrip")
 async def get_clip_filmstrip(clip_id: str):
-    """Return an array of thumbnail frames spanning the video duration for the timeline filmstrip."""
+    """Return an array of thumbnail frames spanning the video duration for the timeline filmstrip.
+    Guarantees freshness: automatically detects when underlying video has changed and regenerates frames.
+    """
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    # Check for existing pre-extracted frames
+    active_video = resolve_active_clip_video(clip)
+    video_mtime = int(active_video.stat().st_mtime) if (active_video and active_video.exists()) else 0
+
+    # Check for existing pre-extracted frames and validate freshness against active video
     existing_frames = []
+    is_filmstrip_stale = False
     for i in range(12):
         frame_name = f"{clip_id}_frame_{i}.jpg"
-        if (CLIPS_DIR / frame_name).exists():
-            existing_frames.append(f"/clips/{frame_name}")
+        frame_path = CLIPS_DIR / frame_name
+        if frame_path.exists():
+            if video_mtime > 0 and frame_path.stat().st_mtime < video_mtime:
+                is_filmstrip_stale = True
+                break
+            existing_frames.append(f"/clips/{frame_name}?v={int(frame_path.stat().st_mtime)}")
 
-    if len(existing_frames) >= 4:
+    if len(existing_frames) >= 4 and not is_filmstrip_stale:
         return {"frames": existing_frames}
 
     # Extract dynamically if video exists on disk
-    vpath = clip.get("video_path")
-    if vpath and Path(vpath).exists():
+    if active_video and active_video.exists():
         def _extract_frames() -> List[str]:
             count = 8
             dur = max(1.0, float(clip.get("duration") or 10.0))
@@ -1093,24 +1276,29 @@ async def get_clip_filmstrip(clip_id: str):
                 out_path = CLIPS_DIR / frame_name
                 try:
                     subprocess.run([
-                        "ffmpeg", "-y", "-ss", str(t), "-i", str(vpath),
+                        "ffmpeg", "-y", "-ss", str(round(t, 3)), "-i", str(active_video),
                         "-frames:v", "1", "-q:v", "3", "-vf", "scale=160:-1",
                         str(out_path)
-                    ], capture_output=True, timeout=5)
+                    ], capture_output=True, timeout=10)
                     if out_path.exists():
-                        dyn_frames.append(f"/clips/{frame_name}")
-                except Exception:
-                    pass
+                        try:
+                            if out_path.stat().st_mtime < video_mtime:
+                                os.utime(str(out_path), (video_mtime + 1.0, video_mtime + 1.0))
+                        except Exception:
+                            pass
+                        dyn_frames.append(f"/clips/{frame_name}?v={int(out_path.stat().st_mtime)}")
+                except Exception as e:
+                    logger.debug("Failed extracting filmstrip frame %d for %s: %s", i, clip_id, e)
             return dyn_frames
 
         frames = await asyncio.to_thread(_extract_frames)
         if frames:
             return {"frames": frames}
 
-    # Fallback to clip thumbnail if single frame
-    thumb = clip.get("thumbnail_path")
-    if thumb and (CLIPS_DIR / Path(thumb).name).exists():
-        return {"frames": [f"/clips/{Path(thumb).name}"]}
+    # Fallback to clip thumbnail
+    thumb = ensure_clip_thumbnail(clip)
+    if thumb and thumb.exists():
+        return {"frames": [f"/clips/{thumb.name}?v={int(thumb.stat().st_mtime)}"]}
 
     return {"frames": []}
 
@@ -1137,13 +1325,59 @@ async def get_clip_captions(clip_id: str):
     cached_json = db.get_clip_caption_data(clip_id)
     if cached_json:
         try:
-            return json.loads(cached_json)
+            cached_track = json.loads(cached_json)
+            # Verify if cached_track has authentic word-level timestamps (not phrase-level duplicate timings)
+            has_word_timings = False
+            for grp in cached_track.get("groups", []):
+                words = grp.get("words", [])
+                if len(words) >= 2:
+                    if words[0].get("start") != words[-1].get("start") or words[0].get("end") != words[-1].get("end"):
+                        has_word_timings = True
+                        break
+            if has_word_timings:
+                return cached_track
         except Exception:
             pass
 
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+
+    # If missing word-level precision, attempt Stage 2 precision alignment from local video
+    if clip.get("video_path"):
+        try:
+            from dispatch.transcription.gemini_engine import transcribe_stage2_precision_words
+            vp = Path(clip["video_path"])
+            if vp.exists() and vp.stat().st_size > 0:
+                res = transcribe_stage2_precision_words(vp)
+                words = res.get("words", [])
+                if words:
+                    clean_words = [{
+                        "word": w.get("word", ""),
+                        "start": round(w.get("start", 0.0), 3),
+                        "end": round(w.get("end", 0.0), 3),
+                        "is_exact": True
+                    } for w in words]
+                    clip_dur = float(clip.get("duration", 30.0))
+                    raw_segs = [{"id": 0, "start": 0.0, "end": clip_dur, "words": clean_words}]
+                    translit_segs = transliterate_segments_to_hinglish(raw_segs)
+                    track = group_words_into_captions(
+                        raw_segments=translit_segs,
+                        clip_start=0.0,
+                        clip_end=clip_dur,
+                        clip_id=clip_id,
+                        preset_id="yellow_pop"
+                    )
+                    track_dict = track.to_dict()
+                    db.save_clip_caption_data(clip_id, json.dumps(track_dict, ensure_ascii=False))
+                    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
+                    try:
+                        export_to_ass(track, ass_path)
+                    except Exception:
+                        pass
+                    return track_dict
+        except Exception as e:
+            logger.warning("Stage 2 word alignment during get_clip_captions for %s had error: %s", clip_id, e)
 
     chunk_id = clip.get("chunk_id")
     session_id = clip.get("session_id")
@@ -1385,7 +1619,14 @@ async def upload_web_recording(request: Request, file: UploadFile = File(...)):
 
 @app.get("/api/recordings")
 async def get_recordings():
-    """Return list of recordings/chunks formatted for the Sessions tab."""
+    """Return list of recordings/chunks formatted for the Sessions tab.
+    
+    Guarantees:
+    1. Zero duplication: Chunks are grouped by c.id so one chunk never produces multiple recording rows.
+    2. True Source Video: videoUrl ALWAYS resolves to original raw footage (/api/recordings/{chunk_id}/source).
+       Generated/captioned clips (video_path) are strictly excluded from recording previews.
+    3. Lightweight Clip Counts: Provides exact clip_count and approved_clip_count for UI badges.
+    """
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -1397,27 +1638,69 @@ async def get_recordings():
                 c.duration,
                 c.status as chunk_status,
                 c.created_at,
-                cl.id as clip_id,
-                cl.video_path,
-                s.status as session_status
+                s.status as session_status,
+                s.created_at as session_created_at,
+                COUNT(cl.id) as clip_count,
+                COUNT(CASE WHEN cl.status = 'approved' OR cl.status = 'published' THEN 1 END) as approved_clip_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(c.session_id, c.id) 
+                    ORDER BY c.created_at ASC
+                ) as seq_num,
+                y.video_id as youtube_video_id
             FROM chunks c
             LEFT JOIN sessions s ON c.session_id = s.id
             LEFT JOIN clips cl ON cl.chunk_id = c.id
+            LEFT JOIN youtube_inbox y ON (c.file_hash = 'yt_' || y.video_id OR y.local_video_path = c.filepath OR c.filename LIKE '%' || y.video_id || '%')
+            GROUP BY c.id
             ORDER BY c.created_at DESC
         """)
         rows = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT 
+                y.video_id,
+                y.session_id,
+                y.title,
+                y.local_video_path,
+                y.duration,
+                y.status as inbox_status,
+                y.discovered_at,
+                y.sequence_number
+            FROM youtube_inbox y
+            WHERE y.video_id NOT IN (
+                SELECT REPLACE(c.file_hash, 'yt_', '') FROM chunks c WHERE c.file_hash LIKE 'yt_%'
+            )
+            ORDER BY y.discovered_at DESC
+        """)
+        inbox_rows = cursor.fetchall()
 
     recordings = []
     for r in rows:
         chunk_id = r["chunk_id"]
         session_id = r["session_id"] or f"sess_{chunk_id}"
-        st = "UPLOADED_TO_YOUTUBE" if r["chunk_status"] in ("processed", "transcribed", "verified") else "QUEUED_FOR_UPLOAD"
+        yt_id = r["youtube_video_id"]
         
+        # Genuine granular status mapping (never fake success)
+        c_status = (r["chunk_status"] or "").lower()
+        if c_status in ("processed", "transcribed", "verified") or yt_id:
+            st = "UPLOADED_TO_YOUTUBE"
+        elif c_status == "transcribing":
+            st = "PROCESSING"
+        elif c_status == "incoming":
+            st = "QUEUED_FOR_UPLOAD"
+        elif c_status == "failed":
+            st = "FAILED_RETRY"
+        else:
+            st = "QUEUED_FOR_UPLOAD"
+
+        # Strictly raw source video preview — NEVER captioned clips!
         video_url = None
-        if r["clip_id"] and r["video_path"]:
-            video_url = f"/clips/{Path(r['video_path']).name}"
-        elif r["filepath"] and Path(r["filepath"]).exists():
-            video_url = f"/api/clips/{chunk_id}/source"
+        if r["filepath"] and Path(r["filepath"]).exists():
+            video_url = f"/api/recordings/{chunk_id}/source"
+        elif Path(r["filepath"] or "").name:
+            fallback_path = STORAGE_DIR / "incoming" / Path(r["filepath"]).name
+            if fallback_path.exists():
+                video_url = f"/api/recordings/{chunk_id}/source"
 
         file_size = 0
         try:
@@ -1439,16 +1722,67 @@ async def get_recordings():
         recordings.append({
             "segmentId": chunk_id,
             "sessionId": session_id,
-            "sequenceNumber": 1,
+            "sequenceNumber": int(r["seq_num"] or 1),
             "filename": r["filename"] or f"{chunk_id}.mp4",
             "filepath": r["filepath"] or "",
             "fileSizeBytes": file_size,
             "sha256Hash": "",
             "status": st,
+            "chunkStatus": r["chunk_status"],
+            "sessionStatus": r["session_status"],
             "createdAt": created_ts,
             "finalizedAt": created_ts,
             "durationSeconds": float(r["duration"] or 0),
             "videoUrl": video_url,
+            "clipCount": int(r["clip_count"] or 0),
+            "approvedClipCount": int(r["approved_clip_count"] or 0),
+            "youtubeVideoId": yt_id,
+        })
+
+    for iy in inbox_rows:
+        vid = iy["video_id"]
+        sess_id = iy["session_id"] or f"sess_{vid}"
+        inbox_st = (iy["inbox_status"] or "").upper()
+        if inbox_st in ("DOWNLOADING", "VALIDATING"):
+            st = "PROCESSING"
+        elif inbox_st == "FAILED":
+            st = "FAILED_RETRY"
+        else:
+            st = "UPLOADED_TO_YOUTUBE"
+
+        video_url = None
+        file_size = 0
+        local_path = iy["local_video_path"]
+        if local_path and Path(local_path).exists():
+            video_url = f"/api/recordings/{vid}/source"
+            file_size = Path(local_path).stat().st_size
+
+        created_ts = int(time.time() * 1000)
+        try:
+            if iy["discovered_at"]:
+                dt = datetime.fromisoformat(str(iy["discovered_at"]).replace(" ", "T"))
+                created_ts = int(dt.timestamp() * 1000)
+        except Exception:
+            pass
+
+        recordings.append({
+            "segmentId": f"yt_{vid}",
+            "sessionId": sess_id,
+            "sequenceNumber": int(iy["sequence_number"] or 1),
+            "filename": f"{vid}.mp4",
+            "filepath": local_path or "",
+            "fileSizeBytes": file_size,
+            "sha256Hash": "",
+            "status": st,
+            "chunkStatus": inbox_st.lower(),
+            "sessionStatus": "recording",
+            "createdAt": created_ts,
+            "finalizedAt": created_ts,
+            "durationSeconds": float(iy["duration"] or 0),
+            "videoUrl": video_url,
+            "clipCount": 0,
+            "approvedClipCount": 0,
+            "youtubeVideoId": vid,
         })
 
     return recordings
@@ -1695,6 +2029,7 @@ async def create_youtube_pairing_code(request: Request, payload: PairingCodeIssu
     code, expires_in = issue_pairing_code()
     return {
         "code": code,
+        "expires_in": expires_in,
         "expires_in_seconds": expires_in,
         "message": "One-time code. Use it within five minutes on a trusted local network.",
     }
@@ -1742,17 +2077,16 @@ async def pair_youtube_credentials(
                 raise
             raise HTTPException(status_code=403, detail="Forbidden: Malformed Origin header")
 
-    if not is_trusted_localhost(client_host):
-        if payload.pairing_code:
-            if not _is_local_network_peer(client_host):
-                raise HTTPException(status_code=403, detail="One-time pairing codes are accepted only on a local or Tailscale network.")
-            try:
-                consume_pairing_code(payload.pairing_code.strip(), client_host)
-            except PairingCodeError as error:
-                raise HTTPException(status_code=error.status_code, detail=str(error))
-        else:
-            from dispatch.sync.receiver import verify_token
-            verify_token(authorization)
+    if payload.pairing_code:
+        if not _is_local_network_peer(client_host):
+            raise HTTPException(status_code=403, detail="One-time pairing codes are accepted only on a local or Tailscale network.")
+        try:
+            consume_pairing_code(payload.pairing_code.strip(), client_host)
+        except PairingCodeError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error))
+    elif not is_trusted_localhost(client_host):
+        from dispatch.sync.receiver import verify_token
+        verify_token(authorization)
     else:
         # Loopback caller must pass dashboard auth
         verify_dashboard_auth(request)
@@ -2119,5 +2453,139 @@ if STUDIO_DIR.exists():
         if index_file.exists():
             return FileResponse(index_file)
         raise HTTPException(status_code=404, detail="Studio interface not found")
+
+
+# Font Library & Custom Font Import APIs
+@app.get("/api/fonts")
+async def list_fonts():
+    """List all available fonts in the Dispatch creator library (bundled and custom)."""
+    manifest_path = FONTS_DIR / "fonts_manifest.json"
+    fonts = []
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                fonts = json.load(f)
+        except Exception as e:
+            logger.error("Failed to read fonts manifest: %s", e)
+    
+    # Also discover any custom fonts present in FONTS_DIR not yet recorded
+    existing_files = {f.get("filename") for f in fonts if isinstance(f, dict)}
+    for font_file in FONTS_DIR.glob("*.*"):
+        if font_file.suffix.lower() in (".ttf", ".otf") and font_file.name not in existing_files:
+            try:
+                from fontTools.ttLib import TTFont
+                tt = TTFont(str(font_file))
+                detected_family = font_file.stem
+                for record in tt["name"].names:
+                    if record.nameID in (1, 4, 16):
+                        try:
+                            s = record.toUnicode()
+                            if s and len(s) > 1:
+                                detected_family = s
+                                break
+                        except Exception:
+                            pass
+                weight = "400"
+                if "OS/2" in tt:
+                    weight = str(getattr(tt["OS/2"], "usWeightClass", 400))
+                fonts.append({
+                    "family": detected_family,
+                    "category": "Custom",
+                    "weights": [weight],
+                    "filename": font_file.name,
+                    "license": "Custom Imported",
+                    "is_valid": True,
+                    "is_custom": True,
+                    "url": f"/api/fonts/{font_file.name}"
+                })
+            except Exception as e:
+                logger.warning("Could not parse font %s: %s", font_file.name, e)
+    return {"fonts": fonts}
+
+
+@app.post("/api/fonts/import")
+async def import_custom_font(file: UploadFile = File(...)):
+    """Validate, register, and save a custom TTF or OTF font file."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing font file")
+    
+    ext = Path(file.filename).suffix.lower()
+    if ext not in (".ttf", ".otf"):
+        raise HTTPException(status_code=400, detail="Only .ttf and .otf font files are supported")
+    
+    content = await file.read()
+    if len(content) < 1024:
+        raise HTTPException(status_code=400, detail="Invalid or corrupt font file (file too small)")
+    
+    # Validate with fontTools
+    try:
+        from io import BytesIO
+        from fontTools.ttLib import TTFont
+        tt = TTFont(BytesIO(content))
+        detected_family = None
+        for record in tt["name"].names:
+            if record.nameID in (1, 4, 16):
+                try:
+                    s = record.toUnicode()
+                    if s and len(s) > 1 and not detected_family:
+                        detected_family = s
+                except Exception:
+                    pass
+        if not detected_family:
+            detected_family = Path(file.filename).stem
+
+        weight = "400"
+        if "OS/2" in tt:
+            weight = str(getattr(tt["OS/2"], "usWeightClass", 400))
+    except Exception as e:
+        logger.error("Failed to parse font %s: %s", file.filename, e)
+        raise HTTPException(status_code=400, detail=f"Corrupt or invalid font format: {str(e)}")
+
+    clean_name = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", file.filename)
+    dest_path = FONTS_DIR / clean_name
+    with open(dest_path, "wb") as f:
+        f.write(content)
+
+    font_entry = {
+        "family": detected_family,
+        "category": "Custom",
+        "weights": [weight],
+        "filename": clean_name,
+        "license": "Custom Imported",
+        "is_valid": True,
+        "is_custom": True,
+        "url": f"/api/fonts/{clean_name}"
+    }
+
+    manifest_path = FONTS_DIR / "fonts_manifest.json"
+    manifest = []
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception:
+            manifest = []
+    
+    manifest = [m for m in manifest if m.get("filename") != clean_name and m.get("family") != detected_family]
+    manifest.append(font_entry)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    logger.info("Successfully imported custom font: %s (%s)", detected_family, clean_name)
+    return {"success": True, "font": font_entry}
+
+
+@app.get("/api/fonts/{filename}")
+async def serve_font(filename: str):
+    """Serve font binary asset with proper MIME type."""
+    clean_filename = Path(filename).name
+    target_file = (FONTS_DIR / clean_filename).resolve()
+    if not target_file.exists() or not str(target_file).startswith(str(FONTS_DIR.resolve())):
+        raise HTTPException(status_code=404, detail="Font file not found")
+    
+    ext = target_file.suffix.lower()
+    media_type = "font/ttf" if ext == ".ttf" else ("font/otf" if ext == ".otf" else "application/octet-stream")
+    return FileResponse(target_file, media_type=media_type)
+
 
 

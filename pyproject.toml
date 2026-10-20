@@ -21,7 +21,14 @@ dependencies = [
     "yt-dlp>=2024.8.0",
     "youtube-transcript-api>=0.6.2",
     "pillow>=10.0.0",
+    "python-multipart>=0.0.12",
+    "fonttools>=4.40.0",
 ]
 
 [project.scripts]
 dispatch = "dispatch.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dispatch*"]
+

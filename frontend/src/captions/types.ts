@@ -13,6 +13,7 @@ export interface Word {
   start: number;
   end: number;
   confidence?: number;
+  is_exact?: boolean;
   style_override?: WordStyleOverride;
 }
 
@@ -20,19 +21,24 @@ export interface StyleConfig {
   font_family: string;
   font_size: number;
   font_weight: string;
-  text_transform: 'uppercase' | 'none' | 'lowercase';
+  font_style?: 'normal' | 'italic';
+  underline?: boolean;
+  text_transform: 'uppercase' | 'none' | 'lowercase' | 'title';
   letter_spacing: number;
   line_height: number;
   opacity?: number;
+  text_opacity?: number;
   
   // Colors
   primary_color: string;
   highlight_color: string;
+  highlight_enabled?: boolean; // Captions active/spoken-word highlight toggle
   
   // Stroke / Outline
   outline_enabled: boolean;
   outline_color: string;
   outline_width: number;
+  outline_opacity?: number;
   
   // Drop Shadow
   shadow_enabled: boolean;
@@ -40,18 +46,28 @@ export interface StyleConfig {
   shadow_offset_x: number;
   shadow_offset_y: number;
   shadow_blur: number;
+  shadow_opacity?: number;
+  shadow_distance?: number;
+  shadow_angle?: number;
   
   // Glow Aura
   glow_enabled?: boolean;
   glow_color?: string;
   glow_blur?: number;
+  glow_opacity?: number;
   
   // Background Box / Pill
   background_enabled: boolean;
+  background_mode?: 'none' | 'line' | 'block';
   background_color: string;
+  background_opacity?: number;
   background_padding_x: number;
   background_padding_y: number;
   background_corner_radius: number;
+  background_offset_x?: number;
+  background_offset_y?: number;
+  background_width?: number;
+  background_height?: number;
 }
 
 export interface LayoutConfig {
@@ -82,8 +98,12 @@ export interface AnimationConfig {
     duration_ms: number;
   };
   exit?: {
-    type: 'fade' | 'scale_down' | 'none';
+    type: 'fade' | 'scale_down' | 'slide_down' | 'none';
     duration_ms: number;
+  };
+  loop?: {
+    type: 'pulse' | 'wiggle' | 'none';
+    speed_ms: number;
   };
 }
 
@@ -118,6 +138,8 @@ export interface CaptionGroup {
   flip_h?: boolean;
   flip_v?: boolean;
   overlay_animation?: OverlayAnimationConfig;
+  has_word_timing?: boolean;
+  timing_mode?: 'word' | 'phrase';
 }
 
 export interface CaptionTrack {

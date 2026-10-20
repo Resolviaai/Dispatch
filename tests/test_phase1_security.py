@@ -116,10 +116,15 @@ class TestPhase1Security(unittest.TestCase):
         self.assertIn("text/html", resp.headers.get("content-type", ""))
 
         # Check that assets referenced by index.html actually return HTTP 200
-        css_resp = self.client.get("/studio/assets/index-D0mR6DDN.css")
-        self.assertEqual(css_resp.status_code, 200)
-        js_resp = self.client.get("/studio/assets/index-CWv134Sm.js")
-        self.assertEqual(js_resp.status_code, 200)
+        import re
+        css_matches = re.findall(r'href="(?:\./)?assets/([^"]+\.css)"', resp.text)
+        js_matches = re.findall(r'src="(?:\./)?assets/([^"]+\.js)"', resp.text)
+        if css_matches:
+            css_resp = self.client.get(f"/studio/assets/{css_matches[0]}")
+            self.assertEqual(css_resp.status_code, 200)
+        if js_matches:
+            js_resp = self.client.get(f"/studio/assets/{js_matches[0]}")
+            self.assertEqual(js_resp.status_code, 200)
 
 
 if __name__ == "__main__":

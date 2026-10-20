@@ -198,10 +198,11 @@ export const PreviewStage: React.FC<PreviewStageProps> = ({
       <div className="flex-1 min-h-0 w-full flex items-center justify-center p-3 relative overflow-hidden bg-[#0D0F12]">
         {clip && resolvedVideoUrl ? (
           <div className="relative h-full aspect-[9/16] max-w-full max-h-full rounded-xl bg-black border border-[#2E3239] shadow-2xl overflow-hidden flex items-center justify-center group">
-            {/* HTML5 Video Element */}
+            {/* HTML5 Video Element with progressive poster */}
             <video
               ref={videoRef}
               src={resolvedVideoUrl}
+              poster={clip.thumbnail_url ? (clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)) : undefined}
               className="w-full h-full object-contain pointer-events-auto"
               playsInline
               preload="metadata"

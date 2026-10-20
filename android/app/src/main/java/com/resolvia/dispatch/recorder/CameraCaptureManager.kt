@@ -6,9 +6,18 @@ import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.util.Range
 import android.util.Rational
+import android.hardware.camera2.CaptureRequest
+import android.util.Size
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraInfo
@@ -25,6 +34,7 @@ import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -37,6 +47,9 @@ class CameraCaptureManager(private val context: Context) {
     companion object {
         private const val TAG = "CameraCaptureManager"
     }
+
+    private val recordingExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var camera: Camera? = null
     private var videoCapture: VideoCapture<Recorder>? = null
@@ -123,6 +136,61 @@ class CameraCaptureManager(private val context: Context) {
         private set
 
     /**
+     * Builds a ResolutionSelector targeting crisp 16:9 aspect ratio and 1080p resolution across all devices.
+     */
+    private fun createResolutionSelector(): ResolutionSelector {
+        return ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(1920, 1080),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                )
+            )
+            .build()
+    }
+
+    /**
+     * Builds a Universal QualitySelector compatible with all Android sensors (Back & Front, Pixel, Samsung, Poco, etc.)
+     * Ordered UHD -> FHD -> HD -> SD so it automatically picks maximum hardware quality without fallback crashes.
+     */
+    private fun createQualitySelector(): QualitySelector {
+        return QualitySelector.fromOrderedList(
+            listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD),
+            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+        )
+    }
+
+    /**
+     * Applies Camera2 hardware extensions for continuous video autofocus, auto-exposure, and stabilization.
+     */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun applyCamera2Optimizations(previewBuilder: Preview.Builder, lensFacing: Int = currentLensFacing) {
+        try {
+            val extender = Camera2Interop.Extender(previewBuilder)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+
+            // Sharpness & Native Camera Noise Reduction algorithms
+            extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+            extender.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+            extender.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+            extender.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)
+
+            // Hardware autofocus & physical lens optical stabilization (no digital EIS cropping)
+            if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                extender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                extender.setCaptureRequestOption(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                extender.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Camera2Interop options not supported on this device: ${e.message}")
+        }
+    }
+
+    /**
      * Binds CameraX Preview and VideoCapture to the given LifecycleOwner and PreviewView.
      */
     fun initializeCamera(
@@ -139,18 +207,15 @@ class CameraCaptureManager(private val context: Context) {
             try {
                 val cameraProvider = cameraProviderFuture.get()
 
-                val preview = Preview.Builder().build().also {
+                val previewBuilder = Preview.Builder().setResolutionSelector(createResolutionSelector())
+                applyCamera2Optimizations(previewBuilder, currentLensFacing)
+                val preview = previewBuilder.build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-                // Strict 1080p FHD configuration optimized for POCO C65 hardware sensor
-                val qualitySelector = QualitySelector.from(
-                    Quality.FHD,
-                    FallbackStrategy.lowerQualityOrHigherThan(Quality.FHD)
-                )
-
                 val recorder = Recorder.Builder()
-                    .setQualitySelector(qualitySelector)
+                    .setExecutor(recordingExecutor)
+                    .setQualitySelector(createQualitySelector())
                     .build()
 
                 videoCapture = VideoCapture.withOutput(recorder).apply {
@@ -175,7 +240,7 @@ class CameraCaptureManager(private val context: Context) {
                     camera?.cameraControl?.setExposureCompensationIndex(currentExposureIndex)
                 }
 
-                Log.i(TAG, "CameraX 1080p FHD VideoCapture bound successfully (Lens: $currentLensFacing).")
+                Log.i(TAG, "CameraX High-Resolution 16:9 VideoCapture bound successfully (Lens: $currentLensFacing).")
                 onReady?.invoke()
 
             } catch (exc: Exception) {
@@ -198,13 +263,9 @@ class CameraCaptureManager(private val context: Context) {
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider = cameraProviderFuture.get()
-                val qualitySelector = QualitySelector.from(
-                    Quality.FHD,
-                    FallbackStrategy.lowerQualityOrHigherThan(Quality.FHD)
-                )
 
                 val recorder = Recorder.Builder()
-                    .setQualitySelector(qualitySelector)
+                    .setQualitySelector(createQualitySelector())
                     .build()
 
                 videoCapture = VideoCapture.withOutput(recorder).apply {
@@ -217,7 +278,9 @@ class CameraCaptureManager(private val context: Context) {
 
                 val useCases = mutableListOf<androidx.camera.core.UseCase>()
                 activePreviewView?.let { pv ->
-                    val preview = Preview.Builder().build().also {
+                    val pb = Preview.Builder().setResolutionSelector(createResolutionSelector())
+                    applyCamera2Optimizations(pb)
+                    val preview = pb.build().also {
                         it.setSurfaceProvider(pv.surfaceProvider)
                     }
                     useCases.add(preview)
@@ -261,13 +324,9 @@ class CameraCaptureManager(private val context: Context) {
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider = cameraProviderFuture.get()
-                val qualitySelector = QualitySelector.from(
-                    Quality.FHD,
-                    FallbackStrategy.lowerQualityOrHigherThan(Quality.FHD)
-                )
 
                 val recorder = Recorder.Builder()
-                    .setQualitySelector(qualitySelector)
+                    .setQualitySelector(createQualitySelector())
                     .build()
 
                 videoCapture = VideoCapture.withOutput(recorder).apply {
@@ -280,7 +339,9 @@ class CameraCaptureManager(private val context: Context) {
 
                 val serviceUseCases = mutableListOf<androidx.camera.core.UseCase>()
                 activePreviewView?.let { pv ->
-                    val preview = Preview.Builder().build().also {
+                    val pb = Preview.Builder().setResolutionSelector(createResolutionSelector())
+                    applyCamera2Optimizations(pb)
+                    val preview = pb.build().also {
                         it.setSurfaceProvider(pv.surfaceProvider)
                     }
                     serviceUseCases.add(preview)
@@ -533,6 +594,20 @@ class CameraCaptureManager(private val context: Context) {
 
     fun setZoomRatio(ratio: Float): Float = setZoom(ratio)
 
+    data class ZoomInfo(
+        val minZoomRatio: Float,
+        val maxZoomRatio: Float,
+        val currentZoomRatio: Float
+    )
+
+    fun getZoomInfo(): ZoomInfo {
+        val cam = camera ?: return ZoomInfo(1.0f, 5.0f, currentZoomRatio)
+        val zoomState = cam.cameraInfo.zoomState.value
+        val minZ = zoomState?.minZoomRatio ?: 1.0f
+        val maxZ = zoomState?.maxZoomRatio ?: 5.0f
+        return ZoomInfo(minZ, maxZ, currentZoomRatio)
+    }
+
     /**
      * Cycles zoom between 1.0x -> 2.0x -> 3.0x -> 1.0x.
      */
@@ -554,7 +629,7 @@ class CameraCaptureManager(private val context: Context) {
     )
 
     fun getExposureInfo(): ExposureCompensationInfo {
-        val cam = camera ?: return ExposureCompensationInfo(0, 0, 0, 0.5f, false)
+        val cam = camera ?: return ExposureCompensationInfo(-4, 4, currentExposureIndex, 0.5f, true)
         val state = cam.cameraInfo.exposureState
         val range = state.exposureCompensationRange
         val step = if (state.exposureCompensationStep.denominator > 0) {
@@ -562,12 +637,15 @@ class CameraCaptureManager(private val context: Context) {
         } else {
             0.5f
         }
+        val supported = (range.lower < range.upper) || state.isExposureCompensationSupported
+        val minIdx = if (range.lower < range.upper) range.lower else -4
+        val maxIdx = if (range.lower < range.upper) range.upper else 4
         return ExposureCompensationInfo(
-            minIndex = range.lower,
-            maxIndex = range.upper,
-            currentIndex = currentExposureIndex.coerceIn(range.lower, range.upper),
+            minIndex = minIdx,
+            maxIndex = maxIdx,
+            currentIndex = currentExposureIndex.coerceIn(minIdx, maxIdx),
             stepEv = step,
-            isSupported = state.isExposureCompensationSupported && (range.lower < range.upper)
+            isSupported = supported
         )
     }
 
@@ -575,9 +653,14 @@ class CameraCaptureManager(private val context: Context) {
      * Sets exposure compensation bias index cleanly clamped to hardware capabilities.
      */
     fun setExposureIndex(index: Int): Int {
-        val cam = camera ?: return currentExposureIndex
+        val cam = camera ?: run {
+            currentExposureIndex = index
+            return index
+        }
         val range = cam.cameraInfo.exposureState.exposureCompensationRange
-        currentExposureIndex = index.coerceIn(range.lower, range.upper)
+        val minIdx = if (range.lower < range.upper) range.lower else -4
+        val maxIdx = if (range.lower < range.upper) range.upper else 4
+        currentExposureIndex = index.coerceIn(minIdx, maxIdx)
         try {
             cam.cameraControl.setExposureCompensationIndex(currentExposureIndex)
         } catch (e: Exception) {
@@ -648,16 +731,20 @@ class CameraCaptureManager(private val context: Context) {
         }
 
         isRecording = true
-        activeRecording = pendingRecording.start(ContextCompat.getMainExecutor(context)) { recordEvent ->
+        activeRecording = pendingRecording.start(recordingExecutor) { recordEvent ->
             when (recordEvent) {
                 is VideoRecordEvent.Start -> {
                     isRecording = true
-                    RecordingForegroundService.instance?.updateNotification()
+                    mainHandler.post {
+                        RecordingForegroundService.instance?.updateNotification()
+                    }
                     Log.i(TAG, "Started recording 1080p FHD video segment: ${targetTmpFile.name} ($currentOrientationMode)")
                 }
                 is VideoRecordEvent.Finalize -> {
                     isRecording = false
-                    RecordingForegroundService.instance?.updateNotification()
+                    mainHandler.post {
+                        RecordingForegroundService.instance?.updateNotification()
+                    }
                     val durationMs = recordEvent.recordingStats.recordedDurationNanos / 1_000_000
                     if (!recordEvent.hasError()) {
                         if (durationMs < 1000L || targetTmpFile.length() == 0L) {

@@ -226,7 +226,7 @@ def _process_outbox_queue_internal() -> int:
             idempotency_marker = f"dispatch_idempotency_key:{idempotency_key}"
 
             if platform in ("youtube", "youtube_shorts"):
-                privacy = "public" if publish_mode == "public" else "private"
+                privacy = "public" if publish_mode == "public" else ("unlisted" if publish_mode == "unlisted" else "private")
                 # Include idempotency key marker in description
                 full_desc = f"{description}\n\n{hashtags}\n\n{idempotency_marker}".strip()
                 result = upload_youtube_short(

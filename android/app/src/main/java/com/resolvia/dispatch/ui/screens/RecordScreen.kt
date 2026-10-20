@@ -596,59 +596,68 @@ fun CameraFocusExposureIndicator(
             }
         }
 
-        // 3. AE/AF Lock Badge (Yellow pill above reticle)
+        // 3. AE/AF Lock Badge (Yellow circular pill with lock icon above reticle)
         if (focusState.isLocked) {
             Box(
                 modifier = Modifier
                     .offset {
                         IntOffset(
-                            x = (centerX - with(density) { 38.dp.toPx() }).roundToInt(),
+                            x = (centerX - with(density) { 14.dp.toPx() }).roundToInt(),
                             y = (centerY - halfBox * reticleScale - with(density) { 34.dp.toPx() }).roundToInt()
                         )
                     }
-                    .background(Color(0xFFFACC15), RoundedCornerShape(10.dp))
-                    .border(1.dp, Color(0x33000000), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.5.dp)
+                    .size(28.dp)
+                    .background(Color(0xFFFACC15), CircleShape)
+                    .border(1.dp, Color(0x33000000), CircleShape),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "AE/AF LOCK",
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp,
-                    color = Color.Black
-                )
-            }
-        }
-
-        // 4. EV Value Readout Badge (when exposure is adjusted from neutral)
-        if (exposureInfo.isSupported && exposureIndex != 0) {
-            val evVal = exposureIndex * exposureInfo.stepEv
-            val evText = String.format(Locale.US, "%+.1f", evVal)
-            val badgeX = if (placeSliderOnLeft) {
-                trackX - with(density) { 34.dp.toPx() }
-            } else {
-                trackX + with(density) { 14.dp.toPx() }
-            }
-
-            Box(
-                modifier = Modifier
-                    .offset {
-                        IntOffset(
-                            x = badgeX.roundToInt(),
-                            y = (sunY - with(density) { 9.dp.toPx() }).roundToInt()
+                Canvas(modifier = Modifier.size(14.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    // Shackle
+                    val shackleWidth = w * 0.54f
+                    val shackleHeight = h * 0.44f
+                    val shackleLeft = (w - shackleWidth) / 2f
+                    val shackleTop = h * 0.08f
+                    val strokeW = 1.8.dp.toPx()
+                    
+                    val shacklePath = Path().apply {
+                        moveTo(shackleLeft, shackleTop + shackleHeight)
+                        lineTo(shackleLeft, shackleTop + shackleWidth / 2f)
+                        arcTo(
+                            rect = androidx.compose.ui.geometry.Rect(
+                                shackleLeft,
+                                shackleTop,
+                                shackleLeft + shackleWidth,
+                                shackleTop + shackleWidth
+                            ),
+                            startAngleDegrees = 180f,
+                            sweepAngleDegrees = 180f,
+                            forceMoveTo = false
                         )
+                        lineTo(shackleLeft + shackleWidth, shackleTop + shackleHeight)
                     }
-                    .background(Color(0xCC000000), RoundedCornerShape(6.dp))
-                    .border(1.dp, Color(0x44FACC15), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 4.dp, vertical = 1.5.dp)
-            ) {
-                Text(
-                    text = "${evText} EV",
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 9.sp,
-                    color = Color(0xFFFACC15)
-                )
+                    drawPath(shacklePath, Color.Black, style = Stroke(width = strokeW, cap = StrokeCap.Round))
+                    
+                    // Body
+                    val bodyWidth = w * 0.78f
+                    val bodyHeight = h * 0.52f
+                    val bodyLeft = (w - bodyWidth) / 2f
+                    val bodyTop = h * 0.42f
+                    drawRoundRect(
+                        color = Color.Black,
+                        topLeft = Offset(bodyLeft, bodyTop),
+                        size = Size(bodyWidth, bodyHeight),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+                    
+                    // Keyhole dot
+                    drawCircle(
+                        color = Color(0xFFFACC15),
+                        radius = 1.2.dp.toPx(),
+                        center = Offset(w / 2f, bodyTop + bodyHeight * 0.45f)
+                    )
+                }
             }
         }
     }
@@ -779,6 +788,8 @@ fun ActiveCameraViewfinder(
         AndroidView(
             factory = { ctx ->
                 PreviewView(ctx).apply {
+                    implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                    scaleType = PreviewView.ScaleType.FIT_CENTER
                     previewViewRef = this
                     cameraCaptureManager.initializeCamera(lifecycleOwner, this, currentLens)
                 }
@@ -814,10 +825,28 @@ fun ActiveCameraViewfinder(
                         val startExposure = cameraCaptureManager.currentExposureIndex
                         val expInfo = cameraCaptureManager.getExposureInfo()
 
-                        // Check if tap was near the active focus reticle (within 140dp)
                         val activeState = focusState
-                        val isNearFocus = activeState != null && isFocusIndicatorVisible &&
-                            (downPos - activeState.offset).getDistance() <= 140.dp.toPx()
+                        val isIndicatorActive = activeState != null && isFocusIndicatorVisible
+
+                        // Check if touching directly on reticle or exposure slider track
+                        val isDirectSlider = if (isIndicatorActive && activeState != null) {
+                            val cx = activeState.offset.x
+                            val cy = activeState.offset.y
+                            val boxMarginPx = 45.dp.toPx()
+                            val trackOffsetPx = 54.dp.toPx()
+                            val trackMarginXPx = 36.dp.toPx()
+                            val trackMarginYPx = 60.dp.toPx()
+                            val nearBox = abs(downPos.x - cx) <= boxMarginPx && abs(downPos.y - cy) <= boxMarginPx
+                            val nearTrack = abs(abs(downPos.x - cx) - trackOffsetPx) <= trackMarginXPx && abs(downPos.y - cy) <= trackMarginYPx
+                            nearBox || nearTrack
+                        } else {
+                            false
+                        }
+
+                        if (isDirectSlider) {
+                            isDrag = true
+                            isDraggingExposure = true
+                        }
 
                         while (true) {
                             val event = awaitPointerEvent()
@@ -826,7 +855,7 @@ fun ActiveCameraViewfinder(
                             if (!change.pressed) {
                                 // Pointer lifted (UP)
                                 val duration = System.currentTimeMillis() - downTime
-                                if (!isDrag && !isLongPressHandled && duration < 400L) {
+                                if (!isDrag && !isDirectSlider && !isLongPressHandled && duration < 400L) {
                                     handleTapToFocus(downPos)
                                 }
                                 if (isDrag) {
@@ -839,10 +868,10 @@ fun ActiveCameraViewfinder(
                             val delta = currentPos - downPos
                             val dist = delta.getDistance()
 
-                            // Long press check (>= 450ms held within touch slop) -> Lock AE/AF
-                            if (!isDrag && !isLongPressHandled && dist < touchSlop) {
+                            // Long press check (>= 400ms held within touch slop) -> Lock AE/AF
+                            if (!isDirectSlider && !isDrag && !isLongPressHandled && dist < touchSlop) {
                                 val duration = System.currentTimeMillis() - downTime
-                                if (duration >= 450L) {
+                                if (duration >= 400L) {
                                     isLongPressHandled = true
                                     change.consume()
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -851,18 +880,23 @@ fun ActiveCameraViewfinder(
                             }
 
                             // Continuous vertical drag exposure adjustment
-                            if (!isLongPressHandled && expInfo.isSupported) {
-                                if (isDrag || (isNearFocus && abs(delta.y) > touchSlop && abs(delta.y) > abs(delta.x))) {
+                            // Can drag vertically if indicator is active, directly on slider, or moving vertically
+                            if (expInfo.isSupported) {
+                                val isVerticalMotion = abs(delta.y) > touchSlop && abs(delta.y) > abs(delta.x) * 0.8f
+                                if (isDirectSlider || isDrag || (isIndicatorActive && isVerticalMotion) || (!isIndicatorActive && isVerticalMotion)) {
                                     if (!isDrag) {
                                         isDrag = true
                                         isDraggingExposure = true
+                                        if (!isIndicatorActive) {
+                                            handleTapToFocus(downPos)
+                                        }
                                     }
                                     change.consume()
                                     val dy = change.positionChange().y
                                     accumulatedDeltaY += dy
 
-                                    // Dragging 180dp vertically spans full EV index range
-                                    val totalDragDistancePx = 180.dp.toPx()
+                                    // Dragging 160dp vertically spans full EV index range
+                                    val totalDragDistancePx = 160.dp.toPx()
                                     val range = (expInfo.maxIndex - expInfo.minIndex).toFloat().coerceAtLeast(1f)
                                     val indexOffset = (-accumulatedDeltaY / totalDragDistancePx) * range
                                     val targetIndex = (startExposure + indexOffset).roundToInt()

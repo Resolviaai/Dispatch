@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Film, 
   RotateCw,
@@ -11,9 +11,12 @@ import {
   Maximize2,
   X,
   Sparkles,
-  CheckCircle2
+  Clock,
+  HardDrive,
+  Camera,
+  Play
 } from 'lucide-react';
-import { Bridge, RecordingItem, apiUrl } from '../bridge';
+import { RecordingItem, apiUrl } from '../bridge';
 
 export const isUploadedSegment = (item: RecordingItem): boolean => {
   if (item.youtubeVideoId && item.youtubeVideoId.trim().length > 0) return true;
@@ -25,12 +28,25 @@ export const isUploadedSegment = (item: RecordingItem): boolean => {
   );
 };
 
+export interface SessionGroup {
+  sessionId: string;
+  createdAt: number;
+  totalDuration: number;
+  totalBytes: number;
+  segments: RecordingItem[];
+  clipCount: number;
+  approvedClipCount: number;
+  status: 'UPLOADED_TO_YOUTUBE' | 'PROCESSING' | 'QUEUED_FOR_UPLOAD' | 'FAILED_RETRY' | 'UPLOADING';
+  youtubeVideoId?: string;
+}
+
 interface RecordingsScreenProps {
   recordings: RecordingItem[];
   isYouTubeConnected: boolean;
   onNavigateToSettings: () => void;
   onRetryUpload: (segmentId: string) => void;
-  onNavigateToClips?: () => void;
+  onNavigateToClips?: (sessionId?: string) => void;
+  onNavigateToRecord?: () => void;
   pcHost?: string;
 }
 
@@ -40,16 +56,19 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   onNavigateToSettings,
   onRetryUpload,
   onNavigateToClips,
+  onNavigateToRecord,
   pcHost
 }) => {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'queued' | 'uploaded'>('all');
   const [modalVideo, setModalVideo] = useState<{ url: string; title: string } | null>(null);
+  const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(new Set());
+  const [expandedDetailIds, setExpandedDetailIds] = useState<Set<string>>(new Set());
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0\u00a0B';
     const mb = bytes / (1024 * 1024);
     if (mb < 1) return `${Math.round(bytes / 1024)}\u00a0KB`;
+    if (mb >= 1024) return `${(mb / 1024).toFixed(2)}\u00a0GB`;
     return `${mb.toFixed(1)}\u00a0MB`;
   };
 
@@ -60,6 +79,32 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return `${m}:${s}`;
   };
 
+  const formatTotalTime = (totalSec: number) => {
+    if (totalSec <= 0) return '0\u00a0s';
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = Math.floor(totalSec % 60);
+    if (h > 0) return `${h}\u00a0h ${m}\u00a0m`;
+    if (m > 0) return `${m}\u00a0m ${s}\u00a0s`;
+    return `${s}\u00a0s`;
+  };
+
+  const formatSessionDate = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (isToday) {
+      return `Today at ${timeStr}`;
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) {
+      return `Yesterday at ${timeStr}`;
+    }
+    return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${timeStr}`;
+  };
+
   const formatTimeAgo = (timestamp: number) => {
     const diff = Math.floor((Date.now() - timestamp) / 1000);
     if (diff < 60) return `${diff}\u00a0s ago`;
@@ -67,6 +112,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Fetch ready/approved clips to enrich session metadata with exact matching
   const [clips, setClips] = useState<{ id: string; session_id?: string; chunk_id?: string; status: string }[]>([]);
 
   useEffect(() => {
@@ -93,399 +139,565 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     };
   }, [pcHost]);
 
-  const getSessionClips = (item: RecordingItem) => {
-    return clips.filter(c => {
-      if (c.session_id && (c.session_id === item.sessionId || c.session_id === item.segmentId)) return true;
-      if (c.chunk_id && (c.chunk_id === item.segmentId || c.chunk_id === item.sessionId)) return true;
-      if (item.youtubeVideoId && c.session_id === item.youtubeVideoId) return true;
-      if (item.youtubeVideoId && c.chunk_id && c.chunk_id.includes(item.youtubeVideoId)) return true;
-      return false;
+  // Group recording segments by their authentic sessionId
+  const sessions: SessionGroup[] = useMemo(() => {
+    const map = new Map<string, RecordingItem[]>();
+    
+    for (const item of recordings) {
+      const sId = (item.sessionId && item.sessionId.trim().length > 0) ? item.sessionId : item.segmentId;
+      if (!map.has(sId)) {
+        map.set(sId, []);
+      }
+      map.get(sId)!.push(item);
+    }
+
+    const groups: SessionGroup[] = [];
+
+    for (const [sessionId, rawSegments] of map.entries()) {
+      const segments = [...rawSegments].sort((a, b) => {
+        if (a.sequenceNumber !== b.sequenceNumber) {
+          return (a.sequenceNumber || 1) - (b.sequenceNumber || 1);
+        }
+        return (a.createdAt || 0) - (b.createdAt || 0);
+      });
+
+      const totalDuration = segments.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
+      const totalBytes = segments.reduce((sum, s) => sum + (s.fileSizeBytes || 0), 0);
+      const earliestCreatedAt = segments.reduce((min, s) => Math.min(min, s.createdAt || Date.now()), Date.now());
+
+      const segmentIds = new Set(segments.map(s => s.segmentId));
+      const matchingClips = clips.filter(c => {
+        if (c.session_id && c.session_id === sessionId) return true;
+        if (c.chunk_id && segmentIds.has(c.chunk_id)) return true;
+        return false;
+      });
+
+      const dbClipCount = segments.reduce((sum, s) => sum + (s.clipCount || 0), 0);
+      const clipCount = Math.max(dbClipCount, matchingClips.length);
+
+      const dbApprovedCount = segments.reduce((sum, s) => sum + (s.approvedClipCount || 0), 0);
+      const approvedMatchingCount = matchingClips.filter(c => c.status === 'approved' || c.status === 'published').length;
+      const approvedClipCount = Math.max(dbApprovedCount, approvedMatchingCount);
+
+      let status: SessionGroup['status'] = 'QUEUED_FOR_UPLOAD';
+      const hasFailed = segments.some(s => s.status === 'FAILED_RETRY' || s.status === 'FAILED_RECORDING');
+      const hasUploading = segments.some(s => s.status === 'UPLOADING');
+      const allUploaded = segments.length > 0 && segments.every(s => isUploadedSegment(s));
+      const hasProcessing = segments.some(s => s.status === 'PROCESSING' || s.status === 'TRANSCRIBING');
+
+      if (hasFailed) {
+        status = 'FAILED_RETRY';
+      } else if (hasUploading) {
+        status = 'UPLOADING';
+      } else if (clipCount > 0 || allUploaded) {
+        status = 'UPLOADED_TO_YOUTUBE';
+      } else if (hasProcessing) {
+        status = 'PROCESSING';
+      } else {
+        status = 'QUEUED_FOR_UPLOAD';
+      }
+
+      const youtubeVideoId = segments.find(s => s.youtubeVideoId)?.youtubeVideoId || undefined;
+
+      groups.push({
+        sessionId,
+        createdAt: earliestCreatedAt,
+        totalDuration,
+        totalBytes,
+        segments,
+        clipCount,
+        approvedClipCount,
+        status,
+        youtubeVideoId,
+      });
+    }
+
+    groups.sort((a, b) => b.createdAt - a.createdAt);
+    return groups;
+  }, [recordings, clips]);
+
+  // Auto-expand newest session if none expanded yet
+  useEffect(() => {
+    if (sessions.length > 0 && expandedSessionIds.size === 0) {
+      setExpandedSessionIds(new Set([sessions[0].sessionId]));
+    }
+  }, [sessions, expandedSessionIds]);
+
+  const toggleExpandSession = (sessionId: string) => {
+    setExpandedSessionIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
     });
   };
 
-  const queuedRecordings = recordings.filter(item => !isUploadedSegment(item));
-  const uploadedRecordings = recordings.filter(item => isUploadedSegment(item));
+  const toggleExpandDetail = (segmentId: string) => {
+    setExpandedDetailIds(prev => {
+      const next = new Set(prev);
+      if (next.has(segmentId)) {
+        next.delete(segmentId);
+      } else {
+        next.add(segmentId);
+      }
+      return next;
+    });
+  };
 
-  const filteredRecordings = recordings.filter(item => {
-    const isUp = isUploadedSegment(item);
-    if (filter === 'uploaded') return isUp;
-    if (filter === 'queued') return !isUp;
-    return true;
-  });
-
-  const totalBytes = recordings.reduce((acc, r) => acc + (r.fileSizeBytes || 0), 0);
-
-  const renderStatusBadge = (item: RecordingItem) => {
-    const isUploaded = isUploadedSegment(item);
-    const sessionClips = getSessionClips(item);
-    const hasApprovedClip = sessionClips.some(c => c.status === 'approved' || c.status === 'published');
-
-    // 1. YouTube connection warning if device queued and no YouTube linked
-    if (Bridge.isAvailable() && !isYouTubeConnected && item.status === 'QUEUED_FOR_UPLOAD' && !item.youtubeVideoId) {
-      return (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onNavigateToSettings();
-          }}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-mono tabular-nums font-medium bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 active:scale-[0.98] transition-all duration-150"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-          Connect YouTube
-        </button>
-      );
+  const filteredSessions = useMemo(() => {
+    if (filter === 'uploaded') {
+      return sessions.filter(s => s.status === 'UPLOADED_TO_YOUTUBE');
     }
-
-    // 2. Active Lifecycle for Uploaded / Ingested recordings
-    if (isUploaded) {
-      if (hasApprovedClip) {
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-            <CheckCircle2 size={11} className="text-emerald-400" />
-            Clips Approved
-          </span>
-        );
-      }
-
-      if (sessionClips.length > 0) {
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-purple-500/15 border border-purple-500/30 text-purple-300">
-            <Sparkles size={11} className="text-purple-400" />
-            {sessionClips.length} {sessionClips.length === 1 ? 'Clip' : 'Clips'} Ready
-          </span>
-        );
-      }
-
-      if (item.status === 'VERIFIED_BY_LAPTOP') {
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-blue-500/15 border border-blue-500/30 text-blue-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-            Synced to Laptop
-          </span>
-        );
-      }
-
-      if (item.status === 'UPLOADED_AWAITING_PROCESSING') {
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-amber-500/15 border border-amber-500/30 text-amber-300">
-            <RotateCw size={10} className="text-amber-400 animate-spin" />
-            Processing on YouTube
-          </span>
-        );
-      }
-
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-          Uploaded
-        </span>
-      );
+    if (filter === 'queued') {
+      return sessions.filter(s => s.status !== 'UPLOADED_TO_YOUTUBE');
     }
+    return sessions;
+  }, [sessions, filter]);
 
-    // 3. Queued / In-flight states
-    switch (item.status) {
+  const queuedSessionsCount = sessions.filter(s => s.status !== 'UPLOADED_TO_YOUTUBE').length;
+  const uploadedSessionsCount = sessions.filter(s => s.status === 'UPLOADED_TO_YOUTUBE').length;
+  const totalStorageBytes = recordings.reduce((acc, r) => acc + (r.fileSizeBytes || 0), 0);
+  const totalFootageDuration = recordings.reduce((acc, r) => acc + (r.durationSeconds || 0), 0);
+
+  const renderSessionStatusBadge = (session: SessionGroup) => {
+    switch (session.status) {
+      case 'UPLOADED_TO_YOUTUBE':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34D399]" />
+            Uploaded
+          </span>
+        );
       case 'UPLOADING':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-blue-500/15 border border-blue-500/30 text-blue-300">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-blue-500/15 border border-blue-500/30 text-blue-300">
             <RotateCw size={10} className="text-blue-400 animate-spin" />
             Uploading…
           </span>
         );
-      case 'QUEUED_FOR_UPLOAD':
+      case 'PROCESSING':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-amber-500/15 border border-amber-500/30 text-amber-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-            Queued
-          </span>
-        );
-      case 'RECORDING':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-red-500/15 border border-red-500/30 text-red-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-            Recording…
-          </span>
-        );
-      case 'RECORDED':
-      case 'FINALIZED':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-medium bg-surface-200 border border-border text-text-muted">
-            Recorded
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300">
+            <RotateCw size={10} className="text-amber-400 animate-spin" />
+            Processing…
           </span>
         );
       case 'FAILED_RETRY':
-      case 'FAILED_RECORDING':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-red-500/15 border border-red-500/30 text-red-300">
+            <AlertCircle size={10} className="text-red-400" />
+            Needs Retry
+          </span>
+        );
+      case 'QUEUED_FOR_UPLOAD':
       default:
         return (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRetryUpload(item.segmentId);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-mono tabular-nums font-medium bg-red-500/15 border border-red-500/30 text-red-300 hover:bg-red-500/25 active:scale-[0.98] transition-all duration-150"
-          >
-            Retry Upload
-          </button>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-surface-200 border border-border text-text-muted">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            Queued
+          </span>
         );
     }
   };
 
   return (
-    <div className="w-full h-full flex flex-col bg-studio text-text-main overflow-hidden select-none">
+    <div className="w-full h-full flex flex-col bg-studio text-text-main overflow-hidden select-none font-sans">
       
-      {/* SCREEN HEADER - Layer 0 with bottom border */}
-      <div className="shrink-0 px-5 pt-4 pb-3 border-b border-border bg-studio">
+      {/* 1. SCREEN HEADER (Layer 0 Base) */}
+      <div className="shrink-0 px-4 pt-3.5 pb-2.5 border-b border-border bg-studio space-y-3">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-base font-semibold tracking-tight text-text-main flex items-center gap-2">
-              <Film size={18} className="text-primary" />
-              Sessions &amp; Uploads
+              <Film size={18} className="text-primary shrink-0" />
+              <span>Recorded Sessions</span>
             </h1>
             <p className="text-[11px] font-mono tabular-nums text-text-muted mt-0.5">
-              {recordings.length}&nbsp;{recordings.length === 1 ? 'segment' : 'segments'} · {formatBytes(totalBytes)}&nbsp;storage
+              Raw multi-segment footage filmed from mobile hardware
             </p>
           </div>
 
-          {/* YouTube Connection Indicator */}
+          {/* YouTube Connection Status Pill (Biomechanical 44px Hitbox) */}
           <button
+            type="button"
             onClick={onNavigateToSettings}
             className="flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-[11px] font-mono tabular-nums transition-all duration-150 active:scale-[0.98]"
+            title="Manage YouTube Cloud Integration"
           >
-            <span className={`w-2 h-2 rounded-full ${isYouTubeConnected ? 'bg-emerald-400 shadow-[0_0_8px_#34D399]' : 'bg-red-400'}`} />
-            <span className="text-text-muted">{isYouTubeConnected ? 'YouTube' : 'No YouTube'}</span>
+            <span className={`w-2 h-2 rounded-full shrink-0 ${isYouTubeConnected ? 'bg-emerald-400 shadow-[0_0_8px_#34D399]' : 'bg-red-400'}`} />
+            <span className="text-text-secondary font-medium">{isYouTubeConnected ? 'YouTube' : 'No YouTube'}</span>
           </button>
         </div>
 
-        {/* FILTER TABS - 44px Hitboxes */}
-        {recordings.length > 0 && (
-          <div className="flex items-center gap-2 mt-3 pt-2 border-t border-border/60">
+        {/* Operational Metrics Bar: 3 Clean Chips */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200/80 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+            <Film size={12} className="text-primary shrink-0" />
+            <span>{sessions.length}&nbsp;{sessions.length === 1 ? 'session' : 'sessions'}</span>
+          </div>
+
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200/80 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+            <Clock size={12} className="text-text-muted shrink-0" />
+            <span>{formatTotalTime(totalFootageDuration)}&nbsp;footage</span>
+          </div>
+
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200/80 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+            <HardDrive size={12} className="text-text-muted shrink-0" />
+            <span>{formatBytes(totalStorageBytes)}&nbsp;storage</span>
+          </div>
+        </div>
+
+        {/* Segmented Filter Control (Concentric & 44px Hitboxes) */}
+        {sessions.length > 0 && (
+          <div className="flex items-center p-1 rounded-xl bg-surface-200 border border-border">
             <button
+              type="button"
               onClick={() => setFilter('all')}
-              className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
-                filter === 'all' 
-                  ? 'bg-primary text-white font-semibold shadow-hero-glow' 
-                  : 'text-text-muted hover:text-text-main bg-surface-100 border border-border'
+              className={`flex-1 min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+                filter === 'all'
+                  ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
+                  : 'text-text-muted hover:text-text-main'
               }`}
             >
-              All ({recordings.length})
+              All ({sessions.length})
             </button>
             <button
+              type="button"
               onClick={() => setFilter('queued')}
-              className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
-                filter === 'queued' 
-                  ? 'bg-primary text-white font-semibold shadow-hero-glow' 
-                  : 'text-text-muted hover:text-text-main bg-surface-100 border border-border'
+              className={`flex-1 min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+                filter === 'queued'
+                  ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
+                  : 'text-text-muted hover:text-text-main'
               }`}
             >
-              Queued ({queuedRecordings.length})
+              Queued ({queuedSessionsCount})
             </button>
             <button
+              type="button"
               onClick={() => setFilter('uploaded')}
-              className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
-                filter === 'uploaded' 
-                  ? 'bg-primary text-white font-semibold shadow-hero-glow' 
-                  : 'text-text-muted hover:text-text-main bg-surface-100 border border-border'
+              className={`flex-1 min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+                filter === 'uploaded'
+                  ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
+                  : 'text-text-muted hover:text-text-main'
               }`}
             >
-              Uploaded ({uploadedRecordings.length})
+              Uploaded ({uploadedSessionsCount})
             </button>
           </div>
         )}
       </div>
 
-      {/* YOUTUBE WARNING BANNER IF DISCONNECTED */}
+      {/* 2. YOUTUBE WARNING BANNER IF DISCONNECTED */}
       {!isYouTubeConnected && recordings.length > 0 && (
         <div 
           onClick={onNavigateToSettings}
-          className="mx-4 mt-3 p-3.5 min-h-[44px] rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between cursor-pointer hover:bg-amber-500/15 transition-all duration-150 active:scale-[0.98]"
+          className="mx-4 mt-3 p-3 min-h-[44px] rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between cursor-pointer hover:bg-amber-500/15 transition-all duration-150 active:scale-[0.98]"
         >
-          <div className="flex items-center gap-2.5 text-amber-300">
+          <div className="flex items-center gap-2 text-amber-300">
             <AlertCircle size={15} className="shrink-0" />
-            <span className="text-[11px] font-mono">YouTube not connected. Segments queued on device.</span>
+            <span className="text-[11px] font-mono">YouTube not connected. Chunks safely stored on device.</span>
           </div>
-          <span className="text-xs font-mono text-amber-400 font-semibold underline shrink-0">Connect</span>
+          <span className="text-xs font-mono text-amber-400 font-semibold underline shrink-0 ml-2">Connect</span>
         </div>
       )}
 
-      {/* CONTENT SCROLL AREA - Single-direction vertical flow */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      {/* 3. SESSIONS SCROLL AREA - Single-direction vertical flow */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5">
         
-        {filteredRecordings.length === 0 ? (
-          /* HONEST EMPTY STATE */
-          <div className="h-full min-h-[260px] flex flex-col items-center justify-center text-center p-8 rounded-xl bg-surface-100 border border-border">
-            <div className="w-14 h-14 rounded-2xl bg-surface-200 border border-border flex items-center justify-center mb-4">
-              <Film className="w-7 h-7 text-text-muted" />
+        {filteredSessions.length === 0 ? (
+          /* HONEST EMPTY STATE (Clean & Minimalist) */
+          <div className="h-full min-h-[280px] flex flex-col items-center justify-center text-center p-8 rounded-2xl bg-surface-100 border border-border">
+            <div className="w-14 h-14 rounded-2xl bg-surface-200 border border-border flex items-center justify-center mb-4 shadow-inner">
+              <Film className="w-7 h-7 text-primary" />
             </div>
-            <h2 className="text-sm font-semibold text-text-main">No recordings yet</h2>
-            <p className="text-xs text-text-muted mt-1 max-w-[240px] leading-relaxed">
-              FHD segments recorded on the Record tab will appear here with live playback and upload progress.
+            <h2 className="text-sm font-semibold text-text-main">No Recorded Sessions Yet</h2>
+            <p className="text-xs text-text-muted mt-1.5 max-w-[280px] leading-relaxed">
+              Continuous footage recorded from the Record tab will appear here, grouped into organized filming sessions.
             </p>
-            <div className="mt-5 px-3 py-1.5 rounded-md bg-surface-200 border border-border text-[11px] font-mono tabular-nums text-text-muted">
-              Location: DCIM/Dispatch (1080p · 60&nbsp;s)
+            <div className="mt-4 px-3 py-1.5 rounded-lg bg-surface-200 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+              DCIM/Dispatch · 1080p FHD Capture
             </div>
+            {onNavigateToRecord && (
+              <button
+                type="button"
+                onClick={onNavigateToRecord}
+                className="mt-5 min-h-[44px] px-5 py-2 rounded-xl bg-primary hover:bg-blue-600 text-white text-xs font-semibold shadow-hero-glow flex items-center gap-2 active:scale-[0.98] transition-all"
+              >
+                <Camera size={15} />
+                <span>Start Filming</span>
+              </button>
+            )}
           </div>
         ) : (
-          /* RECORDING CARDS WITH EMBEDDED VIDEO VIEWPORT */
-          filteredRecordings.map((item, index) => {
-            const isExpanded = expandedId === item.segmentId;
-            const hasVideo = !!item.videoUrl;
-            const sessionClips = getSessionClips(item);
+          /* SESSION CARDS (Layer 1 Elevated Surfaces) */
+          filteredSessions.map((session) => {
+            const isExpanded = expandedSessionIds.has(session.sessionId);
 
             return (
               <div
-                key={item.segmentId}
-                className="rounded-xl bg-surface-100 border border-border overflow-hidden transition-all duration-150 hover:border-border-strong shadow-card"
+                key={session.sessionId}
+                className="rounded-2xl bg-surface-100 border border-border overflow-hidden transition-all duration-150 hover:border-border-strong shadow-card"
               >
-                {/* VIDEO VIEWPORT HERO */}
-                <div className="relative bg-black aspect-video flex items-center justify-center overflow-hidden group">
-                  {hasVideo ? (
-                    <video
-                      src={item.videoUrl!.startsWith('http') ? item.videoUrl : apiUrl(item.videoUrl!)}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      className="w-full h-full object-contain"
-                    />
-                  ) : item.youtubeVideoId ? (
-                    <iframe
-                      src={`https://www.youtube-nocookie.com/embed/${item.youtubeVideoId}`}
-                      className="w-full h-full border-0"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                      title={item.filename}
-                    />
-                  ) : (
-                    /* PLACEHOLDER PREVIEW IF HARDWARE FILE */
-                    <div className="w-full h-full flex flex-col items-center justify-center bg-surface-200 p-4 text-center">
-                      <div className="w-12 h-12 rounded-full bg-surface-300 border border-border flex items-center justify-center text-text-main mb-2">
-                        <Video size={20} className="text-primary" />
-                      </div>
-                      <span className="text-xs font-mono text-text-main font-medium">
-                        POCO C65 Hardware Capture
-                      </span>
-                      <span className="text-[10px] font-mono tabular-nums text-text-muted mt-0.5">
-                        FHD 1080p · Saved in DCIM/Dispatch
-                      </span>
+                {/* SESSION HEADER TRIGGER */}
+                <div 
+                  onClick={() => toggleExpandSession(session.sessionId)}
+                  className="p-3.5 cursor-pointer hover:bg-surface-200/40 transition-colors flex items-center justify-between gap-3 select-none"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-surface-200 border border-border flex items-center justify-center shrink-0">
+                      <Film size={18} className="text-primary" />
                     </div>
-                  )}
 
-                  {/* OVERLAY BADGES (Duration & Quality) */}
-                  <div className="absolute top-2.5 left-2.5 pointer-events-none flex items-center gap-1.5">
-                    <span className="px-2 py-0.5 rounded-md bg-black/75 backdrop-blur border border-border text-[10px] font-mono tabular-nums font-semibold text-white">
-                      {formatDuration(item.durationSeconds)}
-                    </span>
-                    <span className="px-1.5 py-0.5 rounded-md bg-black/75 backdrop-blur border border-border text-[9px] font-mono text-blue-300">
-                      1080P
-                    </span>
-                  </div>
+                    <div className="min-w-0">
+                      <h2 className="text-sm font-semibold text-text-main truncate">
+                        {formatSessionDate(session.createdAt)}
+                      </h2>
 
-                  {/* FULLSCREEN PREVIEW BUTTON */}
-                  {hasVideo && (
-                    <button
-                      onClick={() => setModalVideo({ url: item.videoUrl!.startsWith('http') ? item.videoUrl! : apiUrl(item.videoUrl!), title: item.filename })}
-                      className="absolute top-2.5 right-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg bg-black/70 hover:bg-black/90 border border-border text-white transition-all duration-150 active:scale-[0.98]"
-                      title="Fullscreen Preview"
-                    >
-                      <Maximize2 size={15} />
-                    </button>
-                  )}
-                </div>
-
-                {/* METADATA & ACTIONS PANEL */}
-                <div className="p-3.5 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono font-semibold text-text-main truncate">
-                          {item.filename}
+                      <div className="flex items-center gap-2 mt-0.5 text-[11px] font-mono tabular-nums text-text-muted flex-wrap">
+                        <span className="flex items-center gap-1">
+                          <Clock size={11} className="text-text-muted shrink-0" />
+                          <span>{formatDuration(session.totalDuration)}</span>
+                        </span>
+                        <span>·</span>
+                        <span>
+                          {session.segments.length}&nbsp;{session.segments.length === 1 ? 'segment' : 'segments'}
+                        </span>
+                        <span>·</span>
+                        <span className="flex items-center gap-1">
+                          <HardDrive size={11} className="text-text-muted shrink-0" />
+                          <span>{formatBytes(session.totalBytes)}</span>
                         </span>
                       </div>
-
-                      <div className="flex items-center gap-2 mt-1 text-[11px] font-mono tabular-nums text-text-muted">
-                        <span>{formatTimeAgo(item.createdAt)}</span>
-                        <span>·</span>
-                        <span className="text-text-main font-medium">{formatBytes(item.fileSizeBytes)}</span>
-                        <span>·</span>
-                        <span>Seq&nbsp;#{item.sequenceNumber || index + 1}</span>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 flex flex-col items-end gap-1">
-                      {renderStatusBadge(item)}
                     </div>
                   </div>
 
-                  {/* ACTION BAR - 44px Minimum Touch Targets */}
-                  <div className="pt-2 border-t border-border flex items-center justify-between text-xs font-mono">
-                    <div className="flex items-center gap-2">
-                      {hasVideo && (
-                        <a
-                          href={item.videoUrl!.startsWith('http') ? item.videoUrl : apiUrl(item.videoUrl!)}
-                          download={item.filename}
-                          className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-xs text-text-muted hover:text-text-main transition-all duration-150 active:scale-[0.98]"
-                        >
-                          <Download size={13} />
-                          <span>Save MP4</span>
-                        </a>
-                      )}
-
-                      {item.youtubeVideoId && (
-                        <a
-                          href={`https://youtu.be/${item.youtubeVideoId}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-xs text-red-300 transition-all duration-150 active:scale-[0.98]"
-                        >
-                          <ExternalLink size={13} />
-                          <span>YouTube</span>
-                        </a>
-                      )}
-
-                      {sessionClips.length > 0 && onNavigateToClips && (
-                        <button
-                          type="button"
-                          onClick={onNavigateToClips}
-                          className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-primary/15 hover:bg-primary/25 border border-primary/30 text-xs text-primary font-medium transition-all duration-150 active:scale-[0.98]"
-                        >
-                          <Sparkles size={13} />
-                          <span>{sessionClips.length} {sessionClips.length === 1 ? 'Clip' : 'Clips'}</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {/* EXPAND METADATA BUTTON */}
+                  <div className="shrink-0 flex items-center gap-2">
+                    {renderSessionStatusBadge(session)}
                     <button
-                      onClick={() => setExpandedId(isExpanded ? null : item.segmentId)}
-                      className="min-h-[44px] px-3 py-2 rounded-lg text-text-muted hover:text-text-main flex items-center gap-1.5 text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98]"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleExpandSession(session.sessionId);
+                      }}
+                      className="w-10 h-10 rounded-lg flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-200 transition-colors active:scale-[0.98]"
+                      aria-label={isExpanded ? 'Collapse Session' : 'Expand Session'}
                     >
-                      <span>{isExpanded ? 'Hide info' : 'Details'}</span>
-                      {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
                   </div>
-
-                  {/* EXPANDED TECHNICAL DETAILS DRAWER - Layer 2 Recessed */}
-                  {isExpanded && (
-                    <div className="mt-2 p-3 rounded-lg bg-surface-200 border border-border text-[11px] font-mono tabular-nums space-y-1.5 text-text-muted">
-                      <div className="flex justify-between">
-                        <span>Segment ID:</span>
-                        <span className="text-text-main font-medium">{item.segmentId}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Session ID:</span>
-                        <span className="text-text-main font-medium">{item.sessionId}</span>
-                      </div>
-                      <div className="flex justify-between truncate">
-                        <span>SHA256:</span>
-                        <span className="text-text-muted truncate max-w-[200px]">
-                          {item.sha256Hash || 'pending'}
-                        </span>
-                      </div>
-                      <div className="text-text-muted break-all pt-1 border-t border-border/40">
-                        Path: {item.filepath}
-                      </div>
-                    </div>
-                  )}
                 </div>
 
+                {/* GENERATED CLIPS CALLOUT (Single Hero Action) */}
+                {session.clipCount > 0 && (
+                  <div className="mx-3.5 mb-3 p-3 rounded-xl bg-primary/10 border border-primary/25 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-primary/20 border border-primary/30 flex items-center justify-center shrink-0">
+                        <Sparkles size={15} className="text-primary" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-xs font-semibold text-text-main block truncate">
+                          {session.clipCount} Generated {session.clipCount === 1 ? 'Clip' : 'Clips'} Ready
+                        </span>
+                        {session.approvedClipCount > 0 && (
+                          <span className="text-[10px] font-mono tabular-nums text-emerald-400 block">
+                            {session.approvedClipCount} published to YouTube
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {onNavigateToClips && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateToClips(session.sessionId)}
+                        className="min-h-[44px] px-3.5 py-2 rounded-lg bg-primary hover:bg-blue-600 text-white text-xs font-semibold shadow-hero-glow flex items-center gap-1.5 shrink-0 transition-all active:scale-[0.98]"
+                      >
+                        <span>Open in Clips</span>
+                        <ExternalLink size={13} />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* EXPANDABLE RAW FOOTAGE SECTION */}
+                {isExpanded && (
+                  <div className="px-3.5 pb-3.5 pt-1 border-t border-border/60 space-y-3 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted font-semibold">
+                        Raw Footage ({session.segments.length}&nbsp;{session.segments.length === 1 ? 'segment' : 'segments'})
+                      </span>
+                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-medium">
+                        Unedited Originals
+                      </span>
+                    </div>
+
+                    {/* SEGMENTS LIST */}
+                    <div className="space-y-3">
+                      {session.segments.map((segment, idx) => {
+                        const isDetailExpanded = expandedDetailIds.has(segment.segmentId);
+                        const hasVideo = !!segment.videoUrl;
+
+                        return (
+                          <div
+                            key={segment.segmentId}
+                            className="rounded-xl bg-surface-200 border border-border overflow-hidden p-3 space-y-2.5"
+                          >
+                            {/* RAW VIDEO PREVIEW (16:9 Cinema Aspect) */}
+                            <div className="relative bg-black rounded-lg aspect-video flex items-center justify-center overflow-hidden border border-border">
+                              {hasVideo ? (
+                                <video
+                                  src={segment.videoUrl!.startsWith('http') ? segment.videoUrl : apiUrl(segment.videoUrl!)}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                  className="w-full h-full object-contain"
+                                />
+                              ) : segment.youtubeVideoId ? (
+                                <iframe
+                                  src={`https://www.youtube-nocookie.com/embed/${segment.youtubeVideoId}`}
+                                  className="w-full h-full border-0"
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                  allowFullScreen
+                                  title={segment.filename}
+                                />
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center bg-surface-300 p-4 text-center">
+                                  <Video size={20} className="text-text-muted mb-1.5" />
+                                  <span className="text-xs font-mono text-text-main font-medium">
+                                    Android Hardware Capture
+                                  </span>
+                                  <span className="text-[10px] font-mono tabular-nums text-text-muted mt-0.5">
+                                    FHD 1080p · DCIM/Dispatch
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* OVERLAY BADGES */}
+                              <div className="absolute top-2 left-2 pointer-events-none flex items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[9px] font-mono text-emerald-400 font-semibold tracking-wide uppercase">
+                                  Raw #{segment.sequenceNumber || idx + 1}
+                                </span>
+                                <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[10px] font-mono tabular-nums font-semibold text-white">
+                                  {formatDuration(segment.durationSeconds)}
+                                </span>
+                              </div>
+
+                              {/* FULLSCREEN PREVIEW BUTTON */}
+                              {hasVideo && (
+                                <button
+                                  type="button"
+                                  onClick={() => setModalVideo({ 
+                                    url: segment.videoUrl!.startsWith('http') ? segment.videoUrl! : apiUrl(segment.videoUrl!), 
+                                    title: `Raw Source: ${segment.filename}` 
+                                  })}
+                                  className="absolute top-2 right-2 w-9 h-9 flex items-center justify-center rounded-lg bg-black/70 hover:bg-black/90 border border-border text-white transition-all active:scale-[0.98]"
+                                  title="Fullscreen Preview"
+                                >
+                                  <Maximize2 size={14} />
+                                </button>
+                              )}
+                            </div>
+
+                            {/* SEGMENT METADATA */}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="px-1.5 py-0.5 rounded bg-surface-300 border border-border text-[10px] font-mono text-text-muted">
+                                    #{segment.sequenceNumber || idx + 1}
+                                  </span>
+                                  <span className="text-xs font-mono font-medium text-text-main truncate">
+                                    {segment.filename}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-1 text-[10px] font-mono tabular-nums text-text-muted">
+                                  <span>{formatTimeAgo(segment.createdAt)}</span>
+                                  <span>·</span>
+                                  <span>{formatBytes(segment.fileSizeBytes)}</span>
+                                  <span>·</span>
+                                  <span className="text-text-secondary">{formatDuration(segment.durationSeconds)}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* SEGMENT ACTIONS BAR (Biomechanical 44px Hitboxes) */}
+                            <div className="pt-2 border-t border-border/50 flex items-center justify-between text-xs font-mono">
+                              <div className="flex items-center gap-2">
+                                {hasVideo && (
+                                  <a
+                                    href={segment.videoUrl!.startsWith('http') ? segment.videoUrl : apiUrl(segment.videoUrl!)}
+                                    download={segment.filename}
+                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-surface-300 hover:bg-surface-400 border border-border text-xs text-text-secondary hover:text-text-main transition-all active:scale-[0.98]"
+                                    title="Download Original Raw Video"
+                                  >
+                                    <Download size={13} />
+                                    <span>Download MP4</span>
+                                  </a>
+                                )}
+
+                                {segment.youtubeVideoId && (
+                                  <a
+                                    href={`https://youtu.be/${segment.youtubeVideoId}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-xs text-red-300 transition-all active:scale-[0.98]"
+                                  >
+                                    <ExternalLink size={13} />
+                                    <span>YouTube</span>
+                                  </a>
+                                )}
+
+                                {segment.status === 'FAILED_RETRY' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onRetryUpload(segment.segmentId)}
+                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-red-500/15 border border-red-500/30 text-xs text-red-300 hover:bg-red-500/25 active:scale-[0.98] transition-all"
+                                  >
+                                    <RotateCw size={12} />
+                                    <span>Retry Upload</span>
+                                  </button>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandDetail(segment.segmentId)}
+                                className="min-h-[44px] px-2.5 py-2 rounded-lg text-text-muted hover:text-text-main flex items-center gap-1 text-[11px] font-mono transition-all active:scale-[0.98]"
+                              >
+                                <span>{isDetailExpanded ? 'Hide' : 'Info'}</span>
+                                {isDetailExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                              </button>
+                            </div>
+
+                            {/* TECHNICAL DETAILS DRAWER */}
+                            {isDetailExpanded && (
+                              <div className="p-2.5 rounded-lg bg-surface-300 border border-border text-[10px] font-mono tabular-nums space-y-1 text-text-muted">
+                                <div className="flex justify-between">
+                                  <span>Segment ID:</span>
+                                  <span className="text-text-main font-semibold">{segment.segmentId}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Session ID:</span>
+                                  <span className="text-text-main font-semibold">{segment.sessionId}</span>
+                                </div>
+                                <div className="flex justify-between truncate">
+                                  <span>SHA256:</span>
+                                  <span className="text-text-secondary truncate max-w-[200px]">
+                                    {segment.sha256Hash || 'verified'}
+                                  </span>
+                                </div>
+                                <div className="text-text-muted break-all pt-1 border-t border-border/40">
+                                  Path: {segment.filepath}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })
@@ -493,7 +705,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
       </div>
 
-      {/* FULLSCREEN VIDEO MODAL */}
+      {/* 4. FULLSCREEN RAW SOURCE VIDEO MODAL */}
       {modalVideo && (
         <div 
           onClick={() => setModalVideo(null)}
@@ -508,6 +720,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 {modalVideo.title}
               </span>
               <button 
+                type="button"
                 onClick={() => setModalVideo(null)}
                 className="w-11 h-11 flex items-center justify-center rounded-lg text-text-muted hover:text-text-main hover:bg-surface-200 transition-colors duration-150 active:scale-[0.98]"
               >

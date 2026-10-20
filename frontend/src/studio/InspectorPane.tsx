@@ -18,7 +18,9 @@ import {
   Palette
 } from 'lucide-react';
 import { ClipItem, IntegrationsStatus, LayoutMode } from './types';
-import { CaptionTrack, StyleConfig } from '../captions/types';
+import { CaptionTrack, StyleConfig, LayoutConfig } from '../captions/types';
+import { StyleSection } from '../captions/applyToAll';
+import { ApplyToAllButton } from '../captions/ApplyToAllButton';
 
 interface InspectorPaneProps {
   clip: ClipItem | null;
@@ -27,6 +29,8 @@ interface InspectorPaneProps {
   onUpdateClipMetadata: (patch: Partial<ClipItem>) => void;
   onSaveCaptions: () => Promise<void>;
   onUpdateTrackStyle: (stylePatch: Partial<StyleConfig>) => void;
+  onUpdateTrackLayout?: (layoutPatch: Partial<LayoutConfig>) => void;
+  onApplyStyleToAll?: (section: StyleSection) => number;
   onApproveClip: () => Promise<void>;
   onRejectClip: (reason?: string) => Promise<void>;
   isApproving: boolean;
@@ -61,6 +65,8 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
   onUpdateClipMetadata,
   onSaveCaptions,
   onUpdateTrackStyle,
+  onUpdateTrackLayout,
+  onApplyStyleToAll,
   onApproveClip,
   onRejectClip,
   isApproving,
@@ -132,6 +138,12 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
     highlight_color: '#FFE600',
     outline_width: 2.5,
     outline_color: '#000000',
+  };
+
+  const currentLayout = track?.default_layout || {
+    position_x: 0.5,
+    position_y: 0.78,
+    scale: 1.0,
   };
 
   const isYouTubeConnected = Boolean(integrations?.youtube?.connected);
@@ -358,6 +370,13 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
                   </button>
                 ))}
               </div>
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="templates"
+                  sectionLabel="Preset"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
             </div>
 
             {/* Font Family Selector */}
@@ -389,35 +408,103 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
                 onChange={(e) => onUpdateTrackStyle({ font_size: parseInt(e.target.value) })}
                 className="w-full h-1 bg-[#23262C] accent-[#2563EB] cursor-pointer"
               />
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="font"
+                  sectionLabel="Font"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
             </div>
 
             {/* Color Pickers */}
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="space-y-1">
-                <label className="text-[11px] text-[#A3AAB5]">Text Color</label>
-                <div className="flex items-center gap-2 bg-[#23262C] p-1.5 rounded-lg border border-[#2E3239]">
-                  <input
-                    type="color"
-                    value={currentStyle.primary_color || '#FFFFFF'}
-                    onChange={(e) => onUpdateTrackStyle({ primary_color: e.target.value })}
-                    className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
-                  />
-                  <span className="text-[10px] font-mono text-[#F3F4F6]">{currentStyle.primary_color || '#FFFFFF'}</span>
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-[#A3AAB5]">Text Color</label>
+                  <div className="flex items-center gap-2 bg-[#23262C] p-1.5 rounded-lg border border-[#2E3239]">
+                    <input
+                      type="color"
+                      value={currentStyle.primary_color || '#FFFFFF'}
+                      onChange={(e) => onUpdateTrackStyle({ primary_color: e.target.value })}
+                      className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
+                    />
+                    <span className="text-[10px] font-mono text-[#F3F4F6]">{currentStyle.primary_color || '#FFFFFF'}</span>
+                  </div>
                 </div>
-              </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] text-[#A3AAB5]">Active Highlight</label>
-                <div className="flex items-center gap-2 bg-[#23262C] p-1.5 rounded-lg border border-[#2E3239]">
-                  <input
-                    type="color"
-                    value={currentStyle.highlight_color || '#FFE600'}
-                    onChange={(e) => onUpdateTrackStyle({ highlight_color: e.target.value })}
-                    className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
-                  />
-                  <span className="text-[10px] font-mono text-[#F3F4F6]">{currentStyle.highlight_color || '#FFE600'}</span>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-[#A3AAB5]">Active Highlight</label>
+                  <div className="flex items-center gap-2 bg-[#23262C] p-1.5 rounded-lg border border-[#2E3239]">
+                    <input
+                      type="color"
+                      value={currentStyle.highlight_color || '#FFE600'}
+                      onChange={(e) => onUpdateTrackStyle({ highlight_color: e.target.value })}
+                      className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
+                    />
+                    <span className="text-[10px] font-mono text-[#F3F4F6]">{currentStyle.highlight_color || '#FFE600'}</span>
+                  </div>
                 </div>
               </div>
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="color"
+                  sectionLabel="Color"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
+            </div>
+
+            {/* Position & Size */}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs">
+                <label className="text-[11px] font-semibold text-[#A3AAB5]">Position & Size</label>
+                <span className="text-[10px] text-[#747D8A]">Move on preview</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-[#A3AAB5]">Vertical (Y)</span>
+                    <span className="font-mono text-[10px] text-[#F3F4F6]">
+                      {Math.round((currentLayout.position_y ?? 0.78) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={15}
+                    max={90}
+                    step={1}
+                    value={Math.round((currentLayout.position_y ?? 0.78) * 100)}
+                    onChange={(e) => onUpdateTrackLayout?.({ position_y: Number((Number(e.target.value) / 100).toFixed(2)) })}
+                    className="w-full h-1 bg-[#23262C] accent-[#2563EB] cursor-pointer"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-[#A3AAB5]">Scale</span>
+                    <span className="font-mono text-[10px] text-[#F3F4F6]">
+                      {(currentLayout.scale ?? 1.0).toFixed(2)}x
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={60}
+                    max={200}
+                    step={5}
+                    value={Math.round((currentLayout.scale ?? 1.0) * 100)}
+                    onChange={(e) => onUpdateTrackLayout?.({ scale: Number((Number(e.target.value) / 100).toFixed(2)) })}
+                    className="w-full h-1 bg-[#23262C] accent-[#2563EB] cursor-pointer"
+                  />
+                </div>
+              </div>
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="layout"
+                  sectionLabel="Position & Size"
+                  label="Apply to All Captions"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
             </div>
 
             {/* Save Captions Button */}

@@ -155,7 +155,14 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
                     rem_words = cue_words[prefix_word_count:]
                 else:
                     rem_words = [w for w in cue_words if w.get("word") in remainder.split()]
-                start_time = rem_words[0]["start"] if rem_words else cue["start"]
+                if rem_words:
+                    start_time = rem_words[0]["start"]
+                else:
+                    # In rolling cues without inline word timestamps, the remainder was spoken
+                    # after the previous cue's end. Avoid setting start_time to cue["start"]
+                    # which introduces a multi-second constant timing offset.
+                    prev_end = deduped_cues[-1]["end"] if deduped_cues else cue["start"]
+                    start_time = min(cue["end"] - 0.1, max(cue["start"], prev_end))
                 deduped_cues.append({
                     "start": start_time,
                     "end": cue["end"],
@@ -173,67 +180,79 @@ def parse_vtt_content(vtt_content: str) -> List[Dict[str, Any]]:
         })
         last_text = text
 
-    # Merge small fragmented cues into coherent 3-8s thought chunks
+    # Merge cues: only merge if cues contain word timestamps.
+    # For phrase-only cues without inline word timestamps, keep authentic cue boundaries intact.
+    has_any_inline_words = any(bool(c.get("words")) for c in deduped_cues)
     merged_segments: List[Dict[str, Any]] = []
-    current_seg: Optional[Dict[str, Any]] = None
 
-    for cue in deduped_cues:
-        if current_seg is None:
-            current_seg = {
-                "start": cue["start"],
-                "end": cue["end"],
-                "text": cue["text"],
-                "words": list(cue.get("words", []))
-            }
-            continue
+    if has_any_inline_words:
+        current_seg: Optional[Dict[str, Any]] = None
+        for cue in deduped_cues:
+            if current_seg is None:
+                current_seg = {
+                    "start": cue["start"],
+                    "end": cue["end"],
+                    "text": cue["text"],
+                    "words": list(cue.get("words", []))
+                }
+                continue
 
-        gap = cue["start"] - current_seg["end"]
-        duration = current_seg["end"] - current_seg["start"]
+            gap = cue["start"] - current_seg["end"]
+            duration = current_seg["end"] - current_seg["start"]
 
-        # Merge if gap is small and cumulative duration is under 6 seconds
-        if gap < 1.5 and duration < 5.0 and not current_seg["text"].endswith((".", "?", "!")):
-            current_seg["end"] = cue["end"]
-            current_seg["text"] = f"{current_seg['text']} {cue['text']}".strip()
-            current_seg["words"].extend(cue.get("words", []))
-        else:
+            # Merge if gap is small and cumulative duration is under 5 seconds
+            if gap < 1.5 and duration < 5.0 and not current_seg["text"].endswith((".", "?", "!")):
+                current_seg["end"] = cue["end"]
+                current_seg["text"] = f"{current_seg['text']} {cue['text']}".strip()
+                current_seg["words"].extend(cue.get("words", []))
+            else:
+                merged_segments.append(current_seg)
+                current_seg = {
+                    "start": cue["start"],
+                    "end": cue["end"],
+                    "text": cue["text"],
+                    "words": list(cue.get("words", []))
+                }
+
+        if current_seg is not None:
             merged_segments.append(current_seg)
-            current_seg = {
+    else:
+        # Preserve authentic phrase boundaries directly from deduped cues
+        for cue in deduped_cues:
+            merged_segments.append({
                 "start": cue["start"],
                 "end": cue["end"],
                 "text": cue["text"],
-                "words": list(cue.get("words", []))
-            }
+                "words": []
+            })
 
-    if current_seg is not None:
-        merged_segments.append(current_seg)
-
-    # Build word boundaries for segments: keep exact words if fully populated, otherwise synthesize
+    # Build word boundaries for segments: keep exact words if authentic; do NOT fabricate linear words!
     for seg in merged_segments:
         text_words = seg["text"].split()
         if not text_words:
             seg["words"] = []
+            seg["has_word_timestamps"] = False
             continue
 
         existing_words = seg.get("words", [])
-        # If all text words have corresponding exact words, keep them
-        if len(existing_words) == len(text_words) and all(w.get("is_exact") for w in existing_words):
-            continue
-
-        # If not, synthesize word boundaries with is_exact=False
-        seg_duration = max(0.2, seg["end"] - seg["start"])
-        word_step = seg_duration / len(text_words)
-        word_objs = []
-        for i, w in enumerate(text_words):
-            w_start = round(seg["start"] + i * word_step, 3)
-            w_end = round(seg["start"] + (i + 1) * word_step, 3)
-            word_objs.append({
-                "word": w,
-                "start": w_start,
-                "end": w_end,
-                "probability": 1.0,
-                "is_exact": False
-            })
-        seg["words"] = word_objs
+        # If text words have corresponding exact words from inline VTT tags, preserve them
+        if existing_words and all(w.get("is_exact") for w in existing_words):
+            seg["has_word_timestamps"] = True
+            seg["words"] = existing_words
+        else:
+            # Phrase-level only: do NOT divide segment duration evenly across words.
+            # Preserve honest phrase boundaries with is_exact=False.
+            seg["has_word_timestamps"] = False
+            word_objs = []
+            for w in text_words:
+                word_objs.append({
+                    "word": w,
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "probability": 1.0,
+                    "is_exact": False
+                })
+            seg["words"] = word_objs
 
     logger.info("Parsed %d raw VTT cues into %d clean speech segments", len(raw_cues), len(merged_segments))
     return merged_segments

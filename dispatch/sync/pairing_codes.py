@@ -31,9 +31,9 @@ def _digest(code: str) -> str:
 
 
 def issue_pairing_code() -> tuple[str, int]:
-    """Replace any outstanding code with a new random 8-digit single-use code."""
+    """Replace any outstanding code with a new random 4-digit single-use code."""
     global _active_code_digest, _active_code_expires_at
-    code = f"{secrets.randbelow(100_000_000):08d}"
+    code = f"{secrets.randbelow(10_000):04d}"
     with _lock:
         _active_code_digest = _digest(code)
         _active_code_expires_at = time.monotonic() + PAIRING_CODE_TTL_SECONDS
@@ -56,7 +56,7 @@ def consume_pairing_code(code: str, client_ip: str) -> None:
         ]
         _failed_attempts[address] = attempts
 
-        valid_shape = len(code) == 8 and code.isdigit()
+        valid_shape = len(code) == 4 and code.isdigit()
         matches = valid_shape and secrets.compare_digest(_digest(code), _active_code_digest)
         not_expired = now < _active_code_expires_at
         if not (matches and not_expired and _active_code_digest):

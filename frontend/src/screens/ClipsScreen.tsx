@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Film,
   Play,
@@ -27,13 +27,22 @@ import {
   Pencil,
   RotateCw,
   Wifi,
-  WifiOff
+  WifiOff,
+  Lock,
+  Globe,
+  Link as LinkIcon,
+  CheckCheck,
+  ExternalLink,
+  Cloud,
 } from 'lucide-react';
-import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig } from '../captions/types';
+import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig, LayerType } from '../captions/types';
 import { CaptionTimeline } from '../captions/CaptionTimeline';
 import { CaptionStudio, ActivePanel } from '../captions/CaptionStudio';
-import { DispatchCaptionRenderer } from '../captions/DispatchCaptionRenderer';
+import { DispatchCaptionRenderer, applyColorOpacity, applyCaseTransform } from '../captions/DispatchCaptionRenderer';
 import { useCaptionHistory } from '../captions/useCaptionHistory';
+import { preserveWordTimingsOnEdit } from '../captions/timingPreservation';
+import { partitionWordsIntoVisualLines } from '../captions/linePartition';
+import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, getAuthHeaders } from '../bridge';
 
 export type LayoutMode = 'fit_black' | 'fit_blur' | 'native_916' | 'crop_916' | 'crop_follow' | 'native_169' | 'landscape';
@@ -66,6 +75,8 @@ export interface ClipItem {
   chunk_id?: string | null;
   start_time: number;
   end_time: number;
+  padded_start?: number;
+  padded_end?: number;
   duration: number;
   title: string;
   hook: string;
@@ -82,10 +93,22 @@ export interface ClipItem {
   source_video_url?: string;
   thumbnail_url?: string;
   created_at: string;
+  published_at?: string;
+  remote_url?: string;
+  remote_id?: string;
+  is_cloud_only?: boolean;
   source_orientation?: 'portrait' | 'landscape';
   source_aspect_ratio?: '9:16' | '16:9';
   available_layout_modes?: AvailableLayoutMode[];
   target_aspect?: '16:9' | '9:16';
+}
+
+export interface QueueStats {
+  ready_count: number;
+  queued_count: number;
+  daily_quota_used: number;
+  daily_quota_max: number;
+  quota_date: string;
 }
 
 interface ClipsScreenProps {
@@ -93,6 +116,8 @@ interface ClipsScreenProps {
   isMobileFrame?: boolean;
   onEditorOpenChange?: (open: boolean) => void;
   isPcOnline?: boolean;
+  sessionFilter?: string | null;
+  onClearSessionFilter?: () => void;
 }
 
 // Brand Social Media SVGs
@@ -155,6 +180,14 @@ function formatTimeCode(sec: number): string {
   const m = Math.floor(safe / 60);
   const s = Math.floor(safe % 60);
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+function getRetentionDaysLeft(publishedAt?: string): number {
+  if (!publishedAt) return 7;
+  const pubDate = new Date(publishedAt).getTime();
+  if (isNaN(pubDate)) return 7;
+  const diffDays = 7 - (Date.now() - pubDate) / (1000 * 60 * 60 * 24);
+  return Math.max(0, Math.ceil(diffDays));
 }
 
 function normalizeCaptionTrack(raw: any, clipId: string, duration: number): CaptionTrack {
@@ -247,6 +280,8 @@ function normalizeCaptionTrack(raw: any, clipId: string, duration: number): Capt
         ...default_style,
         ...(g.style || {}),
         primary_color: g.style?.primary_color || g.style?.color || default_style.primary_color,
+        highlight_color: g.style?.highlight_color || default_style.highlight_color,
+        highlight_enabled: g.style?.highlight_enabled !== false,
         outline_color: g.style?.outline_color || g.style?.stroke_color || default_style.outline_color,
         outline_width: g.style?.outline_width || g.style?.stroke_width || default_style.outline_width,
       },
@@ -254,6 +289,20 @@ function normalizeCaptionTrack(raw: any, clipId: string, duration: number): Capt
         ...default_animation,
         ...(g.animation || {}),
       },
+      type: (g.type as LayerType) || 'caption',
+      trackIndex: typeof g.trackIndex === 'number' ? g.trackIndex : 0,
+      volume: typeof g.volume === 'number' ? g.volume : 1.0,
+      is_muted: Boolean(g.is_muted),
+      audio_url: g.audio_url,
+      overlay_url: g.overlay_url,
+      overlay_type: g.overlay_type,
+      opacity: typeof g.opacity === 'number' ? g.opacity : 100,
+      label: g.label,
+      flip_h: Boolean(g.flip_h),
+      flip_v: Boolean(g.flip_v),
+      overlay_animation: g.overlay_animation,
+      has_word_timing: g.has_word_timing,
+      timing_mode: g.timing_mode,
     };
   });
 
@@ -280,9 +329,11 @@ function InteractiveCanvasItem({
   defaultAnimation,
   layoutMode,
   onSelectGroup,
+  onOpenTextEditor,
   onUpdateGroup,
   onDeleteGroup,
   onDuplicateGroup,
+  onApplyLayoutToAll,
 }: {
   group: CaptionGroup;
   isSelected: boolean;
@@ -293,14 +344,17 @@ function InteractiveCanvasItem({
   defaultAnimation: AnimationConfig;
   layoutMode: LayoutMode;
   onSelectGroup: (id: string | null) => void;
-  onUpdateGroup: (id: string, patch: Partial<CaptionGroup>) => void;
+  onOpenTextEditor?: (id: string) => void;
+  onUpdateGroup: (id: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
   onDeleteGroup?: (id: string) => void;
   onDuplicateGroup?: (id: string) => void;
+  onApplyLayoutToAll?: (id: string) => void;
 }) {
   const boxRef = useRef<HTMLDivElement | null>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const dragStart = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const pinchStart = useRef<{ distance: number; scale: number } | null>(null);
+  const pendingOverlayPatchRef = useRef<{ groupId: string; patch: Partial<CaptionGroup> } | null>(null);
   const transformState = useRef<{
     pointerId: number;
     centerX: number;
@@ -310,9 +364,6 @@ function InteractiveCanvasItem({
     startScale: number;
     startRotation: number;
   } | null>(null);
-
-  const [isEditingText, setIsEditingText] = useState(false);
-  const [editText, setEditText] = useState('');
 
   const isOverlay = group.type === 'overlay';
   const layout = group.layout || defaultLayout;
@@ -325,6 +376,35 @@ function InteractiveCanvasItem({
   const rotation = layout.rotation ?? 0;
   const flipH = group.flip_h ? -1 : 1;
   const flipV = group.flip_v ? -1 : 1;
+
+  // Memoized visual line partitioning to prevent unneeded DOM Canvas text measurements during playback
+  const visualLines = useMemo(() => {
+    if (isOverlay) return [];
+    const fontFam = style.font_family || 'Montserrat';
+    const fontSize = Math.max(10, Math.round((style.font_size || 44) * 0.44));
+    const fontWeight = style.font_weight || '700';
+    const letterSpacing = style.letter_spacing || 0;
+    const displayWords = group.words || [];
+
+    return partitionWordsIntoVisualLines(
+      displayWords,
+      fontFam,
+      fontSize,
+      fontWeight,
+      letterSpacing,
+      360 * (layout.max_width || 0.88),
+      style.text_transform
+    );
+  }, [
+    isOverlay,
+    group.words,
+    style.font_family,
+    style.font_size,
+    style.font_weight,
+    style.letter_spacing,
+    layout.max_width,
+    style.text_transform,
+  ]);
 
   // Base opacity
   let computedOpacity = isOverlay ? ((group.opacity ?? 100) / 100) : (style.opacity ?? 1);
@@ -363,7 +443,6 @@ function InteractiveCanvasItem({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
-    if (isEditingText) return;
     e.stopPropagation();
     onSelectGroup(group.id);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -388,9 +467,9 @@ function InteractiveCanvasItem({
       const pts = [...pointers.current.values()];
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       const nextScale = clamp(pinchStart.current.scale * (dist / pinchStart.current.distance), 0.3, 3.0);
-      onUpdateGroup(group.id, {
-        layout: { ...layout, scale: Number(nextScale.toFixed(2)) },
-      });
+      const patch = { layout: { ...layout, scale: Number(nextScale.toFixed(2)) } };
+      pendingOverlayPatchRef.current = { groupId: group.id, patch };
+      onUpdateGroup(group.id, patch, false);
       return;
     }
 
@@ -400,9 +479,9 @@ function InteractiveCanvasItem({
       const minY = layoutMode === 'landscape' ? 0.08 : 0.06;
       const maxY = layoutMode === 'landscape' ? 0.92 : 0.94;
       const nextY = clamp(dragStart.current.py + (e.clientY - dragStart.current.y) / rect.height, minY, maxY);
-      onUpdateGroup(group.id, {
-        layout: { ...layout, position_x: Number(nextX.toFixed(3)), position_y: Number(nextY.toFixed(3)) },
-      });
+      const patch = { layout: { ...layout, position_x: Number(nextX.toFixed(3)), position_y: Number(nextY.toFixed(3)) } };
+      pendingOverlayPatchRef.current = { groupId: group.id, patch };
+      onUpdateGroup(group.id, patch, false);
     }
   };
 
@@ -413,6 +492,10 @@ function InteractiveCanvasItem({
     } catch { }
 
     if (pointers.current.size === 0) {
+      if (pendingOverlayPatchRef.current) {
+        onUpdateGroup(pendingOverlayPatchRef.current.groupId, pendingOverlayPatchRef.current.patch, true);
+        pendingOverlayPatchRef.current = null;
+      }
       dragStart.current = null;
       pinchStart.current = null;
     }
@@ -454,40 +537,28 @@ function InteractiveCanvasItem({
     const angleDiff = currentAngle - startAngle;
     const nextRotation = Math.round((startRotation + angleDiff) % 360);
 
-    onUpdateGroup(group.id, {
+    const patch = {
       layout: {
         ...layout,
         scale: Number(nextScale.toFixed(2)),
         rotation: nextRotation,
       },
-    });
+    };
+    pendingOverlayPatchRef.current = { groupId: group.id, patch };
+    onUpdateGroup(group.id, patch, false);
   };
 
   const handleTransformPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (transformState.current?.pointerId === e.pointerId) {
+      if (pendingOverlayPatchRef.current) {
+        onUpdateGroup(pendingOverlayPatchRef.current.groupId, pendingOverlayPatchRef.current.patch, true);
+        pendingOverlayPatchRef.current = null;
+      }
       transformState.current = null;
       try {
         e.currentTarget.releasePointerCapture?.(e.pointerId);
       } catch { }
     }
-  };
-
-  const handleSaveInlineText = () => {
-    const trimmed = editText.trim();
-    if (trimmed) {
-      const wordsArr = trimmed.split(/\s+/).filter(Boolean);
-      const totalDuration = Math.max(0.2, group.end - group.start);
-      const wordDuration = totalDuration / Math.max(1, wordsArr.length);
-      const nextWords: Word[] = wordsArr.map((text, idx) => ({
-        id: group.words?.[idx]?.id || `w_${Date.now()}_${idx}`,
-        text,
-        start: Number((group.start + idx * wordDuration).toFixed(2)),
-        end: Number((group.start + (idx + 1) * wordDuration).toFixed(2)),
-        style_override: group.words?.[idx]?.style_override,
-      }));
-      onUpdateGroup(group.id, { words: nextWords });
-    }
-    setIsEditingText(false);
   };
 
   const justifyClass =
@@ -503,7 +574,13 @@ function InteractiveCanvasItem({
         left: `${posX * 100}%`,
         top: `${posY * 100}%`,
         transform: `translate(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px)) scale(${computedScale}) rotate(${rotation}deg) scaleX(${flipH}) scaleY(${flipV})`,
-        maxWidth: isOverlay ? '85%' : `${clamp(layout.max_width ?? 0.88, 0.35, 0.94) * 100}%`,
+        width: isOverlay ? 'auto' : 'max-content',
+        maxWidth: isOverlay
+          ? '85%'
+          : (containerRef.current?.clientWidth
+              ? `${Math.round(containerRef.current.clientWidth * clamp(layout.max_width ?? 0.88, 0.35, 0.94))}px`
+              : `${clamp(layout.max_width ?? 0.88, 0.35, 0.94) * 100}%`),
+        boxSizing: 'border-box',
         opacity: Math.max(0, Math.min(1, computedOpacity)),
         transformOrigin: 'center center',
       }}
@@ -518,13 +595,13 @@ function InteractiveCanvasItem({
       onDoubleClick={(e) => {
         if (!isOverlay) {
           e.stopPropagation();
-          setEditText(currentFullText);
-          setIsEditingText(true);
+          onSelectGroup(group.id);
+          onOpenTextEditor?.(group.id);
         }
       }}
     >
       {/* Bounding Box when Selected */}
-      {isSelected && !isEditingText && (
+      {isSelected && (
         <div className="absolute -inset-2.5 border-2 border-primary bg-primary/[0.04] shadow-[0_0_12px_rgba(37,99,235,0.25)] pointer-events-none rounded-xl">
           {/* Top-Left Corner: Delete */}
           <div className="absolute -top-3.5 -left-3.5 w-11 h-11 -m-2 flex items-center justify-center pointer-events-auto">
@@ -543,14 +620,14 @@ function InteractiveCanvasItem({
           </div>
 
           {/* Top-Right Corner: Edit text (text layers only) */}
-          {!isOverlay && (
+          {!isOverlay && onOpenTextEditor && (
             <div className="absolute -top-3.5 -right-3.5 w-11 h-11 -m-2 flex items-center justify-center pointer-events-auto">
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setEditText(currentFullText);
-                  setIsEditingText(true);
+                  onSelectGroup(group.id);
+                  onOpenTextEditor(group.id);
                 }}
                 className="w-7 h-7 rounded-full bg-[#2563EB] hover:bg-blue-500 text-white flex items-center justify-center shadow-lg active:scale-90 transition-transform cursor-pointer border border-white/40"
                 title="Edit text content"
@@ -592,6 +669,24 @@ function InteractiveCanvasItem({
               <RotateCw size={12} strokeWidth={2} />
             </button>
           </div>
+
+          {/* Quick Apply to All Captions Action Pill */}
+          {(!group.type || group.type === 'caption') && onApplyLayoutToAll && (
+            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 pointer-events-auto z-40">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onApplyLayoutToAll(group.id);
+                }}
+                className="h-6 px-2.5 rounded-full bg-[#1C1F24]/95 border border-[#2E3239] hover:border-primary text-text-secondary hover:text-white text-[10px] font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 transition-all whitespace-nowrap"
+                title="Apply this caption's position & size to all spoken captions"
+              >
+                <CheckCheck size={11} className="text-primary" />
+                <span>Apply to All Captions</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -617,90 +712,189 @@ function InteractiveCanvasItem({
         </div>
       ) : (
         /* TEXT CONTENT */
-        isEditingText ? (
-          <div
-            className="flex flex-col items-center gap-2 p-2.5 bg-black/85 rounded-xl border border-primary shadow-2xl pointer-events-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <textarea
-              autoFocus
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSaveInlineText();
-                } else if (e.key === 'Escape') {
-                  setIsEditingText(false);
-                }
-              }}
-              onBlur={handleSaveInlineText}
-              rows={2}
-              className="w-full min-w-[200px] max-w-[300px] bg-transparent text-white text-center font-bold text-[16px] outline-none resize-none border-b border-primary/50 pb-1 font-sans"
-              style={{
-                fontFamily: style.font_family || 'Montserrat',
-                color: style.primary_color || '#FFFF00',
-              }}
-              placeholder="Enter caption text…"
-            />
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleSaveInlineText}
-                className="min-h-[32px] px-3 rounded-lg bg-primary hover:bg-primary-hover text-white text-[11px] font-semibold flex items-center gap-1 active:scale-95 shadow-hero-glow"
-              >
-                <Check size={12} /> Done
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div
-            className={`flex flex-wrap items-center gap-x-2 gap-y-1 ${justifyClass}`}
-            style={{
-              background: style.background_enabled ? style.background_color : 'transparent',
-              padding: style.background_enabled
-                ? `${style.background_padding_y || 6}px ${style.background_padding_x || 12}px`
-                : undefined,
-              borderRadius: style.background_enabled ? `${style.background_corner_radius || 8}px` : undefined,
-              backdropFilter: style.background_enabled ? 'blur(8px)' : undefined,
-            }}
-          >
-            {(group.words || []).map((word, wIdx) => {
-              const isSpoken = currentTime >= word.start && currentTime <= word.end;
-              const wordText = word.text || (word as any).word || '';
-              const animType = animation?.active_word?.type || animation?.type;
-              const activeScale = animType === 'pop' || animType === 'bounce' ? (animation?.active_scale || 1.15) : 1.0;
-              const wordColor = isSpoken
-                ? word.style_override?.highlight_color || style.highlight_color || '#FFFFFF'
-                : word.style_override?.color || style.primary_color || '#FFFF00';
+        (() => {
+          // Animation evaluation (entrance, exit, loop)
+          let enterOpacity = 1.0;
+          let enterTransform = '';
+          const enterType = animation?.enter?.type || (animation as any)?.enter_type || 'none';
+          const enterDur = (animation?.enter?.duration_ms || (animation as any)?.enter_duration_ms || 200) / 1000;
+          const enterElapsed = currentTime - group.start;
+          if (enterType !== 'none' && enterElapsed >= 0 && enterElapsed < enterDur) {
+            const p = Math.max(0, Math.min(1, enterElapsed / enterDur));
+            if (enterType === 'fade') enterOpacity = p;
+            else if (enterType === 'pop') {
+              enterOpacity = Math.min(1, p * 2);
+              enterTransform = `scale(${0.5 + 0.5 * Math.sin(p * Math.PI / 2)})`;
+            } else if (enterType === 'slide_up') {
+              enterOpacity = p;
+              enterTransform = `translateY(${(1 - p) * 25}px)`;
+            }
+          }
 
-              return (
-                <span
-                  key={word.id || `w_${wIdx}`}
-                  className="inline-block whitespace-pre"
-                  style={{
-                    fontFamily: style.font_family || 'Montserrat',
-                    fontSize: `${Math.max(16, (style.font_size || 44) * 0.44)}px`,
-                    fontWeight: style.font_weight || '900',
-                    textTransform: style.text_transform || 'none',
-                    letterSpacing: `${style.letter_spacing || 0}px`,
-                    lineHeight: style.line_height || 1.25,
-                    color: wordColor,
-                    WebkitTextStroke: style.outline_enabled
-                      ? `${Math.max(1, (style.outline_width || 2) * 0.6)}px ${style.outline_color || '#000000'}`
-                      : undefined,
-                    paintOrder: 'stroke fill',
-                    transform: isSpoken ? `scale(${activeScale})` : 'scale(1)',
-                    transformOrigin: 'center bottom',
-                    transition: 'transform 80ms ease-out',
-                  }}
-                >
-                  {wordText}
-                </span>
-              );
-            })}
-          </div>
-        )
+          let exitOpacity = 1.0;
+          let exitTransform = '';
+          const exitType = animation?.exit?.type || (animation as any)?.exit_type || 'none';
+          const exitDur = (animation?.exit?.duration_ms || (animation as any)?.exit_duration_ms || 150) / 1000;
+          const exitRemaining = group.end - currentTime;
+          if (exitType !== 'none' && exitRemaining >= 0 && exitRemaining < exitDur) {
+            const p = Math.max(0, Math.min(1, exitRemaining / exitDur));
+            if (exitType === 'fade') exitOpacity = p;
+            else if (exitType === 'scale_down') {
+              exitOpacity = p;
+              exitTransform = `scale(${0.5 + 0.5 * p})`;
+            } else if (exitType === 'slide_down') {
+              exitOpacity = p;
+              exitTransform = `translateY(${(1 - p) * 25}px)`;
+            }
+          }
+
+          let loopTransform = '';
+          const loopType = (animation as any)?.loop?.type || (animation as any)?.loop_type || 'none';
+          if (loopType === 'pulse') {
+            const speed = ((animation as any)?.loop?.speed_ms || 1000) / 1000;
+            const loopTime = (currentTime - group.start) / speed;
+            loopTransform = `scale(${1.0 + 0.04 * Math.sin(loopTime * 2 * Math.PI)})`;
+          } else if (loopType === 'wiggle') {
+            const speed = ((animation as any)?.loop?.speed_ms || 1000) / 1000;
+            const loopTime = (currentTime - group.start) / speed;
+            loopTransform = `rotate(${2.0 * Math.sin(loopTime * 2 * Math.PI)}deg)`;
+          }
+
+          const containerOpacity = (style.opacity ?? 1.0) * Math.min(enterOpacity, exitOpacity);
+          const animTransform = [enterTransform, exitTransform, loopTransform].filter(Boolean).join(' ');
+
+          // Shadow distance and angle calculations
+          let shadowX = style.shadow_offset_x || 0;
+          let shadowY = style.shadow_offset_y || 2;
+          if (style.shadow_distance !== undefined && style.shadow_angle !== undefined) {
+            const rad = (style.shadow_angle * Math.PI) / 180;
+            shadowX = Math.round(style.shadow_distance * Math.cos(rad) * 10) / 10;
+            shadowY = Math.round(style.shadow_distance * Math.sin(rad) * 10) / 10;
+          }
+          const shadowColor = applyColorOpacity(style.shadow_color || 'rgba(0,0,0,0.85)', style.shadow_opacity ?? 1.0);
+          const glowColor = applyColorOpacity(style.glow_color || '#00F0FF', style.glow_opacity ?? 1.0);
+
+          // Glow and shadow filters
+          const filters: string[] = [];
+          if (style.shadow_enabled) {
+            filters.push(`drop-shadow(${shadowX}px ${shadowY}px ${style.shadow_blur || 6}px ${shadowColor})`);
+          }
+          if (style.glow_enabled) {
+            filters.push(`drop-shadow(0px 0px ${style.glow_blur || 12}px ${glowColor})`);
+          }
+          const filterStr = filters.length > 0 ? filters.join(' ') : undefined;
+
+          const bgEnabled = style.background_enabled !== false && style.background_mode !== 'none';
+          const rawBgMode = bgEnabled ? (style.background_mode || 'block') : 'none';
+          const isBgBlock = rawBgMode === 'block' || (rawBgMode as string) === 'full_box';
+          const isBgLine = rawBgMode === 'line' || (rawBgMode as string) === 'per_line';
+          const effectiveBgColor = applyColorOpacity(style.background_color || '#000000', style.background_opacity ?? 1.0);
+
+          const bgOffsetX = (isBgBlock || isBgLine) ? (style.background_offset_x || 0) : 0;
+          const bgOffsetY = (isBgBlock || isBgLine) ? (style.background_offset_y || 0) : 0;
+          const bgOffsetTransform = (bgOffsetX !== 0 || bgOffsetY !== 0) ? `translate(${bgOffsetX}px, ${bgOffsetY}px)` : '';
+
+          const fontFam = style.font_family || 'Montserrat';
+          const fontSize = Math.max(10, Math.round((style.font_size || 44) * 0.44));
+
+          return (
+            <>
+              <div
+                className={`w-full flex flex-col ${
+                  layout.alignment === 'left' ? 'items-start text-left' : layout.alignment === 'right' ? 'items-end text-right' : 'items-center text-center'
+                }`}
+                style={{
+                  background: isBgBlock ? effectiveBgColor : 'transparent',
+                  padding: isBgBlock
+                    ? `${style.background_padding_y ?? 8}px ${style.background_padding_x ?? 14}px`
+                    : undefined,
+                  borderRadius: isBgBlock ? `${style.background_corner_radius ?? 8}px` : undefined,
+                  // Implicit blur removed per specification
+                  transform: [animTransform, bgOffsetTransform].filter(Boolean).join(' ') || undefined,
+                  opacity: containerOpacity,
+                  transition: 'opacity 50ms linear',
+                }}
+              >
+                {visualLines.map((lineWords, lIdx) => {
+                  const isCaption = (group.type || 'caption') === 'caption';
+                  const highlightEnabled = isCaption && (style.highlight_enabled !== false);
+                  const lineContent = lineWords.map((word, wIdx) => {
+                    const hasWordTiming = isCaption && (group as any).has_word_timing !== false && (group as any).timing_mode !== 'phrase' && (word as any).is_exact !== false;
+                    const isSpoken = hasWordTiming && currentTime >= (word.start ?? group.start) && currentTime <= (word.end ?? group.end);
+                    const wordText = applyCaseTransform(word.text || (word as any).word || '', style.text_transform);
+                    const animType = animation?.active_word?.type || animation?.type;
+                    const activeScale = isCaption && isSpoken && animType && animType !== 'none' && (animType === 'pop' || animType === 'bounce')
+                      ? (animation?.active_scale || 1.15)
+                      : 1.0;
+                    const wordColor = (isCaption && isSpoken && highlightEnabled)
+                      ? word.style_override?.highlight_color || style.highlight_color || '#FFFFFF'
+                      : word.style_override?.color || style.primary_color || '#FFFF00';
+
+                    const strokeWidth = style.outline_enabled
+                      ? `${Math.max(1, (style.outline_width || 2) * 0.6)}px`
+                      : undefined;
+                    const strokeColorWithOpacity = style.outline_enabled
+                      ? applyColorOpacity(style.outline_color || '#000000', style.outline_opacity ?? 1.0)
+                      : undefined;
+
+                    return (
+                      <React.Fragment key={word.id || `w_${wIdx}`}>
+                        <span
+                          style={{
+                            fontFamily: fontFam,
+                            fontSize: `${fontSize}px`,
+                            fontWeight: word.style_override?.font_weight || fontWeight,
+                            fontStyle: style.font_style || 'normal',
+                            textDecoration: (word.style_override?.underline ?? style.underline) ? 'underline' : undefined,
+                            letterSpacing: `${letterSpacing}px`,
+                            lineHeight: style.line_height || 1.25,
+                            color: applyColorOpacity(wordColor, style.text_opacity ?? 1.0),
+                            WebkitTextStroke: strokeWidth && strokeColorWithOpacity
+                              ? `${strokeWidth} ${strokeColorWithOpacity}`
+                              : undefined,
+                            paintOrder: 'stroke fill',
+                            filter: filterStr,
+                            transform: isSpoken ? `scale(${activeScale})` : 'scale(1)',
+                            display: 'inline-block',
+                            transformOrigin: 'center bottom',
+                            transition: 'transform 80ms ease-out',
+                          }}
+                        >
+                          {wordText}
+                        </span>
+                        {wIdx < lineWords.length - 1 ? ' ' : null}
+                      </React.Fragment>
+                    );
+                  });
+
+                  if (isBgLine) {
+                    return (
+                      <div key={lIdx} className="my-0.5 inline-block text-center w-auto">
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            backgroundColor: effectiveBgColor,
+                            padding: `${Math.round((style.background_padding_y ?? 6) * 0.45)}px ${Math.round((style.background_padding_x ?? 12) * 0.45)}px`,
+                            borderRadius: `${Math.round((style.background_corner_radius ?? 8) * 0.6)}px`,
+                            // Implicit blur removed per specification
+                          }}
+                        >
+                          {lineContent}
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={lIdx} className="my-0.5 inline-block text-center w-auto">
+                      {lineContent}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          );
+        })()
       )}
     </div>
   );
@@ -712,29 +906,33 @@ function InteractiveCaptionCanvas({
   selectedGroupId,
   layoutMode = 'crop_follow',
   onSelectGroup,
+  onOpenTextEditor,
   onUpdateGroup,
   onDeleteGroup,
   onDuplicateGroup,
+  onApplyLayoutToAll,
 }: {
   track: CaptionTrack | null;
   currentTime: number;
   selectedGroupId: string | null;
   layoutMode?: LayoutMode;
   onSelectGroup: (id: string | null) => void;
+  onOpenTextEditor?: (id: string) => void;
   onUpdateGroup: (id: string, patch: Partial<CaptionGroup>) => void;
   onDeleteGroup?: (id: string) => void;
   onDuplicateGroup?: (id: string) => void;
+  onApplyLayoutToAll?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   if (!track || !track.groups.length) return null;
 
-  // Filter all layers that are active at currentTime OR currently selected
+  // Timeline-aware layer visibility:
+  // Render text only when currentTime is strictly within that layer's [start, end] interval.
+  // Selecting a layer must never force its text to remain visible outside its duration!
   const visibleGroups = track.groups.filter((g) => {
     if (g.type === 'audio' || g.type === 'voiceover') return false;
-    const isTimeActive = currentTime >= g.start && currentTime <= g.end;
-    const isSelected = selectedGroupId === g.id;
-    return isTimeActive || isSelected;
+    return currentTime >= g.start && currentTime <= g.end;
   });
 
   return (
@@ -755,9 +953,11 @@ function InteractiveCaptionCanvas({
           defaultAnimation={track.default_animation}
           layoutMode={layoutMode}
           onSelectGroup={onSelectGroup}
+          onOpenTextEditor={onOpenTextEditor}
           onUpdateGroup={onUpdateGroup}
           onDeleteGroup={onDeleteGroup}
           onDuplicateGroup={onDuplicateGroup}
+          onApplyLayoutToAll={onApplyLayoutToAll}
         />
       ))}
     </div>
@@ -782,15 +982,18 @@ interface FramedVideoStageProps {
   setIsPlaying: (playing: boolean) => void;
   showPlayPauseOverlay?: boolean;
   children?: React.ReactNode;
+  poster?: string;
   maxHeight?: string;
   isCompact?: boolean;
   isDetail?: boolean;
   preferRendered?: boolean;
+  onVideoClick?: () => void;
 }
 
 export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   sourceVideoUrl,
   videoUrl: _videoUrl,
+  poster,
   layoutMode,
   sourceOrientation = 'portrait',
   targetAspect,
@@ -807,6 +1010,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   isCompact = false,
   isDetail = false,
   preferRendered = false,
+  onVideoClick,
 }) => {
   const [sourceFailed, setSourceFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
@@ -823,12 +1027,17 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
 
   // Determine whether the container must be 16:9 widescreen or 9:16 vertical
   const isTarget169 = useMemo(() => {
+    if (targetAspect === '16:9') return true;
+    if (targetAspect === '9:16') return false;
     if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
-    if (sourceOrientation === 'portrait' && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return true;
     if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow') return false;
-    if (sourceOrientation === 'landscape' && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return false;
-    return targetAspect === '16:9';
-  }, [layoutMode, sourceOrientation, targetAspect]);
+    const isPortrait = (videoDimensions.width > 0 && videoDimensions.height > 0)
+      ? videoDimensions.width < videoDimensions.height
+      : sourceOrientation === 'portrait';
+    if (isPortrait && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return true;
+    if (!isPortrait && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return false;
+    return false;
+  }, [layoutMode, sourceOrientation, targetAspect, videoDimensions.width, videoDimensions.height]);
 
   const isCrop = (layoutMode === 'crop_916' || layoutMode === 'crop_follow');
 
@@ -929,7 +1138,8 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               height: detailDimensions ? `${detailDimensions.height}px` : (isTarget169 ? 'auto' : '100%'),
               maxWidth: '100%',
               maxHeight: '100%',
-              transition: 'width 280ms cubic-bezier(0.4, 0, 0.2, 1), height 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+              transition: 'width 240ms cubic-bezier(0.2, 0.8, 0.2, 1), height 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+              willChange: 'width, height',
             }
             : {
               aspectRatio: isTarget169 ? '16 / 9' : '9 / 16',
@@ -937,28 +1147,49 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               maxWidth: '100%',
               width: isTarget169 ? '100%' : 'auto',
               height: isTarget169 ? 'auto' : '100%',
-              transition: 'max-height 200ms ease, max-width 200ms ease, aspect-ratio 200ms ease',
+              transition: 'max-height 240ms cubic-bezier(0.2, 0.8, 0.2, 1), max-width 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+              willChange: 'max-width, max-height',
             }
         }
-        className="relative bg-black rounded-xl border border-border overflow-hidden shadow-2xl flex items-center justify-center select-none"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (onVideoClick) {
+            onVideoClick();
+          } else {
+            onTogglePlay?.();
+          }
+        }}
+        className="relative bg-black rounded-xl border border-border overflow-hidden shadow-2xl flex items-center justify-center select-none cursor-pointer"
       >
         {activeVideoUrl ? (
           <>
-            {/* Fit + Blur synchronized background video layer: smooth opacity crossfade */}
-            <video
-              ref={bgVideoRef}
-              src={activeVideoUrl}
-              muted
-              playsInline
-              aria-hidden="true"
-              className={`absolute inset-0 w-full h-full object-cover filter blur-2xl brightness-75 scale-110 pointer-events-none select-none z-0 transition-opacity duration-300 ease-out ${layoutMode === 'fit_blur' ? 'opacity-100' : 'opacity-0'
-                }`}
-            />
+            {/* Fit + Blur synchronized background video layer: only mount and decode when layoutMode === 'fit_blur' */}
+            {layoutMode === 'fit_blur' && (
+              <video
+                ref={bgVideoRef}
+                src={activeVideoUrl}
+                muted
+                playsInline
+                preload="auto"
+                aria-hidden="true"
+                onLoadedData={() => {
+                  if (videoRef.current && bgVideoRef.current) {
+                    bgVideoRef.current.currentTime = videoRef.current.currentTime;
+                    if (isPlaying) {
+                      bgVideoRef.current.play().catch(() => {});
+                    }
+                  }
+                }}
+                className="absolute inset-0 w-full h-full object-cover filter blur-2xl brightness-75 scale-125 pointer-events-none select-none z-0 transition-opacity duration-300 ease-out opacity-100"
+              />
+            )}
 
-            {/* Primary foreground video layer: smooth scale zoom between crop and fit */}
+            {/* Primary foreground video layer: prioritized loading with instant poster */}
             <video
               ref={videoRef}
               src={activeVideoUrl}
+              poster={poster}
+              preload="auto"
               playsInline
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget;
@@ -989,11 +1220,11 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 setIsPlaying(false);
                 bgVideoRef.current?.pause();
               }}
-              className="absolute inset-0 z-10 w-full h-full object-contain pointer-events-none"
+              className="absolute inset-0 z-10 w-full h-full object-contain pointer-events-none will-change-transform"
               style={{
-                transform: isCrop ? `scale(${calculatedCropScale})` : 'scale(1)',
+                transform: isCrop ? `scale(${calculatedCropScale}) translateZ(0)` : 'scale(1) translateZ(0)',
                 transformOrigin: 'center center',
-                transition: 'transform 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+                transition: 'transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
               }}
             />
           </>
@@ -1034,13 +1265,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   isMobileFrame = true,
   onEditorOpenChange,
   isPcOnline,
+  sessionFilter,
+  onClearSessionFilter,
 }) => {
   // Navigation Model: 3-Level Architecture
   // 'library' (landing) -> 'detail' -> 'studio' | 'publish'
   const [viewMode, setViewMode] = useState<ViewMode>('library');
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>('ready');
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [isMoreModalOpen, setIsMoreModalOpen] = useState<boolean>(false);
+  const [clipToReject, setClipToReject] = useState<ClipItem | null>(null);
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
   const [isVideoSelected, setIsVideoSelected] = useState<boolean>(false);
   const [isFullscreenPreview, setIsFullscreenPreview] = useState<boolean>(false);
@@ -1054,6 +1288,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // Clips State
   const [readyClips, setReadyClips] = useState<ClipItem[]>([]);
   const [approvedClips, setApprovedClips] = useState<ClipItem[]>([]);
+  const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -1081,11 +1316,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // Active Clip Customization Fields
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('crop_follow');
+  const [publishMode, setPublishMode] = useState<'private' | 'unlisted' | 'public'>('private');
   const [hookOverlayText, setHookOverlayText] = useState<string>('');
   const [showHookBanner, setShowHookBanner] = useState<boolean>(true);
   const [titleDraft, setTitleDraft] = useState<string>('');
   const [captionDraft, setCaptionDraft] = useState<string>('');
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['youtube_shorts', 'instagram']);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved' | 'error'>('idle');
+  const [playbackFeedback, setPlaybackFeedback] = useState<string | null>(null);
+  const previewAnimRef = useRef<{ active: boolean; restoreTime: number; endTime: number } | null>(null);
 
   // Canonical Caption Track with Stale Protection
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -1112,6 +1351,39 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     [currentClip, captionClipId, captionTrack]
   );
 
+  // Canonical selection clearing: deselects text layer, video track, and closes layer-dependent panels
+  const handleClearSelection = useCallback(() => {
+    setSelectedGroupId(null);
+    setIsVideoSelected(false);
+    setActivePanel((current) => {
+      if ([
+        'style',
+        'fonts',
+        'effects',
+        'animation',
+        'templates',
+        'framing',
+        'main_volume',
+        'layer_volume',
+        'overlay_animation',
+        'overlay_transform',
+        'layer_opacity',
+      ].includes(current)) {
+        return 'none';
+      }
+      return current;
+    });
+  }, []);
+
+  const handleSelectGroup = useCallback((id: string | null) => {
+    if (!id) {
+      handleClearSelection();
+    } else {
+      setSelectedGroupId(id);
+      setIsVideoSelected(false);
+    }
+  }, [handleClearSelection]);
+
   // 1. Fetch Real Clips from Backend
   const fetchClips = async () => {
     setIsLoading(true);
@@ -1124,6 +1396,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
         setReadyClips(rList);
         setApprovedClips(aList);
+        if (data.queue_stats) {
+          setQueueStats(data.queue_stats);
+        }
         setConnectionError(null);
       } else {
         throw new Error(`Server returned HTTP ${res.status}`);
@@ -1148,6 +1423,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
           setReadyClips(rList);
           setApprovedClips(aList);
+          if (data.queue_stats) {
+            setQueueStats(data.queue_stats);
+          }
           setConnectionError(null);
         })
         .catch(() => {});
@@ -1179,6 +1457,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setHookOverlayText(currentClip.hook || '');
     setCaptionDraft(currentClip.description || currentClip.hashtags || '');
     setDuration(Math.max(0, currentClip.duration || 0));
+    if (currentClip.publish_mode && ['private', 'unlisted', 'public'].includes(currentClip.publish_mode)) {
+      setPublishMode(currentClip.publish_mode as 'private' | 'unlisted' | 'public');
+    } else {
+      setPublishMode('private');
+    }
 
     const validModeIds = (currentClip.available_layout_modes && currentClip.available_layout_modes.length > 0)
       ? currentClip.available_layout_modes.map((m) => m.id)
@@ -1202,6 +1485,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           const norm = normalizeCaptionTrack(rawData, currentClip.id, currentClip.duration || 40);
           resetHistory(norm);
           setCaptionClipId(currentClip.id);
+          setSaveStatus('saved');
           if (norm.groups && norm.groups.length > 0) {
             setSelectedGroupId(norm.groups[0].id);
           }
@@ -1213,25 +1497,29 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         }
       });
 
-    // Fetch filmstrip frames for timeline
-    fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { signal: controller.signal })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((fsData) => {
-        if (fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
-          setFilmstripFrames(fsData.frames.map((f: string) => (f.startsWith('http') ? f : apiUrl(f, pcHost))));
-        } else if (currentClip.thumbnail_url) {
-          const tUrl = currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost);
-          setFilmstripFrames([tUrl]);
-        }
-      })
-      .catch(() => {
-        if (currentClip.thumbnail_url) {
-          const tUrl = currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost);
-          setFilmstripFrames([tUrl]);
-        }
-      });
+    // Defer heavy filmstrip frame extraction so active video stream and captions have top network priority
+    if (currentClip.thumbnail_url) {
+      const tUrl = currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost);
+      setFilmstripFrames([tUrl]);
+    } else {
+      setFilmstripFrames([]);
+    }
 
-    return () => controller.abort();
+    const timer = setTimeout(() => {
+      fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { signal: controller.signal })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((fsData) => {
+          if (fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
+            setFilmstripFrames(fsData.frames.map((f: string) => (f.startsWith('http') ? f : apiUrl(f, pcHost))));
+          }
+        })
+        .catch(() => { });
+    }, 700);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [currentClip?.id, pcHost]);
 
   // Source bounds for mapping local clip time (0 -> duration) to source video time
@@ -1259,7 +1547,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       video.play().then(() => {
         setIsPlaying(true);
         if (bgVideoRef.current) bgVideoRef.current.play().catch(() => { });
-      }).catch(() => { });
+      }).catch((err) => {
+        console.warn('Playback interrupted:', err);
+        setIsPlaying(false);
+        setPlaybackFeedback('Playback interrupted. Tap play again.');
+        setTimeout(() => setPlaybackFeedback(null), 3500);
+      });
     } else {
       video.pause();
       if (bgVideoRef.current) bgVideoRef.current.pause();
@@ -1268,6 +1561,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   const handleSeek = (targetSec: number) => {
+    if (previewAnimRef.current?.active) {
+      previewAnimRef.current = null;
+    }
     const safeTarget = clamp(targetSec, 0, clipDuration);
     lastTimeUpdateRef.current = safeTarget;
     setCurrentTime(safeTarget);
@@ -1280,12 +1576,63 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
   };
 
+  // Synchronize Fit + Blur background layer on mode toggle, seek, or play/pause transition
+  useEffect(() => {
+    if (layoutMode === 'fit_blur' && bgVideoRef.current && videoRef.current) {
+      bgVideoRef.current.currentTime = videoRef.current.currentTime;
+      if (isPlaying) {
+        bgVideoRef.current.play().catch(() => {});
+      } else {
+        bgVideoRef.current.pause();
+      }
+    }
+  }, [layoutMode, isPlaying]);
+
+  const handlePreviewAnimation = (start: number, end: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const restoreTime = currentTime;
+    previewAnimRef.current = {
+      active: true,
+      restoreTime,
+      endTime: Math.min(clipDuration, end + 0.1),
+    };
+
+    handleSeek(start);
+    video.play().then(() => {
+      setIsPlaying(true);
+      if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
+    }).catch((err) => {
+      console.warn('Preview playback failed:', err);
+      setIsPlaying(false);
+      previewAnimRef.current = null;
+      setPlaybackFeedback('Playback blocked. Tap play manually.');
+      setTimeout(() => setPlaybackFeedback(null), 3500);
+    });
+  };
+
   const handleTimeUpdate = () => {
     const video = videoRef.current;
     if (!video) return;
     const cur = video.currentTime;
 
     if (isSourceTimebase) {
+      const localTime = Math.max(0, cur - clipStart);
+
+      // Check if preview animation completed
+      if (previewAnimRef.current?.active) {
+        if (localTime >= previewAnimRef.current.endTime) {
+          const restore = previewAnimRef.current.restoreTime;
+          previewAnimRef.current = null;
+          video.pause();
+          if (bgVideoRef.current) bgVideoRef.current.pause();
+          setIsPlaying(false);
+          handleSeek(restore);
+          return;
+        }
+      }
+
       // Source bounds: stop when end of clip is reached
       if (cur >= clipEnd) {
         video.pause();
@@ -1308,19 +1655,31 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         return;
       }
 
-      const localTime = Math.max(0, cur - clipStart);
-      if (Math.abs(localTime - lastTimeUpdateRef.current) >= 0.04 || cur <= clipStart + 0.05) {
+      if (Math.abs(localTime - lastTimeUpdateRef.current) >= 0.045 || cur <= clipStart + 0.05) {
         lastTimeUpdateRef.current = localTime;
         setCurrentTime(localTime);
       }
 
       if (bgVideoRef.current && layoutMode === 'fit_blur') {
         const diff = Math.abs(bgVideoRef.current.currentTime - cur);
-        if (diff > 0.4) {
+        if (diff > 0.15) {
           bgVideoRef.current.currentTime = cur;
         }
       }
     } else {
+      // Check if preview animation completed
+      if (previewAnimRef.current?.active) {
+        if (cur >= previewAnimRef.current.endTime) {
+          const restore = previewAnimRef.current.restoreTime;
+          previewAnimRef.current = null;
+          video.pause();
+          if (bgVideoRef.current) bgVideoRef.current.pause();
+          setIsPlaying(false);
+          handleSeek(restore);
+          return;
+        }
+      }
+
       // 0-based timebase for pre-rendered clip files
       if (cur >= clipDuration) {
         video.pause();
@@ -1335,19 +1694,52 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         return;
       }
 
-      if (Math.abs(cur - lastTimeUpdateRef.current) >= 0.04 || cur <= 0.05) {
+      if (Math.abs(cur - lastTimeUpdateRef.current) >= 0.045 || cur <= 0.05) {
         lastTimeUpdateRef.current = cur;
         setCurrentTime(cur);
       }
 
       if (bgVideoRef.current && layoutMode === 'fit_blur') {
         const diff = Math.abs(bgVideoRef.current.currentTime - cur);
-        if (diff > 0.4) {
+        if (diff > 0.15) {
           bgVideoRef.current.currentTime = cur;
         }
       }
     }
   };
+
+  // Playback Time Sync Loop (efficient requestVideoFrameCallback with rAF fallback)
+  useEffect(() => {
+    if (!isPlaying) return;
+    let animId: number;
+    let rvfcId: number;
+    let cancelled = false;
+    const v = videoRef.current;
+
+    const tick = () => {
+      if (cancelled) return;
+      handleTimeUpdate();
+      if (v && 'requestVideoFrameCallback' in v) {
+        rvfcId = (v as any).requestVideoFrameCallback(tick);
+      } else {
+        animId = requestAnimationFrame(tick);
+      }
+    };
+
+    if (v && 'requestVideoFrameCallback' in v) {
+      rvfcId = (v as any).requestVideoFrameCallback(tick);
+    } else {
+      animId = requestAnimationFrame(tick);
+    }
+
+    return () => {
+      cancelled = true;
+      if (v && 'cancelVideoFrameCallback' in v && rvfcId) {
+        (v as any).cancelVideoFrameCallback(rvfcId);
+      }
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [isPlaying, isSourceTimebase, clipStart, clipEnd, clipDuration, layoutMode]);
 
   const handleLoadedMetadata = (isSource?: boolean) => {
     const isSourceEffective = (typeof isSource === 'boolean') ? isSource : isSourceTimebase;
@@ -1381,7 +1773,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const modeObj = availModes.find((m) => m.id === newMode);
     const immediateTargetAspect = modeObj ? modeObj.target_aspect : (newMode === 'native_169' || newMode === 'landscape' ? '16:9' : '9:16');
 
-    // Immediately reflect in in-memory clip lists so back/forth navigation retains it
+    // 1. INSTANT 0ms Optimistic In-Memory Update:
     setReadyClips((prev) =>
       prev.map((c) => (c.id === currentClip.id ? { ...c, layout_mode: newMode, target_aspect: immediateTargetAspect, is_render_stale: true } : c))
     );
@@ -1389,43 +1781,48 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       prev.map((c) => (c.id === currentClip.id ? { ...c, layout_mode: newMode, target_aspect: immediateTargetAspect, is_render_stale: true } : c))
     );
 
+    // 2. Non-blocking asynchronous persistence to server
     try {
-      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost), {
+      fetch(apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ layout_mode: newMode }),
+      }).then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+
+          setReadyClips((prev) =>
+            prev.map((c) =>
+              c.id === currentClip.id
+                ? {
+                  ...c,
+                  layout_mode: data.layout_mode || newMode,
+                  target_aspect: data.target_aspect,
+                  source_orientation: data.source_orientation,
+                  available_layout_modes: data.available_layout_modes,
+                  rendered_layout_mode: data.rendered_layout_mode,
+                  is_render_stale: data.is_render_stale,
+                }
+                : c
+            )
+          );
+        }
+      }).catch((e) => {
+        console.warn('Failed to persist layout framing mode:', e);
       });
-      if (res.ok) {
-        const data = await res.json();
-        setReadyClips((prev) =>
-          prev.map((c) =>
-            c.id === currentClip.id
-              ? {
-                ...c,
-                layout_mode: data.layout_mode || newMode,
-                target_aspect: data.target_aspect,
-                source_orientation: data.source_orientation,
-                available_layout_modes: data.available_layout_modes,
-                rendered_layout_mode: data.rendered_layout_mode,
-                is_render_stale: data.is_render_stale,
-              }
-              : c
-          )
-        );
-        const activeObj = data.available_layout_modes?.find((m: any) => m.id === data.layout_mode);
-        const modeLabel = activeObj ? activeObj.label : newMode;
-        setFeedback(`Framing set to ${modeLabel}. Live preview updated.`);
-        setTimeout(() => setFeedback(null), 2500);
-      }
     } catch (e) {
       console.warn('Failed to persist layout framing mode:', e);
     }
   };
 
-  // 4. Update Caption Group
-  const handleUpdateGroup = (groupId: string, patch: Partial<CaptionGroup>) => {
+  // 4. Update Caption Group with Transient Preview vs Commit Support
+  const handleUpdateGroup = (
+    groupId: string,
+    patch: Partial<CaptionGroup>,
+    commitToHistory: boolean = true
+  ) => {
     if (!captionTrack) return;
-    setCaptionTrack({
+    const updatedTrack = {
       ...captionTrack,
       groups: captionTrack.groups.map((grp) => {
         if (grp.id !== groupId) return grp;
@@ -1435,7 +1832,62 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         if (patch.animation) next.animation = { ...(grp.animation || captionTrack.default_animation), ...patch.animation };
         return next;
       }),
-    });
+    };
+    setCaptionTrack(updatedTrack, commitToHistory);
+    setSaveStatus('unsaved');
+  };
+
+  // Explicit / Auto Save Captions to Server
+  const handleSaveCaptions = async () => {
+    if (!currentClip || !captionTrack) return;
+    setSaveStatus('saving');
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(captionTrack),
+      });
+      if (res.ok) {
+        setSaveStatus('saved');
+        setFeedback('Captions saved successfully.');
+        setTimeout(() => setFeedback(null), 2500);
+      } else {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
+    } catch (e) {
+      setSaveStatus('error');
+      setFeedback('Failed to save captions to server. Click Retry.');
+    }
+  };
+
+  const handleTrimChange = async (newStart: number, newEnd: number) => {
+    if (!currentClip) return;
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_time: newStart, end_time: newEnd }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setReadyClips((prev) =>
+          prev.map((c) =>
+            c.id === currentClip.id
+              ? {
+                  ...c,
+                  start_time: data.start_time,
+                  end_time: data.end_time,
+                  duration: data.duration,
+                  padded_start: data.padded_start,
+                  padded_end: data.padded_end,
+                }
+              : c
+          )
+        );
+      }
+    } catch (e) {
+      console.error('Failed to update trim', e);
+    }
   };
 
   const handleDeleteGroup = (groupId: string) => {
@@ -1472,6 +1924,22 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setSelectedGroupId(newId);
   };
 
+  const handleApplyLayoutToAll = (groupId: string) => {
+    if (!visibleCaptionTrack) return;
+    const { nextTrack, affectedCount } = applySectionStylesToTrack(
+      visibleCaptionTrack,
+      groupId,
+      'layout'
+    );
+    // Commit as a single atomic history step for undo/redo
+    setCaptionTrack(nextTrack, true);
+    setSaveStatus('unsaved');
+    setFeedback(`Applied position & size to all captions (${affectedCount})`);
+    setTimeout(() => {
+      setFeedback(null);
+    }, 2200);
+  };
+
   // 5. Approve & Publish Handler
   const handleApprove = async () => {
     if (!currentClip) return;
@@ -1493,7 +1961,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         body: JSON.stringify({
           title: titleDraft.trim(),
           hashtags: captionDraft.trim(),
-          publish_mode: currentClip.publish_mode || 'private',
+          publish_mode: publishMode,
           platforms: selectedPlatforms.map((p) => p === 'youtube_shorts' ? 'youtube' : p).join(','),
           layout_mode: layoutMode,
         }),
@@ -1509,6 +1977,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         title: titleDraft.trim(),
         description: captionDraft.trim(),
         layout_mode: layoutMode,
+        publish_mode: publishMode,
         status: 'approved',
       };
 
@@ -1524,14 +1993,19 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
   };
 
-  // 6. Reject Handler
-  const handleReject = async () => {
-    if (!currentClip) return;
+  // 6. Double Confirmation Reject Handlers
+  const handlePromptReject = (clip: ClipItem) => {
+    setIsMoreModalOpen(false);
+    setClipToReject(clip);
+  };
+
+  const handleConfirmReject = async () => {
+    if (!clipToReject) return;
     setIsSubmitting(true);
     setFeedback(null);
 
     try {
-      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/reject`, pcHost), {
+      const res = await fetch(apiUrl(`/api/clips/${clipToReject.id}/reject`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ reason: 'Rejected from review studio' }),
@@ -1542,12 +2016,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         throw new Error(err?.detail || 'Reject request failed');
       }
 
-      setReadyClips((prev) => prev.filter((c) => c.id !== currentClip.id));
-      setApprovedClips((prev) => prev.filter((c) => c.id !== currentClip.id));
-      setViewMode('library');
-      setSelectedClipId(null);
-      setIsMoreModalOpen(false);
-      setFeedback('Clip rejected.');
+      setReadyClips((prev) => prev.filter((c) => c.id !== clipToReject.id));
+      setApprovedClips((prev) => prev.filter((c) => c.id !== clipToReject.id));
+      if (selectedClipId === clipToReject.id) {
+        setViewMode('library');
+        setSelectedClipId(null);
+      }
+      setClipToReject(null);
+      setFeedback('Clip permanently rejected and media deleted.');
     } catch (e) {
       setFeedback(e instanceof Error ? e.message : 'Could not reject clip.');
     } finally {
@@ -1569,10 +2045,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // Filtered clip list for Library View
   const filteredClips = useMemo(() => {
-    if (filterStatus === 'ready') return readyClips;
-    if (filterStatus === 'approved') return approvedClips;
-    return allClips;
-  }, [filterStatus, readyClips, approvedClips, allClips]);
+    let list = allClips;
+    if (filterStatus === 'ready') list = readyClips;
+    else if (filterStatus === 'approved') list = approvedClips;
+
+    if (sessionFilter) {
+      list = list.filter((c) => c.session_id === sessionFilter || c.chunk_id === sessionFilter);
+    }
+    return list;
+  }, [filterStatus, readyClips, approvedClips, allClips, sessionFilter]);
 
   // Group clips by source session for clean structure
   const groupedSessions = useMemo(() => {
@@ -1642,9 +2123,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         {/* 2. STATUS / FILTER TABS */}
         <div className="mt-2.5 flex items-center gap-1.5">
           {[
-            { id: 'all' as FilterStatus, label: 'All', count: allClips.length },
             { id: 'ready' as FilterStatus, label: 'Ready', count: readyClips.length },
-            { id: 'approved' as FilterStatus, label: 'Approved', count: approvedClips.length },
+            { id: 'approved' as FilterStatus, label: 'Uploaded', count: approvedClips.length },
+            { id: 'all' as FilterStatus, label: 'All', count: allClips.length },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1663,6 +2144,51 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           ))}
         </div>
       </header>
+
+      {/* 4.2 BACKLOG QUEUE DEPTH ALERT BANNER */}
+      {queueStats && queueStats.queued_count > 0 && (
+        <div className="shrink-0 mx-3.5 mt-2.5 p-2.5 rounded-xl bg-surface-200 border border-amber-500/30 flex items-center justify-between gap-2.5 z-20 shadow-sm">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-6 h-6 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+              <Clock size={13} className="text-amber-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-text-main truncate">
+                <span className="font-mono tabular-nums">{queueStats.ready_count}</span> clips ready &middot;{' '}
+                <span className="text-amber-400 font-mono tabular-nums">{queueStats.queued_count}</span> queued for tomorrow's reset
+              </p>
+              <p className="text-[10px] text-text-muted font-mono tabular-nums">
+                Daily free tier quota ({queueStats.daily_quota_used}/{queueStats.daily_quota_max} requests) reached &middot; FIFO auto-drain at midnight UTC
+              </p>
+            </div>
+          </div>
+          <span className="shrink-0 text-[10px] font-mono uppercase px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-400">
+            Backlog Active
+          </span>
+        </div>
+      )}
+
+      {/* SESSION FILTER ACTIVE BANNER */}
+      {sessionFilter && (
+        <div className="shrink-0 px-3.5 py-2 bg-primary/10 border-b border-primary/25 flex items-center justify-between gap-2 z-20">
+          <div className="flex items-center gap-2 min-w-0 text-xs font-mono text-primary">
+            <Sparkles size={13} className="shrink-0" />
+            <span className="truncate">
+              Filtering session: <span className="text-text-main font-semibold">{sessionFilter}</span> ({filteredClips.length}&nbsp;{filteredClips.length === 1 ? 'clip' : 'clips'})
+            </span>
+          </div>
+          {onClearSessionFilter && (
+            <button
+              type="button"
+              onClick={onClearSessionFilter}
+              className="shrink-0 px-2.5 py-1 rounded-md bg-surface-200 hover:bg-surface-300 border border-border text-[11px] font-mono text-text-muted hover:text-text-main flex items-center gap-1 active:scale-[0.98] transition-all"
+            >
+              <X size={12} />
+              <span>Show All Clips</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* FEEDBACK BANNER */}
       {feedback && (
@@ -1752,28 +2278,62 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <div className="space-y-2">
                 {clipsInSession.map((clip) => {
                   const isReady = clip.status === 'ready_review';
+                  const isUploaded = clip.status === 'approved' || clip.status === 'published';
+                  const youtubeUrl = clip.remote_url || (clip.remote_id ? `https://youtu.be/${clip.remote_id}` : null);
+                  const daysLeft = getRetentionDaysLeft(clip.published_at);
+
+                  const handleCardClick = () => {
+                    if (clip.is_cloud_only && youtubeUrl) {
+                      window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
+                      return;
+                    }
+                    setSelectedClipId(clip.id);
+                    setViewMode('detail');
+                  };
+
                   return (
                     <div
                       key={clip.id}
-                      onClick={() => {
-                        setSelectedClipId(clip.id);
-                        setViewMode('detail');
-                      }}
+                      onClick={handleCardClick}
                       className="group w-full rounded-2xl bg-surface-100 hover:bg-surface-200/60 border border-border hover:border-border-strong p-2.5 flex items-stretch gap-3 cursor-pointer active:scale-[0.99] transition-all shadow-sm"
                     >
-                      {/* Left: 9:16 Thumbnail */}
-                      <div className="relative w-16 h-28 rounded-xl bg-black border border-border/70 overflow-hidden shrink-0 flex items-center justify-center">
-                        {clip.thumbnail_url ? (
+                      {/* Left: 9:16 Thumbnail (Clicking thumbnail opens YouTube if uploaded!) */}
+                      <div
+                        onClick={(e) => {
+                          if (youtubeUrl) {
+                            e.stopPropagation();
+                            window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
+                          }
+                        }}
+                        className={`relative w-16 h-28 rounded-xl bg-black border border-border/70 overflow-hidden shrink-0 flex items-center justify-center ${youtubeUrl ? 'hover:ring-2 hover:ring-primary/60 transition-all' : ''}`}
+                        title={youtubeUrl ? "Click thumbnail to view video on YouTube" : undefined}
+                      >
+                        {/* Fallback film icon behind image */}
+                        <Film size={18} className="text-text-muted shrink-0" />
+                        {clip.thumbnail_url && (
                           <img
                             src={clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)}
                             alt=""
-                            className="w-full h-full object-cover"
+                            className="absolute inset-0 w-full h-full object-cover"
                             onError={(e) => {
                               (e.target as HTMLElement).style.display = 'none';
                             }}
                           />
-                        ) : (
-                          <Film size={18} className="text-text-muted" />
+                        )}
+
+                        {/* Cloud-only pill overlay */}
+                        {clip.is_cloud_only && (
+                          <div className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 font-mono text-[8px] text-sky-400 flex items-center gap-0.5 border border-sky-500/30">
+                            <Cloud size={8} />
+                            <span>Cloud</span>
+                          </div>
+                        )}
+
+                        {/* YouTube external link trigger overlay if uploaded */}
+                        {youtubeUrl && (
+                          <div className="absolute top-1 right-1 w-5 h-5 rounded-md bg-black/80 border border-white/20 flex items-center justify-center text-white shadow-sm opacity-90 group-hover:scale-105 transition-all">
+                            <ExternalLink size={9} />
+                          </div>
                         )}
 
                         {/* Duration Badge */}
@@ -1811,29 +2371,64 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         </div>
                       </div>
 
-                      {/* Right: Status & Action */}
+                      {/* Right: Status, Retention Info & Actions */}
                       <div className="shrink-0 flex flex-col justify-between items-end pl-1">
-                        <span
-                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${isReady
-                            ? 'bg-primary/15 text-primary border-primary/30'
-                            : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                            }`}
-                        >
-                          {isReady ? 'Ready' : 'Approved'}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <span
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${isReady
+                              ? 'bg-primary/15 text-primary border-primary/30'
+                              : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              }`}
+                          >
+                            {isReady ? 'Ready' : 'Uploaded'}
+                          </span>
 
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedClipId(clip.id);
-                            setIsMoreModalOpen(true);
-                          }}
-                          className="min-h-[44px] min-w-[44px] rounded-lg text-text-muted hover:text-text-main flex items-center justify-center active:scale-[0.95]"
-                          title="More options"
-                        >
-                          <MoreVertical size={16} />
-                        </button>
+                          {isUploaded && (
+                            clip.is_cloud_only ? (
+                              <span className="font-mono text-[9px] text-sky-400 flex items-center gap-1" title="Local MP4 purged after 7-day retention. Thumbnail & live YouTube link preserved permanently.">
+                                <Cloud size={9} />
+                                <span>Cloud Only</span>
+                              </span>
+                            ) : (
+                              <span
+                                className="font-mono tabular-nums text-[9px] text-text-muted"
+                                title="Local video auto-deletes 7 days after upload to reclaim disk space, keeping thumbnail and YouTube link permanently"
+                              >
+                                {daysLeft}d left
+                              </span>
+                            )
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 mt-auto">
+                          {youtubeUrl && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
+                              }}
+                              className="min-h-[36px] px-2 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 text-[10px] font-semibold flex items-center gap-1 active:scale-95 transition-all"
+                              title="Open live video on YouTube"
+                            >
+                              <ExternalLink size={11} />
+                              <span className="hidden sm:inline">Watch</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedClipId(clip.id);
+                              setIsMoreModalOpen(true);
+                            }}
+                            className="min-h-[44px] min-w-[36px] rounded-lg text-text-muted hover:text-text-main flex items-center justify-center active:scale-[0.95]"
+                            title="More options"
+                          >
+                            <MoreVertical size={16} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1899,6 +2494,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <FramedVideoStage
               sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
               videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
+              poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
               preferRendered={Boolean(currentClip.video_url && !currentClip.is_render_stale)}
               clipStart={clipStart}
               clipEnd={clipEnd}
@@ -1929,6 +2525,31 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
           {/* 2. BOTTOM CONTROLS DOCK: Transport + Action Buttons + Framing Options */}
           <div className="w-full shrink-0 space-y-2">
+            {/* Cloud Only 7-Day Retention Notice */}
+            {currentClip.is_cloud_only && (
+              <div className="w-full px-3 py-2 rounded-xl bg-sky-500/10 border border-sky-500/25 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Cloud size={14} className="text-sky-400 shrink-0" />
+                  <span className="text-[11px] text-sky-200 truncate font-mono">
+                    Local MP4 deleted after 7d retention. Live on YouTube.
+                  </span>
+                </div>
+                {(currentClip.remote_url || currentClip.remote_id) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = currentClip.remote_url || `https://youtu.be/${currentClip.remote_id}`;
+                      window.open(url, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="min-h-[28px] px-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[10px] font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition-all"
+                  >
+                    <ExternalLink size={11} />
+                    <span>Watch</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Playback Transport Row (Target: 40–44px high) */}
             <section className="w-full h-11 flex items-center gap-3 px-1">
               {/* Play / Pause button (Target: 32–36px) */}
@@ -1972,7 +2593,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               </div>
             </section>
 
-            {/* Core Action Buttons: [Edit] and [Publish] (Target: 42–44px high, equal widths, 8–10px gap) */}
+            {/* Core Action Buttons: [Edit] and [Publish / Watch Live] (Target: 42–44px high, equal widths, 8–10px gap) */}
             <section className="w-full grid grid-cols-2 gap-2.5">
               {/* Edit: Opens Full Caption Studio */}
               <button
@@ -1984,15 +2605,30 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <span>Edit</span>
               </button>
 
-              {/* Publish: Opens Publishing Selector */}
-              <button
-                type="button"
-                onClick={() => setViewMode('publish')}
-                className="h-[42px] rounded-xl bg-primary hover:bg-primary-hover text-white text-[12px] font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
-              >
-                <Send size={14} />
-                <span>Publish</span>
-              </button>
+              {/* Publish or Watch Live on YouTube */}
+              {(currentClip.status === 'approved' || currentClip.status === 'published') && (currentClip.remote_url || currentClip.remote_id) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = currentClip.remote_url || `https://youtu.be/${currentClip.remote_id}`;
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                  }}
+                  className="h-[42px] rounded-xl bg-red-600 hover:bg-red-500 text-white text-[12px] font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                >
+                  <ExternalLink size={14} />
+                  <span>Watch on YouTube</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setViewMode('publish')}
+                  className="h-[42px] rounded-xl bg-primary hover:bg-primary-hover text-white text-[12px] font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                >
+                  <Send size={14} />
+                  <span>Publish</span>
+                  <span className="text-[10px] opacity-80 font-mono capitalize">({publishMode})</span>
+                </button>
+              )}
             </section>
 
             {/* Layout Framing Quick Select (Target: ~68–76px total, buttons 32–36px high) */}
@@ -2066,33 +2702,41 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setViewMode('detail');
-              setSelectedGroupId(null);
-              setIsVideoSelected(false);
-              setActivePanel('none');
-            }}
-            className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold active:scale-95 transition-all shadow-hero-sm"
-          >
-            Done
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              disabled={saveStatus === 'saving'}
+              onClick={async () => {
+                if (saveStatus === 'unsaved') {
+                  try {
+                    await handleSaveCaptions();
+                  } catch {
+                    return; // Retain on screen if save failed
+                  }
+                }
+                setViewMode('detail');
+                setSelectedGroupId(null);
+                setIsVideoSelected(false);
+                setActivePanel('none');
+              }}
+              className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold flex items-center gap-1.5 active:scale-95 transition-all shadow-hero-sm disabled:opacity-75"
+              title="Save edits and return to clip detail"
+            >
+              {saveStatus === 'saving' && <RotateCw size={11} className="animate-spin" />}
+              <span>Done</span>
+            </button>
+          </div>
         </header>
 
         {/* 2. VIDEO PREVIEW STAGE (Fixed ~38% split, zero resizing during panel changes) */}
         <div
           className="h-[50%] min-h-[200px] max-h-[50%] shrink-0 w-full flex items-center justify-center p-1 bg-black relative overflow-hidden"
-          onClick={() => {
-            // Clicking canvas background deselects layer and video
-            setSelectedGroupId(null);
-            setIsVideoSelected(false);
-            setActivePanel('none');
-          }}
+          onClick={handleClearSelection}
         >
           <FramedVideoStage
             sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
             videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
+            poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
             clipStart={clipStart}
             clipEnd={clipEnd}
             clipDuration={clipDuration}
@@ -2108,25 +2752,55 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             setIsPlaying={setIsPlaying}
             showPlayPauseOverlay={false}
             isCompact={false}
+            isDetail={true}
+            onVideoClick={() => {
+              if (selectedGroupId || isVideoSelected) {
+                handleClearSelection();
+              } else {
+                handleTogglePlay();
+              }
+            }}
           >
             <InteractiveCaptionCanvas
               track={visibleCaptionTrack}
               currentTime={currentTime}
               selectedGroupId={selectedGroupId}
               layoutMode={layoutMode}
-              onSelectGroup={(id) => {
+              onSelectGroup={handleSelectGroup}
+              onOpenTextEditor={(id) => {
                 setSelectedGroupId(id);
-                if (id) setIsVideoSelected(false);
+                setIsVideoSelected(false);
+                setActivePanel('style');
               }}
               onUpdateGroup={handleUpdateGroup}
               onDeleteGroup={handleDeleteGroup}
               onDuplicateGroup={handleDuplicateGroup}
+              onApplyLayoutToAll={handleApplyLayoutToAll}
             />
           </FramedVideoStage>
         </div>
 
         {/* LOWER WORKSPACE (~2/3 screen split: Transport + Timeline / Tertiary Panel) */}
-        <div className="flex-1 min-h-0 relative flex flex-col bg-[#121418] overflow-hidden">
+        <div
+          className="flex-1 min-h-0 relative flex flex-col bg-[#121418] overflow-hidden"
+          onClick={(e) => {
+            const target = e.target as HTMLElement;
+            if (target.closest('button, input, textarea, select, [data-layer-block="true"], [data-video-track="true"], [data-handle]')) {
+              return;
+            }
+            if (selectedGroupId || isVideoSelected) {
+              handleClearSelection();
+            }
+          }}
+        >
+          {/* Toast feedback for playback issues */}
+          {playbackFeedback && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 px-3 py-1 bg-red-500/90 text-white text-[11px] font-medium rounded-full shadow-lg backdrop-blur-sm animate-in fade-in flex items-center gap-1.5 pointer-events-none">
+              <AlertCircle size={12} />
+              <span>{playbackFeedback}</span>
+            </div>
+          )}
+
           {/* 3. CAPCUT TRANSPORT-CONTROL ROW (Fullscreen · Play/Pause · Undo/Redo) */}
           <div className="shrink-0 h-9 px-3 bg-[#13161B] border-y border-[#232832] flex items-center justify-between text-[11px] z-20">
             {/* Left: Fullscreen / Expand preview icon + Timecode */}
@@ -2194,11 +2868,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   isVideoSelected={isVideoSelected}
                   isPlaying={isPlaying}
                   filmstripFrames={filmstripFrames}
+                  mediaElementRef={videoRef}
+                  clipStart={currentClip.start_time}
+                  clipEnd={currentClip.end_time}
+                  paddedStart={currentClip.padded_start}
+                  paddedEnd={currentClip.padded_end}
+                  onTrimChange={handleTrimChange}
                   onSeek={handleSeek}
-                  onSelectGroup={(id) => {
-                    setSelectedGroupId(id);
-                    if (id) setIsVideoSelected(false);
-                  }}
+                  onSelectGroup={handleSelectGroup}
                   onSelectVideo={() => {
                     setIsVideoSelected(true);
                     setSelectedGroupId(null);
@@ -2222,17 +2899,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   activePanel={activePanel}
                   onActivePanelChange={setActivePanel}
                   onUpdateMainVideoAudio={handleUpdateMainVideoAudio}
-                  onSelectGroup={(id) => {
-                    setSelectedGroupId(id);
-                    if (id) setIsVideoSelected(false);
-                  }}
+                  onSelectGroup={handleSelectGroup}
                   onSelectVideo={(sel) => {
                     setIsVideoSelected(sel);
                     if (sel) setSelectedGroupId(null);
                   }}
-                  onUpdateTrack={setCaptionTrack}
+                  onUpdateTrack={(updated, commit = true) => {
+                    setCaptionTrack(updated, commit);
+                    setSaveStatus('unsaved');
+                  }}
                   onLayoutChange={handleLayoutChange}
                   onSeek={handleSeek}
+                  onPreviewAnimation={handlePreviewAnimation}
                   canUndo={canUndo}
                   canRedo={canRedo}
                   onUndo={undo}
@@ -2242,7 +2920,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             </>
           ) : (
             /* Tertiary View: Detailed Settings Panel fills lower workspace, zero preview jumping */
-            <div className="flex-1 min-h-0 w-full h-full bg-[#16191E] z-30 pb-[env(safe-area-inset-bottom,0px)] overflow-hidden">
+            <div className="flex-1 min-h-0 w-full h-full bg-[#121418] z-30 pb-[env(safe-area-inset-bottom,0px)] overflow-hidden">
               <CaptionStudio
                 track={visibleCaptionTrack}
                 currentTime={currentTime}
@@ -2256,17 +2934,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 activePanel={activePanel}
                 onActivePanelChange={setActivePanel}
                 onUpdateMainVideoAudio={handleUpdateMainVideoAudio}
-                onSelectGroup={(id) => {
-                  setSelectedGroupId(id);
-                  if (id) setIsVideoSelected(false);
-                }}
+                onSelectGroup={handleSelectGroup}
                 onSelectVideo={(sel) => {
                   setIsVideoSelected(sel);
                   if (sel) setSelectedGroupId(null);
                 }}
-                onUpdateTrack={setCaptionTrack}
+                onUpdateTrack={(updated, commit = true) => {
+                  setCaptionTrack(updated, commit);
+                  setSaveStatus('unsaved');
+                }}
                 onLayoutChange={handleLayoutChange}
                 onSeek={handleSeek}
+                onPreviewAnimation={handlePreviewAnimation}
                 canUndo={canUndo}
                 canRedo={canRedo}
                 onUndo={undo}
@@ -2295,6 +2974,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <FramedVideoStage
                 sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
                 videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
+                poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
                 preferRendered={Boolean(currentClip.video_url && !currentClip.is_render_stale)}
                 clipStart={clipStart}
                 clipEnd={clipEnd}
@@ -2416,7 +3096,43 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             </div>
           </section>
 
-
+          {/* Visibility / Privacy Selector */}
+          <section className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] font-semibold text-text-secondary uppercase tracking-wider">
+              <span>Visibility</span>
+              <span className="font-mono text-[10px] text-primary lowercase tracking-normal font-medium">
+                {publishMode === 'private' && 'Only you can view'}
+                {publishMode === 'unlisted' && 'Anyone with link can view'}
+                {publishMode === 'public' && 'Publicly visible to everyone'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'private', label: 'Private', icon: <Lock size={13} />, desc: 'Review safe' },
+                { id: 'unlisted', label: 'Unlisted', icon: <LinkIcon size={13} />, desc: 'Share link' },
+                { id: 'public', label: 'Public', icon: <Globe size={13} />, desc: 'Live on feed' },
+              ].map((m) => {
+                const isSelected = publishMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setPublishMode(m.id as 'private' | 'unlisted' | 'public')}
+                    className={`min-h-[46px] p-2 rounded-xl border flex flex-col items-center justify-center gap-1 active:scale-[0.98] transition-all ${isSelected
+                      ? 'bg-primary/15 border-primary text-text-main shadow-hero-sm font-semibold'
+                      : 'bg-surface-100 border-border text-text-muted hover:text-text-secondary'
+                      }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className={isSelected ? 'text-primary' : 'text-text-muted'}>{m.icon}</span>
+                      <span className="text-[12px]">{m.label}</span>
+                    </div>
+                    <span className="text-[9px] text-text-muted font-sans">{m.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
 
           {/* Content Fields */}
           <section className="space-y-2.5">
@@ -2457,7 +3173,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-[13px] font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
           >
             <Send size={15} />
-            <span>{isSubmitting ? 'Publishing…' : 'Approve & publish'}</span>
+            <span>
+              {isSubmitting
+                ? 'Publishing…'
+                : `Approve & Publish (${publishMode.charAt(0).toUpperCase() + publishMode.slice(1)})`}
+            </span>
           </button>
         </footer>
       </div>
@@ -2558,7 +3278,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <div className="pt-2">
               <button
                 type="button"
-                onClick={handleReject}
+                onClick={() => handlePromptReject(currentClip)}
                 disabled={isSubmitting}
                 className="w-full min-h-[44px] px-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 flex items-center justify-center gap-2 text-[12px] font-semibold text-red-400 active:scale-[0.98] transition-all"
               >
@@ -2566,6 +3286,69 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <span>Reject Clip</span>
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // =========================================================================
+  // VIEW 6: DOUBLE CONFIRMATION MODAL FOR REJECT
+  // =========================================================================
+  const renderRejectConfirmationModal = () => {
+    if (!clipToReject) return null;
+
+    return (
+      <div
+        onClick={() => setClipToReject(null)}
+        className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-sm rounded-t-3xl sm:rounded-2xl bg-[#16191E] border border-border p-5 pb-8 sm:pb-5 space-y-4 shadow-2xl animate-in slide-in-from-bottom-4 duration-200"
+        >
+          {/* Mobile Sheet Handle */}
+          <div className="w-10 h-1 rounded-full bg-surface-300/60 mx-auto -mt-2 mb-2 sm:hidden" />
+
+          <div className="flex items-start gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0 text-red-400">
+              <Trash2 size={20} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-[15px] font-semibold text-text-main leading-tight">
+                Reject & Delete Clip?
+              </h3>
+              <p className="text-[12px] text-text-secondary mt-1 leading-relaxed">
+                Are you sure you want to reject <span className="text-text-main font-semibold">&ldquo;{clipToReject.title || clipToReject.hook || 'this clip'}&rdquo;</span>?
+              </p>
+              <p className="text-[11px] text-red-400/90 mt-1.5 leading-snug">
+                This will immediately delete the rendered MP4 and thumbnail files from your storage. This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 pt-2">
+            <button
+              type="button"
+              onClick={() => setClipToReject(null)}
+              disabled={isSubmitting}
+              className="min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-[13px] font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmReject}
+              disabled={isSubmitting}
+              className="min-h-[44px] rounded-xl bg-red-600 hover:bg-red-500 text-white text-[13px] font-semibold flex items-center justify-center gap-1.5 shadow-hero-sm active:scale-[0.98] transition-all disabled:opacity-50"
+            >
+              {isSubmitting ? (
+                <RotateCw size={14} className="animate-spin" />
+              ) : (
+                <Trash2 size={14} />
+              )}
+              <span>{isSubmitting ? 'Deleting…' : 'Yes, Delete'}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -2580,6 +3363,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       {viewMode === 'studio' && renderStudioView()}
       {viewMode === 'publish' && renderPublishView()}
       {renderMoreModal()}
+      {renderRejectConfirmationModal()}
     </div>
   );
 };

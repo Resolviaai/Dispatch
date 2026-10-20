@@ -40,18 +40,28 @@ def upload_youtube_short(
 
     # Check for credentials
     from dispatch.config import ROOT_DIR, YOUTUBE_TOKEN_PATH
-    candidates = [
-        credentials_path,
-        Path(os.getenv("DISPATCH_YOUTUBE_TOKEN_PATH", str(YOUTUBE_TOKEN_PATH))),
-        YOUTUBE_TOKEN_PATH,
-        ROOT_DIR / "youtube_token.json",
-        Path("youtube_token.json"),
-    ]
-    token_file = None
-    for c in candidates:
-        if c and c.exists():
-            token_file = c
-            break
+
+    if credentials_path is not None:
+        # Caller explicitly requested a specific credentials file — honour that contract strictly.
+        # Do NOT silently fall back to the system-wide token when a specific path was requested.
+        if credentials_path.exists():
+            token_file = credentials_path
+        else:
+            token_file = None
+    else:
+        # Auto-discovery: scan well-known locations
+        env_token_path = os.getenv("DISPATCH_YOUTUBE_TOKEN_PATH")
+        candidates = [
+            Path(env_token_path) if env_token_path else None,
+            YOUTUBE_TOKEN_PATH,
+            ROOT_DIR / "youtube_token.json",
+            Path("youtube_token.json"),
+        ]
+        token_file = None
+        for c in candidates:
+            if c and c.exists():
+                token_file = c
+                break
 
     if not token_file and not os.getenv("YOUTUBE_ACCESS_TOKEN"):
         raise PermissionError("YouTube OAuth credentials missing (youtube_token.json). Please authenticate via Settings.")

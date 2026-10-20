@@ -530,9 +530,14 @@ def validate_and_filter_candidates(
         if layout not in ("crop_follow", "fit_blur"):
             layout = "fit_blur"
 
+        p_start = max(0.0, round(start_t - 4.0, 2))
+        p_end = min(total_duration, round(end_t + 4.0, 2))
+
         valid_candidates.append({
             "start_time": start_t,
             "end_time": end_t,
+            "padded_start": p_start,
+            "padded_end": p_end,
             "duration": duration,
             "title": cand.title.strip(),
             "hook": (cand.hook or "").strip(),
@@ -876,7 +881,9 @@ def identify_and_save_highlights(
                 virality_score=c["virality_score"],
                 layout_mode=c["layout_recommendation"],
                 platform_targets="youtube",
-                publish_mode=publish_mode
+                publish_mode=publish_mode,
+                padded_start=c.get("padded_start"),
+                padded_end=c.get("padded_end")
             )
             saved_ids.append(cid)
 

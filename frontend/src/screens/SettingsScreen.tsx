@@ -299,12 +299,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               <input
                 id="youtube-pairing-code"
                 value={pairingCode}
-                onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, '').slice(0, 8))}
-                placeholder="8-digit code"
+                onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="4-digit code"
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                maxLength={8}
-                className="w-full min-h-[44px] rounded-lg bg-surface-200 border border-border px-3 text-center text-sm font-mono tabular-nums tracking-[0.2em] text-text-main placeholder:text-text-muted"
+                maxLength={4}
+                className="w-full min-h-[44px] rounded-lg bg-surface-200 border border-border px-3 text-center text-lg font-mono tabular-nums tracking-[0.3em] font-semibold text-text-main placeholder:text-text-muted"
               />
               <div className="rounded-lg bg-surface-200 border border-border p-3 flex gap-2">
                 <ShieldAlert size={16} className="shrink-0 text-warning" />
@@ -314,7 +314,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </div>
               <button
                 onClick={handleConnectYouTube}
-                disabled={pairingCode.length !== 8}
+                disabled={pairingCode.length !== 4}
                 className="w-full min-h-[44px] py-2.5 px-3 rounded-lg bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
               >
                 <KeyRound size={16} />

@@ -13,6 +13,10 @@ export interface RecordingItem {
   finalizedAt?: number | null;
   durationSeconds?: number;
   videoUrl?: string;
+  clipCount?: number;
+  approvedClipCount?: number;
+  chunkStatus?: string;
+  sessionStatus?: string;
 }
 
 export interface YouTubeStatus {
@@ -26,6 +30,20 @@ export interface StorageInfo {
   totalGb: number;
 }
 
+export interface ExposureInfo {
+  minIndex: number;
+  maxIndex: number;
+  currentIndex: number;
+  stepEv: number;
+  isSupported: boolean;
+}
+
+export interface ZoomInfo {
+  minZoom: number;
+  maxZoom: number;
+  currentZoom: number;
+}
+
 declare global {
   interface Window {
     DispatchBridge?: {
@@ -36,6 +54,12 @@ declare global {
       toggleTorch: () => boolean;
       toggleMic: () => boolean;
       setZoom: (ratio: number) => number;
+      getZoomInfo?: () => string;
+      focusOnPoint?: (normX: number, normY: number) => void;
+      lockAeAfAtPoint?: (normX: number, normY: number) => boolean;
+      unlockAeAf?: () => void;
+      setExposureIndex?: (index: number) => number;
+      getExposureInfo?: () => string;
       getRecordings: () => string;
       getYouTubeStatus: () => string;
       connectYouTube: (pcHost: string, pairingCode: string) => string;
@@ -113,6 +137,57 @@ export const Bridge = {
     }
     console.log('[Mock Bridge] setZoom', ratio);
     return ratio;
+  },
+
+  getZoomInfo(): ZoomInfo {
+    if (window.DispatchBridge?.getZoomInfo) {
+      try {
+        return JSON.parse(window.DispatchBridge.getZoomInfo());
+      } catch {}
+    }
+    return { minZoom: 1.0, maxZoom: 5.0, currentZoom: 1.0 };
+  },
+
+  focusOnPoint(normX: number, normY: number): void {
+    if (window.DispatchBridge?.focusOnPoint) {
+      window.DispatchBridge.focusOnPoint(normX, normY);
+    } else {
+      console.log('[Mock Bridge] focusOnPoint', normX, normY);
+    }
+  },
+
+  lockAeAfAtPoint(normX: number, normY: number): boolean {
+    if (window.DispatchBridge?.lockAeAfAtPoint) {
+      return window.DispatchBridge.lockAeAfAtPoint(normX, normY);
+    }
+    console.log('[Mock Bridge] lockAeAfAtPoint', normX, normY);
+    return true;
+  },
+
+  unlockAeAf(): void {
+    if (window.DispatchBridge?.unlockAeAf) {
+      window.DispatchBridge.unlockAeAf();
+    } else {
+      console.log('[Mock Bridge] unlockAeAf');
+    }
+  },
+
+  setExposureIndex(index: number): number {
+    if (window.DispatchBridge?.setExposureIndex) {
+      return window.DispatchBridge.setExposureIndex(index);
+    }
+    return index;
+  },
+
+  getExposureInfo(): ExposureInfo {
+    if (window.DispatchBridge?.getExposureInfo) {
+      try {
+        return JSON.parse(window.DispatchBridge.getExposureInfo());
+      } catch {
+        // fallback
+      }
+    }
+    return { minIndex: -4, maxIndex: 4, currentIndex: 0, stepEv: 0.5, isSupported: true };
   },
 
   getRecordings(): RecordingItem[] {

@@ -60,13 +60,13 @@ class TranscriptionWorker:
         env_interval = os.getenv("DISPATCH_TRANSCRIPTION_POLL_INTERVAL")
         self.poll_interval = poll_interval_seconds or (int(env_interval) if env_interval and env_interval.isdigit() else 15)
 
-        # Wait window for YouTube captions before Whisper fallback (default 6 hours = 21600s per user spec)
+        # Wait window for YouTube captions before Whisper fallback (default 4 hours = 14400s)
         env_wait = os.getenv("DISPATCH_TRANSCRIPT_WAIT_SECONDS")
-        self.caption_wait_seconds = caption_wait_seconds or (int(env_wait) if env_wait and env_wait.isdigit() else 21600)
+        self.caption_wait_seconds = caption_wait_seconds or (int(env_wait) if env_wait and env_wait.isdigit() else 14400)
 
-        # Reprobe interval for checking YouTube captions (default 2 minutes = 120s)
+        # Reprobe interval for checking YouTube captions (default 5 minutes = 300s)
         env_reprobe = os.getenv("DISPATCH_CAPTION_REPROBE_SECONDS")
-        self.caption_reprobe_seconds = caption_reprobe_seconds or (int(env_reprobe) if env_reprobe and env_reprobe.isdigit() else 120)
+        self.caption_reprobe_seconds = caption_reprobe_seconds or (int(env_reprobe) if env_reprobe and env_reprobe.isdigit() else 300)
 
         self.catcher = catcher or YouTubeInboxCatcher()
         self._stop_event = threading.Event()
@@ -115,6 +115,15 @@ class TranscriptionWorker:
         with self._lock:
             processed = []
 
+            # 0. FIFO Rolling Backlog: drain any queued transcriptions from yesterday / available quota
+            try:
+                from dispatch.transcription.gemini_engine import drain_queued_transcriptions
+                drained = drain_queued_transcriptions(max_batch=5)
+                if drained > 0:
+                    logger.info("Drained %d queued transcription clips from backlog.", drained)
+            except Exception as e:
+                logger.error("Error running drain_queued_transcriptions: %s", e)
+
             # 1. Promote DOWNLOADED items to WAITING_FOR_TRANSCRIPT
             downloaded_items = db.list_youtube_inbox(status="DOWNLOADED", limit=20)
             for item in downloaded_items:
@@ -146,6 +155,30 @@ class TranscriptionWorker:
             "Video %s: Entering WAITING_FOR_TRANSCRIPT (Deadline: %s, Wait window: %ds, Reprobe: %ds)",
             video_id, deadline_str, self.caption_wait_seconds, self.caption_reprobe_seconds
         )
+
+        # Stage 1 Fast Funnel: If local video exists and Gemini API key is configured,
+        # transcribe immediately with gemini-3.5-flash-lite in ~3s without waiting for YouTube captions!
+        local_path_str = item.get("local_video_path")
+        if local_path_str and Path(local_path_str).exists():
+            from dispatch.config import GEMINI_API_KEY
+            api_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+            if api_key:
+                try:
+                    logger.info("Stage 1 Fast Ingestion: Transcribing %s with gemini-3.5-flash-lite...", video_id)
+                    from dispatch.transcription.gemini_engine import transcribe_stage1_flash_lite
+                    stage1_segments = transcribe_stage1_flash_lite(Path(local_path_str))
+                    if stage1_segments:
+                        logger.info("Stage 1 Gemini transcription succeeded for %s (%d segments). Finalizing immediately.",
+                                    video_id, len(stage1_segments))
+                        return self._finalize_transcription(
+                            video_id=video_id,
+                            local_video_path=local_path_str,
+                            duration=item.get("duration", 0.0),
+                            source="gemini_stage1",
+                            segments=stage1_segments
+                        )
+                except Exception as e:
+                    logger.warning("Gemini Stage 1 transcription failed for %s: %s. Falling back to caption wait / Whisper.", video_id, e)
 
         db.update_youtube_video(
             video_id=video_id,
@@ -239,14 +272,14 @@ class TranscriptionWorker:
         # 2. Captions unavailable. Check deadline.
         if remaining > 0:
             logger.info(
-                "YouTube captions not yet available for %s. Waiting (%.1f minutes / %.0fs remaining until Whisper fallback).",
+                "YouTube captions not yet available for %s. Waiting (%.1f minutes / %.0fs remaining).",
                 video_id, remaining / 60.0, remaining
             )
             return None
 
-        # 3. Deadline passed! Explicit Whisper fallback.
+        # 3. Deadline passed → fall back to local Whisper transcription
         logger.info(
-            "Caption wait deadline passed for %s. Triggering local faster-whisper fallback.",
+            "Caption wait deadline passed for %s. Falling back to local Whisper transcription.",
             video_id
         )
         return self._run_whisper_fallback(
@@ -263,17 +296,27 @@ class TranscriptionWorker:
     ) -> Dict[str, Any]:
         """Execute local faster-whisper transcription on the downloaded video."""
         if not local_video_path:
-            err = f"Cannot run Whisper fallback for {video_id}: local_video_path is missing"
-            logger.error(err)
-            db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
-            raise FileNotFoundError(err)
+            err = f"YouTube captions unavailable and cannot run Whisper fallback for {video_id}: local_video_path is missing"
+            logger.warning(err)
+            db.update_youtube_video(video_id=video_id, status="CAPTIONS_UNAVAILABLE", last_error=err)
+            return {
+                "video_id": video_id,
+                "status": "CAPTIONS_UNAVAILABLE",
+                "source": "none",
+                "segments": []
+            }
 
         video_path = Path(local_video_path)
         if not video_path.exists() or video_path.stat().st_size == 0:
-            err = f"Cannot run Whisper fallback for {video_id}: local file not found at {video_path}"
-            logger.error(err)
-            db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
-            raise FileNotFoundError(err)
+            err = f"YouTube captions unavailable and cannot run Whisper fallback for {video_id}: local file not found at {video_path}"
+            logger.warning(err)
+            db.update_youtube_video(video_id=video_id, status="CAPTIONS_UNAVAILABLE", last_error=err)
+            return {
+                "video_id": video_id,
+                "status": "CAPTIONS_UNAVAILABLE",
+                "source": "none",
+                "segments": []
+            }
 
         try:
             logger.info("Running local faster-whisper on %s (%.2f MB)...",

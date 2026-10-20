@@ -1,376 +1,409 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
   Move, 
   Maximize2, 
   RotateCw, 
   Edit3, 
   X, 
-  Check 
+  Check,
+  CheckCheck,
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig } from './types';
+import { preserveWordTimingsOnEdit } from './timingPreservation';
+import { partitionWordsIntoVisualLines } from './linePartition';
+
+function applyColorOpacity(color: string, opacity: number = 1.0): string {
+  if (opacity >= 1.0) return color;
+  if (color.startsWith('#')) {
+    const hex = color.slice(1);
+    let r = 0, g = 0, b = 0;
+    if (hex.length === 3) {
+      r = parseInt(hex[0] + hex[0], 16);
+      g = parseInt(hex[1] + hex[1], 16);
+      b = parseInt(hex[2] + hex[2], 16);
+    } else if (hex.length >= 6) {
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+    }
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  }
+  return color;
+}
 
 interface InteractiveTextCanvasProps {
   track: CaptionTrack | null;
   currentTime: number;
   selectedGroupId: string | null;
   onSelectGroup: (groupId: string | null) => void;
-  onUpdateGroup: (groupId: string, patch: Partial<CaptionGroup>) => void;
+  onUpdateGroup: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
+  onApplyLayoutToAll?: (groupId: string) => void;
   layoutMode?: string;
   isInteractive?: boolean;
 }
 
-export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
-  track,
+interface CanvasGroupItemProps {
+  group: CaptionGroup;
+  defaultStyle: StyleConfig;
+  defaultLayout: LayoutConfig;
+  defaultAnimation: any;
+  isSelected: boolean;
+  currentTime: number;
+  containerRef: React.RefObject<HTMLDivElement>;
+  onSelectGroup: (groupId: string | null) => void;
+  onUpdateGroup: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
+  onApplyLayoutToAll?: (groupId: string) => void;
+  layoutMode: string;
+  isInteractive: boolean;
+}
+
+const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
+  group,
+  defaultStyle,
+  defaultLayout,
+  defaultAnimation,
+  isSelected,
   currentTime,
-  selectedGroupId,
+  containerRef,
   onSelectGroup,
   onUpdateGroup,
-  layoutMode = 'fit_black',
-  isInteractive = true
+  onApplyLayoutToAll,
+  layoutMode,
+  isInteractive
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Dragging and resizing states
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
-  const [isEditingInline, setIsEditingInline] = useState(false);
-  const [inlineEditText, setInlineEditText] = useState('');
 
-  const dragStartRef = useRef<{ x: number; y: number; initialX: number; initialY: number }>({ x: 0, y: 0, initialX: 0.5, initialY: 0.78 });
-  const resizeStartRef = useRef<{ x: number; initialScale: number }>({ x: 0, initialScale: 1.0 });
+  const style: StyleConfig = group.style || defaultStyle;
+  const layout: LayoutConfig = group.layout || defaultLayout;
+  const anim = group.animation || defaultAnimation;
 
-  if (!track || !track.groups || track.groups.length === 0) {
-    return null;
-  }
+  // Layer type awareness
+  const isCaption = (group.type || 'caption') === 'caption';
+  const highlightEnabled = isCaption && (style.highlight_enabled !== false);
 
-  // Find currently active group by currentTime, or fallback to selected group
-  const activeGroupByTime = track.groups.find(
-    grp => currentTime >= grp.start && currentTime <= grp.end
-  );
-
-  const currentGroup = activeGroupByTime || 
-    (selectedGroupId ? track.groups.find(g => g.id === selectedGroupId) : null) || 
-    track.groups[0];
-
-  if (!currentGroup) return null;
-
-  const isSelected = selectedGroupId === currentGroup.id || !selectedGroupId;
-  const style: StyleConfig = currentGroup.style || track.default_style;
-  const layout: LayoutConfig = currentGroup.layout || track.default_layout;
-  const anim = currentGroup.animation || track.default_animation;
-
-  // Normalized position coordinates [0.0 - 1.0]
   let posX = layout.position_x ?? 0.5;
   let posY = layout.position_y ?? 0.78;
   const scale = layout.scale ?? 1.0;
 
-  // Adapt for landscape mode if applicable
-  if (layoutMode === 'landscape') {
+  if (isCaption && layoutMode === 'landscape') {
     posY = Math.max(0.78, posY);
   }
 
-  // Alignment classes
-  const justifyClass = 
-    layout.alignment === 'left' ? 'justify-start text-left' :
-    layout.alignment === 'right' ? 'justify-end text-right' :
-    'justify-center text-center';
+  const dragStartRef = useRef<{ 
+    x: number; 
+    y: number; 
+    initialX: number; 
+    initialY: number; 
+    containerWidth: number; 
+    containerHeight: number; 
+  }>({ x: 0, y: 0, initialX: 0.5, initialY: 0.78, containerWidth: 1, containerHeight: 1 });
 
-  // Drag interaction handlers
+  const resizeStartRef = useRef<{ 
+    x: number; 
+    initialScale: number; 
+    containerWidth: number; 
+  }>({ x: 0, initialScale: 1.0, containerWidth: 1 });
+
+  const latestPatchRef = useRef<{ groupId: string; patch: Partial<CaptionGroup> } | null>(null);
+
+  const fontFam = style.font_family || 'Montserrat';
+  const fontSize = Math.max(10, Math.round((style.font_size || 44) * 0.44));
+  const fontWeight = style.font_weight || 'bold';
+  const letterSpacing = style.letter_spacing || 0;
+
+  const visualLines = useMemo(() => {
+    return partitionWordsIntoVisualLines(
+      group.words || [],
+      fontFam,
+      fontSize,
+      fontWeight,
+      letterSpacing,
+      360 * (layout.max_width || 0.88),
+      style.text_transform
+    );
+  }, [group.words, fontFam, fontSize, fontWeight, letterSpacing, layout.max_width, style.text_transform]);
+
   const handlePointerDownDrag = (e: React.PointerEvent) => {
-    if (!isInteractive || isEditingInline) return;
+    if (!isInteractive) return;
     e.stopPropagation();
-    onSelectGroup(currentGroup.id);
+    onSelectGroup(group.id);
 
+    const rect = containerRef.current?.getBoundingClientRect() || { width: 393, height: 700 };
     dragStartRef.current = {
       x: e.clientX,
       y: e.clientY,
       initialX: posX,
-      initialY: posY
+      initialY: posY,
+      containerWidth: Math.max(1, rect.width),
+      containerHeight: Math.max(1, rect.height),
     };
+    latestPatchRef.current = null;
     setIsDragging(true);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-
     if (isDragging) {
-      const deltaX = (e.clientX - dragStartRef.current.x) / rect.width;
-      const deltaY = (e.clientY - dragStartRef.current.y) / rect.height;
+      const deltaX = (e.clientX - dragStartRef.current.x) / dragStartRef.current.containerWidth;
+      const deltaY = (e.clientY - dragStartRef.current.y) / dragStartRef.current.containerHeight;
 
       const newX = Math.max(0.12, Math.min(0.88, dragStartRef.current.initialX + deltaX));
       const newY = Math.max(0.15, Math.min(0.90, dragStartRef.current.initialY + deltaY));
 
-      onUpdateGroup(currentGroup.id, {
+      const patch: Partial<CaptionGroup> = {
         layout: {
           ...layout,
           position_x: Number(newX.toFixed(3)),
           position_y: Number(newY.toFixed(3))
         }
-      });
+      };
+
+      latestPatchRef.current = { groupId: group.id, patch };
+      onUpdateGroup(group.id, patch, false);
     } else if (isResizing) {
-      const deltaX = (e.clientX - resizeStartRef.current.x) / (rect.width * 0.4);
+      const deltaX = (e.clientX - resizeStartRef.current.x) / (resizeStartRef.current.containerWidth * 0.4);
       const newScale = Math.max(0.6, Math.min(2.4, resizeStartRef.current.initialScale + deltaX));
 
-      onUpdateGroup(currentGroup.id, {
+      const patch: Partial<CaptionGroup> = {
         layout: {
           ...layout,
           scale: Number(newScale.toFixed(2))
         }
-      });
+      };
+
+      latestPatchRef.current = { groupId: group.id, patch };
+      onUpdateGroup(group.id, patch, false);
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (latestPatchRef.current) {
+      onUpdateGroup(latestPatchRef.current.groupId, latestPatchRef.current.patch, true);
+      latestPatchRef.current = null;
+    }
     if (isDragging) setIsDragging(false);
     if (isResizing) setIsResizing(false);
     try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
     } catch {}
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
+    const rect = containerRef.current?.getBoundingClientRect() || { width: 393, height: 700 };
     resizeStartRef.current = {
       x: e.clientX,
-      initialScale: scale
+      initialScale: scale,
+      containerWidth: Math.max(1, rect.width),
     };
+    latestPatchRef.current = null;
     setIsResizing(true);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
   };
 
-  // Inline text editing commit
-  const handleCommitInlineText = () => {
-    if (!inlineEditText.trim()) {
-      setIsEditingInline(false);
-      return;
-    }
-    const rawWords = inlineEditText.trim().split(/\s+/);
-    const duration = currentGroup.end - currentGroup.start;
-    const step = duration / Math.max(1, rawWords.length);
-
-    const updatedWords: Word[] = rawWords.map((text, idx) => ({
-      id: `${currentGroup.id}-w${idx}`,
-      text,
-      start: Number((currentGroup.start + idx * step).toFixed(2)),
-      end: Number((currentGroup.start + (idx + 1) * step).toFixed(2)),
-      confidence: 1.0
-    }));
-
-    onUpdateGroup(currentGroup.id, {
-      words: updatedWords
-    });
-    setIsEditingInline(false);
-  };
-
-  // Deterministic 3-layer animation evaluation (Enter / Active-Word / Exit)
-  const timeSinceStart = Math.max(0, currentTime - currentGroup.start);
-  const timeUntilEnd = Math.max(0, currentGroup.end - currentTime);
+  // Deterministic 3-layer animation evaluation (Enter / Exit / Loop)
+  const timeSinceStart = Math.max(0, currentTime - group.start);
+  const timeUntilEnd = Math.max(0, group.end - currentTime);
   
   let enterOpacity = 1.0;
-  let enterTranslateY = 0;
-  if (anim.enter?.type === 'fade' && anim.enter.duration_ms > 0) {
-    const enterSec = anim.enter.duration_ms / 1000;
-    if (timeSinceStart < enterSec) enterOpacity = timeSinceStart / enterSec;
-  } else if (anim.enter?.type === 'slide_up' && anim.enter.duration_ms > 0) {
-    const enterSec = anim.enter.duration_ms / 1000;
-    if (timeSinceStart < enterSec) {
-      const p = timeSinceStart / enterSec;
+  let enterTransform = '';
+  const enterType = anim.enter?.type || (anim as any)?.enter_type || 'none';
+  const enterDur = (anim.enter?.duration_ms || (anim as any)?.enter_duration_ms || 200) / 1000;
+  if (enterType !== 'none' && timeSinceStart < enterDur) {
+    const p = Math.max(0, Math.min(1, timeSinceStart / enterDur));
+    if (enterType === 'fade') enterOpacity = p;
+    else if (enterType === 'pop') {
+      enterOpacity = Math.min(1, p * 2);
+      enterTransform = `scale(${0.5 + 0.5 * Math.sin(p * Math.PI / 2)})`;
+    } else if (enterType === 'slide_up') {
       enterOpacity = p;
-      enterTranslateY = (1 - p) * 15;
+      enterTransform = `translateY(${(1 - p) * 20}px)`;
     }
   }
 
   let exitOpacity = 1.0;
-  if (anim.exit?.type === 'fade' && anim.exit.duration_ms > 0) {
-    const exitSec = anim.exit.duration_ms / 1000;
-    if (timeUntilEnd < exitSec) exitOpacity = timeUntilEnd / exitSec;
+  let exitTransform = '';
+  const exitType = anim.exit?.type || (anim as any)?.exit_type || 'none';
+  const exitDur = (anim.exit?.duration_ms || (anim as any)?.exit_duration_ms || 150) / 1000;
+  if (exitType !== 'none' && timeUntilEnd < exitDur) {
+    const p = Math.max(0, Math.min(1, timeUntilEnd / exitDur));
+    if (exitType === 'fade') exitOpacity = p;
+    else if (exitType === 'scale_down') {
+      exitOpacity = p;
+      exitTransform = `scale(${0.5 + 0.5 * p})`;
+    } else if (exitType === 'slide_down') {
+      exitOpacity = p;
+      exitTransform = `translateY(${(1 - p) * 20}px)`;
+    }
+  }
+
+  let loopTransform = '';
+  const loopType = anim.loop?.type || (anim as any)?.loop_type || 'none';
+  if (loopType === 'pulse') {
+    const speed = (anim.loop?.speed_ms || (anim as any)?.loop_speed_ms || 1000) / 1000;
+    const loopTime = timeSinceStart / speed;
+    loopTransform = `scale(${1.0 + 0.04 * Math.sin(loopTime * 2 * Math.PI)})`;
+  } else if (loopType === 'wiggle') {
+    const speed = (anim.loop?.speed_ms || (anim as any)?.loop_speed_ms || 1000) / 1000;
+    const loopTime = timeSinceStart / speed;
+    loopTransform = `rotate(${2.0 * Math.sin(loopTime * 2 * Math.PI)}deg)`;
   }
 
   const computedOpacity = (style.opacity ?? 1.0) * enterOpacity * exitOpacity;
+  const extraAnimTransform = [enterTransform, exitTransform, loopTransform].filter(Boolean).join(' ');
+
+  const bgEnabled = style.background_enabled !== false && style.background_mode !== 'none';
+  const rawBgMode = bgEnabled ? (style.background_mode || 'block') : 'none';
+  const isBgBlock = rawBgMode === 'block' || (rawBgMode as string) === 'full_box';
+  const isBgLine = rawBgMode === 'line' || (rawBgMode as string) === 'per_line';
+  const effectiveBgColor = applyColorOpacity(style.background_color || '#000000', style.background_opacity ?? 1.0);
+  const bgOffsetX = (isBgBlock || isBgLine) ? (style.background_offset_x || 0) : 0;
+  const bgOffsetY = (isBgBlock || isBgLine) ? (style.background_offset_y || 0) : 0;
+  const bgOffsetTransform = (bgOffsetX !== 0 || bgOffsetY !== 0) ? `translate(${bgOffsetX}px, ${bgOffsetY}px)` : '';
 
   return (
     <div
-      ref={containerRef}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      className="absolute inset-0 z-20 overflow-hidden select-none"
+      onPointerCancel={handlePointerUp}
       style={{
-        paddingLeft: '4%',
-        paddingRight: '4%'
+        position: 'absolute',
+        left: `${posX * 100}%`,
+        top: `${posY * 100}%`,
+        transform: `translate(-50%, -50%) scale(${scale}) ${extraAnimTransform}`.trim(),
+        width: 'max-content',
+        maxWidth: containerRef.current?.clientWidth
+          ? `${Math.round(containerRef.current.clientWidth * (layout.max_width ?? 0.88))}px`
+          : `${(layout.max_width ?? 0.88) * 100}%`,
+        boxSizing: 'border-box',
+        opacity: computedOpacity,
+        cursor: isInteractive ? (isDragging ? 'grabbing' : 'grab') : 'default',
+        touchAction: 'none'
       }}
+      onPointerDown={handlePointerDownDrag}
+      onClick={(e) => {
+        if (!isInteractive) return;
+        e.stopPropagation();
+        onSelectGroup(group.id);
+      }}
+      className={`relative transition-shadow group ${
+        isSelected && isInteractive ? 'ring-2 ring-primary/80 shadow-[0_0_15px_rgba(37,99,235,0.35)]' : ''
+      }`}
     >
-      <div
-        style={{
-          position: 'absolute',
-          left: `${posX * 100}%`,
-          top: `${posY * 100}%`,
-          transform: `translate(-50%, -50%) scale(${scale}) translateY(${enterTranslateY}px)`,
-          maxWidth: `${(layout.max_width ?? 0.88) * 100}%`,
-          opacity: computedOpacity,
-          cursor: isInteractive ? (isDragging ? 'grabbing' : 'grab') : 'default'
-        }}
-        onPointerDown={handlePointerDownDrag}
-        onDoubleClick={() => {
-          if (!isInteractive) return;
-          setInlineEditText(currentGroup.words.map(w => w.text).join(' '));
-          setIsEditingInline(true);
-        }}
-        className={`relative transition-shadow group ${
-          isSelected && isInteractive ? 'ring-2 ring-primary/80 shadow-[0_0_15px_rgba(37,99,235,0.35)]' : ''
-        }`}
-      >
-        {/* ======================================================== */}
-        {/* CAPCUT SELECTION OVERLAY & TRANSFORM HANDLES            */}
-        {/* ======================================================== */}
-        {isSelected && isInteractive && !isEditingInline && (
-          <div className="absolute -inset-2.5 border border-dashed border-primary rounded-lg pointer-events-none z-30">
-            {/* Top-Left: Close / Deselect handle (with 44px thumb hit-envelope) */}
-            <div 
-              onClick={(e) => { e.stopPropagation(); onSelectGroup(null); }}
-              className="absolute -top-4 -left-4 w-9 h-9 flex items-center justify-center pointer-events-auto cursor-pointer"
-              title="Deselect"
-            >
-              <div className="w-5 h-5 rounded-full bg-surface-200 border border-border flex items-center justify-center hover:bg-red-500 transition-colors shadow-md">
-                <X size={10} className="text-white" />
-              </div>
-            </div>
-
-            {/* Top-Right: Quick Edit handle (with 44px thumb hit-envelope) */}
-            <div 
-              onClick={(e) => {
-                e.stopPropagation();
-                setInlineEditText(currentGroup.words.map(w => w.text).join(' '));
-                setIsEditingInline(true);
-              }}
-              className="absolute -top-4 -right-4 w-9 h-9 flex items-center justify-center pointer-events-auto cursor-pointer"
-              title="Double click or tap to edit text"
-            >
-              <div className="w-5 h-5 rounded-full bg-surface-200 border border-border flex items-center justify-center hover:bg-primary transition-colors shadow-md">
-                <Edit3 size={10} className="text-white" />
-              </div>
-            </div>
-
-            {/* Bottom-Right: Scale / Resize handle (with 44px thumb hit-envelope) */}
-            <div 
-              onPointerDown={handleResizePointerDown}
-              className="absolute -bottom-4 -right-4 w-9 h-9 flex items-center justify-center pointer-events-auto cursor-nwse-resize"
-              title="Drag to resize text scale"
-            >
-              <div className="w-5 h-5 rounded-full bg-primary border border-white flex items-center justify-center hover:scale-110 transition-transform shadow-md">
-                <Maximize2 size={10} className="text-white" />
-              </div>
-            </div>
-
-            {/* Bottom-Center: Move Anchor handle */}
-            <div 
-              className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-surface-200 border border-primary flex items-center justify-center pointer-events-none"
-            >
-              <Move size={8} className="text-primary" />
-            </div>
-          </div>
-        )}
-
-        {/* ======================================================== */}
-        {/* INLINE TEXT EDITING MODAL / INPUT                        */}
-        {/* ======================================================== */}
-        {isEditingInline ? (
+      {/* CAPCUT SELECTION OVERLAY & TRANSFORM HANDLES */}
+      {isSelected && isInteractive && (
+        <div className="absolute -inset-2.5 border border-dashed border-primary rounded-lg pointer-events-none z-30">
+          {/* Top-Left: Close / Deselect handle */}
           <div 
-            onClick={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="p-1.5 rounded-xl bg-surface-100 border border-primary shadow-hero-glow flex items-center gap-2 z-40 min-w-[220px]"
+            onClick={(e) => { e.stopPropagation(); onSelectGroup(null); }}
+            className="absolute -top-5 -left-5 w-11 h-11 flex items-center justify-center pointer-events-auto cursor-pointer"
+            title="Deselect"
           >
-            <input
-              type="text"
-              autoFocus
-              value={inlineEditText}
-              onChange={(e) => setInlineEditText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCommitInlineText();
-                if (e.key === 'Escape') setIsEditingInline(false);
-              }}
-              className="w-full px-2.5 py-1.5 bg-surface-200 rounded-lg text-xs text-text-main font-semibold border border-border focus:outline-none focus:border-primary"
-              placeholder="Edit caption text…"
-            />
-            <button
-              type="button"
-              onClick={handleCommitInlineText}
-              className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg bg-primary hover:bg-primary-hover text-white shrink-0 active:scale-[0.98] transition-all"
-            >
-              <Check size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsEditingInline(false)}
-              className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg bg-surface-200 hover:bg-surface-300 text-text-muted hover:text-text-main shrink-0 active:scale-[0.98] transition-all"
-            >
-              <X size={14} />
-            </button>
+            <div className="w-5 h-5 rounded-full bg-surface-200 border border-border flex items-center justify-center hover:bg-red-500 transition-colors shadow-md">
+              <X size={10} className="text-white" />
+            </div>
           </div>
-        ) : (
-          /* ======================================================== */
-          /* RENDERED TEXT AND WORD-LEVEL POP ANIMATION               */
-          /* ======================================================== */
-          <div
-            className={`flex flex-wrap items-center gap-x-2 gap-y-1 ${justifyClass} p-1.5 rounded-lg transition-all`}
-            style={{
-              ...(style.background_enabled && {
-                backgroundColor: style.background_color,
-                padding: `${style.background_padding_y || 8}px ${style.background_padding_x || 14}px`,
-                borderRadius: `${style.background_corner_radius || 12}px`,
-                backdropFilter: 'blur(8px)'
-              })
-            }}
+
+          {/* Bottom-Right: Scale / Resize handle */}
+          <div 
+            onPointerDown={handleResizePointerDown}
+            className="absolute -bottom-5 -right-5 w-11 h-11 flex items-center justify-center pointer-events-auto cursor-nwse-resize"
+            title="Drag to resize text scale"
           >
-            {currentGroup.words.map((w, idx) => {
-              const isSpoken = currentTime >= w.start && currentTime <= w.end;
-              const wordOverride = w.style_override;
-              const fontFam = style.font_family || 'Impact';
-              const fontSize = Math.max(16, Math.min(42, Math.round((style.font_size || 54) * 0.42)));
+            <div className="w-5 h-5 rounded-full bg-primary border border-white flex items-center justify-center hover:scale-110 transition-transform shadow-md">
+              <Maximize2 size={10} className="text-white" />
+            </div>
+          </div>
 
-              // Tactile scale pop calculation (Spring Punch)
-              let wordScale = 1.0;
-              const activeAnimType = anim.active_word?.type || anim.type;
-              const punchScale = anim.active_word?.active_scale || anim.active_scale || 1.16;
-              const animDurationMs = anim.active_word?.duration_ms || anim.duration_ms || 100;
+          {/* Bottom-Center: Move Anchor handle */}
+          <div 
+            className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-surface-200 border border-primary flex items-center justify-center pointer-events-none"
+          >
+            <Move size={8} className="text-primary" />
+          </div>
 
-              if (isSpoken && (activeAnimType === 'pop' || activeAnimType === 'bounce')) {
-                const durationSec = animDurationMs / 1000;
-                const elapsed = Math.max(0, currentTime - w.start);
-                if (elapsed < durationSec) {
-                  const progress = elapsed / durationSec;
-                  const punch = punchScale - 1.0;
-                  wordScale = 1.0 + punch * Math.cos(progress * (Math.PI / 2));
-                }
+          {/* Quick Apply to All Captions Action Pill (Captions only) */}
+          {onApplyLayoutToAll && isCaption && (
+            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 pointer-events-auto z-40">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onApplyLayoutToAll(group.id);
+                }}
+                className="h-6 px-2.5 rounded-full bg-[#1C1F26]/95 border border-[#2E3239] hover:border-primary text-text-secondary hover:text-white text-[10px] font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 transition-all whitespace-nowrap"
+                title="Apply this caption's position & size to all spoken captions"
+              >
+                <CheckCheck size={11} className="text-primary" />
+                <span>Apply to All Captions</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* RENDERED TEXT AND WORD-LEVEL POP ANIMATION */}
+      <div
+        className={`w-full flex flex-col ${
+          layout.alignment === 'left' ? 'items-start text-left' : layout.alignment === 'right' ? 'items-end text-right' : 'items-center text-center'
+        } p-1.5 rounded-lg transition-all`}
+        style={{
+          transform: bgOffsetTransform || undefined,
+          ...(isBgBlock && {
+            backgroundColor: effectiveBgColor,
+            padding: `${style.background_padding_y || 8}px ${style.background_padding_x || 14}px`,
+            borderRadius: `${style.background_corner_radius || 12}px`,
+          })
+        }}
+      >
+        {visualLines.map((lineWords, lIdx) => {
+          const lineContent = lineWords.map((w, idx) => {
+            const hasWordTiming = isCaption && (group as any).has_word_timing !== false && (group as any).timing_mode !== 'phrase' && w.is_exact !== false;
+            const isSpoken = hasWordTiming && currentTime >= w.start && currentTime <= w.end;
+            const wordOverride = w.style_override;
+
+            // Tactile scale pop calculation (Spring Punch) ONLY when layer is caption
+            let wordScale = 1.0;
+            const activeAnimType = anim.active_word?.type || anim.type;
+            const punchScale = anim.active_word?.active_scale || anim.active_scale || 1.16;
+            const animDurationMs = anim.active_word?.duration_ms || anim.duration_ms || 100;
+
+            if (isCaption && isSpoken && highlightEnabled && activeAnimType && activeAnimType !== 'none' && (activeAnimType === 'pop' || activeAnimType === 'bounce')) {
+              const durationSec = animDurationMs / 1000;
+              const elapsed = Math.max(0, currentTime - w.start);
+              if (elapsed < durationSec) {
+                const progress = elapsed / durationSec;
+                const punch = punchScale - 1.0;
+                wordScale = 1.0 + punch * Math.cos(progress * (Math.PI / 2));
               }
+            }
 
-              // Color resolution
-              let textColor = style.primary_color;
-              if (isSpoken) {
-                textColor = wordOverride?.highlight_color || style.highlight_color;
-              } else if (wordOverride?.color) {
-                textColor = wordOverride.color;
-              }
+            // Color resolution: Normal text strictly preserves primary_color; Spoken highlight only applies to captions
+            let textColor = style.primary_color;
+            if (isCaption && isSpoken && highlightEnabled) {
+              textColor = wordOverride?.highlight_color || style.highlight_color;
+            } else if (wordOverride?.color) {
+              textColor = wordOverride.color;
+            }
 
-              const strokeWidth = style.outline_enabled ? `${Math.max(1.5, (style.outline_width || 4.5) * 0.6)}px` : '0px';
+            const strokeWidth = style.outline_enabled ? `${Math.max(1.5, (style.outline_width || 4.5) * 0.6)}px` : '0px';
 
-              // Glow and Shadow filters
-              const filters: string[] = [];
-              if (style.shadow_enabled) {
-                filters.push(`drop-shadow(${style.shadow_offset_x || 0}px ${style.shadow_offset_y || 2}px ${style.shadow_blur || 4}px ${style.shadow_color || 'rgba(0,0,0,0.85)'})`);
-              }
-              if (style.glow_enabled) {
-                filters.push(`drop-shadow(0px 0px ${style.glow_blur || 14}px ${style.glow_color || '#00F0FF'})`);
-              }
+            const filters: string[] = [];
+            if (style.shadow_enabled) {
+              filters.push(`drop-shadow(${style.shadow_offset_x || 0}px ${style.shadow_offset_y || 2}px ${style.shadow_blur || 4}px ${style.shadow_color || 'rgba(0,0,0,0.85)'})`);
+            }
+            if (style.glow_enabled) {
+              filters.push(`drop-shadow(0px 0px ${style.glow_blur || 14}px ${style.glow_color || '#00F0FF'})`);
+            }
 
-              return (
+            return (
+              <React.Fragment key={w.id || idx}>
                 <span
-                  key={w.id || idx}
                   style={{
                     fontFamily: fontFam,
                     fontSize: `${fontSize}px`,
-                    fontWeight: style.font_weight || 'bold',
+                    fontWeight: w.style_override?.font_weight || style.font_weight || 'bold',
                     textTransform: (style.text_transform as any) || 'uppercase',
                     letterSpacing: `${style.letter_spacing || 0}px`,
                     color: textColor,
@@ -385,11 +418,88 @@ export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
                 >
                   {w.text}
                 </span>
-              );
-            })}
-          </div>
-        )}
+                {idx < lineWords.length - 1 ? ' ' : null}
+              </React.Fragment>
+            );
+          });
+
+          if (isBgLine) {
+            return (
+              <div key={lIdx} className="my-0.5 inline-block text-center w-auto">
+                <span
+                  style={{
+                    display: 'inline-block',
+                    backgroundColor: effectiveBgColor,
+                    padding: `${Math.round((style.background_padding_y || 6) * 0.45)}px ${Math.round((style.background_padding_x || 12) * 0.45)}px`,
+                    borderRadius: `${Math.round((style.background_corner_radius || 8) * 0.6)}px`,
+                  }}
+                >
+                  {lineContent}
+                </span>
+              </div>
+            );
+          }
+
+          return (
+            <div key={lIdx} className="my-0.5 inline-block text-center w-auto">
+              {lineContent}
+            </div>
+          );
+        })}
       </div>
+    </div>
+  );
+});
+
+export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
+  track,
+  currentTime,
+  selectedGroupId,
+  onSelectGroup,
+  onUpdateGroup,
+  onApplyLayoutToAll,
+  layoutMode = 'fit_black',
+  isInteractive = true
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  if (!track || !track.groups || track.groups.length === 0) {
+    return null;
+  }
+
+  // Find all active visible groups for current playback time (timeline-aware visibility)
+  const activeGroups = track.groups.filter(
+    grp => grp.type !== 'audio' && grp.type !== 'voiceover' && currentTime >= grp.start && currentTime <= grp.end
+  );
+
+  if (activeGroups.length === 0) return null;
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0 z-20 overflow-hidden select-none"
+      style={{
+        paddingLeft: '4%',
+        paddingRight: '4%',
+      }}
+    >
+      {activeGroups.map((grp) => (
+        <CanvasGroupItem
+          key={grp.id}
+          group={grp}
+          defaultStyle={track.default_style}
+          defaultLayout={track.default_layout}
+          defaultAnimation={track.default_animation}
+          isSelected={selectedGroupId === grp.id}
+          currentTime={currentTime}
+          containerRef={containerRef}
+          onSelectGroup={onSelectGroup}
+          onUpdateGroup={onUpdateGroup}
+          onApplyLayoutToAll={onApplyLayoutToAll}
+          layoutMode={layoutMode}
+          isInteractive={isInteractive}
+        />
+      ))}
     </div>
   );
 };

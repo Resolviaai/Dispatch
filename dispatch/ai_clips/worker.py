@@ -9,6 +9,7 @@ import json
 import time
 import logging
 import threading
+import subprocess
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
@@ -162,13 +163,15 @@ class HighlightWorker:
                         all_rendered = True
                         for cid in clip_ids:
                             c_row = db.get_clip_by_id(cid)
+                            if c_row and c_row.get("status") == "queued_transcription":
+                                continue
                             vp = Path(c_row["video_path"]) if (c_row and c_row.get("video_path")) else None
                             if not vp or not vp.exists() or vp.stat().st_size == 0:
                                 all_rendered = False
                                 break
                         if all_rendered:
                             db.update_youtube_video(video_id=video_id, status="COMPLETED")
-                            logger.info("All %d clips rendered and verified for video %s -> COMPLETED", len(clip_ids), video_id)
+                            logger.info("All clips rendered or queued for video %s -> COMPLETED", video_id)
                         else:
                             logger.warning("Not all clips rendered yet for video %s; maintaining CLIPS_DEFINED", video_id)
                     else:
@@ -219,18 +222,19 @@ class HighlightWorker:
         segments: List[Dict[str, Any]],
         source_video_path: Optional[Path]
     ):
-        """Render candidate clips with Roman Hinglish subtitles and FFmpeg."""
+        """Render candidate clips with Stage 2 precision transcription and FFmpeg."""
         if not saved_ids:
             return
+
+        from dispatch.transcription.gemini_engine import (
+            check_and_increment_daily_transcribe_quota,
+            transcribe_stage2_precision_words,
+        )
 
         for clip_id in saved_ids:
             clip = db.get_clip_by_id(clip_id)
             if not clip:
                 continue
-
-            c_start = float(clip["start_time"])
-            c_end = float(clip["end_time"])
-            c_layout = clip.get("layout_mode", "fit_blur")
 
             # Check if clip is already rendered and non-empty
             if clip.get("video_path"):
@@ -239,26 +243,132 @@ class HighlightWorker:
                     logger.debug("Clip %s already rendered (%s). Skipping duplicate render.", clip_id, vp.name)
                     continue
 
-            # Filter segments covering this clip
-            clip_segs = [s for s in segments if s.get("end", 0.0) > c_start and s.get("start", 0.0) < c_end]
-            clean_segs = transliterate_segments_to_hinglish(clip_segs)
+            # Check if clip is already waiting in backlog
+            if clip.get("status") == "queued_transcription":
+                logger.debug("Clip %s is queued in backlog. Skipping render until quota drain.", clip_id)
+                continue
 
-            # Generate and cache canonical CaptionTrack
+            # Daily Quota Budget Guard (gemini-3.5-transcribe 25 RPD free tier ceiling)
+            has_quota = check_and_increment_daily_transcribe_quota(max_daily_requests=25)
+            if not has_quota:
+                with db.get_db_connection() as conn:
+                    conn.cursor().execute("UPDATE clips SET status = 'queued_transcription' WHERE id = ?", (clip_id,))
+                    conn.commit()
+                logger.info("Daily transcribe quota (25/25) reached. Clip %s routed to backlog queue ('queued_transcription').", clip_id)
+                continue
+
+            c_start = float(clip["start_time"])
+            c_end = float(clip["end_time"])
+            c_layout = clip.get("layout_mode", "fit_blur")
+            p_start = float(clip["padded_start"]) if clip.get("padded_start") is not None else max(0.0, c_start - 4.0)
+            p_end = float(clip["padded_end"]) if clip.get("padded_end") is not None else (c_end + 4.0)
+
+            active_segs: List[Dict[str, Any]] = []
+
+            # Stage 2: Precision Word Alignment via gemini-3.5-transcribe
             try:
-                track = group_words_into_captions(
-                    raw_segments=clean_segs,
-                    clip_start=c_start,
-                    clip_end=c_end,
-                    clip_id=clip_id,
-                    preset_id="yellow_pop"
-                )
-                db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
-                ass_path = PROCESSING_DIR / f"{clip_id}.ass"
-                export_to_ass(track, ass_path)
-            except Exception as e:
-                logger.warning("Failed to prepare captions for clip %s: %s", clip_id, e)
+                slice_mp3 = PROCESSING_DIR / f"{clip_id}_slice.mp3"
+                if source_video_path and source_video_path.exists():
+                    slice_cmd = [
+                        "ffmpeg", "-y",
+                        "-ss", str(round(p_start, 3)),
+                        "-to", str(round(p_end, 3)),
+                        "-i", str(source_video_path),
+                        "-vn", "-acodec", "libmp3lame", "-b:a", "96k",
+                        str(slice_mp3)
+                    ]
+                    subprocess.run(slice_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
 
-            # FFmpeg render
+                target_media = slice_mp3 if (slice_mp3.exists() and slice_mp3.stat().st_size > 0) else source_video_path
+                stage2_res = transcribe_stage2_precision_words(target_media) if target_media else {"words": []}
+
+                if slice_mp3.exists():
+                    try:
+                        slice_mp3.unlink()
+                    except Exception:
+                        pass
+
+                words = stage2_res.get("words", [])
+                if words:
+                    # 2.2 Word-Snap: tight cut to millisecond start and end of spoken syllables
+                    speech_start = p_start + stage2_res.get("speech_start", 0.0)
+                    speech_end = p_start + stage2_res.get("speech_end", c_end - p_start)
+                    snapped_start = max(p_start, round(speech_start - 0.2, 2))
+                    snapped_end = min(p_end, round(speech_end + 0.3, 2))
+                    db.update_clip_trim(clip_id, snapped_start, snapped_end)
+                    c_start = snapped_start
+                    c_end = snapped_end
+
+                    # 5.1 Word-by-Word Caption Data Mapping
+                    clean_words = []
+                    for w in words:
+                        w_s = round(p_start + w.get("start", 0.0), 3)
+                        w_e = round(p_start + w.get("end", 0.0), 3)
+                        if w_e > c_start and w_s < c_end:
+                            clean_words.append({
+                                "word": w.get("word", ""),
+                                "start": w_s,
+                                "end": w_e
+                            })
+
+                    track = group_words_into_captions(
+                        raw_segments=[{"id": 0, "start": c_start, "end": c_end, "words": clean_words}],
+                        clip_start=c_start,
+                        clip_end=c_end,
+                        clip_id=clip_id,
+                        preset_id="yellow_pop"
+                    )
+                    track_dict = track.to_dict()
+                    track_dict["words"] = clean_words
+                    db.save_clip_caption_data(clip_id, json.dumps(track_dict))
+                    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
+                    export_to_ass(track, ass_path)
+                    active_segs = clean_words
+                else:
+                    # Fallback to coarse Stage 1 segments if Stage 2 found no words
+                    clip_segs = [s for s in segments if s.get("end", 0.0) > c_start and s.get("start", 0.0) < c_end]
+                    clean_segs = transliterate_segments_to_hinglish(clip_segs)
+                    track = group_words_into_captions(
+                        raw_segments=clean_segs,
+                        clip_start=c_start,
+                        clip_end=c_end,
+                        clip_id=clip_id,
+                        preset_id="yellow_pop"
+                    )
+                    db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
+                    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
+                    export_to_ass(track, ass_path)
+                    active_segs = clean_segs
+
+            except Exception as e:
+                logger.warning("Stage 2 precision transcribe encountered error for clip %s: %s", clip_id, e)
+                # If quota/rate limit error, route to backlog queue
+                if "quota" in str(e).lower() or "429" in str(e) or "resourceexhausted" in str(e).lower():
+                    with db.get_db_connection() as conn:
+                        conn.cursor().execute("UPDATE clips SET status = 'queued_transcription' WHERE id = ?", (clip_id,))
+                        conn.commit()
+                    logger.info("Clip %s routed to backlog queue due to quota exhaustion.", clip_id)
+                    continue
+
+                # Otherwise fallback to Stage 1 segments
+                clip_segs = [s for s in segments if s.get("end", 0.0) > c_start and s.get("start", 0.0) < c_end]
+                clean_segs = transliterate_segments_to_hinglish(clip_segs)
+                try:
+                    track = group_words_into_captions(
+                        raw_segments=clean_segs,
+                        clip_start=c_start,
+                        clip_end=c_end,
+                        clip_id=clip_id,
+                        preset_id="yellow_pop"
+                    )
+                    db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
+                    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
+                    export_to_ass(track, ass_path)
+                    active_segs = clean_segs
+                except Exception:
+                    pass
+
+            # 5.2 Animated Pop-Up Subtitle Burner via FFmpeg
             if source_video_path and source_video_path.exists():
                 try:
                     logger.info("Auto-rendering clip %s (%.1fs - %.1fs) with FFmpeg...", clip_id, c_start, c_end)
@@ -269,8 +379,11 @@ class HighlightWorker:
                         end_time=c_end,
                         aspect_ratio=None,
                         layout_mode=c_layout,
-                        segments=clean_segs
+                        segments=active_segs
                     )
+                    with db.get_db_connection() as conn:
+                        conn.cursor().execute("UPDATE clips SET status = 'ready_review' WHERE id = ?", (clip_id,))
+                        conn.commit()
                 except Exception as e:
                     logger.error("Auto-render failed for clip %s: %s", clip_id, e)
             else:

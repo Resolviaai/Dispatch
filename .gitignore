@@ -88,3 +88,12 @@ design_research/transcripts/
 audit_bundle_*.txt
 antigravity_diff_verify.txt
 file_structure.txt
+scratch_prompt.txt
+NEW_ARCHITECTURE_CHECKLIST.md
+uv.lock
+storage/*.db
+storage/fonts/
+Transcript/
+transcription_benchmarks/
+dispatch.egg-info/
+download_drive_video.py

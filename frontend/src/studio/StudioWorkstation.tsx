@@ -12,7 +12,8 @@ import {
   IntegrationsStatus,
   LayoutMode,
 } from './types';
-import { CaptionTrack, CaptionGroup, StyleConfig } from '../captions/types';
+import { CaptionTrack, CaptionGroup, StyleConfig, LayoutConfig } from '../captions/types';
+import { applySectionStylesToTrack, StyleSection } from '../captions/applyToAll';
 import { apiUrl, getAuthHeaders } from '../bridge';
 
 interface StudioWorkstationProps {
@@ -387,19 +388,50 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
     setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, ...patch } : c));
   };
 
-  // 7. Update Track Style
+  // 7. Update Track Style (edits affect only the selected group, leaving others untouched)
   const handleUpdateTrackStyle = (stylePatch: Partial<StyleConfig>) => {
     if (!track) return;
-    const updatedStyle = { ...track.default_style, ...stylePatch };
-    const updatedGroups = track.groups.map(g => ({
-      ...g,
-      style: { ...(g.style || track.default_style), ...stylePatch },
-    }));
+    const targetGroupId = selectedGroupId || (track.groups.find(g => !g.type || g.type === 'caption' || g.type === 'text')?.id) || (track.groups.length > 0 ? track.groups[0].id : null);
+    if (!targetGroupId) return;
+    const updatedGroups = track.groups.map(g => {
+      if (g.id !== targetGroupId) return g;
+      return {
+        ...g,
+        style: { ...(g.style || track.default_style), ...stylePatch },
+      };
+    });
     setTrack({
       ...track,
-      default_style: updatedStyle,
       groups: updatedGroups,
     });
+  };
+
+  const handleUpdateTrackLayout = (layoutPatch: Partial<LayoutConfig>) => {
+    if (!track) return;
+    const targetGroupId = selectedGroupId || (track.groups.find(g => !g.type || g.type === 'caption' || g.type === 'text')?.id) || (track.groups.length > 0 ? track.groups[0].id : null);
+    if (!targetGroupId) return;
+    const updatedGroups = track.groups.map(g => {
+      if (g.id !== targetGroupId) return g;
+      return {
+        ...g,
+        layout: { ...(g.layout || track.default_layout), ...layoutPatch },
+      };
+    });
+    setTrack({
+      ...track,
+      groups: updatedGroups,
+    });
+  };
+
+  const handleApplySectionToAll = (section: StyleSection): number => {
+    if (!track) return 0;
+    const { nextTrack, affectedCount } = applySectionStylesToTrack(
+      track,
+      selectedGroupId,
+      section
+    );
+    setTrack(nextTrack);
+    return affectedCount;
   };
 
   // 8. Update Track Group
@@ -560,6 +592,8 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
           onUpdateClipMetadata={handleUpdateClipMetadata}
           onSaveCaptions={handleSaveCaptions}
           onUpdateTrackStyle={handleUpdateTrackStyle}
+          onUpdateTrackLayout={handleUpdateTrackLayout}
+          onApplyStyleToAll={handleApplySectionToAll}
           onApproveClip={handleApproveCurrentClip}
           onRejectClip={handleRejectCurrentClip}
           isApproving={isApproving}

@@ -10,6 +10,7 @@ import {
   Image as ImageIcon,
   Eye,
   EyeOff,
+  Sparkles,
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word } from './types';
 
@@ -21,11 +22,17 @@ interface CaptionTimelineProps {
   isVideoSelected?: boolean;
   isPlaying: boolean;
   filmstripFrames?: string[];
+  mediaElementRef?: React.RefObject<HTMLVideoElement>;
+  clipStart?: number;
+  clipEnd?: number;
+  paddedStart?: number;
+  paddedEnd?: number;
+  onTrimChange?: (newStart: number, newEnd: number) => void;
   onSeek: (seconds: number) => void;
   onTogglePlay?: () => void;
   onSelectGroup: (groupId: string | null) => void;
   onSelectVideo?: () => void;
-  onUpdateGroup?: (groupId: string, patch: Partial<CaptionGroup>) => void;
+  onUpdateGroup?: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
   onSplitGroup?: (groupId: string, splitTime: number) => void;
 }
 
@@ -55,6 +62,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   isVideoSelected = false,
   isPlaying,
   filmstripFrames = [],
+  mediaElementRef,
+  clipStart = 0,
+  clipEnd,
+  paddedStart,
+  paddedEnd,
+  onTrimChange,
   onSeek,
   onSelectGroup,
   onSelectVideo,
@@ -70,6 +83,32 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const [scrollLeft, setScrollLeft] = useState<number>(0);
   const canvasDragRef = useRef<{ startX: number; startScrollLeft: number } | null>(null);
   const leftRailRef = useRef<HTMLDivElement>(null);
+  const latestBlockPatchRef = useRef<{ groupId: string; patch: Partial<CaptionGroup> } | null>(null);
+
+  // CapCut-style dual drag trimmer state
+  const [activeTrim, setActiveTrim] = useState<{ start: number; end: number }>({
+    start: clipStart || 0,
+    end: clipEnd !== undefined ? clipEnd : duration,
+  });
+
+  const [trimDrag, setTrimDrag] = useState<{
+    side: 'start' | 'end';
+    startX: number;
+    initialStart: number;
+    initialEnd: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setActiveTrim({
+      start: clipStart !== undefined ? clipStart : 0,
+      end: clipEnd !== undefined ? clipEnd : duration,
+    });
+  }, [clipStart, clipEnd, duration]);
+
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
+  const pxPerSecRef = useRef(pxPerSec);
+  pxPerSecRef.current = pxPerSec;
 
   const safeDuration = Math.max(1, duration);
   const totalTimelineWidth = Math.max(340, Math.round(safeDuration * pxPerSec));
@@ -175,25 +214,53 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     });
   };
 
-  // Follow playhead smoothly during playback using animation-frame scheduling
+  // Follow playhead smoothly during playback using decoupled media-frame scheduling
+  // Drives timeline movement directly from the media clock (requestVideoFrameCallback where supported)
+  // Does NOT restart/teardown on every frame update of currentTime
   useEffect(() => {
     if (!isPlaying || isScrubbing || dragSession) return;
     let animId: number;
+    let rvfcId: number;
+    let cancelled = false;
+
+    const v = mediaElementRef?.current;
 
     const tick = () => {
+      if (cancelled) return;
       const scrollEl = scrollContainerRef.current;
       if (scrollEl) {
-        const targetScroll = currentTime * pxPerSec;
+        let cur = currentTimeRef.current;
+        if (v && !v.paused) {
+          const raw = v.currentTime;
+          cur = Math.max(0, raw - (clipStart || 0));
+        }
+        const targetScroll = cur * pxPerSecRef.current;
         if (Math.abs(scrollEl.scrollLeft - targetScroll) > 0.5) {
           scrollEl.scrollLeft = targetScroll;
         }
       }
-      animId = requestAnimationFrame(tick);
+
+      if (v && 'requestVideoFrameCallback' in v) {
+        rvfcId = (v as any).requestVideoFrameCallback(tick);
+      } else {
+        animId = requestAnimationFrame(tick);
+      }
     };
 
-    animId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animId);
-  }, [isPlaying, isScrubbing, dragSession, currentTime, pxPerSec]);
+    if (v && 'requestVideoFrameCallback' in v) {
+      rvfcId = (v as any).requestVideoFrameCallback(tick);
+    } else {
+      animId = requestAnimationFrame(tick);
+    }
+
+    return () => {
+      cancelled = true;
+      if (v && 'cancelVideoFrameCallback' in v && rvfcId) {
+        (v as any).cancelVideoFrameCallback(rvfcId);
+      }
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [isPlaying, isScrubbing, !!dragSession, mediaElementRef, clipStart]);
 
   // When paused and external seek happens (e.g. transport scrub), center timeline
   useEffect(() => {
@@ -205,7 +272,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     if (Math.abs(scrollEl.scrollLeft - targetScroll) > 1) {
       scrollEl.scrollLeft = targetScroll;
     }
-  }, [currentTime]);
+  }, [currentTime, pxPerSec, isPlaying, isScrubbing, !!dragSession]);
 
   // Scroll listener: updates playback time beneath the fixed center playhead
   // CRITICAL: Only call onSeek when manually scrubbing or paused!
@@ -225,7 +292,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   // Mouse drag on empty timeline canvas or ruler (desktop horizontal swipe/scrub)
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (dragSession) return;
-    if ((e.target as HTMLElement).closest('[data-layer-block="true"]')) return;
+    if ((e.target as HTMLElement).closest('[data-layer-block="true"], [data-video-track="true"], button, input, [data-handle]')) return;
     setIsScrubbing(true);
     canvasDragRef.current = {
       startX: e.clientX,
@@ -245,11 +312,20 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const handleCanvasPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (canvasDragRef.current) {
+      const moved = Math.abs(e.clientX - canvasDragRef.current.startX);
       canvasDragRef.current = null;
       setIsScrubbing(false);
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
       } catch { }
+
+      // Genuinely empty timeline area clicked/tapped (motion < 5px): deselect active layer
+      if (moved < 5) {
+        const isInteractive = (e.target as HTMLElement).closest('[data-layer-block="true"], [data-video-track="true"], button, input, [data-handle]');
+        if (!isInteractive) {
+          onSelectGroup(null);
+        }
+      }
     }
   };
 
@@ -310,12 +386,13 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         end: Number((w.end + timeShift).toFixed(2)),
       }));
 
-      onUpdateGroup(dragSession.groupId, {
+      const patch: Partial<CaptionGroup> = {
         start: Number(nextStart.toFixed(2)),
         end: Number(nextEnd.toFixed(2)),
         words: nextWords,
-      });
-
+      };
+      latestBlockPatchRef.current = { groupId: dragSession.groupId, patch };
+      onUpdateGroup(dragSession.groupId, patch, false);
       onSeek(Number(nextStart.toFixed(2)));
     } else if (dragSession.type === 'trim-start') {
       let nextStart = dragSession.origStart + deltaSec;
@@ -333,11 +410,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         end: Number((nextStart + (w.end - dragSession.origStart) * ratio).toFixed(2)),
       }));
 
-      onUpdateGroup(dragSession.groupId, {
+      const patch: Partial<CaptionGroup> = {
         start: Number(nextStart.toFixed(2)),
         words: nextWords,
-      });
-
+      };
+      latestBlockPatchRef.current = { groupId: dragSession.groupId, patch };
+      onUpdateGroup(dragSession.groupId, patch, false);
       onSeek(Number(nextStart.toFixed(2)));
     } else if (dragSession.type === 'trim-end') {
       let nextEnd = dragSession.origEnd + deltaSec;
@@ -355,18 +433,80 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         end: Number((dragSession.origStart + (w.end - dragSession.origStart) * ratio).toFixed(2)),
       }));
 
-      onUpdateGroup(dragSession.groupId, {
+      const patch: Partial<CaptionGroup> = {
         end: Number(nextEnd.toFixed(2)),
         words: nextWords,
-      });
-
+      };
+      latestBlockPatchRef.current = { groupId: dragSession.groupId, patch };
+      onUpdateGroup(dragSession.groupId, patch, false);
       onSeek(Number(nextEnd.toFixed(2)));
     }
   };
 
   const handleBlockPointerUp = (e: React.PointerEvent) => {
+    if (latestBlockPatchRef.current && onUpdateGroup) {
+      onUpdateGroup(latestBlockPatchRef.current.groupId, latestBlockPatchRef.current.patch, true);
+      latestBlockPatchRef.current = null;
+    }
     if (dragSession) {
       setDragSession(null);
+      try {
+        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      } catch { }
+    }
+  };
+
+  const handleBlockPointerCancel = (e: React.PointerEvent) => {
+    latestBlockPatchRef.current = null;
+    if (dragSession) {
+      setDragSession(null);
+      try {
+        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      } catch { }
+    }
+  };
+
+  const handleTrimPointerDown = (side: 'start' | 'end', e: React.PointerEvent) => {
+    e.stopPropagation();
+    setTrimDrag({
+      side,
+      startX: e.clientX,
+      initialStart: activeTrim.start,
+      initialEnd: activeTrim.end,
+    });
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+
+  const handleTrimPointerMove = (e: React.PointerEvent) => {
+    if (!trimDrag) return;
+    e.stopPropagation();
+    const deltaSec = (e.clientX - trimDrag.startX) / pxPerSec;
+    const minPadded = paddedStart !== undefined ? paddedStart : 0;
+    const maxPadded = paddedEnd !== undefined ? paddedEnd : safeDuration;
+
+    if (trimDrag.side === 'start') {
+      const minBound = minPadded;
+      const maxBound = Math.max(minPadded, trimDrag.initialEnd - 1.5);
+      const nextStart = clamp(trimDrag.initialStart + deltaSec, minBound, maxBound);
+      const rounded = Number(nextStart.toFixed(2));
+      setActiveTrim((prev) => ({ ...prev, start: rounded }));
+      onSeek(rounded);
+    } else {
+      const minBound = Math.min(maxPadded, trimDrag.initialStart + 1.5);
+      const maxBound = maxPadded;
+      const nextEnd = clamp(trimDrag.initialEnd + deltaSec, minBound, maxBound);
+      const rounded = Number(nextEnd.toFixed(2));
+      setActiveTrim((prev) => ({ ...prev, end: rounded }));
+      onSeek(rounded);
+    }
+  };
+
+  const handleTrimPointerUp = (e: React.PointerEvent) => {
+    if (trimDrag) {
+      if (onTrimChange) {
+        onTrimChange(activeTrim.start, activeTrim.end);
+      }
+      setTrimDrag(null);
       try {
         (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
       } catch { }
@@ -407,13 +547,24 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         name: grp.label || (isVideo ? 'Video' : 'Image'),
       };
     }
-    // Default text / caption
+    if (grp.type === 'text') {
+      return {
+        icon: <Type size={11} className="mr-1 shrink-0 text-cyan-200" />,
+        bg: 'bg-[#0284C7]/90',
+        border: 'border-[#38BDF8]',
+        text: 'text-sky-100',
+        badge: 'Text',
+        name: (grp.words || []).map((w) => w.text || '').join(' ') || 'Text',
+      };
+    }
+    // Default caption (type === 'caption' or undefined)
     return {
-      icon: <Type size={11} className="mr-1 shrink-0" />,
+      icon: <Sparkles size={11} className="mr-1 shrink-0 text-amber-200" />,
       bg: 'bg-[#2563EB]/90',
       border: 'border-[#3B82F6]',
       text: 'text-blue-100',
-      name: (grp.words || []).map((w) => w.text || '').join(' ') || 'Text',
+      badge: 'Caption',
+      name: (grp.words || []).map((w) => w.text || '').join(' ') || 'Caption',
     };
   };
 
@@ -511,6 +662,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
             onPointerMove={handleCanvasPointerMove}
             onPointerUp={handleCanvasPointerUp}
             onPointerCancel={handleCanvasPointerUp}
+            onClick={(e) => {
+              const isInteractive = (e.target as HTMLElement).closest('[data-layer-block="true"], [data-video-track="true"], button, input, [data-handle]');
+              if (!isInteractive) {
+                onSelectGroup(null);
+              }
+            }}
           >
             <div
               className="relative h-full flex items-center pointer-events-none"
@@ -545,6 +702,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
             onPointerMove={handleCanvasPointerMove}
             onPointerUp={handleCanvasPointerUp}
             onPointerCancel={handleCanvasPointerUp}
+            onClick={(e) => {
+              const isInteractive = (e.target as HTMLElement).closest('[data-layer-block="true"], [data-video-track="true"], button, input, [data-handle]');
+              if (!isInteractive) {
+                onSelectGroup(null);
+              }
+            }}
             className="flex-1 overflow-x-auto overflow-y-auto relative bg-[#0D1014] no-scrollbar select-none cursor-ew-resize"
             style={{ touchAction: 'pan-x' }}
           >
@@ -573,34 +736,91 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                 ))}
               </div>
 
-              {/* 1. MAIN VIDEO TRACK */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectVideo?.();
-                }}
-                className={`h-10 border-b border-[#232832] relative p-0.5 overflow-hidden cursor-pointer transition-colors ${isVideoSelected ? 'bg-primary/10 ring-1 ring-primary inset-0' : ''
-                  }`}
-                style={{ width: `${totalTimelineWidth}px` }}
-              >
-                <div className="w-full h-full rounded bg-[#090C0F] border border-[#232832]/60 flex items-center overflow-hidden">
-                  {filmstripFrames.length > 0 ? (
-                    filmstripFrames.map((frameUrl, idx) => (
+              {/* 1. MAIN VIDEO TRACK WITH CAPCUT-STYLE SAFETY HANDLES & DUAL DRAG TRIMMING */}
+              {(() => {
+                const trimLeftPx = Math.max(0, activeTrim.start * pxPerSec);
+                const trimRightPx = Math.max(trimLeftPx + 20, activeTrim.end * pxPerSec);
+                const trimWidthPx = Math.max(20, trimRightPx - trimLeftPx);
+
+                return (
+                  <div
+                    data-video-track="true"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectVideo?.();
+                    }}
+                    className={`h-11 border-b border-[#232832] relative p-0.5 overflow-visible cursor-pointer transition-colors ${isVideoSelected ? 'bg-primary/10 ring-1 ring-primary' : ''
+                      }`}
+                    style={{ width: `${totalTimelineWidth}px` }}
+                  >
+                    <div className="w-full h-full rounded bg-[#090C0F] border border-[#232832]/60 flex items-center overflow-hidden relative">
+                      {filmstripFrames.length > 0 ? (
+                        filmstripFrames.map((frameUrl, idx) => (
+                          <div
+                            key={idx}
+                            className="flex-1 h-full border-r border-black/50 overflow-hidden bg-cover bg-center"
+                            style={{ backgroundImage: `url(${frameUrl})` }}
+                          />
+                        ))
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
+                          {Array.from({ length: 8 }).map((_, i) => (
+                            <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Head Margin Dimmed Overlay (Safety Handle) */}
+                      {trimLeftPx > 0 && (
+                        <div
+                          className="absolute left-0 top-0 bottom-0 bg-black/75 backdrop-blur-[1px] border-r border-dashed border-amber-400/60 pointer-events-none z-10"
+                          style={{ width: `${trimLeftPx}px` }}
+                        />
+                      )}
+
+                      {/* Tail Margin Dimmed Overlay (Safety Handle) */}
+                      {trimRightPx < totalTimelineWidth && (
+                        <div
+                          className="absolute top-0 bottom-0 right-0 bg-black/75 backdrop-blur-[1px] border-l border-dashed border-amber-400/60 pointer-events-none z-10"
+                          style={{ left: `${trimRightPx}px` }}
+                        />
+                      )}
+
+                      {/* Active Video Bounding Box with Dual Drag Handles (CapCut Style) */}
                       <div
-                        key={idx}
-                        className="flex-1 h-full border-r border-black/50 overflow-hidden bg-cover bg-center"
-                        style={{ backgroundImage: `url(${frameUrl})` }}
-                      />
-                    ))
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
-                      {Array.from({ length: 8 }).map((_, i) => (
-                        <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
-                      ))}
+                        className="absolute top-0 bottom-0 rounded border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.35)] pointer-events-none z-20"
+                        style={{ left: `${trimLeftPx}px`, width: `${trimWidthPx}px` }}
+                      >
+                        {/* Left Trim Handle (Head Padding Expansion) */}
+                        <div
+                          onPointerDown={(e) => handleTrimPointerDown('start', e)}
+                          onPointerMove={handleTrimPointerMove}
+                          onPointerUp={handleTrimPointerUp}
+                          onPointerCancel={handleTrimPointerUp}
+                          className="absolute left-0 top-0 bottom-0 w-3.5 -translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-l cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform"
+                          title="Drag to trim start (reveals earlier speech in safety handle)"
+                        >
+                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                        </div>
+
+                        {/* Right Trim Handle (Tail Padding Expansion) */}
+                        <div
+                          onPointerDown={(e) => handleTrimPointerDown('end', e)}
+                          onPointerMove={handleTrimPointerMove}
+                          onPointerUp={handleTrimPointerUp}
+                          onPointerCancel={handleTrimPointerUp}
+                          className="absolute right-0 top-0 bottom-0 w-3.5 translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-r cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform"
+                          title="Drag to trim end (extends ending speech into safety handle)"
+                        >
+                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                        </div>
+                      </div>
                     </div>
-                  )}
-                </div>
-              </div>
+                  </div>
+                );
+              })()}
 
               {/* 2. UNIFORM LAYER TRACKS (L1, L2, L3...) */}
               {dynamicTracks.map((rowGroups, trackIdx) => {
@@ -622,77 +842,103 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                   >
                     {rowGroups.map((grp) => {
                       const left = grp.start * pxPerSec;
-                      const width = Math.max(32, (grp.end - grp.start) * pxPerSec);
+                      const rawDur = Math.max(0.04, grp.end - grp.start);
+                      const trueWidth = Math.max(4, rawDur * pxPerSec);
                       const isSelected = selectedGroupId === grp.id;
-                      const isSpoken = currentTime >= grp.start && currentTime <= grp.end;
+                      const isCaption = !grp.type || grp.type === 'caption';
+                      const isSpoken = isCaption && currentTime >= grp.start && currentTime <= grp.end;
                       const meta = getLayerMeta(grp, trackIdx);
+
+                      const showHandles = isSelected && trueWidth >= 32;
+                      const showDuration = isSelected && trueWidth >= 96;
+                      const showLabel = trueWidth >= 40;
+                      const showIcon = trueWidth >= 20;
 
                       return (
                         <div
                           key={grp.id}
                           data-layer-block="true"
-                          className={`absolute top-1 bottom-1 rounded-lg flex items-center overflow-hidden transition-shadow select-none ${isSelected
-                            ? 'bg-[#2563EB] border-2 border-white text-white font-bold shadow-[0_0_12px_rgba(37,99,235,0.6)] z-10'
-                            : isSpoken
-                              ? `${meta.bg} border-2 border-white/80 text-white font-semibold`
-                              : `${meta.bg} border ${meta.border} ${meta.text} hover:opacity-95`
-                            }`}
-                          style={{ left: `${left}px`, width: `${width}px` }}
+                          className={`absolute top-1 bottom-1 rounded-md flex items-center overflow-hidden transition-all select-none ${
+                            isSelected
+                              ? 'bg-[#2563EB] border-2 border-white text-white font-bold shadow-[0_0_12px_rgba(37,99,235,0.6)] z-20'
+                              : isSpoken
+                              ? `${meta.bg} border-2 border-white/80 text-white font-semibold z-10`
+                              : `${meta.bg} border ${meta.border} ${meta.text} hover:opacity-100 opacity-90`
+                          }`}
+                          style={{ left: `${left}px`, width: `${trueWidth}px` }}
                           onClick={(e) => {
                             e.stopPropagation();
                             onSelectGroup(grp.id);
                           }}
                         >
-                          {/* Left Trim Handle */}
-                          <div
-                            data-handle="start"
-                            onPointerDown={(e) => handleBlockPointerDown(e, grp, 'trim-start')}
-                            onPointerMove={handleBlockPointerMove}
-                            onPointerUp={handleBlockPointerUp}
-                            onPointerCancel={handleBlockPointerUp}
-                            className="w-3.5 h-full flex items-center justify-center cursor-ew-resize bg-black/30 hover:bg-black/50 active:bg-primary transition-colors shrink-0"
-                            title="Trim Start"
-                          >
-                            <div className="w-[2px] h-3 bg-white/70 rounded-full" />
-                          </div>
+                          {/* Left Trim Handle (visible only when selected and width permits) */}
+                          {showHandles && (
+                            <div
+                              data-handle="start"
+                              onPointerDown={(e) => handleBlockPointerDown(e, grp, 'trim-start')}
+                              onPointerMove={handleBlockPointerMove}
+                              onPointerUp={handleBlockPointerUp}
+                              onPointerCancel={handleBlockPointerCancel}
+                              style={{ touchAction: 'none' }}
+                              className="w-3 h-full flex items-center justify-center cursor-ew-resize bg-black/40 hover:bg-black/60 active:bg-primary transition-colors shrink-0"
+                              title="Trim Start"
+                            >
+                              <div className="w-[1.5px] h-3 bg-white/90 rounded-full" />
+                            </div>
+                          )}
 
                           {/* Draggable Layer Body */}
                           <div
                             onPointerDown={(e) => handleBlockPointerDown(e, grp, 'move')}
                             onPointerMove={handleBlockPointerMove}
                             onPointerUp={handleBlockPointerUp}
-                            onPointerCancel={handleBlockPointerUp}
-                            className="flex-1 h-full flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing overflow-hidden min-w-0"
+                            onPointerCancel={handleBlockPointerCancel}
+                            style={{ touchAction: 'none' }}
+                            className={`flex-1 h-full flex items-center justify-between ${trueWidth >= 28 ? 'px-1' : 'px-0'} cursor-grab active:cursor-grabbing overflow-hidden min-w-0`}
                           >
                             <div className="flex items-center min-w-0 truncate">
-                              {grp.type === 'overlay' && grp.overlay_url && grp.overlay_type === 'image' ? (
-                                <img src={grp.overlay_url} alt="" className="w-3.5 h-3.5 rounded object-cover mr-1 shrink-0 border border-white/30" />
-                              ) : (
-                                meta.icon
+                              {showIcon && (
+                                grp.type === 'overlay' && grp.overlay_url && grp.overlay_type === 'image' ? (
+                                  <img src={grp.overlay_url} alt="" className="w-3.5 h-3.5 rounded object-cover mr-0.5 shrink-0 border border-white/30" />
+                                ) : (
+                                  meta.icon
+                                )
                               )}
-                              <span className="text-[10px] font-sans truncate whitespace-nowrap leading-none min-w-0">
-                                {meta.name}
-                              </span>
+                              {showLabel && (
+                                <div className="flex items-center min-w-0 truncate">
+                                  {(meta as any).badge && trueWidth >= 48 && (
+                                    <span className="text-[8px] font-black uppercase tracking-wider px-1 py-0.2 rounded bg-black/40 text-white/90 mr-1 shrink-0 select-none">
+                                      {(meta as any).badge}
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-sans truncate whitespace-nowrap leading-none min-w-0">
+                                    {meta.name}
+                                  </span>
+                                </div>
+                              )}
                             </div>
-                            {isSelected && (
-                              <span className="ml-1 font-mono tabular-nums text-[9px] text-white/90 bg-black/40 px-1 py-0.5 rounded shrink-0 font-bold">
-                                {(grp.end - grp.start).toFixed(1)}s
+                            {showDuration && (
+                              <span className="ml-1 font-mono tabular-nums text-[9px] text-white/90 bg-black/40 px-1 py-0.2 rounded shrink-0 font-bold">
+                                {rawDur.toFixed(1)}s
                               </span>
                             )}
                           </div>
 
-                          {/* Right Trim Handle */}
-                          <div
-                            data-handle="end"
-                            onPointerDown={(e) => handleBlockPointerDown(e, grp, 'trim-end')}
-                            onPointerMove={handleBlockPointerMove}
-                            onPointerUp={handleBlockPointerUp}
-                            onPointerCancel={handleBlockPointerUp}
-                            className="w-3.5 h-full flex items-center justify-center cursor-ew-resize bg-black/30 hover:bg-black/50 active:bg-primary transition-colors shrink-0"
-                            title="Trim End"
-                          >
-                            <div className="w-[2px] h-3 bg-white/70 rounded-full" />
-                          </div>
+                          {/* Right Trim Handle (visible only when selected and width permits) */}
+                          {showHandles && (
+                            <div
+                              data-handle="end"
+                              onPointerDown={(e) => handleBlockPointerDown(e, grp, 'trim-end')}
+                              onPointerMove={handleBlockPointerMove}
+                              onPointerUp={handleBlockPointerUp}
+                              onPointerCancel={handleBlockPointerCancel}
+                              style={{ touchAction: 'none' }}
+                              className="w-3 h-full flex items-center justify-center cursor-ew-resize bg-black/40 hover:bg-black/60 active:bg-primary transition-colors shrink-0"
+                              title="Trim End"
+                            >
+                              <div className="w-[1.5px] h-3 bg-white/90 rounded-full" />
+                            </div>
+                          )}
                         </div>
                       );
                     })}

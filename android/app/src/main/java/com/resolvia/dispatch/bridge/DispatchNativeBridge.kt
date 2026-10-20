@@ -151,6 +151,75 @@ class DispatchNativeBridge(
     }
 
     @JavascriptInterface
+    fun getZoomInfo(): String {
+        val info = cameraCaptureManager.getZoomInfo()
+        val obj = JsonObject().apply {
+            addProperty("minZoom", info.minZoomRatio)
+            addProperty("maxZoom", info.maxZoomRatio)
+            addProperty("currentZoom", info.currentZoomRatio)
+        }
+        return obj.toString()
+    }
+
+    @JavascriptInterface
+    fun focusOnPoint(normalizedX: Float, normalizedY: Float) {
+        activity.runOnUiThread {
+            val pv = cameraCaptureManager.activePreviewView ?: return@runOnUiThread
+            val w = pv.width.toFloat()
+            val h = pv.height.toFloat()
+            if (w > 0 && h > 0) {
+                val px = normalizedX.coerceIn(0f, 1f) * w
+                val py = normalizedY.coerceIn(0f, 1f) * h
+                cameraCaptureManager.focusOnPoint(px, py, pv)
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun lockAeAfAtPoint(normalizedX: Float, normalizedY: Float): Boolean {
+        return try {
+            activity.runOnUiThread {
+                val pv = cameraCaptureManager.activePreviewView ?: return@runOnUiThread
+                val w = pv.width.toFloat()
+                val h = pv.height.toFloat()
+                if (w > 0 && h > 0) {
+                    val px = normalizedX.coerceIn(0f, 1f) * w
+                    val py = normalizedY.coerceIn(0f, 1f) * h
+                    cameraCaptureManager.lockAeAfAtPoint(px, py, pv)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun unlockAeAf() {
+        activity.runOnUiThread {
+            cameraCaptureManager.unlockAeAf()
+        }
+    }
+
+    @JavascriptInterface
+    fun setExposureIndex(index: Int): Int {
+        return cameraCaptureManager.setExposureIndex(index)
+    }
+
+    @JavascriptInterface
+    fun getExposureInfo(): String {
+        val info = cameraCaptureManager.getExposureInfo()
+        val obj = JsonObject().apply {
+            addProperty("minIndex", info.minIndex)
+            addProperty("maxIndex", info.maxIndex)
+            addProperty("currentIndex", info.currentIndex)
+            addProperty("stepEv", info.stepEv)
+            addProperty("isSupported", info.isSupported)
+        }
+        return obj.toString()
+    }
+
+    @JavascriptInterface
     fun getRecordings(): String {
         return try {
             runBlocking(Dispatchers.IO) {

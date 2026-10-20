@@ -92,13 +92,14 @@ class MainActivity : ComponentActivity() {
         pairingManager = PairingManager(this)
 
         // Initialize native camera PreviewView (placed underneath WebView)
+        // PERFORMANCE mode uses hardware SurfaceView directly via hardware composer, eliminating TextureView copy lag during 1080p recording
         previewView = PreviewView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+            scaleType = PreviewView.ScaleType.FIT_CENTER
         }
 
         // Set up WebViewAssetLoader to safely serve assets over http://appassets.androidplatform.net

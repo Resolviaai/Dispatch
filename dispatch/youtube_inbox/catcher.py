@@ -525,11 +525,26 @@ class YouTubeInboxCatcher:
                 logger.info("Successfully loaded %d segments from YouTube captions", len(segments))
 
         if not segments:
-            logger.info("YouTube captions unavailable. Falling back to local faster-whisper on %s", local_video_path.name)
-            whisper_result = transcribe_video(local_video_path)
-            segments = whisper_result.get("segments", [])
-            transcript_source = "whisper"
-            logger.info("Local faster-whisper generated %d segments", len(segments))
+            if force_whisper:
+                logger.info("force_whisper requested. Running local faster-whisper on %s", local_video_path.name)
+                whisper_result = transcribe_video(local_video_path)
+                segments = whisper_result.get("segments", [])
+                transcript_source = "whisper"
+                logger.info("Local faster-whisper generated %d segments", len(segments))
+            else:
+                logger.info("YouTube captions unavailable for %s and automatic Whisper fallback is disabled.", video_id)
+                db.update_youtube_video(
+                    video_id,
+                    status="CAPTIONS_UNAVAILABLE",
+                    transcript_source="none",
+                    last_error="YouTube captions unavailable",
+                    segments_json="[]"
+                )
+                return {
+                    "video_id": video_id,
+                    "status": "CAPTIONS_UNAVAILABLE",
+                    "error": "YouTube captions unavailable"
+                }
 
         db.update_youtube_video(
             video_id,
