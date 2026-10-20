@@ -14,6 +14,7 @@ import {
 } from './types';
 import { CaptionTrack, CaptionGroup, StyleConfig, LayoutConfig } from '../captions/types';
 import { applySectionStylesToTrack, StyleSection } from '../captions/applyToAll';
+import { normalizeCaptionTrack, resolveStudioClip, trackForClip } from '../captions/normalizeTrack';
 import { apiUrl, getAuthHeaders } from '../bridge';
 
 interface StudioWorkstationProps {
@@ -30,6 +31,10 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [track, setTrack] = useState<CaptionTrack | null>(null);
+  const [captionClipId, setCaptionClipId] = useState<string | null>(null);
+  const [captionLoadState, setCaptionLoadState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle');
+  const [captionLoadError, setCaptionLoadError] = useState<string | null>(null);
+  const [captionRetryCount, setCaptionRetryCount] = useState(0);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
   // --- Telemetry States ---
@@ -145,33 +150,60 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
   // 3. Derived current selected clip
   const currentClip = useMemo(() => {
-    return clips.find(c => c.id === selectedClipId) || clips[0] || null;
+    return resolveStudioClip(clips, selectedClipId);
   }, [clips, selectedClipId]);
+  const visibleTrack = trackForClip(currentClip?.id || null, captionClipId, track);
 
   // 4. Fetch CaptionTrack for selected clip
   useEffect(() => {
     if (!currentClip) {
       setTrack(null);
+      setCaptionClipId(null);
+      setCaptionLoadState('idle');
+      setCaptionLoadError(null);
       return;
     }
+
+    const clipId = currentClip.id;
     const controller = new AbortController();
-    fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { signal: controller.signal })
-      .then(res => (res.ok ? res.json() : null))
-      .then(data => {
-        if (data) {
-          setTrack(data);
-          if (data.groups && data.groups.length > 0) {
-            setSelectedGroupId(data.groups[0].id);
-          }
-        }
+    setTrack(null);
+    setCaptionClipId(null);
+    setCaptionLoadState('loading');
+    setCaptionLoadError(null);
+    setSelectedGroupId(null);
+
+    fetch(apiUrl(`/api/clips/${clipId}/captions`, pcHost), { signal: controller.signal })
+      .then(async (res) => {
+        if (res.status === 404) return { groups: [] };
+        if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load captions`);
+        return res.json();
       })
-      .catch(() => {});
+      .then((raw) => {
+        if (controller.signal.aborted) return;
+        const normalized = normalizeCaptionTrack(raw, clipId, currentClip.duration || 40);
+        setTrack(normalized);
+        setCaptionClipId(clipId);
+        setCaptionLoadState(normalized.groups.length > 0 ? 'success' : 'empty');
+        setSelectedGroupId(normalized.groups[0]?.id || null);
+      })
+      .catch((err: unknown) => {
+        if ((err as DOMException)?.name === 'AbortError') return;
+        const message = err instanceof Error ? err.message : 'Network communication failure';
+        console.warn('Captions unavailable for clip:', err);
+        setCaptionLoadError(message);
+        setCaptionLoadState('error');
+      });
 
     setCurrentTime(0);
     setIsPlaying(false);
 
     return () => controller.abort();
-  }, [currentClip?.id, pcHost]);
+  }, [currentClip?.id, currentClip?.duration, pcHost, captionRetryCount]);
+
+  const handleRetryCaptionLoad = () => {
+    setCaptionLoadState('loading');
+    setCaptionRetryCount((count) => count + 1);
+  };
 
   // Responsive collapsing at narrower viewports
   useEffect(() => {
@@ -571,7 +603,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
           {/* Top Video Stage */}
           <PreviewStage
             clip={currentClip}
-            track={track}
+            track={visibleTrack}
             currentTime={currentTime}
             duration={duration}
             isPlaying={isPlaying}
@@ -590,20 +622,23 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
           {/* Bottom Docked Caption Timeline */}
           <CaptionDock
-            track={track}
+            track={visibleTrack}
             currentTime={currentTime}
             duration={duration}
             onSeek={setCurrentTime}
             onUpdateTrack={setTrack}
             selectedGroupId={selectedGroupId}
             onSelectGroup={setSelectedGroupId}
+            captionLoadState={captionLoadState}
+            captionLoadError={captionLoadError}
+            onRetryCaptions={handleRetryCaptionLoad}
           />
         </div>
 
         {/* RIGHT PANE: INSPECTOR & PUBLISHING */}
         <InspectorPane
           clip={currentClip}
-          track={track}
+          track={visibleTrack}
           integrations={integrations}
           onUpdateClipMetadata={handleUpdateClipMetadata}
           onSaveCaptions={handleSaveCaptions}

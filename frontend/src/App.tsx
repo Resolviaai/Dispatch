@@ -7,6 +7,7 @@ import { BottomNav, TabType } from './components/BottomNav';
 import { RecordingItem, Bridge, apiUrl } from './bridge';
 import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
 import { StudioWorkstation } from './studio/StudioWorkstation';
+import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
@@ -251,15 +252,17 @@ export const App: React.FC = () => {
   // Desktop Review Studio Workstation (Primary Experience for PC)
   if (!isNative && !isMobileFrame) {
     return (
-      <StudioWorkstation
-        pcHost={pcHost}
-        onSwitchToMobileFrame={() => {
-          setIsMobileFrame(true);
-          if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('dispatch_view_mode', 'mobile');
-          }
-        }}
-      />
+      <ScreenErrorBoundary title="Studio could not render" resetKey={pcHost}>
+        <StudioWorkstation
+          pcHost={pcHost}
+          onSwitchToMobileFrame={() => {
+            setIsMobileFrame(true);
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('dispatch_view_mode', 'mobile');
+            }
+          }}
+        />
+      </ScreenErrorBoundary>
     );
   }
 
@@ -355,14 +358,16 @@ export const App: React.FC = () => {
           )}
 
           {currentTab === 'clips' && (
-            <ClipsScreen 
-              pcHost={pcHost} 
-              isMobileFrame={isMobileFrame} 
-              onEditorOpenChange={setIsEditorOpen} 
-              isPcOnline={isPcOnline}
-              sessionFilter={sessionFilter}
-              onClearSessionFilter={() => setSessionFilter(null)}
-            />
+            <ScreenErrorBoundary title="Clip editor could not render" resetKey={`${currentTab}:${pcHost}`}>
+              <ClipsScreen
+                pcHost={pcHost}
+                isMobileFrame={isMobileFrame}
+                onEditorOpenChange={setIsEditorOpen}
+                isPcOnline={isPcOnline}
+                sessionFilter={sessionFilter}
+                onClearSessionFilter={() => setSessionFilter(null)}
+              />
+            </ScreenErrorBoundary>
           )}
 
           {currentTab === 'settings' && (

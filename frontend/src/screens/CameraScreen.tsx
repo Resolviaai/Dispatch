@@ -15,26 +15,24 @@ import {
   Camera,
   Loader2
 } from 'lucide-react';
-import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent } from '../bridge';
+import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent, ExposureResultEvent } from '../bridge';
+import {
+  applyExposureResult,
+  applyFocusResult,
+  applyNativeLockState,
+  applyUnlockResult,
+  beginPointerSession,
+  endPointerSession,
+  exposureIndexForPointerMove,
+  FocusExposureState,
+  isCameraLifecycleTransition,
+  markLockAttemptTimedOut,
+  PointerSession,
+} from '../camera/cameraInteractionState';
 
 interface CameraScreenProps {
   onRecordingComplete?: (item: RecordingItem) => void;
   onRecordingStatusUpdate?: (segmentId: string, status: string, extra?: Partial<RecordingItem>) => void;
-}
-
-type FocusStatus = 'idle' | 'focusing' | 'success' | 'failed' | 'locked';
-
-interface FocusExposureState {
-  x: number;
-  y: number;
-  screenNormX: number;
-  screenNormY: number;
-  status: FocusStatus;
-  triggerId: number;
-  isLocked: boolean;
-  hasAf: boolean;
-  hasAe: boolean;
-  timestamp: number;
 }
 
 export const CameraScreen: React.FC<CameraScreenProps> = ({ 
@@ -63,12 +61,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     exposure: { minIndex: 0, maxIndex: 0, currentIndex: 0, stepEv: 0.5, isSupported: false },
     zoom: { minZoom: 1.0, maxZoom: 10.0, currentZoom: 1.0 },
   });
+  const cameraStatusRef = useRef(cameraStatus);
 
   // Focus & Exposure states
   const [focusState, setFocusState] = useState<FocusExposureState | null>(null);
   const [isIndicatorVisible, setIsIndicatorVisible] = useState(false);
   const [isDraggingExposure, setIsDraggingExposure] = useState(false);
   const [exposureIndex, setExposureIndex] = useState(0);
+  const [exposureError, setExposureError] = useState<string | null>(null);
   const [exposureInfo, setExposureInfo] = useState<ExposureInfo>({
     minIndex: 0,
     maxIndex: 0,
@@ -76,6 +76,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     stepEv: 0.5,
     isSupported: false,
   });
+  const exposureInfoRef = useRef(exposureInfo);
   const [viewfinderBounds, setViewfinderBounds] = useState<{ width: number; height: number }>({
     width: typeof window !== 'undefined' ? window.innerWidth : 360,
     height: typeof window !== 'undefined' ? window.innerHeight : 640
@@ -90,11 +91,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const viewfinderRef = useRef<HTMLDivElement | null>(null);
   const fadeTimeoutRef = useRef<any>(null);
   const longPressTimerRef = useRef<any>(null);
+  const lockTimeoutRef = useRef<any>(null);
+  const unlockTimeoutRef = useRef<any>(null);
   const isLongPressHandledRef = useRef(false);
-  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
-  const startExposureIndexRef = useRef<number>(0);
-  const isInteractingWithSliderRef = useRef<boolean>(false);
+  const pointerSessionRef = useRef<PointerSession | null>(null);
+  const pointerCaptureRef = useRef<{ pointerId: number; target: HTMLElement } | null>(null);
+  const lastExposureRequestRef = useRef<number | null>(null);
   const lastSunTapTimeRef = useRef<number>(0);
+  const lastTriggerIdRef = useRef(0);
 
   // Synchronize native recording status when running inside Dispatch Android WebView
   useEffect(() => {
@@ -114,62 +118,107 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     const unsub = Bridge.onCameraEvent((event) => {
       if (event.type === 'camera_state') {
         const data = event.data as CameraStateEvent;
+        const previous = cameraStatusRef.current;
+        cameraStatusRef.current = data;
         setCameraStatus(data);
+        setCameraFacing(data.lensFacing);
         if (data.isAudioEnabled !== undefined) {
           setMicActive(data.isAudioEnabled);
         }
+        if (data.exposure) {
+          exposureInfoRef.current = data.exposure;
+          setExposureInfo(data.exposure);
+          setExposureIndex(data.exposure.currentIndex);
+        }
+        if (isCameraLifecycleTransition(previous, data)) {
+          if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
+          if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
+          setFocusState(null);
+          setIsIndicatorVisible(false);
+        } else if (typeof data.isAeAfLocked === 'boolean') {
+          setFocusState((prev) => {
+            if (!prev && data.isAeAfLocked) {
+              const x = (viewfinderRef.current?.clientWidth || window.innerWidth) / 2;
+              const y = (viewfinderRef.current?.clientHeight || window.innerHeight) / 2;
+              return {
+                x, y, screenNormX: 0.5, screenNormY: 0.5,
+                status: 'locked', triggerId: Date.now(), isLocked: true,
+                hasAf: true, hasAe: true, timestamp: Date.now(),
+              };
+            }
+            return applyNativeLockState(prev, data.isAeAfLocked);
+          });
+          setIsIndicatorVisible(data.isAeAfLocked);
+        }
       } else if (event.type === 'focus_result') {
         const result = event.data as FocusResultEvent;
+        if (result.triggerId === lastTriggerIdRef.current && lockTimeoutRef.current) {
+          clearTimeout(lockTimeoutRef.current);
+          lockTimeoutRef.current = null;
+        }
         setFocusState(prev => {
-          if (!prev) return prev;
-          // Apply if trigger matches or if it's the active focus event
-          if (prev.triggerId === result.triggerId || !result.triggerId) {
-            const isLocked = !!result.isLocked;
-            const newStatus: FocusStatus = isLocked 
-              ? (result.success ? 'locked' : 'failed')
-              : (result.success ? 'success' : 'failed');
-
-            if (newStatus === 'locked') {
-              if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
-            } else if (newStatus === 'success') {
-              startFadeTimer(2800);
-            } else {
-              startFadeTimer(1600);
-            }
-
-            return {
-              ...prev,
-              status: newStatus,
-              isLocked,
-              hasAf: result.hasAf ?? true,
-              hasAe: result.hasAe ?? true
-            };
+          const next = applyFocusResult(prev, result);
+          if (next?.status === 'locked') {
+            if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
+          } else if (next?.status === 'success') {
+            startFadeTimer(2800);
+          } else if (next?.status === 'failed') {
+            startFadeTimer(2200);
           }
-          return prev;
+          return next;
         });
       } else if (event.type === 'exposure_result') {
-        if (typeof event.data?.appliedIndex === 'number') {
-          setExposureIndex(event.data.appliedIndex);
+        const result = event.data as ExposureResultEvent;
+        if (result.success) {
+          const applied = applyExposureResult(exposureInfoRef.current.currentIndex, result);
+          setExposureIndex(applied.index);
+          setExposureError(applied.error);
+        } else {
+          const actual = Bridge.getExposureInfo();
+          if (actual) {
+            exposureInfoRef.current = actual;
+            setExposureInfo(actual);
+            setExposureIndex(actual.currentIndex);
+          }
+          const rejected = applyExposureResult(actual?.currentIndex ?? exposureInfoRef.current.currentIndex, result);
+          setExposureError(rejected.error);
+          lastExposureRequestRef.current = null;
+          startFadeTimer(4500);
         }
       } else if (event.type === 'unlock_result') {
+        const success = event.data?.success === true;
+        if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
+        unlockTimeoutRef.current = null;
         setFocusState(prev => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            status: 'idle',
-            isLocked: false
-          };
+          const next = applyUnlockResult(prev, success);
+          if (!success && next?.isLocked) setIsIndicatorVisible(true);
+          return next;
         });
-        startFadeTimer(1500);
+        if (success) {
+          setIsIndicatorVisible(false);
+          startFadeTimer(1500);
+        }
       }
     });
 
     // Initial camera status query
     const initStatus = Bridge.getCameraStatus();
     if (initStatus) {
+      cameraStatusRef.current = initStatus;
       setCameraStatus(initStatus);
+      setCameraFacing(initStatus.lensFacing);
+      exposureInfoRef.current = initStatus.exposure;
+      setExposureInfo(initStatus.exposure);
+      setExposureIndex(initStatus.exposure.currentIndex);
       if (initStatus.isAudioEnabled !== undefined) {
         setMicActive(initStatus.isAudioEnabled);
+      }
+      if (initStatus.isAeAfLocked) {
+        const x = (viewfinderRef.current?.clientWidth || window.innerWidth) / 2;
+        const y = (viewfinderRef.current?.clientHeight || window.innerHeight) / 2;
+        const triggerId = Date.now();
+        setFocusState({ x, y, screenNormX: 0.5, screenNormY: 0.5, status: 'locked', triggerId, isLocked: true, hasAf: true, hasAe: true, timestamp: triggerId });
+        setIsIndicatorVisible(true);
       }
     }
 
@@ -252,6 +301,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const syncCameraHardwareState = useCallback(() => {
     const info = Bridge.getExposureInfo();
     if (info) {
+      exposureInfoRef.current = info;
       setExposureInfo(info);
       setExposureIndex(info.currentIndex);
     }
@@ -291,6 +341,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       window.removeEventListener('resize', updateBounds);
       if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+      if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
+      if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
     };
   }, []);
 
@@ -325,77 +377,178 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     return Math.abs(touchX - trackX) <= 32 && touchY >= (trackTop - 20) && touchY <= (trackBottom + 20);
   };
 
-  const handleUnlockAeAf = (e?: React.MouseEvent | React.PointerEvent) => {
-    if (e) e.stopPropagation();
+  const requestExposureIndex = (index: number) => {
+    lastExposureRequestRef.current = index;
+    setExposureError(null);
+    Bridge.setExposureIndex(index);
+  };
+
+  const nextTriggerId = () => {
+    const triggerId = Math.max(Date.now(), lastTriggerIdRef.current + 1);
+    lastTriggerIdRef.current = triggerId;
+    return triggerId;
+  };
+
+  const finishLockAttempt = (triggerId: number, error: string) => {
+    setFocusState((prev) => markLockAttemptTimedOut(prev, triggerId) || prev);
     Bridge.unlockAeAf();
-    setFocusState(prev => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        status: 'idle',
-        isLocked: false
-      };
-    });
-    startFadeTimer(1500);
+    if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
+    unlockTimeoutRef.current = setTimeout(() => {
+      const status = Bridge.getCameraStatus();
+      if (status) {
+        cameraStatusRef.current = status;
+        setCameraStatus(status);
+        setCameraFacing(status.lensFacing);
+        setFocusState((prev) => {
+          if (status.isAeAfLocked) return applyNativeLockState(prev, true);
+          return prev?.triggerId === triggerId
+            ? { ...prev, status: 'failed', isLocked: false, error }
+            : prev;
+        });
+        setIsIndicatorVisible(!!status.isAeAfLocked);
+      } else {
+        setFocusState((prev) => prev?.triggerId === triggerId
+          ? { ...prev, status: 'failed', isLocked: false, error }
+          : prev);
+      }
+      unlockTimeoutRef.current = null;
+      startFadeTimer(4500);
+    }, 1600);
+  };
+
+  const requestUnlock = () => {
+    setFocusState((prev) => prev?.isLocked ? { ...prev, status: 'unlocking', error: undefined } : prev);
+    setIsIndicatorVisible(true);
+    Bridge.unlockAeAf();
+    if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
+    unlockTimeoutRef.current = setTimeout(() => {
+      const status = Bridge.getCameraStatus();
+      if (status) {
+        cameraStatusRef.current = status;
+        setCameraStatus(status);
+        setFocusState((prev) => {
+          if (status.isAeAfLocked) {
+            return prev ? { ...applyNativeLockState(prev, true)!, status: 'locked', error: 'Unlock confirmation timed out. Try again.' } : prev;
+          }
+          return applyNativeLockState(prev, false);
+        });
+        setIsIndicatorVisible(!!status.isAeAfLocked);
+      } else {
+        setFocusState((prev) => prev?.isLocked
+          ? { ...prev, status: 'locked', error: 'Unlock confirmation timed out. Try again.' }
+          : prev);
+      }
+      unlockTimeoutRef.current = null;
+    }, 4500);
+  };
+
+  const handleUnlockAeAf = (e?: React.MouseEvent | React.PointerEvent) => {
+    e?.stopPropagation();
+    requestUnlock();
   };
 
   const handleResetExposure = (e: React.PointerEvent | React.MouseEvent) => {
     e.stopPropagation();
-    Bridge.setExposureIndex(0);
-    setExposureIndex(0);
+    requestExposureIndex(0);
+  };
+
+  const handleExposureSliderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    const freshExposure = Bridge.getExposureInfo() || exposureInfoRef.current;
+    exposureInfoRef.current = freshExposure;
+    setExposureInfo(freshExposure);
+    if (!freshExposure.isSupported) {
+      setExposureError('Exposure compensation is not supported by this camera');
+      return;
+    }
+
+    if (focusState?.status === 'locking' || focusState?.status === 'unlocking') return;
+    capturePointer(e, true, freshExposure.currentIndex);
+    isLongPressHandledRef.current = false;
+    lastExposureRequestRef.current = freshExposure.currentIndex;
+    setIsDraggingExposure(true);
+    if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
+
+    const now = Date.now();
+    if (now - lastSunTapTimeRef.current < 300) {
+      requestExposureIndex(0);
+      lastSunTapTimeRef.current = 0;
+    } else {
+      lastSunTapTimeRef.current = now;
+    }
+  };
+
+  const capturePointer = (event: React.PointerEvent<HTMLElement>, isExposureSlider: boolean, startIndex: number) => {
+    pointerSessionRef.current = beginPointerSession(event.pointerId, event.clientX, event.clientY, startIndex, isExposureSlider);
+    pointerCaptureRef.current = { pointerId: event.pointerId, target: event.currentTarget };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      pointerCaptureRef.current = null;
+    }
+  };
+
+  const releasePointerCapture = (pointerId: number) => {
+    const capture = pointerCaptureRef.current;
+    pointerSessionRef.current = endPointerSession(pointerSessionRef.current, pointerId);
+    if (!capture || capture.pointerId !== pointerId) return;
+    pointerCaptureRef.current = null;
+    try {
+      if (capture.target.hasPointerCapture(pointerId)) capture.target.releasePointerCapture(pointerId);
+    } catch { }
+  };
+
+  const clearPointerInteraction = (pointerId: number, releaseCapture: boolean) => {
+    const session = pointerSessionRef.current;
+    if (!session || session.pointerId !== pointerId) return null;
+    if (releaseCapture) releasePointerCapture(pointerId);
+    else {
+      pointerSessionRef.current = endPointerSession(session, pointerId);
+      pointerCaptureRef.current = null;
+    }
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
+    setIsDraggingExposure(false);
+    return session;
   };
 
   const handleViewfinderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
 
-    // Refresh hardware exposure parameters dynamically on touch
-    const freshExp = Bridge.getExposureInfo();
-    if (freshExp) {
-      setExposureInfo(freshExp);
-    }
+    const freshExposure = Bridge.getExposureInfo() || exposureInfoRef.current;
+    exposureInfoRef.current = freshExposure;
+    setExposureInfo(freshExposure);
 
     const rect = e.currentTarget.getBoundingClientRect();
     const bounds = { width: rect.width, height: rect.height };
     setViewfinderBounds(bounds);
-
-    const clientX = e.clientX;
-    const clientY = e.clientY;
-    const localX = clientX - rect.left;
-    const localY = clientY - rect.top;
-
-    // Hardware coordinate normalization:
-    // When running inside Android WebView, PreviewView covers the full screen (window.innerWidth x window.innerHeight).
-    // Normalizing directly to screen width/height ensures perfect 1:1 alignment with native PreviewView.meteringPointFactory.
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
     const screenNormX = Bridge.isAvailable() && window.innerWidth > 0
-      ? Math.max(0, Math.min(1, clientX / window.innerWidth))
+      ? Math.max(0, Math.min(1, e.clientX / window.innerWidth))
       : Math.max(0, Math.min(1, localX / rect.width));
-
     const screenNormY = Bridge.isAvailable() && window.innerHeight > 0
-      ? Math.max(0, Math.min(1, clientY / window.innerHeight))
+      ? Math.max(0, Math.min(1, e.clientY / window.innerHeight))
       : Math.max(0, Math.min(1, localY / rect.height));
 
-    pointerDownPosRef.current = { x: clientX, y: clientY };
-    isLongPressHandledRef.current = false;
-    startExposureIndexRef.current = freshExp ? freshExp.currentIndex : exposureIndex;
+    const isTouchingSlider = isIndicatorVisible && focusState && freshExposure.isSupported && checkIsNearSlider(localX, localY, focusState, bounds);
+    const lockInProgress = focusState?.status === 'locking' || focusState?.status === 'unlocking';
+    if (lockInProgress || (focusState?.isLocked && !isTouchingSlider)) return;
 
+    capturePointer(e, !!isTouchingSlider, freshExposure.currentIndex);
+    isLongPressHandledRef.current = false;
     if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
 
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-
-    // Check if touching dedicated exposure slider track or sun handle
-    const isTouchingSlider = isIndicatorVisible && focusState && exposureInfo.isSupported && checkIsNearSlider(localX, localY, focusState, bounds);
     if (isTouchingSlider) {
-      isInteractingWithSliderRef.current = true;
+      lastExposureRequestRef.current = freshExposure.currentIndex;
       setIsDraggingExposure(true);
-
-      // Check double-tap on sun handle to quickly reset EV to 0
       const now = Date.now();
       if (now - lastSunTapTimeRef.current < 300) {
-        Bridge.setExposureIndex(0);
-        setExposureIndex(0);
+        requestExposureIndex(0);
         lastSunTapTimeRef.current = 0;
       } else {
         lastSunTapTimeRef.current = now;
@@ -403,144 +556,112 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       return;
     }
 
-    isInteractingWithSliderRef.current = false;
-
-    // Setup Long-press (>= 400ms held within 8px touch slop) for AE/AF Lock
     longPressTimerRef.current = setTimeout(() => {
+      const activeSession = pointerSessionRef.current;
+      if (!activeSession || activeSession.pointerId !== e.pointerId || activeSession.isExposureSlider) return;
       isLongPressHandledRef.current = true;
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        try { navigator.vibrate(50); } catch {}
+        try { navigator.vibrate(50); } catch { }
       }
-      const triggerId = Date.now();
-      Bridge.lockAeAfAtPoint(screenNormX, screenNormY, triggerId);
 
+      const triggerId = nextTriggerId();
       setFocusState({
-        x: localX,
-        y: localY,
-        screenNormX,
-        screenNormY,
-        status: 'focusing',
-        triggerId,
-        isLocked: true,
-        hasAf: true,
-        hasAe: true,
-        timestamp: triggerId
+        x: localX, y: localY, screenNormX, screenNormY,
+        status: 'locking', triggerId, isLocked: false,
+        hasAf: true, hasAe: true, timestamp: triggerId,
       });
       setIsIndicatorVisible(true);
+      try {
+        const accepted = Bridge.lockAeAfAtPoint(screenNormX, screenNormY, triggerId);
+        if (!accepted) {
+          setFocusState((prev) => prev?.triggerId === triggerId
+            ? { ...prev, status: 'failed', error: 'Camera rejected the AE/AF lock request' }
+            : prev);
+          startFadeTimer(2200);
+          return;
+        }
+        lockTimeoutRef.current = setTimeout(() => {
+          lockTimeoutRef.current = null;
+          finishLockAttempt(triggerId, 'Lock confirmation timed out; camera focus state could not be confirmed');
+        }, 5000);
+      } catch (err) {
+        setFocusState((prev) => prev?.triggerId === triggerId
+          ? { ...prev, status: 'failed', error: err instanceof Error ? err.message : 'Camera rejected the AE/AF lock request' }
+          : prev);
+        startFadeTimer(2200);
+      }
     }, 400);
   };
 
   const handleViewfinderPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!pointerDownPosRef.current) return;
+    const session = pointerSessionRef.current;
+    if (!session || session.pointerId !== e.pointerId) return;
 
-    const dx = e.clientX - pointerDownPosRef.current.x;
-    const dy = e.clientY - pointerDownPosRef.current.y;
-    const dist = Math.hypot(dx, dy);
-
-    // Cancel long press if moved past touch slop (8px)
-    if (dist > 8 && longPressTimerRef.current) {
+    const dx = e.clientX - session.originX;
+    const dy = e.clientY - session.originY;
+    if (Math.hypot(dx, dy) > 8 && longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
 
-    // EXPOSURE ADJUSTMENT LAW:
-    // Exposure changes *only* via dedicated slider interaction.
-    // Accidental vertical swipes on the empty viewfinder NEVER alter exposure.
-    if (exposureInfo.isSupported && isInteractingWithSliderRef.current) {
-      const totalDragDistancePx = 160;
-      const range = Math.max(1, exposureInfo.maxIndex - exposureInfo.minIndex);
-      const indexOffset = (-dy / totalDragDistancePx) * range;
-      const targetIndex = Math.min(
-        exposureInfo.maxIndex,
-        Math.max(exposureInfo.minIndex, Math.round(startExposureIndexRef.current + indexOffset))
-      );
-
-      if (targetIndex !== exposureIndex) {
-        Bridge.setExposureIndex(targetIndex);
-        setExposureIndex(targetIndex);
-      }
+    const targetIndex = exposureIndexForPointerMove(
+      session,
+      e.pointerId,
+      e.clientX,
+      e.clientY,
+      exposureInfoRef.current
+    );
+    if (targetIndex !== null && targetIndex !== lastExposureRequestRef.current) {
+      requestExposureIndex(targetIndex);
     }
   };
 
   const handleViewfinderPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
+    const session = clearPointerInteraction(e.pointerId, true);
+    if (!session) return;
 
-    try {
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
-    } catch {}
-
-    const wasDirectSlider = isInteractingWithSliderRef.current;
-    isInteractingWithSliderRef.current = false;
-    setIsDraggingExposure(false);
-
-    if (wasDirectSlider) {
-      pointerDownPosRef.current = null;
-      if (!focusState?.isLocked) {
-        startFadeTimer(2800);
-      }
+    if (session.isExposureSlider) {
+      if (!focusState?.isLocked) startFadeTimer(2800);
       return;
     }
-
     if (isLongPressHandledRef.current) {
       isLongPressHandledRef.current = false;
-      pointerDownPosRef.current = null;
       return;
     }
+    if (focusState?.isLocked || focusState?.status === 'locking' || focusState?.status === 'unlocking') return;
 
-    // Single Tap detected (Tap-to-Focus)
-    if (pointerDownPosRef.current) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const localX = e.clientX - rect.left;
-      const localY = e.clientY - rect.top;
-
-      const screenNormX = Bridge.isAvailable() && window.innerWidth > 0
-        ? Math.max(0, Math.min(1, e.clientX / window.innerWidth))
-        : Math.max(0, Math.min(1, localX / rect.width));
-
-      const screenNormY = Bridge.isAvailable() && window.innerHeight > 0
-        ? Math.max(0, Math.min(1, e.clientY / window.innerHeight))
-        : Math.max(0, Math.min(1, localY / rect.height));
-
-      // If already locked, tap unlocks AE/AF first
-      if (focusState?.isLocked) {
-        Bridge.unlockAeAf();
-      }
-
-      const triggerId = Date.now();
-      Bridge.focusOnPoint(screenNormX, screenNormY, triggerId);
-
-      setFocusState({
-        x: localX,
-        y: localY,
-        screenNormX,
-        screenNormY,
-        status: 'focusing',
-        triggerId,
-        isLocked: false,
-        hasAf: true,
-        hasAe: true,
-        timestamp: triggerId
+    const rect = e.currentTarget.getBoundingClientRect();
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    const screenNormX = Bridge.isAvailable() && window.innerWidth > 0
+      ? Math.max(0, Math.min(1, e.clientX / window.innerWidth))
+      : Math.max(0, Math.min(1, localX / rect.width));
+    const screenNormY = Bridge.isAvailable() && window.innerHeight > 0
+      ? Math.max(0, Math.min(1, e.clientY / window.innerHeight))
+      : Math.max(0, Math.min(1, localY / rect.height));
+    const triggerId = nextTriggerId();
+    Bridge.focusOnPoint(screenNormX, screenNormY, triggerId);
+    setFocusState({ x: localX, y: localY, screenNormX, screenNormY, status: 'focusing', triggerId, isLocked: false, hasAf: true, hasAe: true, timestamp: triggerId });
+    setIsIndicatorVisible(true);
+    setTimeout(() => {
+      setFocusState((current) => {
+        if (current && current.triggerId === triggerId && current.status === 'focusing') {
+          startFadeTimer(2800);
+          return { ...current, status: 'success' };
+        }
+        return current;
       });
-      setIsIndicatorVisible(true);
+    }, 3000);
+  };
 
-      // Fallback timeout in case hardware/mock bridge doesn't fire callback
-      setTimeout(() => {
-        setFocusState(curr => {
-          if (curr && curr.triggerId === triggerId && curr.status === 'focusing') {
-            startFadeTimer(2800);
-            return { ...curr, status: 'success' };
-          }
-          return curr;
-        });
-      }, 3000);
-    }
+  const handleViewfinderPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    const session = clearPointerInteraction(e.pointerId, false);
+    if (session) isLongPressHandledRef.current = false;
+  };
 
-    pointerDownPosRef.current = null;
+  const handleViewfinderLostPointerCapture = (e: React.PointerEvent<HTMLDivElement>) => {
+    const session = clearPointerInteraction(e.pointerId, false);
+    if (session) isLongPressHandledRef.current = false;
   };
 
   const handleToggleTorch = () => {
@@ -726,7 +847,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         onPointerDown={handleViewfinderPointerDown}
         onPointerMove={handleViewfinderPointerMove}
         onPointerUp={handleViewfinderPointerUp}
-        onPointerCancel={handleViewfinderPointerUp}
+        onPointerCancel={handleViewfinderPointerCancel}
+        onLostPointerCapture={handleViewfinderLostPointerCapture}
         style={{ touchAction: 'none' }}
         className={`absolute inset-0 z-0 flex items-center justify-center ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-black'} overflow-hidden cursor-crosshair`}
       >
@@ -749,7 +871,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             </div>
             <p className="text-sm font-semibold text-text-main">Browser Preview Mode</p>
             <p className="text-xs text-text-secondary mt-1 max-w-[260px] leading-relaxed">
-              Tap screen to focus, drag vertical slider for exposure, or hold to lock AE/AF.
+              Tap to focus, drag exposure, double-tap the sun to reset, or hold to lock AE/AF.
             </p>
             {webcamError && (
               <span className="text-[10px] text-text-muted mt-2 font-mono">
@@ -803,7 +925,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                 : 0.5;
               const sunY = trackBottom - normExp * (trackBottom - trackTop);
 
-              const isFocusing = focusState.status === 'focusing';
+              const isFocusing = focusState.status === 'focusing' || focusState.status === 'locking';
               const isLocked = focusState.status === 'locked' || focusState.isLocked;
               const isFailed = focusState.status === 'failed';
 
@@ -826,16 +948,18 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                     >
                       <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-black shadow-[0_2px_12px_rgba(0,0,0,0.8)] border border-amber-300 animate-in fade-in zoom-in-95 duration-150">
                         <Lock size={11} strokeWidth={2.8} className="text-black shrink-0" />
-                        <span className="text-[10px] font-mono font-bold tracking-tight uppercase">AE/AF LOCK</span>
+                        <span className="text-[10px] font-mono font-bold tracking-tight uppercase">
+                          {focusState.status === 'unlocking' ? 'UNLOCKING…' : focusState.hasAe && !focusState.hasAf ? 'AE LOCK' : 'AE/AF LOCK'}
+                        </span>
                       </div>
 
                       <button
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={handleUnlockAeAf}
                         aria-label="Unlock AE/AF"
-                        className="flex items-center justify-center w-6 h-6 rounded-full bg-black/80 border border-white/30 text-white hover:bg-black active:scale-[0.96] shadow-md transition-all"
+                        className="flex items-center justify-center w-11 h-11 rounded-full bg-black/80 border border-white/30 text-white hover:bg-black active:scale-[0.96] shadow-md transition-all"
                       >
-                        <Unlock size={11} strokeWidth={2.2} />
+                        <Unlock size={14} strokeWidth={2.2} />
                       </button>
                     </div>
                   )}
@@ -850,7 +974,9 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                       }}
                     >
                       <AlertCircle size={10} strokeWidth={2.5} />
-                      <span className="text-[9px] font-mono font-bold uppercase tracking-wide">AF METERING FAILED</span>
+                      <span className="text-[9px] font-mono font-bold uppercase tracking-wide" title={focusState.error || undefined}>
+                        {focusState.error || 'FOCUS OR LOCK FAILED'}
+                      </span>
                     </div>
                   )}
 
@@ -897,11 +1023,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                         width: '32px',
                         height: `${trackHeight + 20}px`,
                       }}
-                      onPointerDown={(e) => {
-                        e.stopPropagation();
-                        isInteractingWithSliderRef.current = true;
-                        setIsDraggingExposure(true);
-                      }}
+                      onPointerDown={handleExposureSliderPointerDown}
                     >
                       {/* Central Track Line */}
                       <div 
@@ -953,6 +1075,31 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                           </div>
                         )}
                       </div>
+                    </div>
+                  )}
+                  {exposureInfo.isSupported && exposureIndex !== 0 && (
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={handleResetExposure}
+                      aria-label="Reset exposure to zero"
+                      title="Reset exposure to 0 EV"
+                      className="absolute pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/30 bg-black/80 text-white hover:bg-black active:scale-[0.98] transition-all"
+                      style={{
+                        left: `${Math.max(22, Math.min(cw - 22, trackX))}px`,
+                        top: `${Math.min(ch - 22, trackBottom + 12)}px`,
+                        transform: 'translate(-50%, -50%)',
+                      }}
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                  )}
+                  {exposureError && (
+                    <div
+                      role="status"
+                      className="absolute pointer-events-none left-1/2 bottom-5 -translate-x-1/2 rounded-lg border border-danger/40 bg-surface-100 px-3 py-2 text-center text-[10px] text-danger"
+                    >
+                      {exposureError}
                     </div>
                   )}
                 </>

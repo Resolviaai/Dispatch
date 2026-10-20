@@ -69,8 +69,8 @@ export interface FocusResultEvent {
 
 export interface ExposureResultEvent {
   success: boolean;
-  index: number;
-  ev: number;
+  index?: number;
+  ev?: number;
   error?: string;
 }
 

@@ -35,7 +35,8 @@ import {
   ExternalLink,
   Cloud,
 } from 'lucide-react';
-import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig, LayerType } from '../captions/types';
+import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig } from '../captions/types';
+import { normalizeCaptionTrack } from '../captions/normalizeTrack';
 import { CaptionTimeline } from '../captions/CaptionTimeline';
 import { CaptionStudio, ActivePanel } from '../captions/CaptionStudio';
 import { DispatchCaptionRenderer, applyColorOpacity, applyCaseTransform } from '../captions/DispatchCaptionRenderer';
@@ -189,134 +190,6 @@ function getRetentionDaysLeft(publishedAt?: string): number {
   if (isNaN(pubDate)) return 7;
   const diffDays = 7 - (Date.now() - pubDate) / (1000 * 60 * 60 * 24);
   return Math.max(0, Math.ceil(diffDays));
-}
-
-function normalizeCaptionTrack(raw: any, clipId: string, duration: number): CaptionTrack {
-  const default_style: StyleConfig = {
-    font_family: raw?.default_style?.font_family || 'Montserrat',
-    font_size: raw?.default_style?.font_size || 44,
-    font_weight: raw?.default_style?.font_weight || '900',
-    text_transform: raw?.default_style?.text_transform || 'none',
-    letter_spacing: raw?.default_style?.letter_spacing || 0,
-    line_height: raw?.default_style?.line_height || 1.25,
-    primary_color: raw?.default_style?.primary_color || raw?.default_style?.color || '#FFFF00',
-    highlight_color: raw?.default_style?.highlight_color || '#FFFFFF',
-    outline_enabled: raw?.default_style?.outline_enabled ?? (raw?.default_style?.stroke_width ? true : false),
-    outline_color: raw?.default_style?.outline_color || raw?.default_style?.stroke_color || '#000000',
-    outline_width: raw?.default_style?.outline_width || raw?.default_style?.stroke_width || 3,
-    shadow_enabled: raw?.default_style?.shadow_enabled ?? raw?.default_style?.has_shadow ?? true,
-    shadow_color: raw?.default_style?.shadow_color || '#000000',
-    shadow_offset_x: raw?.default_style?.shadow_offset_x || 0,
-    shadow_offset_y: raw?.default_style?.shadow_offset_y || 2,
-    shadow_blur: raw?.default_style?.shadow_blur || 6,
-    background_enabled: raw?.default_style?.background_enabled ?? raw?.default_style?.has_background ?? false,
-    background_color: raw?.default_style?.background_color || '#000000',
-    background_padding_x: raw?.default_style?.background_padding_x || 12,
-    background_padding_y: raw?.default_style?.background_padding_y || 6,
-    background_corner_radius: raw?.default_style?.background_corner_radius || 8,
-  };
-
-  const default_layout: LayoutConfig = {
-    position_x: raw?.default_layout?.position_x ?? 0.5,
-    position_y: raw?.default_layout?.position_y ?? 0.78,
-    scale: raw?.default_layout?.scale ?? 1.0,
-    rotation: raw?.default_layout?.rotation ?? 0,
-    alignment: raw?.default_layout?.alignment || 'center',
-    max_width: raw?.default_layout?.max_width ?? 0.88,
-    max_lines: raw?.default_layout?.max_lines ?? 2,
-  };
-
-  const default_animation: AnimationConfig = {
-    type: raw?.default_animation?.type || 'pop',
-    duration_ms: raw?.default_animation?.duration_ms || 120,
-    active_scale: raw?.default_animation?.active_scale || 1.15,
-    easing: raw?.default_animation?.easing || 'ease_out',
-    enter: {
-      type: raw?.default_animation?.entrance_animation || raw?.default_animation?.enter?.type === 'scale_up' ? 'pop' : (raw?.default_animation?.enter?.type || 'pop'),
-      duration_ms: 200,
-    },
-    active_word: {
-      type: raw?.default_animation?.active_word_effect || raw?.default_animation?.active_word?.type || 'pop',
-      active_scale: 1.15,
-      duration_ms: 120,
-    },
-    exit: {
-      type: raw?.default_animation?.exit_animation || raw?.default_animation?.exit?.type || 'none',
-      duration_ms: 150,
-    },
-  };
-
-  const rawGroups = Array.isArray(raw?.groups) ? raw.groups : [];
-  const groups: CaptionGroup[] = rawGroups.map((g: any, gIdx: number) => {
-    const rawWords = Array.isArray(g.words) ? g.words : [];
-    const words: Word[] = rawWords.map((w: any, wIdx: number) => ({
-      id: w.id || `w_${gIdx}_${wIdx}`,
-      text: w.text || w.word || '',
-      start: typeof w.start === 'number' ? w.start : g.start,
-      end: typeof w.end === 'number' ? w.end : g.end,
-      confidence: w.confidence ?? 0.95,
-      style_override: w.style_override,
-    }));
-
-    const rawPosY = g.layout?.position_y ?? default_layout.position_y;
-    const rawPosX = g.layout?.position_x ?? default_layout.position_x;
-
-    return {
-      id: g.id || `grp_${gIdx}`,
-      start: typeof g.start === 'number' ? g.start : 0,
-      end: typeof g.end === 'number' ? g.end : duration,
-      words: words.length > 0 ? words : [{
-        id: `w_${gIdx}_0`,
-        text: g.text || '',
-        start: g.start || 0,
-        end: g.end || duration,
-      }],
-      layout: {
-        ...default_layout,
-        ...(g.layout || {}),
-        position_x: rawPosX > 1 ? rawPosX / 100 : rawPosX,
-        position_y: rawPosY > 1 ? rawPosY / 100 : rawPosY,
-      },
-      style: {
-        ...default_style,
-        ...(g.style || {}),
-        primary_color: g.style?.primary_color || g.style?.color || default_style.primary_color,
-        highlight_color: g.style?.highlight_color || default_style.highlight_color,
-        highlight_enabled: g.style?.highlight_enabled !== false,
-        outline_color: g.style?.outline_color || g.style?.stroke_color || default_style.outline_color,
-        outline_width: g.style?.outline_width || g.style?.stroke_width || default_style.outline_width,
-      },
-      animation: {
-        ...default_animation,
-        ...(g.animation || {}),
-      },
-      type: (g.type as LayerType) || 'caption',
-      trackIndex: typeof g.trackIndex === 'number' && g.trackIndex >= 0 ? g.trackIndex : undefined,
-      volume: typeof g.volume === 'number' ? (g.volume <= 2.0 ? Math.round(g.volume * 100) : g.volume) : 100,
-      is_muted: Boolean(g.is_muted),
-      is_hidden: Boolean(g.is_hidden),
-      audio_url: g.audio_url,
-      overlay_url: g.overlay_url,
-      overlay_type: g.overlay_type,
-      opacity: typeof g.opacity === 'number' ? g.opacity : 100,
-      label: g.label,
-      flip_h: Boolean(g.flip_h),
-      flip_v: Boolean(g.flip_v),
-      overlay_animation: g.overlay_animation,
-      has_word_timing: g.has_word_timing,
-      timing_mode: g.timing_mode,
-    };
-  });
-
-  return {
-    id: raw?.id || `track_${clipId}`,
-    clip_id: clipId,
-    language: raw?.language || 'en',
-    default_style,
-    default_layout,
-    default_animation,
-    groups,
-  };
 }
 
 // Interactive Direct-Canvas Caption Editor (Used inside Studio Mode)

@@ -1,144 +1,85 @@
-/**
- * Dispatch Camera Focus, Exposure, Coordinate Mapping & UX Invariant Tests
- */
+/** Regression tests for the production camera interaction state used by CameraScreen. */
 
-import assert from 'assert';
+import assert from 'node:assert/strict';
+import {
+  applyExposureResult,
+  applyFocusResult,
+  applyNativeLockState,
+  applyUnlockResult,
+  beginPointerSession,
+  endPointerSession,
+  exposureIndexForPointerMove,
+  isCameraLifecycleTransition,
+  markLockAttemptTimedOut,
+} from './src/camera/cameraInteractionState';
 
-console.log('🧪 Starting Dispatch Camera Focus & Exposure Test Suite...\n');
+console.log('Camera interaction regressions...');
 
-// 1. Coordinate Normalization Invariant
-console.log('Test 1: Screen-normalized coordinates for full-bleed PreviewView...');
-function calculateNormalizedCoordinates(clientX, clientY, containerRect, windowBounds, isNative) {
-  const normX = isNative && windowBounds.width > 0
-    ? Math.max(0, Math.min(1, clientX / windowBounds.width))
-    : Math.max(0, Math.min(1, (clientX - containerRect.left) / containerRect.width));
+const exposure = {
+  minIndex: -4,
+  maxIndex: 4,
+  currentIndex: 0,
+  stepEv: 0.5,
+  isSupported: true,
+};
 
-  const normY = isNative && windowBounds.height > 0
-    ? Math.max(0, Math.min(1, clientY / windowBounds.height))
-    : Math.max(0, Math.min(1, (clientY - containerRect.top) / containerRect.height));
+// Direct track/handle pointer-down owns the origin, so the very first captured move is actionable.
+const directTrackTouch = beginPointerSession(11, 180, 220, 0, true);
+assert.equal(exposureIndexForPointerMove(directTrackTouch, 11, 180, 140, exposure), 4);
+assert.equal(exposureIndexForPointerMove(directTrackTouch, 11, 180, 300, exposure), -4);
+assert.equal(exposureIndexForPointerMove(directTrackTouch, 12, 180, 140, exposure), null, 'other pointer ids cannot move this drag');
+assert.equal(exposureIndexForPointerMove(directTrackTouch, 11, 180, 140, { ...exposure, isSupported: false }), null);
 
-  return { normX, normY };
+// A general viewfinder gesture never adjusts exposure.
+const viewfinderTap = beginPointerSession(13, 180, 220, 0, false);
+assert.equal(exposureIndexForPointerMove(viewfinderTap, 13, 180, 140, exposure), null);
+
+// Release, cancellation, and lost capture use the same idempotent session cleanup.
+for (const endReason of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+  const session = beginPointerSession(14, 180, 220, 0, true);
+  assert.equal(endPointerSession(session, 14), null, `${endReason} clears the active pointer origin`);
+  assert.equal(exposureIndexForPointerMove(endPointerSession(session, 14), 14, 180, 140, exposure), null);
 }
+assert.equal(endPointerSession(directTrackTouch, 99), directTrackTouch, 'stale end events must not clear another pointer');
 
-// Emulate POCO C65 screen: 393 x 852. Viewfinder is sitting above 56px bottom nav (height = 796px).
-const windowPOCO = { width: 393, height: 852 };
-const containerPOCO = { left: 0, top: 0, width: 393, height: 796 };
+// The Android contract is `index`; only a successful native result changes the displayed value.
+assert.deepEqual(applyExposureResult(1, { success: true, index: -3, ev: -1.5 }), { index: -3, error: null });
+assert.deepEqual(applyExposureResult(1, { success: false, error: 'Unsupported' }), { index: 1, error: 'Unsupported' });
 
-// User touches at center of screen (y = 426)
-const nativeCoords = calculateNormalizedCoordinates(196.5, 426, containerPOCO, windowPOCO, true);
-assert.strictEqual(nativeCoords.normY, 0.5, 'Center touch must normalize to 0.5 on screen');
-assert.strictEqual(nativeCoords.normX, 0.5, 'Center touch must normalize to 0.5 on screen');
+const pendingLock = {
+  x: 150, y: 200, screenNormX: 0.5, screenNormY: 0.5,
+  status: 'locking', triggerId: 1001, isLocked: false,
+  hasAf: true, hasAe: true, timestamp: 1001,
+};
+assert.equal(pendingLock.isLocked, false, 'lock UI starts pending, without a confirmed lock');
 
-// Verify that using container height would have caused severe offset error
-const brokenY = 426 / 796; // ~0.535 (30px offset on native PreviewView)
-assert.notStrictEqual(nativeCoords.normY, brokenY, 'Native calculation must not use cropped container height');
-console.log('  ✓ Native coordinates map 1:1 to PreviewView full-bleed space without letterbox/nav offsets');
+const aeOnlyConfirmed = applyFocusResult(pendingLock, {
+  triggerId: 1001, success: true, isLocked: true, hasAf: false, hasAe: true,
+});
+assert.equal(aeOnlyConfirmed.status, 'locked', 'native confirmation accepts AE-only locking');
+assert.equal(aeOnlyConfirmed.isLocked, true);
+assert.equal(aeOnlyConfirmed.hasAf, false);
 
-// 2. Exposure Adjustment Isolation Invariant
-console.log('Test 2: Dedicated exposure slider interaction isolation (no accidental swipes)...');
-function handlePointerDrag(isInteractingWithSlider, isSupported, dy, startIndex, expInfo) {
-  // RULE: Only change exposure if directly interacting with slider
-  if (!isSupported || !isInteractingWithSlider) {
-    return { applied: false, index: startIndex };
-  }
-  const totalDragDistancePx = 160;
-  const range = Math.max(1, expInfo.maxIndex - expInfo.minIndex);
-  const indexOffset = (-dy / totalDragDistancePx) * range;
-  const targetIndex = Math.min(
-    expInfo.maxIndex,
-    Math.max(expInfo.minIndex, Math.round(startIndex + indexOffset))
-  );
-  return { applied: true, index: targetIndex };
-}
+const failedLock = applyFocusResult(pendingLock, {
+  triggerId: 1001, success: false, isLocked: false, hasAf: false, hasAe: false, error: 'Unsupported',
+});
+assert.equal(failedLock.status, 'failed');
+assert.equal(failedLock.isLocked, false);
+assert.equal(applyFocusResult(pendingLock, { triggerId: 999, success: true, isLocked: true }), pendingLock, 'stale results are ignored');
 
-const expInfo = { minIndex: -4, maxIndex: 4, currentIndex: 0, stepEv: 0.5, isSupported: true };
+const timedOutLock = markLockAttemptTimedOut(pendingLock, 1001);
+assert.equal(timedOutLock.status, 'failed');
+assert.equal(timedOutLock.isLocked, false);
+assert.match(timedOutLock.error, /timed out/i);
+assert.equal(applyNativeLockState(timedOutLock, true).isLocked, true, 'a direct native status read can confirm a delayed lock');
 
-// Accidental vertical swipe on viewfinder (isInteractingWithSlider = false, dy = -50)
-const accidentalSwipe = handlePointerDrag(false, true, -50, 0, expInfo);
-assert.strictEqual(accidentalSwipe.applied, false, 'Accidental swipe must not alter exposure');
-assert.strictEqual(accidentalSwipe.index, 0, 'Index must remain unchanged');
+const failedUnlock = applyUnlockResult(aeOnlyConfirmed, false);
+assert.equal(failedUnlock.isLocked, true, 'failed unlock keeps confirmed lock UI in sync');
+assert.equal(applyUnlockResult(aeOnlyConfirmed, true).isLocked, false);
 
-// Intentional touch on slider handle (isInteractingWithSlider = true, dy = -80 => half of 160px drag = +4 index steps in range of 8)
-const intentionalDrag = handlePointerDrag(true, true, -80, 0, expInfo);
-assert.strictEqual(intentionalDrag.applied, true, 'Intentional slider drag must adjust exposure');
-assert.strictEqual(intentionalDrag.index, 4, 'Index should increase by 4 on half-track upward drag');
+const cameraState = { status: 'ready', lensFacing: 'back', isRecording: false, isTorchEnabled: false, isAeAfLocked: true, isAudioEnabled: true, exposure, zoom: { minZoom: 1, maxZoom: 4, currentZoom: 1 } };
+assert.equal(isCameraLifecycleTransition(cameraState, { ...cameraState, status: 'initializing' }), true);
+assert.equal(isCameraLifecycleTransition(cameraState, { ...cameraState, lensFacing: 'front' }), true);
+assert.equal(isCameraLifecycleTransition(cameraState, { ...cameraState, isAeAfLocked: false }), false);
 
-// Clamping to hardware range
-const extremeDrag = handlePointerDrag(true, true, -400, 0, expInfo);
-assert.strictEqual(extremeDrag.index, 4, 'Index must clamp to hardware maxIndex');
-const extremeDragDown = handlePointerDrag(true, true, 400, 0, expInfo);
-assert.strictEqual(extremeDragDown.index, -4, 'Index must clamp to hardware minIndex');
-
-// Unsupported hardware
-const unsupportedExp = { ...expInfo, isSupported: false, minIndex: 0, maxIndex: 0 };
-const dragOnUnsupported = handlePointerDrag(true, false, -80, 0, unsupportedExp);
-assert.strictEqual(dragOnUnsupported.applied, false, 'Unsupported exposure hardware must reject changes');
-console.log('  ✓ Exposure changes strictly isolated to dedicated slider and clamped to hardware bounds');
-
-// 3. Real AE/AF Lock Commit Verification
-console.log('Test 3: AE/AF Lock state commitments based on asynchronous hardware confirmation...');
-function evaluateFocusResult(currentFocus, result) {
-  if (currentFocus.triggerId !== result.triggerId) {
-    return currentFocus; // Ignore stale callbacks
-  }
-  if (result.isLocked) {
-    return {
-      ...currentFocus,
-      status: result.success ? 'locked' : 'failed',
-      isLocked: result.success
-    };
-  } else {
-    return {
-      ...currentFocus,
-      status: result.success ? 'success' : 'failed',
-      isLocked: false
-    };
-  }
-}
-
-const activeLockAttempt = { triggerId: 1001, status: 'focusing', isLocked: true };
-
-// Hardware fails lock
-const failedLock = evaluateFocusResult(activeLockAttempt, { triggerId: 1001, success: false, isLocked: true });
-assert.strictEqual(failedLock.status, 'failed', 'Failed lock attempt must transition to failed status');
-assert.strictEqual(failedLock.isLocked, false, 'Failed lock must not remain locked');
-
-// Hardware succeeds lock
-const successfulLock = evaluateFocusResult(activeLockAttempt, { triggerId: 1001, success: true, isLocked: true });
-assert.strictEqual(successfulLock.status, 'locked', 'Successful lock must transition to locked status');
-assert.strictEqual(successfulLock.isLocked, true, 'Successful lock commits isLocked true');
-
-// Stale event from prior tap ignored
-const staleResult = evaluateFocusResult(successfulLock, { triggerId: 999, success: false, isLocked: false });
-assert.strictEqual(staleResult.status, 'locked', 'Stale event must not overwrite current lock');
-console.log('  ✓ AE/AF lock commits only upon verified hardware success and rejects stale responses');
-
-// 4. Camera Permission & Microphone Decoupling
-console.log('Test 4: Camera initialization with microphone permission denial...');
-function evaluateCameraAudioState(permissionState) {
-  // If camera is granted but mic denied, video capture remains ready with audioEnabled: false
-  if (permissionState.cameraGranted) {
-    return {
-      canRecordVideo: true,
-      audioEnabled: !!permissionState.micGranted,
-      status: 'ready'
-    };
-  }
-  return {
-    canRecordVideo: false,
-    audioEnabled: false,
-    status: 'permission_required'
-  };
-}
-
-const micDenied = evaluateCameraAudioState({ cameraGranted: true, micGranted: false });
-assert.strictEqual(micDenied.canRecordVideo, true, 'Camera must be operational even if mic is denied');
-assert.strictEqual(micDenied.audioEnabled, false, 'Audio should be disabled when mic is denied');
-assert.strictEqual(micDenied.status, 'ready', 'Status must be ready for video recording');
-
-const cameraDenied = evaluateCameraAudioState({ cameraGranted: false, micGranted: true });
-assert.strictEqual(cameraDenied.canRecordVideo, false, 'Cannot record video without camera permission');
-assert.strictEqual(cameraDenied.status, 'permission_required', 'Must request camera permission');
-console.log('  ✓ Microphone permission denial properly decouples and allows video capture');
-
-console.log('\n🎉 ALL 4 CAMERA INTERACTION & BRIDGE TESTS PASSED 100%!');
+console.log('  passed: direct slider drags, pointer cleanup, confirmed exposure results, AE-only locks, timeout recovery, unlock and lifecycle state');

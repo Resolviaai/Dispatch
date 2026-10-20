@@ -7,7 +7,9 @@ import {
   Edit2,
   Clock,
   Sparkles,
-  Layers
+  Layers,
+  AlertCircle,
+  RotateCw,
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word } from '../captions/types';
 
@@ -19,6 +21,9 @@ interface CaptionDockProps {
   onUpdateTrack: (track: CaptionTrack) => void;
   selectedGroupId: string | null;
   onSelectGroup: (groupId: string | null) => void;
+  captionLoadState?: 'idle' | 'loading' | 'success' | 'empty' | 'error';
+  captionLoadError?: string | null;
+  onRetryCaptions?: () => void;
 }
 
 export const CaptionDock: React.FC<CaptionDockProps> = ({
@@ -29,6 +34,9 @@ export const CaptionDock: React.FC<CaptionDockProps> = ({
   onUpdateTrack,
   selectedGroupId,
   onSelectGroup,
+  captionLoadState = 'idle',
+  captionLoadError,
+  onRetryCaptions,
 }) => {
   const [zoom, setZoom] = useState<number>(65); // px per second
   const [editingWordId, setEditingWordId] = useState<string | null>(null);
@@ -120,6 +128,27 @@ export const CaptionDock: React.FC<CaptionDockProps> = ({
       </div>
 
       {/* HORIZONTAL TIMELINE SCROLL AREA */}
+      {captionLoadState === 'loading' ? (
+        <div className="flex-1 min-h-0 flex items-center justify-center gap-2 bg-[#16181C] text-[#A3AAB5] text-xs">
+          <RotateCw size={14} className="animate-spin text-primary" />
+          <span>Loading captions…</span>
+        </div>
+      ) : captionLoadState === 'error' ? (
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 bg-[#16181C] text-center px-4">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-[#F3F4F6]">
+            <AlertCircle size={14} className="text-danger" />
+            <span>Captions could not be loaded</span>
+          </div>
+          <p className="max-w-md text-[10px] text-[#A3AAB5]">{captionLoadError || 'Check the connection and retry.'}</p>
+          <button
+            type="button"
+            onClick={onRetryCaptions}
+            className="min-h-11 px-4 rounded-lg bg-[#23262C] border border-[#2E3239] text-xs font-medium text-[#F3F4F6] hover:bg-[#2E3239] active:scale-[0.98] transition-all"
+          >
+            Retry captions
+          </button>
+        </div>
+      ) : (
       <div
         ref={containerRef}
         className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden relative bg-[#16181C]"
@@ -236,6 +265,7 @@ export const CaptionDock: React.FC<CaptionDockProps> = ({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };

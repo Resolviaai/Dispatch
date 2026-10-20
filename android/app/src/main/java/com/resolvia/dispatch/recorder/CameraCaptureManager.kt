@@ -36,6 +36,10 @@ import kotlin.coroutines.resume
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+internal fun isAeAfLockConfirmed(hasAf: Boolean, hasAe: Boolean, focusSuccessful: Boolean): Boolean =
+    hasAe || (hasAf && focusSuccessful)
 
 /**
  * CameraX Video Capture Engine for POCO C65 and Android devices.
@@ -54,6 +58,9 @@ class CameraCaptureManager(private val context: Context) {
     private var camera: Camera? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
+    private val focusOperationGeneration = AtomicLong(0)
+    private var boundLifecycleOwner: LifecycleOwner? = null
+    private var boundLensFacing: Int? = null
     
     var isRecording: Boolean = false
         private set
@@ -64,7 +71,7 @@ class CameraCaptureManager(private val context: Context) {
     var isTorchEnabled: Boolean = false
         private set
 
-    var isAeAfLocked: Boolean = false
+    @Volatile var isAeAfLocked: Boolean = false
         private set
 
     var currentZoomRatio: Float = 1.0f
@@ -213,20 +220,25 @@ class CameraCaptureManager(private val context: Context) {
     ) {
         activeLifecycleOwner = lifecycleOwner
         activePreviewView = previewView
-        currentLensFacing = lensFacing
 
         if (isBindingCamera) {
             Log.i(TAG, "Camera binding already in progress, queuing callbacks.")
+            currentLensFacing = lensFacing
             onReady?.let { pendingReadyCallbacks.add(it) }
             onError?.let { pendingErrorCallbacks.add(it) }
             return
         }
 
-        if (camera != null && videoCapture != null && activeLifecycleOwner == lifecycleOwner && currentLensFacing == lensFacing) {
+        if (camera != null && videoCapture != null && boundLifecycleOwner == lifecycleOwner && boundLensFacing == lensFacing) {
+            currentLensFacing = lensFacing
             Log.i(TAG, "Camera already cleanly bound and active. Re-confirming ready.")
             onReady?.invoke()
             return
         }
+
+        currentLensFacing = lensFacing
+        focusOperationGeneration.incrementAndGet()
+        isAeAfLocked = false
 
         onReady?.let { pendingReadyCallbacks.add(it) }
         onError?.let { pendingErrorCallbacks.add(it) }
@@ -236,9 +248,10 @@ class CameraCaptureManager(private val context: Context) {
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider = cameraProviderFuture.get()
+                val lensFacingToBind = currentLensFacing
 
                 val previewBuilder = Preview.Builder().setResolutionSelector(createResolutionSelector())
-                applyCamera2Optimizations(previewBuilder, currentLensFacing)
+                applyCamera2Optimizations(previewBuilder, lensFacingToBind)
                 val preview = previewBuilder.build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
@@ -248,12 +261,12 @@ class CameraCaptureManager(private val context: Context) {
                     .setQualitySelector(createQualitySelector())
                     .build()
 
-                videoCapture = VideoCapture.withOutput(recorder).apply {
+                val nextVideoCapture = VideoCapture.withOutput(recorder).apply {
                     targetRotation = currentRotation
                 }
 
                 val cameraSelector = CameraSelector.Builder()
-                    .requireLensFacing(currentLensFacing)
+                    .requireLensFacing(lensFacingToBind)
                     .build()
 
                 cameraProvider.unbindAll()
@@ -261,9 +274,12 @@ class CameraCaptureManager(private val context: Context) {
                     lifecycleOwner,
                     cameraSelector,
                     preview,
-                    videoCapture
+                    nextVideoCapture
                 )
                 camera = boundCamera
+                videoCapture = nextVideoCapture
+                boundLifecycleOwner = lifecycleOwner
+                boundLensFacing = lensFacingToBind
 
                 // Restore previous state if applicable
                 boundCamera.cameraControl.setZoomRatio(currentZoomRatio)
@@ -277,7 +293,7 @@ class CameraCaptureManager(private val context: Context) {
                 }
 
                 isBindingCamera = false
-                Log.i(TAG, "CameraX High-Resolution 1080p VideoCapture bound successfully (Lens: $currentLensFacing).")
+                Log.i(TAG, "CameraX High-Resolution 1080p VideoCapture bound successfully (Lens: $lensFacingToBind).")
                 val callbacks = pendingReadyCallbacks.toList()
                 pendingReadyCallbacks.clear()
                 pendingErrorCallbacks.clear()
@@ -287,6 +303,8 @@ class CameraCaptureManager(private val context: Context) {
                 isBindingCamera = false
                 camera = null
                 videoCapture = null
+                boundLifecycleOwner = null
+                boundLensFacing = null
                 val msg = exc.message ?: "Camera binding failed"
                 Log.e(TAG, "Failed to bind CameraX lifecycle: $msg", exc)
                 val errCallbacks = pendingErrorCallbacks.toList()
@@ -433,7 +451,10 @@ class CameraCaptureManager(private val context: Context) {
     /**
      * Toggles lens facing between BACK and FRONT, re-binding to active LifecycleOwner.
      */
-    suspend fun toggleLensFacing(): Int {
+    suspend fun toggleLensFacing(
+        onReady: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ): Int {
         val nextLens = if (currentLensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {
@@ -441,18 +462,24 @@ class CameraCaptureManager(private val context: Context) {
         }
         isTorchEnabled = false
         isAeAfLocked = false
+        focusOperationGeneration.incrementAndGet()
         val owner = activeLifecycleOwner
         val pv = activePreviewView
         if (owner != null && pv != null) {
-            initializeCamera(owner, pv, nextLens)
-            currentLensFacing = nextLens
+            initializeCamera(owner, pv, nextLens, onReady, onError)
         } else if (owner != null) {
-            val success = bindLifecycle(owner, nextLens)
+            val success = try { bindLifecycle(owner, nextLens) } catch (e: Exception) {
+                onError?.invoke(e.message ?: "Camera lens switch failed")
+                false
+            }
             if (success) {
                 currentLensFacing = nextLens
+                onReady?.invoke()
+            } else {
+                onError?.invoke("Camera lens switch failed")
             }
         } else {
-            currentLensFacing = nextLens
+            onError?.invoke("Camera preview is not available")
         }
         return currentLensFacing
     }
@@ -494,6 +521,8 @@ class CameraCaptureManager(private val context: Context) {
         previewView: PreviewView,
         onComplete: ((FocusResult) -> Unit)? = null
     ) {
+        val operationGeneration = focusOperationGeneration.incrementAndGet()
+        isAeAfLocked = false
         val cam = camera
         if (cam == null) {
             onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Camera not initialized"))
@@ -524,6 +553,7 @@ class CameraCaptureManager(private val context: Context) {
 
             val future = cam.cameraControl.startFocusAndMetering(action)
             future.addListener({
+                if (focusOperationGeneration.get() != operationGeneration) return@addListener
                 try {
                     val result = future.get()
                     onComplete?.invoke(FocusResult(success = result.isFocusSuccessful, isLocked = false, hasAf = canAf, hasAe = canAe))
@@ -543,6 +573,7 @@ class CameraCaptureManager(private val context: Context) {
      */
     fun focusOnPoint(meteringPoint: MeteringPoint) {
         val cam = camera ?: return
+        focusOperationGeneration.incrementAndGet()
         isAeAfLocked = false
         lastMeteringPoint = meteringPoint
         val action = FocusMeteringAction.Builder(meteringPoint, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
@@ -562,6 +593,8 @@ class CameraCaptureManager(private val context: Context) {
         previewView: PreviewView,
         onComplete: ((FocusResult) -> Unit)? = null
     ) {
+        val operationGeneration = focusOperationGeneration.incrementAndGet()
+        isAeAfLocked = false
         val cam = camera
         if (cam == null) {
             isAeAfLocked = false
@@ -593,19 +626,21 @@ class CameraCaptureManager(private val context: Context) {
 
             val future = cam.cameraControl.startFocusAndMetering(action)
             future.addListener({
+                if (focusOperationGeneration.get() != operationGeneration) return@addListener
                 try {
                     val result = future.get()
-                    val isSuccess = result.isFocusSuccessful
+                    val isSuccess = isAeAfLockConfirmed(canAf, canAe, result.isFocusSuccessful)
                     isAeAfLocked = isSuccess
                     onComplete?.invoke(FocusResult(success = isSuccess, isLocked = isSuccess, hasAf = canAf, hasAe = canAe))
                     Log.i(TAG, "AE/AF lock completed: success=$isSuccess at ($x, $y).")
                 } catch (e: Exception) {
+                    if (focusOperationGeneration.get() != operationGeneration) return@addListener
                     isAeAfLocked = false
                     onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = canAf, hasAe = canAe, error = e.message))
                 }
             }, ContextCompat.getMainExecutor(context))
         } catch (e: Exception) {
-            isAeAfLocked = false
+            if (focusOperationGeneration.get() == operationGeneration) isAeAfLocked = false
             Log.e(TAG, "Failed to lock AE/AF: ${e.message}")
             onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = e.message))
         }
@@ -615,20 +650,29 @@ class CameraCaptureManager(private val context: Context) {
      * Unlocks Auto Exposure & Auto Focus, returning to continuous auto-metering.
      */
     fun unlockAeAf(onComplete: ((Boolean) -> Unit)? = null) {
+        val operationGeneration = focusOperationGeneration.incrementAndGet()
         val cam = camera
-        isAeAfLocked = false
         if (cam != null) {
             try {
                 val future = cam.cameraControl.cancelFocusAndMetering()
                 future.addListener({
-                    onComplete?.invoke(true)
+                    if (focusOperationGeneration.get() != operationGeneration) return@addListener
+                    try {
+                        future.get()
+                        isAeAfLocked = false
+                        onComplete?.invoke(true)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to confirm AE/AF unlock: ${e.message}")
+                        onComplete?.invoke(false)
+                    }
                 }, ContextCompat.getMainExecutor(context))
-                Log.i(TAG, "AE/AF unlocked and returned to continuous auto.")
+                Log.i(TAG, "AE/AF unlock dispatched; waiting for CameraX confirmation.")
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to cancel focus/metering: ${e.message}")
             }
         }
+        if (cam == null) isAeAfLocked = false
         onComplete?.invoke(false)
     }
 

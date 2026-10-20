@@ -111,11 +111,14 @@ class DispatchNativeBridge(
 
     @JavascriptInterface
     fun switchCamera() {
+        notifyCameraStatus("initializing", null)
         activity.runOnUiThread {
             activity.lifecycleScope.launch {
                 try {
-                    cameraCaptureManager.toggleLensFacing()
-                    notifyCameraStatus("ready", null)
+                    cameraCaptureManager.toggleLensFacing(
+                        onReady = { notifyCameraStatus("ready", null) },
+                        onError = { error -> notifyCameraStatus("error", error) }
+                    )
                 } catch (e: Exception) {
                     android.util.Log.w("DispatchBridge", "switchCamera failed: ${e.message}")
                     notifyCameraStatus("error", e.message)
