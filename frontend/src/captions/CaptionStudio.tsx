@@ -1014,6 +1014,36 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     else if (activePanel === 'style') setTextMainTab('styles');
   }, [activePanel]);
 
+  // Global Undo / Redo keyboard shortcuts
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        if (e.key === 'z' || e.key === 'Z') {
+          if (e.shiftKey) {
+            if (_canRedo && _onRedo) {
+              e.preventDefault();
+              _onRedo();
+            }
+          } else {
+            if (_canUndo && _onUndo) {
+              e.preventDefault();
+              _onUndo();
+            }
+          }
+        } else if (e.key === 'y' || e.key === 'Y') {
+          if (_canRedo && _onRedo) {
+            e.preventDefault();
+            _onRedo();
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [_canUndo, _canRedo, _onUndo, _onRedo]);
+
   // Active selected group
   const currentGroup = useMemo(() => {
     if (!track || !track.groups || track.groups.length === 0) return null;
@@ -1318,6 +1348,9 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
       },
       animation: {
         type: 'none',
+        duration_ms: 150,
+        active_scale: 1.0,
+        easing: 'ease_out',
         enter: { type: 'none', duration_ms: 150 },
         exit: { type: 'none', duration_ms: 150 },
         loop: { type: 'none', speed_ms: 1000 },
@@ -1332,12 +1365,31 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     setActiveCategory('text');
   };
 
+  // Media Upload helper for durable storage in CLIPS_DIR
+  const uploadMediaFile = async (file: File | Blob, filename: string): Promise<string> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file, filename);
+      const res = await fetch('/api/media/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) return data.url;
+      }
+    } catch (e) {
+      console.warn('Upload to /api/media/upload failed, falling back to blob URL:', e);
+    }
+    return URL.createObjectURL(file);
+  };
+
   // Native file picker selection for Add Overlay
-  const handleOverlayFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleOverlayFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !track) return;
     const isVideo = file.type.startsWith('video');
-    const objectUrl = URL.createObjectURL(file);
+    const mediaUrl = await uploadMediaFile(file, file.name);
     const newId = `ovl_${Date.now()}`;
     const start = Number(currentTimeRef.current.toFixed(2));
     const end = Number(Math.min(duration, start + (isVideo ? 8.0 : 4.0)).toFixed(2));
@@ -1349,7 +1401,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
       end,
       type: 'overlay',
       overlay_type: isVideo ? 'video' : 'image',
-      overlay_url: objectUrl,
+      overlay_url: mediaUrl,
       label: cleanName || (isVideo ? 'Video Clip' : 'Image Overlay'),
       opacity: 100,
       volume: isVideo ? 100 : 0,
@@ -1363,7 +1415,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
         max_width: 0.8,
         max_lines: 1,
       },
-      words: [{ id: `w_${Date.now()}`, text: cleanName || 'Overlay', start, end }],
+      words: [], // Honest non-text media layer
     };
 
     onUpdateTrack({
@@ -1377,51 +1429,126 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   };
 
   // Add BGM audio layer
-  const handleImportAudio = (label = 'BGM Track') => {
-    if (!track) return;
+  const audioFileInputRef = useRef<HTMLInputElement | null>(null);
+  const handleAudioFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !track) return;
+    const mediaUrl = await uploadMediaFile(file, file.name);
     const newId = `aud_${Date.now()}`;
     const start = Number(currentTimeRef.current.toFixed(2));
     const end = Number(Math.min(duration, start + 15.0).toFixed(2));
+    const cleanName = file.name.replace(/\.[^/.]+$/, '').slice(0, 20);
+
     const newAudio: CaptionGroup = {
       id: newId,
       start,
       end,
       type: 'audio',
-      label,
+      audio_url: mediaUrl,
+      label: cleanName || 'BGM Track',
       volume: 100,
       is_muted: false,
-      words: [{ id: `w_${Date.now()}`, text: label, start, end }],
+      words: [], // Honest non-text media layer
     };
+
     onUpdateTrack({
       ...track,
       groups: [...track.groups, newAudio],
     }, true);
     onSelectGroup?.(newId);
     setActiveCategory('audio');
+    e.target.value = '';
   };
 
-  // Add Voiceover audio layer
-  const handleRecordVoiceover = () => {
-    if (!track) return;
-    const newId = `voc_${Date.now()}`;
-    const start = Number(currentTimeRef.current.toFixed(2));
-    const end = Number(Math.min(duration, start + 5.0).toFixed(2));
-    const newVoice: CaptionGroup = {
-      id: newId,
-      start,
-      end,
-      type: 'voiceover',
-      label: 'Voiceover',
-      volume: 100,
-      is_muted: false,
-      words: [{ id: `w_${Date.now()}`, text: 'Voiceover', start, end }],
-    };
-    onUpdateTrack({
-      ...track,
-      groups: [...track.groups, newVoice],
-    }, true);
-    onSelectGroup?.(newId);
-    setActiveCategory('audio');
+  const handleImportAudio = () => {
+    if (audioFileInputRef.current) {
+      audioFileInputRef.current.click();
+    } else if (track) {
+      // Direct fallback if file input not mounted
+      const newId = `aud_${Date.now()}`;
+      const start = Number(currentTimeRef.current.toFixed(2));
+      const end = Number(Math.min(duration, start + 15.0).toFixed(2));
+      const newAudio: CaptionGroup = {
+        id: newId,
+        start,
+        end,
+        type: 'audio',
+        label: 'Audio Track',
+        volume: 100,
+        is_muted: false,
+        words: [],
+      };
+      onUpdateTrack({ ...track, groups: [...track.groups, newAudio] }, true);
+      onSelectGroup?.(newId);
+      setActiveCategory('audio');
+    }
+  };
+
+  // Add Voiceover audio layer with real microphone recorder
+  const [isRecordingVoiceover, setIsRecordingVoiceover] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  const handleRecordVoiceover = async () => {
+    if (isRecordingVoiceover) {
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stop();
+        setIsRecordingVoiceover(false);
+      }
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert('Microphone recording is not supported in this browser.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        if (blob.size === 0 || !track) return;
+        const filename = `voiceover_${Date.now()}.webm`;
+        const mediaUrl = await uploadMediaFile(blob, filename);
+        const newId = `voc_${Date.now()}`;
+        const start = Number(currentTimeRef.current.toFixed(2));
+        const end = Number(Math.min(duration, start + Math.max(1, audioChunksRef.current.length * 0.5)).toFixed(2));
+
+        const newVoice: CaptionGroup = {
+          id: newId,
+          start,
+          end,
+          type: 'voiceover',
+          audio_url: mediaUrl,
+          label: 'Voiceover',
+          volume: 100,
+          is_muted: false,
+          words: [], // Honest non-text media layer
+        };
+
+        onUpdateTrack({
+          ...track,
+          groups: [...track.groups, newVoice],
+        }, true);
+        onSelectGroup?.(newId);
+        setActiveCategory('audio');
+      };
+
+      recorder.start(500);
+      mediaRecorderRef.current = recorder;
+      setIsRecordingVoiceover(true);
+    } catch (err) {
+      console.warn('Microphone permission denied or error:', err);
+      alert('Microphone access unavailable or denied.');
+    }
   };
 
   // Split layer at playhead preserving authentic word timestamps
@@ -1439,14 +1566,20 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     onSelectGroup?.(secondGroup.id);
   };
 
-  // Merge selected group with adjacent segment
+  // Merge selected group with adjacent segment of compatible type
   const handleMergeNext = () => {
     if (!track || !currentGroup) return;
-    const sorted = [...track.groups].sort((a, b) => a.start - b.start);
+    const groupType = currentGroup.type || 'caption';
+    const sorted = [...track.groups]
+      .filter((g) => (g.type || 'caption') === groupType)
+      .sort((a, b) => a.start - b.start);
     const currIdx = sorted.findIndex((g) => g.id === currentGroup.id);
     if (currIdx < 0 || currIdx >= sorted.length - 1) return;
 
     const nextGroup = sorted[currIdx + 1];
+    // Adjacency check: within 3 seconds
+    if (nextGroup.start > currentGroup.end + 3.0) return;
+
     const merged = mergeAdjacentCaptionGroups(currentGroup, nextGroup);
 
     onUpdateTrack({
@@ -1454,30 +1587,36 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
       groups: track.groups
         .filter((g) => g.id !== nextGroup.id)
         .map((g) => (g.id === currentGroup.id ? merged : g)),
-    });
+    }, true);
     onSelectGroup?.(merged.id);
   };
 
-  // Duplicate layer
+  // Duplicate layer with time-shifted authentic word timestamps
   const handleDuplicate = () => {
     if (!track || !currentGroup) return;
     const isOverlay = currentGroup.type === 'overlay';
     const newId = `${isOverlay ? 'ovl' : 'grp'}_${Date.now()}`;
     const nextStart = Number(Math.min(duration - 0.5, currentGroup.start + 0.3).toFixed(2));
     const nextEnd = Number(Math.min(duration, currentGroup.end + 0.3).toFixed(2));
+    const timeDelta = nextStart - currentGroup.start;
 
     const dup: CaptionGroup = {
       ...currentGroup,
       id: newId,
       start: nextStart,
       end: nextEnd,
-      words: (currentGroup.words || []).map((w, idx) => ({ ...w, id: `w_${Date.now()}_${idx}` })),
+      words: (currentGroup.words || []).map((w, idx) => ({
+        ...w,
+        id: `w_${Date.now()}_${idx}`,
+        start: Number((w.start + timeDelta).toFixed(3)),
+        end: Number((w.end + timeDelta).toFixed(3)),
+      })),
     };
 
     onUpdateTrack({
       ...track,
       groups: [...track.groups, dup],
-    });
+    }, true);
     onSelectGroup?.(newId);
   };
 
@@ -1487,17 +1626,26 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     onUpdateTrack({
       ...track,
       groups: track.groups.filter((g) => g.id !== currentGroup.id),
-    });
+    }, true);
     onSelectGroup?.(null);
   };
 
-  // Lasting text across duration
+  // Span layer across entire video duration
   const handleLastingText = () => {
     if (!track || !currentGroup) return;
     onUpdateTrack({
       ...track,
-      groups: track.groups.map((g) => (g.id === currentGroup.id ? { ...g, start: 0, end: Number(duration.toFixed(2)) } : g)),
-    });
+      groups: track.groups.map((g) =>
+        g.id === currentGroup.id ? { ...g, start: 0, end: Number(duration.toFixed(2)) } : g
+      ),
+    }, true);
+  };
+
+  // Export SRT download
+  const handleExportSrt = () => {
+    if (track) {
+      downloadSrtFile(track, track.clip_id ? `${track.clip_id}.srt` : 'captions.srt');
+    }
   };
 
   // Reorder stacking layers
@@ -3239,7 +3387,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
 
         {/* Category Tabs: In · Out · Loop · Captions (Captions shown for caption layers only) */}
         <div className={`grid ${isCaption ? 'grid-cols-4' : 'grid-cols-3'} gap-1 p-0.5 bg-[#1C1F26] rounded-lg shrink-0 border border-[#262B35]`}>
-          {((isCaption ? ['in', 'out', 'loop', 'word'] : ['in', 'out', 'loop']) as const).map((cat) => (
+          {(isCaption ? (['in', 'out', 'loop', 'word'] as const) : (['in', 'out', 'loop'] as const)).map((cat) => (
             <button
               key={cat}
               type="button"
@@ -3732,6 +3880,14 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
         className="hidden"
         onChange={handleOverlayFileSelect}
       />
+      {/* Hidden file input for native audio file picker */}
+      <input
+        ref={audioFileInputRef}
+        type="file"
+        accept="audio/*,.mp3,.wav,.aac,.m4a,.ogg"
+        className="hidden"
+        onChange={handleAudioFileSelect}
+      />
 
       {/* CONTEXT A: PRIMARY TOOLBAR (No category / layer open) - Exactly 4 Tools */}
       {effectiveCategory === 'none' && (
@@ -3910,9 +4066,14 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
           />
           <ToolButton
             icon={<Clock size={18} />}
-            label="Duration"
+            label="Span Video"
             disabled={!isTextLayerSelected}
             onClick={handleLastingText}
+          />
+          <ToolButton
+            icon={<Download size={18} />}
+            label="Export SRT"
+            onClick={handleExportSrt}
           />
           <ToolButton
             icon={<Copy size={18} />}
@@ -3983,8 +4144,14 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 onClick={() => handleImportAudio()}
               />
               <ToolButton
-                icon={<Mic size={18} />}
-                label="Voiceover"
+                icon={
+                  isRecordingVoiceover ? (
+                    <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
+                  ) : (
+                    <Mic size={18} />
+                  )
+                }
+                label={isRecordingVoiceover ? 'Stop Rec' : 'Voiceover'}
                 onClick={() => handleRecordVoiceover()}
               />
             </>

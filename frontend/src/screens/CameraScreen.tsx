@@ -54,8 +54,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
   // Camera initialization and hardware status
   const [cameraStatus, setCameraStatus] = useState<CameraStateEvent>({
-    state: Bridge.isAvailable() ? 'initializing' : 'ready',
-    audioEnabled: true
+    status: Bridge.isAvailable() ? 'initializing' : 'ready',
+    lensFacing: 'back',
+    isRecording: false,
+    isTorchEnabled: false,
+    isAeAfLocked: false,
+    isAudioEnabled: true,
+    exposure: { minIndex: 0, maxIndex: 0, currentIndex: 0, stepEv: 0.5, isSupported: false },
+    zoom: { minZoom: 1.0, maxZoom: 10.0, currentZoom: 1.0 },
   });
 
   // Focus & Exposure states
@@ -109,8 +115,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       if (event.type === 'camera_state') {
         const data = event.data as CameraStateEvent;
         setCameraStatus(data);
-        if (data.audioEnabled !== undefined) {
-          setMicActive(data.audioEnabled);
+        if (data.isAudioEnabled !== undefined) {
+          setMicActive(data.isAudioEnabled);
         }
       } else if (event.type === 'focus_result') {
         const result = event.data as FocusResultEvent;
@@ -162,8 +168,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     const initStatus = Bridge.getCameraStatus();
     if (initStatus) {
       setCameraStatus(initStatus);
-      if (initStatus.audioEnabled !== undefined) {
-        setMicActive(initStatus.audioEnabled);
+      if (initStatus.isAudioEnabled !== undefined) {
+        setMicActive(initStatus.isAudioEnabled);
       }
     }
 
@@ -204,13 +210,13 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         }
         setHasWebcam(true);
         setWebcamError(null);
-        setCameraStatus({ state: 'ready', audioEnabled: micActive });
+        setCameraStatus((prev) => ({ ...prev, status: 'ready', isAudioEnabled: micActive }));
       }
     } catch (err: any) {
       console.warn('Webcam preview unavailable:', err);
       setHasWebcam(false);
       setWebcamError(err.message || 'Webcam access restricted');
-      setCameraStatus({ state: 'error', error: err.message, audioEnabled: false });
+      setCameraStatus((prev) => ({ ...prev, status: 'error', error: err.message, isAudioEnabled: false }));
     }
   };
 
@@ -935,7 +941,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         )}
 
         {/* Camera Hardware Initialization Overlay */}
-        {cameraStatus.state === 'initializing' && (
+        {cameraStatus.status === 'initializing' && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm p-6 text-center">
             <div className="w-14 h-14 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-3 shadow-lg">
               <Loader2 className="w-7 h-7 text-primary animate-spin" />
@@ -948,7 +954,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         )}
 
         {/* Camera Permission Required Recovery Overlay */}
-        {cameraStatus.state === 'permission_required' && (
+        {cameraStatus.status === 'permission_required' && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-6 text-center">
             <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 shadow-lg">
               <Camera className="w-8 h-8 text-amber-400" />
@@ -967,7 +973,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         )}
 
         {/* Camera Initialization Error Recovery Overlay */}
-        {cameraStatus.state === 'error' && (
+        {cameraStatus.status === 'error' && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-6 text-center">
             <div className="w-16 h-16 rounded-2xl bg-danger/10 border border-danger/30 flex items-center justify-center mb-4 shadow-lg">
               <AlertCircle className="w-8 h-8 text-danger" />
@@ -1064,7 +1070,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         </div>
 
         {/* Audio Disabled Warning Banner (When camera works but mic permission denied) */}
-        {cameraStatus.audioEnabled === false && (
+        {cameraStatus.isAudioEnabled === false && (
           <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-mono animate-in fade-in">
             <div className="flex items-center gap-1.5 truncate">
               <MicOff size={12} className="shrink-0" />

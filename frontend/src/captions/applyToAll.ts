@@ -269,9 +269,6 @@ export function applySectionStylesToTrack(
 
   const nextTrack: CaptionTrack = {
     ...track,
-    default_style: stylePatch ? { ...track.default_style, ...stylePatch } : track.default_style,
-    default_layout: layoutPatch ? { ...track.default_layout, ...layoutPatch } : track.default_layout,
-    default_animation: animationPatch ? { ...track.default_animation, ...animationPatch } : track.default_animation,
     groups: updatedGroups,
   };
 

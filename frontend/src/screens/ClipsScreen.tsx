@@ -92,6 +92,7 @@ export interface ClipItem {
   video_url?: string;
   source_video_url?: string;
   thumbnail_url?: string;
+  thumbnail_version?: number;
   created_at: string;
   published_at?: string;
   remote_url?: string;
@@ -231,7 +232,7 @@ function normalizeCaptionTrack(raw: any, clipId: string, duration: number): Capt
     active_scale: raw?.default_animation?.active_scale || 1.15,
     easing: raw?.default_animation?.easing || 'ease_out',
     enter: {
-      type: raw?.default_animation?.entrance_animation || raw?.default_animation?.enter?.type || 'scale_up',
+      type: raw?.default_animation?.entrance_animation || raw?.default_animation?.enter?.type === 'scale_up' ? 'pop' : (raw?.default_animation?.enter?.type || 'pop'),
       duration_ms: 200,
     },
     active_word: {
@@ -290,9 +291,10 @@ function normalizeCaptionTrack(raw: any, clipId: string, duration: number): Capt
         ...(g.animation || {}),
       },
       type: (g.type as LayerType) || 'caption',
-      trackIndex: typeof g.trackIndex === 'number' ? g.trackIndex : 0,
-      volume: typeof g.volume === 'number' ? g.volume : 1.0,
+      trackIndex: typeof g.trackIndex === 'number' && g.trackIndex >= 0 ? g.trackIndex : undefined,
+      volume: typeof g.volume === 'number' ? (g.volume <= 2.0 ? Math.round(g.volume * 100) : g.volume) : 100,
       is_muted: Boolean(g.is_muted),
+      is_hidden: Boolean(g.is_hidden),
       audio_url: g.audio_url,
       overlay_url: g.overlay_url,
       overlay_type: g.overlay_type,
@@ -323,6 +325,7 @@ function InteractiveCanvasItem({
   group,
   isSelected,
   currentTime,
+  isPlaying = false,
   containerRef,
   defaultLayout,
   defaultStyle,
@@ -338,6 +341,7 @@ function InteractiveCanvasItem({
   group: CaptionGroup;
   isSelected: boolean;
   currentTime: number;
+  isPlaying?: boolean;
   containerRef: React.RefObject<HTMLDivElement>;
   defaultLayout: LayoutConfig;
   defaultStyle: StyleConfig;
@@ -351,7 +355,27 @@ function InteractiveCanvasItem({
   onApplyLayoutToAll?: (id: string) => void;
 }) {
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const overlayVideoRef = useRef<HTMLVideoElement | null>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
+
+  useEffect(() => {
+    const el = overlayVideoRef.current;
+    if (!el || group.overlay_type !== 'video') return;
+    if (isPlaying) {
+      el.play().catch(() => {});
+    } else {
+      el.pause();
+    }
+  }, [isPlaying, group.overlay_type]);
+
+  useEffect(() => {
+    const el = overlayVideoRef.current;
+    if (!el || group.overlay_type !== 'video') return;
+    const relTime = Math.max(0, currentTime - group.start);
+    if (Math.abs(el.currentTime - relTime) > 0.25) {
+      el.currentTime = relTime;
+    }
+  }, [currentTime, group.start, group.overlay_type]);
   const dragStart = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const pinchStart = useRef<{ distance: number; scale: number } | null>(null);
   const pendingOverlayPatchRef = useRef<{ groupId: string; patch: Partial<CaptionGroup> } | null>(null);
@@ -695,11 +719,11 @@ function InteractiveCanvasItem({
         <div className="relative min-w-[100px] min-h-[70px] max-w-[280px] max-h-[220px] flex items-center justify-center pointer-events-none overflow-hidden rounded-lg">
           {group.overlay_type === 'video' ? (
             <video
+              ref={overlayVideoRef}
               src={group.overlay_url}
               playsInline
-              autoPlay
               loop
-              muted={group.is_muted}
+              muted={group.is_muted ?? true}
               className="w-full h-full object-contain rounded-lg"
             />
           ) : (
@@ -843,10 +867,10 @@ function InteractiveCanvasItem({
                           style={{
                             fontFamily: fontFam,
                             fontSize: `${fontSize}px`,
-                            fontWeight: word.style_override?.font_weight || fontWeight,
+                            fontWeight: word.style_override?.font_weight || style.font_weight || '700',
                             fontStyle: style.font_style || 'normal',
                             textDecoration: (word.style_override?.underline ?? style.underline) ? 'underline' : undefined,
-                            letterSpacing: `${letterSpacing}px`,
+                            letterSpacing: `${style.letter_spacing || 0}px`,
                             lineHeight: style.line_height || 1.25,
                             color: applyColorOpacity(wordColor, style.text_opacity ?? 1.0),
                             WebkitTextStroke: strokeWidth && strokeColorWithOpacity
@@ -903,6 +927,7 @@ function InteractiveCanvasItem({
 function InteractiveCaptionCanvas({
   track,
   currentTime,
+  isPlaying = false,
   selectedGroupId,
   layoutMode = 'crop_follow',
   onSelectGroup,
@@ -914,6 +939,7 @@ function InteractiveCaptionCanvas({
 }: {
   track: CaptionTrack | null;
   currentTime: number;
+  isPlaying?: boolean;
   selectedGroupId: string | null;
   layoutMode?: LayoutMode;
   onSelectGroup: (id: string | null) => void;
@@ -930,8 +956,9 @@ function InteractiveCaptionCanvas({
   // Timeline-aware layer visibility:
   // Render text only when currentTime is strictly within that layer's [start, end] interval.
   // Selecting a layer must never force its text to remain visible outside its duration!
+  // Hidden layers (is_hidden === true) are never rendered.
   const visibleGroups = track.groups.filter((g) => {
-    if (g.type === 'audio' || g.type === 'voiceover') return false;
+    if (g.type === 'audio' || g.type === 'voiceover' || g.is_hidden) return false;
     return currentTime >= g.start && currentTime <= g.end;
   });
 
@@ -947,6 +974,7 @@ function InteractiveCaptionCanvas({
           group={group}
           isSelected={selectedGroupId === group.id}
           currentTime={currentTime}
+          isPlaying={isPlaying}
           containerRef={containerRef}
           defaultLayout={track.default_layout}
           defaultStyle={track.default_style}
@@ -1244,7 +1272,10 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
         {showPlayPauseOverlay && (
           <button
             type="button"
-            onClick={onTogglePlay}
+            onClick={(e) => {
+              e.stopPropagation();
+              onTogglePlay?.();
+            }}
             className="absolute inset-0 z-15 flex items-center justify-center bg-black/10 hover:bg-black/25 active:bg-black/40 transition-colors pointer-events-auto"
             aria-label={isPlaying ? 'Pause video' : 'Play video'}
           >
@@ -1840,8 +1871,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   // Explicit / Auto Save Captions to Server
-  const handleSaveCaptions = async () => {
-    if (!currentClip || !captionTrack) return;
+  const handleSaveCaptions = async (): Promise<boolean> => {
+    if (!currentClip || !captionTrack) return true;
     setSaveStatus('saving');
     try {
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
@@ -1853,26 +1884,45 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         setSaveStatus('saved');
         setFeedback('Captions saved successfully.');
         setTimeout(() => setFeedback(null), 2500);
+        return true;
       } else {
         throw new Error(`Server returned HTTP ${res.status}`);
       }
     } catch (e) {
       setSaveStatus('error');
       setFeedback('Failed to save captions to server. Click Retry.');
+      return false;
     }
   };
 
-  const handleTrimChange = async (newStart: number, newEnd: number) => {
+  const handleTrimChange = async (relStart: number, relEnd: number) => {
     if (!currentClip) return;
+    const baseStart = currentClip.start_time ?? 0;
+    const newStart = Number((baseStart + relStart).toFixed(2));
+    const newEnd = Number((baseStart + relEnd).toFixed(2));
     try {
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ start_time: newStart, end_time: newEnd }),
       });
       if (res.ok) {
         const data = await res.json();
         setReadyClips((prev) =>
+          prev.map((c) =>
+            c.id === currentClip.id
+              ? {
+                  ...c,
+                  start_time: data.start_time,
+                  end_time: data.end_time,
+                  duration: data.duration,
+                  padded_start: data.padded_start,
+                  padded_end: data.padded_end,
+                }
+              : c
+          )
+        );
+        setApprovedClips((prev) =>
           prev.map((c) =>
             c.id === currentClip.id
               ? {
@@ -1945,16 +1995,23 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // 5. Approve & Publish Handler
   const handleApprove = async () => {
     if (!currentClip) return;
+    if (!titleDraft.trim()) {
+      setFeedback('Clip title cannot be empty.');
+      return;
+    }
     setIsSubmitting(true);
     setFeedback(null);
 
     try {
       if (captionTrack) {
-        await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
+        const capRes = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify(captionTrack),
         });
+        if (!capRes.ok) {
+          throw new Error('Failed to save caption track before approval');
+        }
       }
 
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/approve`, pcHost), {
@@ -2687,7 +2744,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
+                if (saveStatus === 'unsaved') {
+                  const saveFirst = window.confirm('You have unsaved changes. Save before exiting?');
+                  if (saveFirst) {
+                    const saved = await handleSaveCaptions();
+                    if (!saved) return;
+                  }
+                }
                 setViewMode('detail');
                 setSelectedGroupId(null);
                 setIsVideoSelected(false);
@@ -2705,14 +2769,24 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {saveStatus === 'error' && (
+              <button
+                type="button"
+                onClick={() => handleSaveCaptions()}
+                className="h-6 px-2 rounded-md bg-red-500/20 text-red-300 border border-red-500/40 text-[10px] font-semibold flex items-center gap-1 active:scale-95 hover:bg-red-500/30"
+                title="Save failed. Click to retry"
+              >
+                <RotateCw size={10} />
+                <span>Retry Save</span>
+              </button>
+            )}
             <button
               type="button"
               disabled={saveStatus === 'saving'}
               onClick={async () => {
-                if (saveStatus === 'unsaved') {
-                  try {
-                    await handleSaveCaptions();
-                  } catch {
+                if (saveStatus === 'unsaved' || saveStatus === 'error') {
+                  const success = await handleSaveCaptions();
+                  if (!success) {
                     return; // Retain on screen if save failed
                   }
                 }
@@ -2766,6 +2840,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <InteractiveCaptionCanvas
               track={visibleCaptionTrack}
               currentTime={currentTime}
+              isPlaying={isPlaying}
               selectedGroupId={selectedGroupId}
               layoutMode={layoutMode}
               onSelectGroup={handleSelectGroup}

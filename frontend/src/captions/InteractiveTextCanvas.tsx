@@ -36,6 +36,7 @@ interface InteractiveTextCanvasProps {
   currentTime: number;
   selectedGroupId: string | null;
   onSelectGroup: (groupId: string | null) => void;
+  onOpenTextEditor?: (groupId: string) => void;
   onUpdateGroup: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
   onApplyLayoutToAll?: (groupId: string) => void;
   layoutMode?: string;
@@ -51,6 +52,7 @@ interface CanvasGroupItemProps {
   currentTime: number;
   containerRef: React.RefObject<HTMLDivElement>;
   onSelectGroup: (groupId: string | null) => void;
+  onOpenTextEditor?: (groupId: string) => void;
   onUpdateGroup: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
   onApplyLayoutToAll?: (groupId: string) => void;
   layoutMode: string;
@@ -66,6 +68,7 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
   currentTime,
   containerRef,
   onSelectGroup,
+  onOpenTextEditor,
   onUpdateGroup,
   onApplyLayoutToAll,
   layoutMode,
@@ -148,8 +151,8 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
       const deltaX = (e.clientX - dragStartRef.current.x) / dragStartRef.current.containerWidth;
       const deltaY = (e.clientY - dragStartRef.current.y) / dragStartRef.current.containerHeight;
 
-      const newX = Math.max(0.12, Math.min(0.88, dragStartRef.current.initialX + deltaX));
-      const newY = Math.max(0.15, Math.min(0.90, dragStartRef.current.initialY + deltaY));
+      const newX = Math.max(0.05, Math.min(0.95, dragStartRef.current.initialX + deltaX));
+      const newY = Math.max(0.05, Math.min(0.95, dragStartRef.current.initialY + deltaY));
 
       const patch: Partial<CaptionGroup> = {
         layout: {
@@ -262,6 +265,8 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
   const bgOffsetY = (isBgBlock || isBgLine) ? (style.background_offset_y || 0) : 0;
   const bgOffsetTransform = (bgOffsetX !== 0 || bgOffsetY !== 0) ? `translate(${bgOffsetX}px, ${bgOffsetY}px)` : '';
 
+  const rotation = layout.rotation ?? 0;
+
   return (
     <div
       onPointerMove={handlePointerMove}
@@ -271,7 +276,7 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
         position: 'absolute',
         left: `${posX * 100}%`,
         top: `${posY * 100}%`,
-        transform: `translate(-50%, -50%) scale(${scale}) ${extraAnimTransform}`.trim(),
+        transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale}) ${extraAnimTransform}`.trim(),
         width: 'max-content',
         maxWidth: containerRef.current?.clientWidth
           ? `${Math.round(containerRef.current.clientWidth * (layout.max_width ?? 0.88))}px`
@@ -286,6 +291,11 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
         if (!isInteractive) return;
         e.stopPropagation();
         onSelectGroup(group.id);
+      }}
+      onDoubleClick={(e) => {
+        if (!isInteractive) return;
+        e.stopPropagation();
+        onOpenTextEditor?.(group.id);
       }}
       className={`relative transition-shadow group ${
         isSelected && isInteractive ? 'ring-2 ring-primary/80 shadow-[0_0_15px_rgba(37,99,235,0.35)]' : ''
@@ -456,6 +466,7 @@ export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
   currentTime,
   selectedGroupId,
   onSelectGroup,
+  onOpenTextEditor,
   onUpdateGroup,
   onApplyLayoutToAll,
   layoutMode = 'fit_black',
@@ -469,7 +480,7 @@ export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
 
   // Find all active visible groups for current playback time (timeline-aware visibility)
   const activeGroups = track.groups.filter(
-    grp => grp.type !== 'audio' && grp.type !== 'voiceover' && currentTime >= grp.start && currentTime <= grp.end
+    grp => grp.type !== 'audio' && grp.type !== 'voiceover' && !grp.is_hidden && currentTime >= grp.start && currentTime <= grp.end
   );
 
   if (activeGroups.length === 0) return null;
@@ -494,6 +505,7 @@ export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
           currentTime={currentTime}
           containerRef={containerRef}
           onSelectGroup={onSelectGroup}
+          onOpenTextEditor={onOpenTextEditor}
           onUpdateGroup={onUpdateGroup}
           onApplyLayoutToAll={onApplyLayoutToAll}
           layoutMode={layoutMode}

@@ -313,9 +313,9 @@ export const DispatchCaptionRenderer: React.FC<DispatchCaptionRendererProps> = (
     return null;
   }
 
-  // Find all active visible groups for current playback time (audio/voiceover do not render visual text)
+  // Find all active visible groups for current playback time (audio/voiceover do not render visual text; hidden layers excluded)
   const activeGroups = track.groups.filter(
-    grp => grp.type !== 'audio' && grp.type !== 'voiceover' && currentTime >= grp.start && currentTime <= grp.end
+    grp => grp.type !== 'audio' && grp.type !== 'voiceover' && !grp.is_hidden && currentTime >= grp.start && currentTime <= grp.end
   );
 
   if (activeGroups.length === 0) {

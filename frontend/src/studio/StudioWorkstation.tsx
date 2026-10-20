@@ -73,13 +73,14 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const prevCollapsedStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
+  const metadataDraftsRef = useRef<Record<string, Partial<ClipItem>>>({});
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // 1. Fetch Clips
+  // 1. Fetch Clips (preserves local metadata drafts across 6s background polling)
   const fetchClips = useCallback(async () => {
     try {
       const res = await fetch(apiUrl('/api/clips', pcHost));
@@ -92,11 +93,15 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
               ...(Array.isArray(data.recent_approved) ? data.recent_approved : []),
               ...(Array.isArray(data.ready_for_review) ? data.ready_for_review : []),
             ];
-        setClips(allClips);
+        const mergedClips = allClips.map((clip) => {
+          const draft = metadataDraftsRef.current[clip.id];
+          return draft ? { ...clip, ...draft } : clip;
+        });
+        setClips(mergedClips);
         // If no clip selected or selected clip no longer exists, default to first clip
         setSelectedClipId(prev => {
-          if (prev && allClips.some(c => c.id === prev)) return prev;
-          return allClips.length > 0 ? allClips[0].id : null;
+          if (prev && mergedClips.some(c => c.id === prev)) return prev;
+          return mergedClips.length > 0 ? mergedClips[0].id : null;
         });
       }
     } catch (err) {
@@ -202,6 +207,11 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target as HTMLElement)?.isContentEditable;
       if (isInput) return;
 
+      // Invariant: NEVER trigger single-key actions when modifier keys (Ctrl, Cmd, Alt) are held
+      // Prevents Ctrl+R (reload), Ctrl+A (select all), Ctrl+F (find) from triggering approve/reject/focus!
+      const hasModifier = e.ctrlKey || e.metaKey || e.altKey;
+      if (hasModifier) return;
+
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
         setIsPlaying(prev => !prev);
@@ -272,6 +282,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
         }),
       });
       if (res.ok) {
+        delete metadataDraftsRef.current[currentClip.id];
         showToast(`Clip Approved: Queued into Publishing Outbox (${publishMode})`);
         setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, status: 'approved' } : c));
       } else {
@@ -295,6 +306,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
         body: JSON.stringify({ reason }),
       });
       if (res.ok) {
+        delete metadataDraftsRef.current[currentClip.id];
         showToast('Clip marked as Rejected');
         setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, status: 'rejected' } : c));
       } else {
@@ -382,9 +394,13 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
     }
   };
 
-  // 6. Update Clip Metadata Draft (local cache update)
+  // 6. Update Clip Metadata Draft (local cache update with persistent protection from 6s polling)
   const handleUpdateClipMetadata = (patch: Partial<ClipItem>) => {
     if (!currentClip) return;
+    metadataDraftsRef.current[currentClip.id] = {
+      ...(metadataDraftsRef.current[currentClip.id] || {}),
+      ...patch,
+    };
     setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, ...patch } : c));
   };
 

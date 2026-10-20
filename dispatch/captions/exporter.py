@@ -144,6 +144,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         grp_layout = grp.layout or layout
         words = grp.words
 
+        grp_type = getattr(grp, "type", "caption") or "caption"
+        if grp_type in ("audio", "voiceover", "overlay"):
+            continue
+        if getattr(grp, "is_hidden", False):
+            continue
+
         if not words:
             continue
 
@@ -435,6 +441,9 @@ def export_to_srt(track: CaptionTrack, output_path: Path) -> Path:
     lines = []
     counter = 1
     for grp in track.groups:
+        grp_type = getattr(grp, "type", "caption") or "caption"
+        if grp_type in ("audio", "voiceover", "overlay") or getattr(grp, "is_hidden", False):
+            continue
         start_ts = format_srt_time(grp.start)
         end_ts = format_srt_time(grp.end)
         text = " ".join(w.text for w in grp.words)

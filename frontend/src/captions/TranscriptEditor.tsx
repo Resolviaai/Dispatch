@@ -13,6 +13,11 @@ import {
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word } from './types';
 import { preserveWordTimingsOnEdit } from './timingPreservation';
+import { downloadSrtFile } from './srtExport';
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 interface TranscriptEditorProps {
   track: CaptionTrack | null;
@@ -21,6 +26,7 @@ interface TranscriptEditorProps {
   onSeek: (seconds: number) => void;
   onSelectGroup: (groupId: string | null) => void;
   onUpdateGroup: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
+  onUpdateTrack?: (track: CaptionTrack, commitToHistory?: boolean) => void;
   onClose: () => void;
 }
 
@@ -31,6 +37,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   onSeek,
   onSelectGroup,
   onUpdateGroup,
+  onUpdateTrack,
   onClose,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -46,7 +53,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
       .sort((a, b) => a.start - b.start);
   }, [track]);
 
-  // Search matches calculation
+  // Search matches calculation with safe literal regex matching
   const searchMatches = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const query = searchQuery.trim().toLowerCase();
@@ -89,13 +96,20 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
     const findStr = searchQuery.trim();
     const repStr = replaceQuery.trim();
 
+    // Literal text matching: escape all regex characters so '.', '(', etc. match literally
+    const escaped = escapeRegex(findStr);
+    const regex = new RegExp(escaped, 'gi');
+
     let totalReplacements = 0;
+    const affectedGroupIds = new Set<string>();
 
-    captionGroups.forEach((grp) => {
+    const updatedGroups = track.groups.map((grp) => {
+      if (grp.type && grp.type !== 'caption' && grp.type !== 'text') {
+        return grp;
+      }
       const origText = (grp.words || []).map((w) => w.text).join(' ');
-      const regex = new RegExp(findStr, 'gi');
-
       if (regex.test(origText)) {
+        regex.lastIndex = 0;
         const nextText = origText.replace(regex, repStr);
         const updatedWords = preserveWordTimingsOnEdit(
           grp.words || [],
@@ -104,10 +118,36 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           grp.end,
           grp.id
         );
-        onUpdateGroup(grp.id, { words: updatedWords }, true);
         totalReplacements++;
+        affectedGroupIds.add(grp.id);
+        return {
+          ...grp,
+          words: updatedWords,
+        };
       }
+      return grp;
     });
+
+    if (totalReplacements === 0) {
+      setFeedback('No occurrences found to replace.');
+      setTimeout(() => setFeedback(null), 2500);
+      return;
+    }
+
+    // Atomic history commit: single undo step for the entire batch replace operation
+    if (onUpdateTrack) {
+      onUpdateTrack({ ...track, groups: updatedGroups }, true);
+    } else {
+      // Fallback: update groups without flooding history, committing on the final group
+      const affectedList = Array.from(affectedGroupIds);
+      affectedList.forEach((gid, idx) => {
+        const grp = updatedGroups.find((g) => g.id === gid);
+        if (grp) {
+          const isLast = idx === affectedList.length - 1;
+          onUpdateGroup(gid, { words: grp.words }, isLast);
+        }
+      });
+    }
 
     setFeedback(`Replaced ${searchMatches.length} occurrences across ${totalReplacements} segments.`);
     setTimeout(() => setFeedback(null), 3000);

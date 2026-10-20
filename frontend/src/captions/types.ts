@@ -89,7 +89,7 @@ export interface AnimationConfig {
   
   // 3-layer animation model
   enter?: {
-    type: 'fade' | 'pop' | 'slide_up' | 'none';
+    type: 'fade' | 'pop' | 'scale_up' | 'slide_up' | 'none';
     duration_ms: number;
   };
   active_word?: {
@@ -126,6 +126,7 @@ export interface CaptionGroup {
   animation?: AnimationConfig;
   trackIndex?: number;
   type?: LayerType;
+  is_hidden?: boolean;
   // Independent layer audio controls
   volume?: number;      // 0 - 200%
   is_muted?: boolean;

@@ -1555,6 +1555,62 @@ async def save_clip_captions(clip_id: str, request: Request):
     return {"status": "success", "message": "Captions saved and exported to ASS"}
 
 
+@app.post("/api/media/upload")
+async def upload_editor_media(request: Request, file: UploadFile = File(...)):
+    """Accept user-imported overlay, audio track, or voiceover recording.
+    Validates file type and size, writes durably to CLIPS_DIR, and returns a permanent URL.
+    """
+    verify_dashboard_auth(request)
+    import uuid
+
+    filename = file.filename or "media_upload"
+    ext = Path(filename).suffix.lower()
+    allowed_exts = {
+        ".mp3", ".wav", ".aac", ".m4a", ".ogg", ".webm",
+        ".mp4", ".mov",
+        ".png", ".jpg", ".jpeg", ".webp"
+    }
+    if ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail=f"Unsupported file format: {ext}. Allowed: {', '.join(sorted(allowed_exts))}")
+
+    media_type = "audio" if ext in {".mp3", ".wav", ".aac", ".m4a", ".ogg"} else (
+        "video" if ext in {".mp4", ".mov"} else (
+            "audio" if "audio" in (file.content_type or "") else (
+                "video" if "video" in (file.content_type or "") else "image"
+            )
+        )
+    )
+
+    safe_name = f"media_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
+    dest_path = CLIPS_DIR / safe_name
+    MAX_MEDIA_BYTES = 100 * 1024 * 1024  # 100MB
+
+    total_bytes = 0
+    try:
+        with open(dest_path, "wb") as f:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_MEDIA_BYTES:
+                    dest_path.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="Upload file exceeds maximum limit of 100MB")
+                f.write(chunk)
+    except Exception:
+        dest_path.unlink(missing_ok=True)
+        raise
+
+    logger.info("Editor media uploaded durably: %s (%d bytes)", safe_name, total_bytes)
+    return {
+        "status": "success",
+        "filename": safe_name,
+        "url": f"/clips/{safe_name}",
+        "media_type": media_type,
+        "size_bytes": total_bytes
+    }
+
+
 @app.post("/api/recordings/upload")
 async def upload_web_recording(request: Request, file: UploadFile = File(...)):
     """Accept test recording from browser camera, save to storage, register session and chunk, extract clip, and prepare for review."""
