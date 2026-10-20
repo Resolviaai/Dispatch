@@ -5,28 +5,36 @@ import {
   Mic, 
   MicOff, 
   SwitchCamera, 
-  Circle, 
-  Square,
   AlertCircle,
   Video,
   CheckCircle2,
   Sun,
-  Lock
+  Lock,
+  Unlock,
+  RotateCcw,
+  Camera,
+  Loader2
 } from 'lucide-react';
-import { Bridge, RecordingItem, ExposureInfo } from '../bridge';
+import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent } from '../bridge';
 
 interface CameraScreenProps {
   onRecordingComplete?: (item: RecordingItem) => void;
   onRecordingStatusUpdate?: (segmentId: string, status: string, extra?: Partial<RecordingItem>) => void;
 }
 
+type FocusStatus = 'idle' | 'focusing' | 'success' | 'failed' | 'locked';
+
 interface FocusExposureState {
   x: number;
   y: number;
-  normX: number;
-  normY: number;
-  isLocked: boolean;
+  screenNormX: number;
+  screenNormY: number;
+  status: FocusStatus;
   triggerId: number;
+  isLocked: boolean;
+  hasAf: boolean;
+  hasAe: boolean;
+  timestamp: number;
 }
 
 export const CameraScreen: React.FC<CameraScreenProps> = ({ 
@@ -44,17 +52,23 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const [webcamError, setWebcamError] = useState<string | null>(null);
   const [recentSavedSegment, setRecentSavedSegment] = useState<string | null>(null);
 
+  // Camera initialization and hardware status
+  const [cameraStatus, setCameraStatus] = useState<CameraStateEvent>({
+    state: Bridge.isAvailable() ? 'initializing' : 'ready',
+    audioEnabled: true
+  });
+
   // Focus & Exposure states
   const [focusState, setFocusState] = useState<FocusExposureState | null>(null);
   const [isIndicatorVisible, setIsIndicatorVisible] = useState(false);
   const [isDraggingExposure, setIsDraggingExposure] = useState(false);
   const [exposureIndex, setExposureIndex] = useState(0);
   const [exposureInfo, setExposureInfo] = useState<ExposureInfo>({
-    minIndex: -4,
-    maxIndex: 4,
+    minIndex: 0,
+    maxIndex: 0,
     currentIndex: 0,
     stepEv: 0.5,
-    isSupported: true,
+    isSupported: false,
   });
   const [viewfinderBounds, setViewfinderBounds] = useState<{ width: number; height: number }>({
     width: typeof window !== 'undefined' ? window.innerWidth : 360,
@@ -73,8 +87,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const isLongPressHandledRef = useRef(false);
   const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
   const startExposureIndexRef = useRef<number>(0);
-  const isDraggingRef = useRef<boolean>(false);
   const isInteractingWithSliderRef = useRef<boolean>(false);
+  const lastSunTapTimeRef = useRef<number>(0);
 
   // Synchronize native recording status when running inside Dispatch Android WebView
   useEffect(() => {
@@ -87,6 +101,75 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       const interval = setInterval(syncRecordingState, 1000);
       return () => clearInterval(interval);
     }
+  }, []);
+
+  // Subscribe to native camera lifecycle and focus events
+  useEffect(() => {
+    const unsub = Bridge.onCameraEvent((event) => {
+      if (event.type === 'camera_state') {
+        const data = event.data as CameraStateEvent;
+        setCameraStatus(data);
+        if (data.audioEnabled !== undefined) {
+          setMicActive(data.audioEnabled);
+        }
+      } else if (event.type === 'focus_result') {
+        const result = event.data as FocusResultEvent;
+        setFocusState(prev => {
+          if (!prev) return prev;
+          // Apply if trigger matches or if it's the active focus event
+          if (prev.triggerId === result.triggerId || !result.triggerId) {
+            const isLocked = !!result.isLocked;
+            const newStatus: FocusStatus = isLocked 
+              ? (result.success ? 'locked' : 'failed')
+              : (result.success ? 'success' : 'failed');
+
+            if (newStatus === 'locked') {
+              if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
+            } else if (newStatus === 'success') {
+              startFadeTimer(2800);
+            } else {
+              startFadeTimer(1600);
+            }
+
+            return {
+              ...prev,
+              status: newStatus,
+              isLocked,
+              hasAf: result.hasAf ?? true,
+              hasAe: result.hasAe ?? true
+            };
+          }
+          return prev;
+        });
+      } else if (event.type === 'exposure_result') {
+        if (typeof event.data?.appliedIndex === 'number') {
+          setExposureIndex(event.data.appliedIndex);
+        }
+      } else if (event.type === 'unlock_result') {
+        setFocusState(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            status: 'idle',
+            isLocked: false
+          };
+        });
+        startFadeTimer(1500);
+      }
+    });
+
+    // Initial camera status query
+    const initStatus = Bridge.getCameraStatus();
+    if (initStatus) {
+      setCameraStatus(initStatus);
+      if (initStatus.audioEnabled !== undefined) {
+        setMicActive(initStatus.audioEnabled);
+      }
+    }
+
+    return () => {
+      unsub();
+    };
   }, []);
 
   // Initialize webcam for PC browser preview
@@ -106,7 +189,12 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: cameraFacing === 'front' ? 'user' : 'environment' },
+          video: { 
+            facingMode: cameraFacing === 'front' ? 'user' : 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 }
+          },
           audio: micActive
         });
         streamRef.current = stream;
@@ -116,11 +204,13 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         }
         setHasWebcam(true);
         setWebcamError(null);
+        setCameraStatus({ state: 'ready', audioEnabled: micActive });
       }
     } catch (err: any) {
       console.warn('Webcam preview unavailable:', err);
       setHasWebcam(false);
       setWebcamError(err.message || 'Webcam access restricted');
+      setCameraStatus({ state: 'error', error: err.message, audioEnabled: false });
     }
   };
 
@@ -147,10 +237,9 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
   }, []);
 
-  // Sync exposure info and zoom range whenever camera facing or mode updates
+  // Sync exposure info and zoom range whenever camera facing updates
   useEffect(() => {
     syncCameraHardwareState();
-    // CameraX rebinds asynchronously in native Android; poll at intervals to catch when hardware is ready
     const t1 = setTimeout(syncCameraHardwareState, 300);
     const t2 = setTimeout(syncCameraHardwareState, 750);
     const t3 = setTimeout(syncCameraHardwareState, 1500);
@@ -178,14 +267,15 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     };
   }, []);
 
-  const startFadeTimer = (ms = 3500) => {
+  const startFadeTimer = (ms = 2800) => {
     if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
     fadeTimeoutRef.current = setTimeout(() => {
       setIsIndicatorVisible(false);
+      setFocusState(prev => (prev?.isLocked ? prev : null));
     }, ms);
   };
 
-  const checkIsNearSliderOrReticle = (
+  const checkIsNearSlider = (
     touchX: number,
     touchY: number,
     focus: FocusExposureState,
@@ -200,14 +290,32 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
     const placeSliderOnLeft = (clampedX + halfBox + 48) > cw;
     const trackX = placeSliderOnLeft ? (clampedX - halfBox - 22) : (clampedX + halfBox + 22);
-    const trackHeight = 90;
+    const trackHeight = 100;
     const trackTop = clampedY - trackHeight / 2;
     const trackBottom = clampedY + trackHeight / 2;
 
-    const nearBox = Math.abs(touchX - clampedX) <= 44 && Math.abs(touchY - clampedY) <= 44;
-    const nearTrack = Math.abs(touchX - trackX) <= 36 && touchY >= (trackTop - 24) && touchY <= (trackBottom + 24);
+    // Direct hit test on slider track & sun handle (44px touch bounding box)
+    return Math.abs(touchX - trackX) <= 32 && touchY >= (trackTop - 20) && touchY <= (trackBottom + 20);
+  };
 
-    return nearBox || nearTrack;
+  const handleUnlockAeAf = (e?: React.MouseEvent | React.PointerEvent) => {
+    if (e) e.stopPropagation();
+    Bridge.unlockAeAf();
+    setFocusState(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        status: 'idle',
+        isLocked: false
+      };
+    });
+    startFadeTimer(1500);
+  };
+
+  const handleResetExposure = (e: React.PointerEvent | React.MouseEvent) => {
+    e.stopPropagation();
+    Bridge.setExposureIndex(0);
+    setExposureIndex(0);
   };
 
   const handleViewfinderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -222,16 +330,25 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     const rect = e.currentTarget.getBoundingClientRect();
     const bounds = { width: rect.width, height: rect.height };
     setViewfinderBounds(bounds);
+
     const clientX = e.clientX;
     const clientY = e.clientY;
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    const normX = Math.max(0, Math.min(1, x / rect.width));
-    const normY = Math.max(0, Math.min(1, y / rect.height));
+    const localX = clientX - rect.left;
+    const localY = clientY - rect.top;
+
+    // Hardware coordinate normalization:
+    // When running inside Android WebView, PreviewView covers the full screen (window.innerWidth x window.innerHeight).
+    // Normalizing directly to screen width/height ensures perfect 1:1 alignment with native PreviewView.meteringPointFactory.
+    const screenNormX = Bridge.isAvailable() && window.innerWidth > 0
+      ? Math.max(0, Math.min(1, clientX / window.innerWidth))
+      : Math.max(0, Math.min(1, localX / rect.width));
+
+    const screenNormY = Bridge.isAvailable() && window.innerHeight > 0
+      ? Math.max(0, Math.min(1, clientY / window.innerHeight))
+      : Math.max(0, Math.min(1, localY / rect.height));
 
     pointerDownPosRef.current = { x: clientX, y: clientY };
     isLongPressHandledRef.current = false;
-    isDraggingRef.current = false;
     startExposureIndexRef.current = freshExp ? freshExp.currentIndex : exposureIndex;
 
     if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
@@ -241,31 +358,46 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {}
 
-    // Check if user is touching existing reticle or exposure slider
-    const isTouchingSlider = isIndicatorVisible && focusState && checkIsNearSliderOrReticle(x, y, focusState, bounds);
+    // Check if touching dedicated exposure slider track or sun handle
+    const isTouchingSlider = isIndicatorVisible && focusState && exposureInfo.isSupported && checkIsNearSlider(localX, localY, focusState, bounds);
     if (isTouchingSlider) {
       isInteractingWithSliderRef.current = true;
-      isDraggingRef.current = true;
       setIsDraggingExposure(true);
+
+      // Check double-tap on sun handle to quickly reset EV to 0
+      const now = Date.now();
+      if (now - lastSunTapTimeRef.current < 300) {
+        Bridge.setExposureIndex(0);
+        setExposureIndex(0);
+        lastSunTapTimeRef.current = 0;
+      } else {
+        lastSunTapTimeRef.current = now;
+      }
       return;
     }
 
     isInteractingWithSliderRef.current = false;
 
-    // Long press (>= 400ms) for AE/AF lock
+    // Setup Long-press (>= 400ms held within 8px touch slop) for AE/AF Lock
     longPressTimerRef.current = setTimeout(() => {
       isLongPressHandledRef.current = true;
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try { navigator.vibrate(50); } catch {}
       }
-      Bridge.lockAeAfAtPoint(normX, normY);
+      const triggerId = Date.now();
+      Bridge.lockAeAfAtPoint(screenNormX, screenNormY, triggerId);
+
       setFocusState({
-        x,
-        y,
-        normX,
-        normY,
+        x: localX,
+        y: localY,
+        screenNormX,
+        screenNormY,
+        status: 'focusing',
+        triggerId,
         isLocked: true,
-        triggerId: Date.now()
+        hasAf: true,
+        hasAe: true,
+        timestamp: triggerId
       });
       setIsIndicatorVisible(true);
     }, 400);
@@ -284,46 +416,21 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       longPressTimerRef.current = null;
     }
 
-    // Vertical drag for exposure adjustment
-    if (exposureInfo.isSupported) {
-      const isDirectSlider = isInteractingWithSliderRef.current;
-      const isVerticalMotion = Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx) * 0.8;
-      if (isDirectSlider || isDraggingRef.current || isVerticalMotion) {
-        if (!isDraggingRef.current) {
-          isDraggingRef.current = true;
-          setIsDraggingExposure(true);
-          if (!isIndicatorVisible || !focusState) {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const startX = pointerDownPosRef.current.x - rect.left;
-            const startY = pointerDownPosRef.current.y - rect.top;
-            const normX = Math.max(0, Math.min(1, startX / rect.width));
-            const normY = Math.max(0, Math.min(1, startY / rect.height));
-            Bridge.focusOnPoint(normX, normY);
-            setFocusState({
-              x: startX,
-              y: startY,
-              normX,
-              normY,
-              isLocked: false,
-              triggerId: Date.now()
-            });
-          }
-          setIsIndicatorVisible(true);
-        }
+    // EXPOSURE ADJUSTMENT LAW:
+    // Exposure changes *only* via dedicated slider interaction.
+    // Accidental vertical swipes on the empty viewfinder NEVER alter exposure.
+    if (exposureInfo.isSupported && isInteractingWithSliderRef.current) {
+      const totalDragDistancePx = 160;
+      const range = Math.max(1, exposureInfo.maxIndex - exposureInfo.minIndex);
+      const indexOffset = (-dy / totalDragDistancePx) * range;
+      const targetIndex = Math.min(
+        exposureInfo.maxIndex,
+        Math.max(exposureInfo.minIndex, Math.round(startExposureIndexRef.current + indexOffset))
+      );
 
-        // Dragging 160px vertically spans full EV index range
-        const totalDragDistancePx = 160;
-        const range = Math.max(1, exposureInfo.maxIndex - exposureInfo.minIndex);
-        const indexOffset = (-dy / totalDragDistancePx) * range;
-        const targetIndex = Math.min(
-          exposureInfo.maxIndex,
-          Math.max(exposureInfo.minIndex, Math.round(startExposureIndexRef.current + indexOffset))
-        );
-
-        if (targetIndex !== exposureIndex) {
-          Bridge.setExposureIndex(targetIndex);
-          setExposureIndex(targetIndex);
-        }
+      if (targetIndex !== exposureIndex) {
+        Bridge.setExposureIndex(targetIndex);
+        setExposureIndex(targetIndex);
       }
     }
   };
@@ -341,15 +448,13 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     } catch {}
 
     const wasDirectSlider = isInteractingWithSliderRef.current;
-    const wasDragging = isDraggingRef.current;
     isInteractingWithSliderRef.current = false;
-    isDraggingRef.current = false;
     setIsDraggingExposure(false);
 
-    if (wasDirectSlider || wasDragging) {
+    if (wasDirectSlider) {
       pointerDownPosRef.current = null;
       if (!focusState?.isLocked) {
-        startFadeTimer(3500);
+        startFadeTimer(2800);
       }
       return;
     }
@@ -360,29 +465,52 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       return;
     }
 
-    // Single Tap detected
+    // Single Tap detected (Tap-to-Focus)
     if (pointerDownPosRef.current) {
       const rect = e.currentTarget.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const normX = Math.max(0, Math.min(1, x / rect.width));
-      const normY = Math.max(0, Math.min(1, y / rect.height));
+      const localX = e.clientX - rect.left;
+      const localY = e.clientY - rect.top;
 
+      const screenNormX = Bridge.isAvailable() && window.innerWidth > 0
+        ? Math.max(0, Math.min(1, e.clientX / window.innerWidth))
+        : Math.max(0, Math.min(1, localX / rect.width));
+
+      const screenNormY = Bridge.isAvailable() && window.innerHeight > 0
+        ? Math.max(0, Math.min(1, e.clientY / window.innerHeight))
+        : Math.max(0, Math.min(1, localY / rect.height));
+
+      // If already locked, tap unlocks AE/AF first
       if (focusState?.isLocked) {
-        // Unlock on tap if already locked
         Bridge.unlockAeAf();
       }
-      Bridge.focusOnPoint(normX, normY);
+
+      const triggerId = Date.now();
+      Bridge.focusOnPoint(screenNormX, screenNormY, triggerId);
+
       setFocusState({
-        x,
-        y,
-        normX,
-        normY,
+        x: localX,
+        y: localY,
+        screenNormX,
+        screenNormY,
+        status: 'focusing',
+        triggerId,
         isLocked: false,
-        triggerId: Date.now()
+        hasAf: true,
+        hasAe: true,
+        timestamp: triggerId
       });
       setIsIndicatorVisible(true);
-      startFadeTimer(3500);
+
+      // Fallback timeout in case hardware/mock bridge doesn't fire callback
+      setTimeout(() => {
+        setFocusState(curr => {
+          if (curr && curr.triggerId === triggerId && curr.status === 'focusing') {
+            startFadeTimer(2800);
+            return { ...curr, status: 'success' };
+          }
+          return curr;
+        });
+      }, 3000);
     }
 
     pointerDownPosRef.current = null;
@@ -498,7 +626,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         const videoBlobUrl = URL.createObjectURL(blob);
         completeSegment(videoBlobUrl, blob.size);
 
-        // Upload directly to PC pipeline so it immediately enters review studio
         setRecentSavedSegment('Uploading recording to PC pipeline...');
         if (onRecordingStatusUpdate) {
           onRecordingStatusUpdate(segmentId, 'UPLOADING');
@@ -512,7 +639,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           });
           if (res.ok) {
             const data = await res.json();
-            setRecentSavedSegment('✓ Recording uploaded! Clip ready in Clips tab.');
+            setRecentSavedSegment('Recording uploaded! Clip ready in Clips tab.');
             if (onRecordingStatusUpdate) {
               onRecordingStatusUpdate(segmentId, 'UPLOADED_TO_YOUTUBE', {
                 videoUrl: data.video_url || videoBlobUrl,
@@ -520,7 +647,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               });
             }
           } else {
-            const errText = await res.text();
             setRecentSavedSegment(`Upload failed (${res.status})`);
             if (onRecordingStatusUpdate) {
               onRecordingStatusUpdate(segmentId, 'FAILED_RECORDING', {
@@ -550,12 +676,20 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     return `${m}:${s}`;
   };
 
+  // Compute EV EV display string (e.g. +1.0 EV, 0.0 EV, -0.5 EV)
+  const currentEvFormatted = (exposureIndex * exposureInfo.stepEv).toFixed(1);
+  const evPrefix = exposureIndex > 0 ? '+' : '';
+
   return (
     <div className={`relative w-full h-full flex flex-col justify-between ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-studio'} text-text-main overflow-hidden select-none font-sans`}>
       <style>{`
         @keyframes reticlePop {
-          0% { transform: scale(1.3); opacity: 0.8; }
+          0% { transform: scale(1.25); opacity: 0.8; }
           100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes reticlePulse {
+          0%, 100% { opacity: 0.9; transform: scale(1); }
+          50% { opacity: 0.55; transform: scale(0.96); }
         }
       `}</style>
       
@@ -569,6 +703,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         style={{ touchAction: 'none' }}
         className={`absolute inset-0 z-0 flex items-center justify-center ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-black'} overflow-hidden cursor-crosshair`}
       >
+        {/* Desktop Web Preview */}
         {hasWebcam ? (
           <video
             ref={videoRef}
@@ -587,7 +722,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             </div>
             <p className="text-sm font-semibold text-text-main">Browser Preview Mode</p>
             <p className="text-xs text-text-secondary mt-1 max-w-[260px] leading-relaxed">
-              Tap screen to focus, drag vertically for exposure slider, or hold to lock AE/AF.
+              Tap screen to focus, drag vertical slider for exposure, or hold to lock AE/AF.
             </p>
             {webcamError && (
               <span className="text-[10px] text-text-muted mt-2 font-mono">
@@ -597,16 +732,16 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           </div>
         )}
 
-        {/* Viewfinder Grid Overlay with Cinema Reticle */}
+        {/* Viewfinder Grid Overlay with Cinema Crosshair */}
         <div className="absolute inset-0 pointer-events-none grid grid-cols-3 grid-rows-3 border border-white/[0.04]">
           <div className="border-r border-b border-white/[0.06]" />
           <div className="border-r border-b border-white/[0.06]" />
           <div className="border-b border-white/[0.06]" />
           <div className="border-r border-b border-white/[0.06]" />
           <div className="border-r border-b border-white/[0.06] flex items-center justify-center">
-            {/* Center Focus Reticle */}
-            <div className="w-12 h-12 border border-white/20 rounded-lg flex items-center justify-center">
-              <div className="w-1.5 h-1.5 rounded-full bg-white/40" />
+            {/* Center Focus Reticle Guide */}
+            <div className="w-10 h-10 border border-white/15 rounded-lg flex items-center justify-center">
+              <div className="w-1 h-1 rounded-full bg-white/30" />
             </div>
           </div>
           <div className="border-b border-white/[0.06]" />
@@ -627,31 +762,68 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               const cw = viewfinderBounds.width || (typeof window !== 'undefined' ? window.innerWidth : 360);
               const ch = viewfinderBounds.height || (typeof window !== 'undefined' ? window.innerHeight : 640);
               const clampedX = Math.max(halfBox + 16, Math.min(cw - halfBox - 56, focusState.x));
-              const clampedY = Math.max(halfBox + 40, Math.min(ch - halfBox - 80, focusState.y));
+              const clampedY = Math.max(halfBox + 48, Math.min(ch - halfBox - 90, focusState.y));
               
               const placeSliderOnLeft = (clampedX + halfBox + 48) > cw;
               const trackX = placeSliderOnLeft ? (clampedX - halfBox - 22) : (clampedX + halfBox + 22);
-              const trackHeight = 90;
+              const trackHeight = 100;
               const trackTop = clampedY - trackHeight / 2;
               const trackBottom = clampedY + trackHeight / 2;
               
               const rangeSpan = Math.max(1, exposureInfo.maxIndex - exposureInfo.minIndex);
-              const normExp = (exposureIndex - exposureInfo.minIndex) / rangeSpan;
+              const normExp = exposureInfo.isSupported
+                ? (exposureIndex - exposureInfo.minIndex) / rangeSpan
+                : 0.5;
               const sunY = trackBottom - normExp * (trackBottom - trackTop);
+
+              const isFocusing = focusState.status === 'focusing';
+              const isLocked = focusState.status === 'locked' || focusState.isLocked;
+              const isFailed = focusState.status === 'failed';
+
+              const reticleColor = isFailed 
+                ? '#EF4444' 
+                : isLocked 
+                ? '#F59E0B' 
+                : '#FACC15';
               
               return (
                 <>
-                  {/* AE/AF Lock Icon Badge */}
-                  {focusState.isLocked && (
+                  {/* AE/AF Lock Badge + Explicit Unlock Button */}
+                  {isLocked && (
                     <div 
-                      className="absolute transform -translate-x-1/2 flex items-center justify-center w-7 h-7 rounded-full bg-amber-400 text-black shadow-[0_2px_10px_rgba(0,0,0,0.7)] border border-amber-300 animate-in fade-in zoom-in-95 duration-150"
+                      className="absolute transform -translate-x-1/2 flex items-center gap-1.5 pointer-events-auto"
+                      style={{
+                        left: `${clampedX}px`,
+                        top: `${clampedY - halfBox - 36}px`,
+                      }}
+                    >
+                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-black shadow-[0_2px_12px_rgba(0,0,0,0.8)] border border-amber-300 animate-in fade-in zoom-in-95 duration-150">
+                        <Lock size={11} strokeWidth={2.8} className="text-black shrink-0" />
+                        <span className="text-[10px] font-mono font-bold tracking-tight uppercase">AE/AF LOCK</span>
+                      </div>
+
+                      <button
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={handleUnlockAeAf}
+                        aria-label="Unlock AE/AF"
+                        className="flex items-center justify-center w-6 h-6 rounded-full bg-black/80 border border-white/30 text-white hover:bg-black active:scale-[0.96] shadow-md transition-all"
+                      >
+                        <Unlock size={11} strokeWidth={2.2} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Focus Failure Toast */}
+                  {isFailed && (
+                    <div 
+                      className="absolute transform -translate-x-1/2 flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/90 text-white shadow-lg pointer-events-none animate-in fade-in duration-150"
                       style={{
                         left: `${clampedX}px`,
                         top: `${clampedY - halfBox - 28}px`,
                       }}
-                      aria-label="AE/AF Locked"
                     >
-                      <Lock size={14} strokeWidth={2.6} className="text-black" />
+                      <AlertCircle size={10} strokeWidth={2.5} />
+                      <span className="text-[9px] font-mono font-bold uppercase tracking-wide">AF METERING FAILED</span>
                     </div>
                   )}
 
@@ -660,7 +832,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                     key={focusState.triggerId}
                     className={`absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-150 ${
                       isDraggingExposure ? 'scale-95' : 'scale-100'
-                    }`}
+                    } ${isFocusing ? 'animate-[reticlePulse_600ms_ease-in-out_infinite]' : 'animate-[reticlePop_140ms_ease-out]'}`}
                     style={{
                       left: `${clampedX}px`,
                       top: `${clampedY}px`,
@@ -669,67 +841,148 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                     }}
                   >
                     <svg 
-                      className="w-full h-full drop-shadow-[0_0_2px_rgba(0,0,0,0.9)] animate-[reticlePop_140ms_ease-out]" 
+                      className="w-full h-full drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]" 
                       viewBox="0 0 64 64" 
                       fill="none"
                     >
                       {/* Corner Brackets */}
                       {/* Top-Left */}
-                      <path d="M 4 16 L 4 4 L 16 4" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M 4 16 L 4 4 L 16 4" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
                       {/* Top-Right */}
-                      <path d="M 48 4 L 60 4 L 60 16" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M 48 4 L 60 4 L 60 16" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
                       {/* Bottom-Right */}
-                      <path d="M 60 48 L 60 60 L 48 60" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M 60 48 L 60 60 L 48 60" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
                       {/* Bottom-Left */}
-                      <path d="M 16 60 L 4 60 L 4 48" stroke="#FACC15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M 16 60 L 4 60 L 4 48" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
                       
                       {/* Center Dot */}
-                      <circle cx="32" cy="32" r="1.5" fill="#FACC15" />
+                      <circle cx="32" cy="32" r="1.5" fill={reticleColor} />
                     </svg>
                   </div>
 
                   {/* Exposure Slider Track & Sun */}
                   {exposureInfo.isSupported && (
                     <div 
-                      className="absolute pointer-events-none"
+                      className="absolute pointer-events-auto cursor-ns-resize"
                       style={{
-                        left: `${trackX}px`,
-                        top: `${trackTop}px`,
-                        width: '2px',
-                        height: `${trackHeight}px`,
+                        left: `${trackX - 16}px`,
+                        top: `${trackTop - 10}px`,
+                        width: '32px',
+                        height: `${trackHeight + 20}px`,
+                      }}
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        isInteractingWithSliderRef.current = true;
+                        setIsDraggingExposure(true);
                       }}
                     >
-                      {/* Track line background shadow */}
-                      <div className="absolute inset-0 bg-black/60 rounded-full w-[3px] -left-[0.5px]" />
-                      {/* Track line white foreground */}
+                      {/* Central Track Line */}
                       <div 
-                        className={`absolute inset-0 rounded-full transition-opacity ${
-                          isDraggingExposure ? 'bg-white opacity-95 w-[2px]' : 'bg-white/70 opacity-70 w-[1.5px]'
-                        }`} 
-                        />
-                      {/* Top and Bottom notch caps */}
-                      <div className="absolute top-0 -left-[3px] w-2 h-[1.5px] bg-white/80 rounded-full shadow" />
-                      <div className="absolute bottom-0 -left-[3px] w-2 h-[1.5px] bg-white/80 rounded-full shadow" />
-
-                      {/* Sun Icon */}
-                      <div 
-                        className={`absolute -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-transform duration-75 ${
-                          isDraggingExposure ? 'scale-125' : 'scale-100'
-                        }`}
+                        className="absolute pointer-events-none"
                         style={{
-                          left: '1px',
-                          top: `${sunY - trackTop}px`,
+                          left: '15px',
+                          top: '10px',
+                          width: '2px',
+                          height: `${trackHeight}px`,
                         }}
                       >
-                        <div className="relative w-6 h-6 flex items-center justify-center">
-                          <Sun size={20} className="text-amber-400 drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] fill-amber-400/30" strokeWidth={2} />
+                        {/* Track line shadow */}
+                        <div className="absolute inset-0 bg-black/70 rounded-full w-[3px] -left-[0.5px]" />
+                        {/* Track line white foreground */}
+                        <div 
+                          className={`absolute inset-0 rounded-full transition-opacity ${
+                            isDraggingExposure ? 'bg-white opacity-95 w-[2px]' : 'bg-white/70 opacity-70 w-[1.5px]'
+                          }`} 
+                        />
+                        {/* Top and Bottom notch caps */}
+                        <div className="absolute top-0 -left-[3px] w-2 h-[1.5px] bg-white/80 rounded-full shadow" />
+                        <div className="absolute bottom-0 -left-[3px] w-2 h-[1.5px] bg-white/80 rounded-full shadow" />
+
+                        {/* Sun Handle Icon */}
+                        <div 
+                          className={`absolute -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-transform duration-75 ${
+                            isDraggingExposure ? 'scale-125' : 'scale-100'
+                          }`}
+                          style={{
+                            left: '1px',
+                            top: `${sunY - trackTop}px`,
+                          }}
+                        >
+                          <div className="relative w-8 h-8 flex items-center justify-center">
+                            <Sun size={20} className="text-amber-400 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)] fill-amber-400/30" strokeWidth={2} />
+                          </div>
                         </div>
+
+                        {/* EV readout bubble while dragging or non-zero */}
+                        {(isDraggingExposure || exposureIndex !== 0) && (
+                          <div 
+                            className="absolute -translate-y-1/2 px-1.5 py-0.5 rounded bg-black/85 border border-white/20 text-[9px] font-mono text-amber-300 tabular-nums shadow-lg pointer-events-none whitespace-nowrap"
+                            style={{
+                              left: placeSliderOnLeft ? '-42px' : '18px',
+                              top: `${sunY - trackTop}px`,
+                            }}
+                          >
+                            {evPrefix}{currentEvFormatted} EV
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
                 </>
               );
             })()}
+          </div>
+        )}
+
+        {/* Camera Hardware Initialization Overlay */}
+        {cameraStatus.state === 'initializing' && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm p-6 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-3 shadow-lg">
+              <Loader2 className="w-7 h-7 text-primary animate-spin" />
+            </div>
+            <p className="text-sm font-semibold text-text-main">Initializing Camera</p>
+            <p className="text-xs text-text-secondary mt-1 font-mono">
+              Configuring 1080p FHD sensor…
+            </p>
+          </div>
+        )}
+
+        {/* Camera Permission Required Recovery Overlay */}
+        {cameraStatus.state === 'permission_required' && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-6 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 shadow-lg">
+              <Camera className="w-8 h-8 text-amber-400" />
+            </div>
+            <h3 className="text-base font-semibold text-text-main">Camera Permission Required</h3>
+            <p className="text-xs text-text-secondary mt-2 max-w-[280px] leading-relaxed">
+              Dispatch requires camera permission to capture video sessions and generate instant creator clips.
+            </p>
+            <button
+              onClick={() => Bridge.retryCameraInit()}
+              className="mt-6 px-6 py-2.5 rounded-xl bg-primary text-white font-medium text-xs shadow-hero-glow hover:bg-blue-600 active:scale-[0.98] transition-all"
+            >
+              Grant Permission
+            </button>
+          </div>
+        )}
+
+        {/* Camera Initialization Error Recovery Overlay */}
+        {cameraStatus.state === 'error' && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-6 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-danger/10 border border-danger/30 flex items-center justify-center mb-4 shadow-lg">
+              <AlertCircle className="w-8 h-8 text-danger" />
+            </div>
+            <h3 className="text-base font-semibold text-text-main">Camera Unavailable</h3>
+            <p className="text-xs text-text-secondary mt-2 max-w-[280px] leading-relaxed">
+              {cameraStatus.error || "The camera sensor could not be initialized. Another application might be using it."}
+            </p>
+            <button
+              onClick={() => Bridge.retryCameraInit()}
+              className="mt-6 flex items-center gap-2 px-5 py-2.5 rounded-xl bg-surface-200 border border-border text-text-main font-medium text-xs hover:bg-surface-300 active:scale-[0.98] transition-all"
+            >
+              <RotateCcw size={14} />
+              Retry Camera
+            </button>
           </div>
         )}
       </div>
@@ -739,74 +992,92 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         onPointerDown={(e) => e.stopPropagation()}
         onPointerMove={(e) => e.stopPropagation()}
         onPointerUp={(e) => e.stopPropagation()}
-        className="relative z-10 flex items-center justify-between px-5 pt-4 pb-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent"
+        className="relative z-10 flex flex-col px-5 pt-4 pb-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent gap-2"
       >
-        {/* Left: Quality & Recording Status & Audio VU */}
-        <div className="flex items-center gap-2">
-          {isRecording ? (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-danger/20 border border-danger/40 backdrop-blur shadow-[0_0_14px_rgba(239,68,68,0.3)]">
-              <span className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse" />
-              <span className="text-xs font-mono tabular-nums font-bold text-rose-300 tracking-wider">
-                REC {formatTime(recordingSeconds)}
-              </span>
-              {micActive && (
-                <div className="flex items-end gap-0.5 h-3 ml-0.5">
-                  <span className="w-0.5 h-2 bg-success rounded-full animate-pulse" />
-                  <span className="w-0.5 h-3 bg-success rounded-full animate-pulse" />
-                  <span className="w-0.5 h-1.5 bg-success rounded-full animate-pulse" />
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-surface-100/90 border border-border backdrop-blur">
-              <span className="w-2 h-2 rounded-full bg-success" />
-              <span className="text-[11px] font-mono tabular-nums text-text-secondary font-medium">1080P 30FPS</span>
-              {micActive && (
-                <div className="flex items-end gap-0.5 h-2.5 opacity-60">
-                  <span className="w-0.5 h-1.5 bg-text-muted rounded-full" />
-                  <span className="w-0.5 h-2.5 bg-text-muted rounded-full" />
-                  <span className="w-0.5 h-1 bg-text-muted rounded-full" />
-                </div>
-              )}
-            </div>
-          )}
+        <div className="flex items-center justify-between">
+          {/* Left: Quality & Recording Status & Audio VU */}
+          <div className="flex items-center gap-2">
+            {isRecording ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-danger/20 border border-danger/40 backdrop-blur shadow-[0_0_14px_rgba(239,68,68,0.3)]">
+                <span className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse" />
+                <span className="text-xs font-mono tabular-nums font-bold text-rose-300 tracking-wider">
+                  REC {formatTime(recordingSeconds)}
+                </span>
+                {micActive && (
+                  <div className="flex items-end gap-0.5 h-3 ml-0.5">
+                    <span className="w-0.5 h-2 bg-success rounded-full animate-pulse" />
+                    <span className="w-0.5 h-3 bg-success rounded-full animate-pulse" />
+                    <span className="w-0.5 h-1.5 bg-success rounded-full animate-pulse" />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-surface-100/90 border border-border backdrop-blur">
+                <span className="w-2 h-2 rounded-full bg-success" />
+                <span className="text-[11px] font-mono tabular-nums text-text-secondary font-medium">1080P 30FPS</span>
+                {micActive && (
+                  <div className="flex items-end gap-0.5 h-2.5 opacity-60">
+                    <span className="w-0.5 h-1.5 bg-text-muted rounded-full" />
+                    <span className="w-0.5 h-2.5 bg-text-muted rounded-full" />
+                    <span className="w-0.5 h-1 bg-text-muted rounded-full" />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right: Quick Toggles (Torch, Mic, Flip) - Biomechanical 44px hitboxes */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleTorch}
+              disabled={cameraFacing === 'front'}
+              aria-label="Toggle Torch"
+              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur transition-all active:scale-[0.98] ${
+                torchActive 
+                  ? 'bg-amber-400 text-black shadow-[0_0_12px_rgba(251,191,36,0.5)]' 
+                  : 'bg-surface-100/80 border border-border text-text-main hover:bg-surface-200 disabled:opacity-30'
+              }`}
+            >
+              {torchActive ? <Zap size={18} fill="currentColor" /> : <ZapOff size={18} />}
+            </button>
+
+            <button
+              onClick={handleToggleMic}
+              aria-label="Toggle Microphone"
+              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur transition-all active:scale-[0.98] ${
+                micActive 
+                  ? 'bg-surface-100/80 border border-border text-text-main hover:bg-surface-200' 
+                  : 'bg-danger text-white shadow-[0_0_12px_rgba(239,68,68,0.4)]'
+              }`}
+            >
+              {micActive ? <Mic size={18} /> : <MicOff size={18} />}
+            </button>
+
+            <button
+              onClick={handleSwitchCamera}
+              aria-label="Switch Camera"
+              className="w-11 h-11 rounded-full flex items-center justify-center bg-surface-100/80 border border-border text-text-main hover:bg-surface-200 backdrop-blur transition-all active:scale-[0.98]"
+            >
+              <SwitchCamera size={18} />
+            </button>
+          </div>
         </div>
 
-        {/* Right: Quick Toggles (Torch, Mic, Flip) - Biomechanical 44px hitboxes */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleToggleTorch}
-            disabled={cameraFacing === 'front'}
-            aria-label="Toggle Torch"
-            className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur transition-all active:scale-[0.98] ${
-              torchActive 
-                ? 'bg-amber-400 text-black shadow-[0_0_12px_rgba(251,191,36,0.5)]' 
-                : 'bg-surface-100/80 border border-border text-text-main hover:bg-surface-200 disabled:opacity-30'
-            }`}
-          >
-            {torchActive ? <Zap size={18} fill="currentColor" /> : <ZapOff size={18} />}
-          </button>
-
-          <button
-            onClick={handleToggleMic}
-            aria-label="Toggle Microphone"
-            className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur transition-all active:scale-[0.98] ${
-              micActive 
-                ? 'bg-surface-100/80 border border-border text-text-main hover:bg-surface-200' 
-                : 'bg-danger text-white shadow-[0_0_12px_rgba(239,68,68,0.4)]'
-            }`}
-          >
-            {micActive ? <Mic size={18} /> : <MicOff size={18} />}
-          </button>
-
-          <button
-            onClick={handleSwitchCamera}
-            aria-label="Switch Camera"
-            className="w-11 h-11 rounded-full flex items-center justify-center bg-surface-100/80 border border-border text-text-main hover:bg-surface-200 backdrop-blur transition-all active:scale-[0.98]"
-          >
-            <SwitchCamera size={18} />
-          </button>
-        </div>
+        {/* Audio Disabled Warning Banner (When camera works but mic permission denied) */}
+        {cameraStatus.audioEnabled === false && (
+          <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-mono animate-in fade-in">
+            <div className="flex items-center gap-1.5 truncate">
+              <MicOff size={12} className="shrink-0" />
+              <span className="truncate">Audio disabled (Microphone permission required)</span>
+            </div>
+            <button
+              onClick={() => Bridge.retryCameraInit()}
+              className="ml-2 text-white font-semibold underline underline-offset-2 shrink-0 hover:text-amber-200"
+            >
+              Enable
+            </button>
+          </div>
+        )}
       </div>
 
       {/* NOTIFICATION TOAST */}
@@ -866,7 +1137,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         {/* Context Help Text */}
         <div className="mt-3 text-center">
           <span className="text-[11px] font-mono text-text-muted">
-            {isRecording ? 'Tap square to stop & finalize chunk' : 'Tap to start recording'}
+            {isRecording ? 'Tap square to stop & finalize chunk' : 'Tap to focus · Hold to lock AE/AF'}
           </span>
         </div>
       </div>

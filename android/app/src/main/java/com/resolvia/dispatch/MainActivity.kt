@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var pairingManager: PairingManager
     private lateinit var webView: WebView
     private lateinit var previewView: PreviewView
+    private lateinit var bridge: DispatchNativeBridge
 
     private val permissionsToRequest = buildList {
         add(Manifest.permission.CAMERA)
@@ -56,24 +57,50 @@ class MainActivity : ComponentActivity() {
     ) { perms ->
         val cam = perms[Manifest.permission.CAMERA] == true
         val mic = perms[Manifest.permission.RECORD_AUDIO] == true
-        if (!cam || !mic) {
-            Toast.makeText(this, "Camera & Mic permissions required for Dispatch.", Toast.LENGTH_LONG).show()
+        if (!cam) {
+            Toast.makeText(this, "Camera permission is required to preview and record.", Toast.LENGTH_LONG).show()
+            if (::bridge.isInitialized) {
+                bridge.notifyCameraStatus("permission_required", "Camera permission required")
+            }
         } else {
+            if (!mic) {
+                Toast.makeText(this, "Microphone permission denied. Capturing video without audio.", Toast.LENGTH_LONG).show()
+                cameraCaptureManager.setAudioEnabled(false)
+            } else {
+                cameraCaptureManager.setAudioEnabled(true)
+            }
             initCameraLifecycle()
         }
     }
 
-    private fun initCameraLifecycle() {
+    fun initCameraLifecycle() {
+        if (::bridge.isInitialized) {
+            bridge.notifyCameraStatus("initializing", null)
+        }
         previewView.post {
             try {
                 cameraCaptureManager.initializeCamera(
                     lifecycleOwner = this@MainActivity,
-                    previewView = previewView
-                ) {
-                    android.util.Log.i("MainActivity", "CameraX 1080p VideoCapture + Preview bound successfully.")
-                }
+                    previewView = previewView,
+                    onReady = {
+                        android.util.Log.i("MainActivity", "CameraX 1080p VideoCapture + Preview bound successfully.")
+                        if (::bridge.isInitialized) {
+                            bridge.notifyCameraStatus("ready", null)
+                        }
+                    },
+                    onError = { err ->
+                        android.util.Log.e("MainActivity", "Error binding camera lifecycle: $err")
+                        if (::bridge.isInitialized) {
+                            bridge.notifyCameraStatus("error", err)
+                        }
+                        Toast.makeText(this@MainActivity, "Camera error: $err", Toast.LENGTH_LONG).show()
+                    }
+                )
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Error binding camera lifecycle: ${e.message}", e)
+                if (::bridge.isInitialized) {
+                    bridge.notifyCameraStatus("error", e.message)
+                }
                 Toast.makeText(this@MainActivity, "Camera error: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
@@ -99,7 +126,7 @@ class MainActivity : ComponentActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
             implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-            scaleType = PreviewView.ScaleType.FIT_CENTER
+            scaleType = PreviewView.ScaleType.FILL_CENTER
         }
 
         // Set up WebViewAssetLoader to safely serve assets over http://appassets.androidplatform.net
@@ -166,7 +193,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // Attach native bridge
-        val bridge = DispatchNativeBridge(
+        bridge = DispatchNativeBridge(
             activity = this,
             webView = webView,
             segmenterEngine = segmenterEngine,
@@ -209,12 +236,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAndRequestPermissions() {
-        val allGranted = permissionsToRequest.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-        if (!allGranted) {
+        val camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+        if (!camGranted) {
+            if (::bridge.isInitialized) {
+                bridge.notifyCameraStatus("permission_required", "Camera permission required")
+            }
             permissionLauncher.launch(permissionsToRequest)
         } else {
+            if (!micGranted) {
+                cameraCaptureManager.setAudioEnabled(false)
+            }
             initCameraLifecycle()
         }
     }

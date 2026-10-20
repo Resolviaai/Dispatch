@@ -44,8 +44,41 @@ export interface ZoomInfo {
   currentZoom: number;
 }
 
+export interface CameraStateEvent {
+  status: 'initializing' | 'ready' | 'permission_required' | 'error';
+  error?: string | null;
+  lensFacing: 'back' | 'front';
+  isRecording: boolean;
+  isTorchEnabled: boolean;
+  isAeAfLocked: boolean;
+  isAudioEnabled: boolean;
+  exposure: ExposureInfo;
+  zoom: ZoomInfo;
+}
+
+export interface FocusResultEvent {
+  triggerId: number;
+  success: boolean;
+  isLocked: boolean;
+  hasAf?: boolean;
+  hasAe?: boolean;
+  normX?: number;
+  normY?: number;
+  error?: string;
+}
+
+export interface ExposureResultEvent {
+  success: boolean;
+  index: number;
+  ev: number;
+  error?: string;
+}
+
+export type CameraEventListener = (event: { type: string; data: any }) => void;
+
 declare global {
   interface Window {
+    onDispatchCameraEvent?: (type: string, data: any) => void;
     DispatchBridge?: {
       startRecording: () => void;
       stopRecording: () => void;
@@ -55,11 +88,13 @@ declare global {
       toggleMic: () => boolean;
       setZoom: (ratio: number) => number;
       getZoomInfo?: () => string;
-      focusOnPoint?: (normX: number, normY: number) => void;
-      lockAeAfAtPoint?: (normX: number, normY: number) => boolean;
+      focusOnPoint?: (normX: number, normY: number, triggerId?: number) => void;
+      lockAeAfAtPoint?: (normX: number, normY: number, triggerId?: number) => boolean;
       unlockAeAf?: () => void;
       setExposureIndex?: (index: number) => number;
       getExposureInfo?: () => string;
+      getCameraStatus?: () => string;
+      retryCameraInit?: () => void;
       getRecordings: () => string;
       getYouTubeStatus: () => string;
       connectYouTube: (pcHost: string, pairingCode: string) => string;
@@ -74,6 +109,32 @@ declare global {
       getAuthToken?: () => string;
     };
   }
+}
+
+const cameraListeners: Set<CameraEventListener> = new Set();
+
+if (typeof window !== 'undefined') {
+  window.onDispatchCameraEvent = (type: string, data: any) => {
+    cameraListeners.forEach(listener => {
+      try {
+        listener({ type, data });
+      } catch (e) {
+        console.error('Camera listener error:', e);
+      }
+    });
+  };
+
+  window.addEventListener('dispatch-camera-event', ((e: CustomEvent) => {
+    if (e.detail) {
+      cameraListeners.forEach(listener => {
+        try {
+          listener(e.detail);
+        } catch (err) {
+          console.error('Camera listener error:', err);
+        }
+      });
+    }
+  }) as EventListener);
 }
 
 export const Bridge = {
@@ -148,19 +209,38 @@ export const Bridge = {
     return { minZoom: 1.0, maxZoom: 5.0, currentZoom: 1.0 };
   },
 
-  focusOnPoint(normX: number, normY: number): void {
+  onCameraEvent(listener: CameraEventListener): () => void {
+    cameraListeners.add(listener);
+    return () => {
+      cameraListeners.delete(listener);
+    };
+  },
+
+  focusOnPoint(normX: number, normY: number, triggerId = Date.now()): void {
     if (window.DispatchBridge?.focusOnPoint) {
-      window.DispatchBridge.focusOnPoint(normX, normY);
+      window.DispatchBridge.focusOnPoint(normX, normY, triggerId);
     } else {
       console.log('[Mock Bridge] focusOnPoint', normX, normY);
+      setTimeout(() => {
+        cameraListeners.forEach(l => l({
+          type: 'focus_result',
+          data: { triggerId, success: true, isLocked: false, hasAf: true, hasAe: true, normX, normY }
+        }));
+      }, 300);
     }
   },
 
-  lockAeAfAtPoint(normX: number, normY: number): boolean {
+  lockAeAfAtPoint(normX: number, normY: number, triggerId = Date.now()): boolean {
     if (window.DispatchBridge?.lockAeAfAtPoint) {
-      return window.DispatchBridge.lockAeAfAtPoint(normX, normY);
+      return window.DispatchBridge.lockAeAfAtPoint(normX, normY, triggerId) ?? true;
     }
     console.log('[Mock Bridge] lockAeAfAtPoint', normX, normY);
+    setTimeout(() => {
+      cameraListeners.forEach(l => l({
+        type: 'focus_result',
+        data: { triggerId, success: true, isLocked: true, hasAf: true, hasAe: true, normX, normY }
+      }));
+    }, 350);
     return true;
   },
 
@@ -169,7 +249,30 @@ export const Bridge = {
       window.DispatchBridge.unlockAeAf();
     } else {
       console.log('[Mock Bridge] unlockAeAf');
+      setTimeout(() => {
+        cameraListeners.forEach(l => l({
+          type: 'unlock_result',
+          data: { success: true }
+        }));
+      }, 100);
     }
+  },
+
+  retryCameraInit(): void {
+    if (window.DispatchBridge?.retryCameraInit) {
+      window.DispatchBridge.retryCameraInit();
+    } else {
+      console.log('[Mock Bridge] retryCameraInit');
+    }
+  },
+
+  getCameraStatus(): CameraStateEvent | null {
+    if (window.DispatchBridge?.getCameraStatus) {
+      try {
+        return JSON.parse(window.DispatchBridge.getCameraStatus());
+      } catch {}
+    }
+    return null;
   },
 
   setExposureIndex(index: number): number {

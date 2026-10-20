@@ -115,8 +115,10 @@ class DispatchNativeBridge(
             activity.lifecycleScope.launch {
                 try {
                     cameraCaptureManager.toggleLensFacing()
+                    notifyCameraStatus("ready", null)
                 } catch (e: Exception) {
                     android.util.Log.w("DispatchBridge", "switchCamera failed: ${e.message}")
+                    notifyCameraStatus("error", e.message)
                 }
             }
         }
@@ -161,49 +163,200 @@ class DispatchNativeBridge(
         return obj.toString()
     }
 
-    @JavascriptInterface
-    fun focusOnPoint(normalizedX: Float, normalizedY: Float) {
+    fun sendCameraEvent(eventType: String, data: JsonObject) {
         activity.runOnUiThread {
-            val pv = cameraCaptureManager.activePreviewView ?: return@runOnUiThread
-            val w = pv.width.toFloat()
-            val h = pv.height.toFloat()
-            if (w > 0 && h > 0) {
-                val px = normalizedX.coerceIn(0f, 1f) * w
-                val py = normalizedY.coerceIn(0f, 1f) * h
-                cameraCaptureManager.focusOnPoint(px, py, pv)
+            val payload = data.toString()
+            val js = "(function() { if (window.onDispatchCameraEvent) { window.onDispatchCameraEvent('$eventType', $payload); } else { window.dispatchEvent(new CustomEvent('dispatch-camera-event', { detail: { type: '$eventType', data: $payload } })); } })();"
+            webView.evaluateJavascript(js, null)
+        }
+    }
+
+    fun notifyCameraStatus(status: String, error: String? = null) {
+        val obj = JsonObject().apply {
+            addProperty("status", status)
+            if (error != null) addProperty("error", error)
+            addProperty("lensFacing", if (cameraCaptureManager.currentLensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back")
+            addProperty("isRecording", cameraCaptureManager.isRecording)
+            addProperty("isTorchEnabled", cameraCaptureManager.isTorchEnabled)
+            addProperty("isAeAfLocked", cameraCaptureManager.isAeAfLocked)
+            addProperty("isAudioEnabled", cameraCaptureManager.isAudioEnabled)
+
+            val exp = cameraCaptureManager.getExposureInfo()
+            add("exposure", JsonObject().apply {
+                addProperty("minIndex", exp.minIndex)
+                addProperty("maxIndex", exp.maxIndex)
+                addProperty("currentIndex", exp.currentIndex)
+                addProperty("stepEv", exp.stepEv)
+                addProperty("isSupported", exp.isSupported)
+            })
+
+            val zoom = cameraCaptureManager.getZoomInfo()
+            add("zoom", JsonObject().apply {
+                addProperty("minZoom", zoom.minZoomRatio)
+                addProperty("maxZoom", zoom.maxZoomRatio)
+                addProperty("currentZoom", zoom.currentZoomRatio)
+            })
+        }
+        sendCameraEvent("camera_state", obj)
+    }
+
+    @JavascriptInterface
+    fun retryCameraInit() {
+        activity.runOnUiThread {
+            if (activity is com.resolvia.dispatch.MainActivity) {
+                activity.initCameraLifecycle()
             }
         }
     }
 
     @JavascriptInterface
-    fun lockAeAfAtPoint(normalizedX: Float, normalizedY: Float): Boolean {
-        return try {
-            activity.runOnUiThread {
-                val pv = cameraCaptureManager.activePreviewView ?: return@runOnUiThread
-                val w = pv.width.toFloat()
-                val h = pv.height.toFloat()
-                if (w > 0 && h > 0) {
-                    val px = normalizedX.coerceIn(0f, 1f) * w
-                    val py = normalizedY.coerceIn(0f, 1f) * h
-                    cameraCaptureManager.lockAeAfAtPoint(px, py, pv)
-                }
-            }
-            true
-        } catch (e: Exception) {
-            false
+    fun getCameraStatus(): String {
+        val exp = cameraCaptureManager.getExposureInfo()
+        val zoom = cameraCaptureManager.getZoomInfo()
+        val obj = JsonObject().apply {
+            addProperty("status", if (cameraCaptureManager.isInitialized) "ready" else "initializing")
+            addProperty("isInitialized", cameraCaptureManager.isInitialized)
+            addProperty("lensFacing", if (cameraCaptureManager.currentLensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back")
+            addProperty("isRecording", cameraCaptureManager.isRecording)
+            addProperty("isTorchEnabled", cameraCaptureManager.isTorchEnabled)
+            addProperty("isAeAfLocked", cameraCaptureManager.isAeAfLocked)
+            addProperty("isAudioEnabled", cameraCaptureManager.isAudioEnabled)
+            add("exposure", JsonObject().apply {
+                addProperty("minIndex", exp.minIndex)
+                addProperty("maxIndex", exp.maxIndex)
+                addProperty("currentIndex", exp.currentIndex)
+                addProperty("stepEv", exp.stepEv)
+                addProperty("isSupported", exp.isSupported)
+            })
+            add("zoom", JsonObject().apply {
+                addProperty("minZoom", zoom.minZoomRatio)
+                addProperty("maxZoom", zoom.maxZoomRatio)
+                addProperty("currentZoom", zoom.currentZoomRatio)
+            })
         }
+        return obj.toString()
+    }
+
+    @JavascriptInterface
+    fun focusOnPoint(normalizedX: Float, normalizedY: Float, triggerId: Long) {
+        activity.runOnUiThread {
+            val pv = cameraCaptureManager.activePreviewView ?: run {
+                sendCameraEvent("focus_result", JsonObject().apply {
+                    addProperty("triggerId", triggerId)
+                    addProperty("success", false)
+                    addProperty("isLocked", false)
+                    addProperty("error", "Preview not available")
+                })
+                return@runOnUiThread
+            }
+            val w = pv.width.toFloat()
+            val h = pv.height.toFloat()
+            if (w <= 0 || h <= 0) {
+                sendCameraEvent("focus_result", JsonObject().apply {
+                    addProperty("triggerId", triggerId)
+                    addProperty("success", false)
+                    addProperty("isLocked", false)
+                    addProperty("error", "Preview dimensions not ready")
+                })
+                return@runOnUiThread
+            }
+
+            val px = normalizedX.coerceIn(0f, 1f) * w
+            val py = normalizedY.coerceIn(0f, 1f) * h
+            cameraCaptureManager.focusOnPoint(px, py, pv) { res ->
+                sendCameraEvent("focus_result", JsonObject().apply {
+                    addProperty("triggerId", triggerId)
+                    addProperty("success", res.success)
+                    addProperty("isLocked", false)
+                    addProperty("hasAf", res.hasAf)
+                    addProperty("hasAe", res.hasAe)
+                    if (res.error != null) addProperty("error", res.error)
+                })
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun focusOnPoint(normalizedX: Float, normalizedY: Float) {
+        focusOnPoint(normalizedX, normalizedY, System.currentTimeMillis())
+    }
+
+    @JavascriptInterface
+    fun lockAeAfAtPoint(normalizedX: Float, normalizedY: Float, triggerId: Long): Boolean {
+        activity.runOnUiThread {
+            val pv = cameraCaptureManager.activePreviewView ?: run {
+                sendCameraEvent("focus_result", JsonObject().apply {
+                    addProperty("triggerId", triggerId)
+                    addProperty("success", false)
+                    addProperty("isLocked", false)
+                    addProperty("error", "Preview not available")
+                })
+                return@runOnUiThread
+            }
+            val w = pv.width.toFloat()
+            val h = pv.height.toFloat()
+            if (w <= 0 || h <= 0) {
+                sendCameraEvent("focus_result", JsonObject().apply {
+                    addProperty("triggerId", triggerId)
+                    addProperty("success", false)
+                    addProperty("isLocked", false)
+                    addProperty("error", "Preview dimensions not ready")
+                })
+                return@runOnUiThread
+            }
+
+            val px = normalizedX.coerceIn(0f, 1f) * w
+            val py = normalizedY.coerceIn(0f, 1f) * h
+            cameraCaptureManager.lockAeAfAtPoint(px, py, pv) { res ->
+                sendCameraEvent("focus_result", JsonObject().apply {
+                    addProperty("triggerId", triggerId)
+                    addProperty("success", res.success)
+                    addProperty("isLocked", res.isLocked)
+                    addProperty("hasAf", res.hasAf)
+                    addProperty("hasAe", res.hasAe)
+                    if (res.error != null) addProperty("error", res.error)
+                })
+            }
+        }
+        return true
+    }
+
+    @JavascriptInterface
+    fun lockAeAfAtPoint(normalizedX: Float, normalizedY: Float): Boolean {
+        return lockAeAfAtPoint(normalizedX, normalizedY, System.currentTimeMillis())
     }
 
     @JavascriptInterface
     fun unlockAeAf() {
         activity.runOnUiThread {
-            cameraCaptureManager.unlockAeAf()
+            cameraCaptureManager.unlockAeAf { ok ->
+                sendCameraEvent("unlock_result", JsonObject().apply {
+                    addProperty("success", ok)
+                })
+            }
         }
     }
 
     @JavascriptInterface
     fun setExposureIndex(index: Int): Int {
-        return cameraCaptureManager.setExposureIndex(index)
+        activity.runOnUiThread {
+            cameraCaptureManager.setExposureIndex(index) { applied, err ->
+                if (applied != null) {
+                    val exp = cameraCaptureManager.getExposureInfo()
+                    sendCameraEvent("exposure_result", JsonObject().apply {
+                        addProperty("success", true)
+                        addProperty("index", applied)
+                        addProperty("ev", applied * exp.stepEv)
+                    })
+                } else {
+                    sendCameraEvent("exposure_result", JsonObject().apply {
+                        addProperty("success", false)
+                        if (err != null) addProperty("error", err)
+                    })
+                }
+            }
+        }
+        return index
     }
 
     @JavascriptInterface

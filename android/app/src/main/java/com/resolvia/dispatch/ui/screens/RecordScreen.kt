@@ -726,9 +726,9 @@ fun ActiveCameraViewfinder(
                 isFocusing = true
             )
             isFocusIndicatorVisible = true
-            cameraCaptureManager.focusOnPoint(tapOffset.x, tapOffset.y, pv) { success ->
+            cameraCaptureManager.focusOnPoint(tapOffset.x, tapOffset.y, pv) { res ->
                 if (focusState?.offset == tapOffset) {
-                    focusState = focusState?.copy(isFocusing = false, focusSuccess = success)
+                    focusState = focusState?.copy(isFocusing = false, focusSuccess = res.success)
                 }
             }
         }
@@ -743,9 +743,13 @@ fun ActiveCameraViewfinder(
                 isFocusing = true
             )
             isFocusIndicatorVisible = true
-            cameraCaptureManager.lockAeAfAtPoint(pressOffset.x, pressOffset.y, pv) { success ->
+            cameraCaptureManager.lockAeAfAtPoint(pressOffset.x, pressOffset.y, pv) { res ->
                 if (focusState?.offset == pressOffset) {
-                    focusState = focusState?.copy(isFocusing = false, focusSuccess = success)
+                    focusState = focusState?.copy(
+                        isFocusing = false,
+                        focusSuccess = res.success,
+                        isLocked = res.success
+                    )
                 }
             }
         }
@@ -789,7 +793,7 @@ fun ActiveCameraViewfinder(
             factory = { ctx ->
                 PreviewView(ctx).apply {
                     implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-                    scaleType = PreviewView.ScaleType.FIT_CENTER
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
                     previewViewRef = this
                     cameraCaptureManager.initializeCamera(lifecycleOwner, this, currentLens)
                 }
@@ -879,31 +883,24 @@ fun ActiveCameraViewfinder(
                                 }
                             }
 
-                            // Continuous vertical drag exposure adjustment
-                            // Can drag vertically if indicator is active, directly on slider, or moving vertically
-                            if (expInfo.isSupported) {
-                                val isVerticalMotion = abs(delta.y) > touchSlop && abs(delta.y) > abs(delta.x) * 0.8f
-                                if (isDirectSlider || isDrag || (isIndicatorActive && isVerticalMotion) || (!isIndicatorActive && isVerticalMotion)) {
-                                    if (!isDrag) {
-                                        isDrag = true
-                                        isDraggingExposure = true
-                                        if (!isIndicatorActive) {
-                                            handleTapToFocus(downPos)
-                                        }
-                                    }
-                                    change.consume()
-                                    val dy = change.positionChange().y
-                                    accumulatedDeltaY += dy
-
-                                    // Dragging 160dp vertically spans full EV index range
-                                    val totalDragDistancePx = 160.dp.toPx()
-                                    val range = (expInfo.maxIndex - expInfo.minIndex).toFloat().coerceAtLeast(1f)
-                                    val indexOffset = (-accumulatedDeltaY / totalDragDistancePx) * range
-                                    val targetIndex = (startExposure + indexOffset).roundToInt()
-                                        .coerceIn(expInfo.minIndex, expInfo.maxIndex)
-
-                                    handleExposureAdjust(targetIndex)
+                            // Continuous vertical drag exposure adjustment (ONLY on dedicated slider touch)
+                            if (expInfo.isSupported && (isDirectSlider || isDrag)) {
+                                if (!isDrag) {
+                                    isDrag = true
+                                    isDraggingExposure = true
                                 }
+                                change.consume()
+                                val dy = change.positionChange().y
+                                accumulatedDeltaY += dy
+
+                                // Dragging 160dp vertically spans full EV index range
+                                val totalDragDistancePx = 160.dp.toPx()
+                                val range = (expInfo.maxIndex - expInfo.minIndex).toFloat().coerceAtLeast(1f)
+                                val indexOffset = (-accumulatedDeltaY / totalDragDistancePx) * range
+                                val targetIndex = (startExposure + indexOffset).roundToInt()
+                                    .coerceIn(expInfo.minIndex, expInfo.maxIndex)
+
+                                handleExposureAdjust(targetIndex)
                             }
                         }
                     }

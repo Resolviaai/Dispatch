@@ -8,6 +8,7 @@ async function run() {
   try {
     await server.ssrLoadModule('../test_apply_to_all.ts');
     await server.ssrLoadModule('../test_text_caption_separation.ts');
+    await server.ssrLoadModule('./test_camera_interactions.js');
   } catch (err) {
     console.error('Test execution failed:', err);
     process.exit(1);

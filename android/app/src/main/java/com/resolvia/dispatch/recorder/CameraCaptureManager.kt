@@ -126,6 +126,15 @@ class CameraCaptureManager(private val context: Context) {
         return isAudioEnabled
     }
 
+    fun setAudioEnabled(enabled: Boolean) {
+        isAudioEnabled = enabled
+        try {
+            activeRecording?.mute(!isAudioEnabled)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update audio mute state: ${e.message}")
+        }
+    }
+
     var activeLifecycleOwner: LifecycleOwner? = null
         private set
 
@@ -151,18 +160,19 @@ class CameraCaptureManager(private val context: Context) {
     }
 
     /**
-     * Builds a Universal QualitySelector compatible with all Android sensors (Back & Front, Pixel, Samsung, Poco, etc.)
-     * Ordered UHD -> FHD -> HD -> SD so it automatically picks maximum hardware quality without fallback crashes.
+     * Builds a QualitySelector prioritizing 1080p FHD video capture to match the 1080p preview and UI claims.
+     * Ordered FHD -> HD -> SD so it automatically picks high-definition quality without framing crop mismatches.
      */
     private fun createQualitySelector(): QualitySelector {
         return QualitySelector.fromOrderedList(
-            listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD),
+            listOf(Quality.FHD, Quality.HD, Quality.SD),
             FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
         )
     }
 
     /**
-     * Applies Camera2 hardware extensions for continuous video autofocus, auto-exposure, and stabilization.
+     * Applies Camera2 hardware extensions for continuous video autofocus and auto-exposure.
+     * Uses FAST / device default processing for smooth live preview without latency or color shifting.
      */
     @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     private fun applyCamera2Optimizations(previewBuilder: Preview.Builder, lensFacing: Int = currentLensFacing) {
@@ -173,22 +183,20 @@ class CameraCaptureManager(private val context: Context) {
             extender.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
             extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
 
-            // Sharpness & Native Camera Noise Reduction algorithms
-            extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-            extender.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-            extender.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
-            extender.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)
+            // Fast preview processing to maintain stable 30fps without thermal throttling or color shift
+            extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+            extender.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
 
-            // Hardware autofocus & physical lens optical stabilization (no digital EIS cropping)
+            // Hardware continuous autofocus for video if supported
             if (lensFacing == CameraSelector.LENS_FACING_BACK) {
                 extender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                extender.setCaptureRequestOption(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-                extender.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Camera2Interop options not supported on this device: ${e.message}")
         }
     }
+
+    private var isBindingCamera = false
 
     /**
      * Binds CameraX Preview and VideoCapture to the given LifecycleOwner and PreviewView.
@@ -197,11 +205,19 @@ class CameraCaptureManager(private val context: Context) {
         lifecycleOwner: LifecycleOwner,
         previewView: PreviewView,
         lensFacing: Int = currentLensFacing,
-        onReady: (() -> Unit)? = null
+        onReady: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
     ) {
         activeLifecycleOwner = lifecycleOwner
         activePreviewView = previewView
         currentLensFacing = lensFacing
+
+        if (isBindingCamera) {
+            Log.w(TAG, "Camera binding already in progress, ignoring duplicate trigger.")
+            return
+        }
+        isBindingCamera = true
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
@@ -227,24 +243,34 @@ class CameraCaptureManager(private val context: Context) {
                     .build()
 
                 cameraProvider.unbindAll()
-                camera = cameraProvider.bindToLifecycle(
+                val boundCamera = cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
                     preview,
                     videoCapture
                 )
+                camera = boundCamera
 
                 // Restore previous state if applicable
-                camera?.cameraControl?.setZoomRatio(currentZoomRatio)
+                boundCamera.cameraControl.setZoomRatio(currentZoomRatio)
                 if (currentExposureIndex != 0) {
-                    camera?.cameraControl?.setExposureCompensationIndex(currentExposureIndex)
+                    val exp = boundCamera.cameraInfo.exposureState
+                    if (exp.isExposureCompensationSupported) {
+                        boundCamera.cameraControl.setExposureCompensationIndex(currentExposureIndex)
+                    } else {
+                        currentExposureIndex = 0
+                    }
                 }
 
-                Log.i(TAG, "CameraX High-Resolution 16:9 VideoCapture bound successfully (Lens: $currentLensFacing).")
+                isBindingCamera = false
+                Log.i(TAG, "CameraX High-Resolution 1080p VideoCapture bound successfully (Lens: $currentLensFacing).")
                 onReady?.invoke()
 
             } catch (exc: Exception) {
-                Log.e(TAG, "Failed to bind CameraX lifecycle: ${exc.message}", exc)
+                isBindingCamera = false
+                val msg = exc.message ?: "Camera binding failed"
+                Log.e(TAG, "Failed to bind CameraX lifecycle: $msg", exc)
+                onError?.invoke(msg)
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -429,6 +455,14 @@ class CameraCaptureManager(private val context: Context) {
 
     private var lastMeteringPoint: MeteringPoint? = null
 
+    data class FocusResult(
+        val success: Boolean,
+        val isLocked: Boolean,
+        val hasAf: Boolean,
+        val hasAe: Boolean,
+        val error: String? = null
+    )
+
     /**
      * Focuses and meters on the tapped (x, y) coordinate on PreviewView.
      */
@@ -436,28 +470,49 @@ class CameraCaptureManager(private val context: Context) {
         x: Float,
         y: Float,
         previewView: PreviewView,
-        onComplete: ((Boolean) -> Unit)? = null
+        onComplete: ((FocusResult) -> Unit)? = null
     ) {
-        val cam = camera ?: return
+        val cam = camera
+        if (cam == null) {
+            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Camera not initialized"))
+            return
+        }
         try {
             isAeAfLocked = false
             val point = previewView.meteringPointFactory.createPoint(x, y)
             lastMeteringPoint = point
-            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+
+            val info = cam.cameraInfo
+            val canAf = try {
+                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build())
+            } catch (_: Exception) { false }
+            val canAe = try {
+                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AE).build())
+            } catch (_: Exception) { false }
+
+            val flags = (if (canAf) FocusMeteringAction.FLAG_AF else 0) or (if (canAe) FocusMeteringAction.FLAG_AE else 0)
+            if (flags == 0) {
+                onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Focus/metering not supported on this camera"))
+                return
+            }
+
+            val action = FocusMeteringAction.Builder(point, flags)
                 .setAutoCancelDuration(3, TimeUnit.SECONDS)
                 .build()
+
             val future = cam.cameraControl.startFocusAndMetering(action)
             future.addListener({
                 try {
                     val result = future.get()
-                    onComplete?.invoke(result.isFocusSuccessful)
-                } catch (_: Exception) {
-                    onComplete?.invoke(false)
+                    onComplete?.invoke(FocusResult(success = result.isFocusSuccessful, isLocked = false, hasAf = canAf, hasAe = canAe))
+                } catch (e: Exception) {
+                    onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = canAf, hasAe = canAe, error = e.message))
                 }
             }, ContextCompat.getMainExecutor(context))
-            Log.i(TAG, "Focus dispatched at ($x, $y).")
+            Log.i(TAG, "Focus dispatched at ($x, $y) with flags=$flags.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to dispatch focus: ${e.message}")
+            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = e.message))
         }
     }
 
@@ -477,52 +532,82 @@ class CameraCaptureManager(private val context: Context) {
 
     /**
      * Locks Auto Exposure & Auto Focus (AE/AF Lock) permanently at the specified (x, y) coordinate.
+     * Accurately updates isAeAfLocked and reports completion ONLY after the hardware future succeeds.
      */
     fun lockAeAfAtPoint(
         x: Float,
         y: Float,
         previewView: PreviewView,
-        onComplete: ((Boolean) -> Unit)? = null
-    ): Boolean {
-        val cam = camera ?: return false
-        return try {
+        onComplete: ((FocusResult) -> Unit)? = null
+    ) {
+        val cam = camera
+        if (cam == null) {
+            isAeAfLocked = false
+            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Camera not initialized"))
+            return
+        }
+        try {
             val point = previewView.meteringPointFactory.createPoint(x, y)
             lastMeteringPoint = point
-            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+
+            val info = cam.cameraInfo
+            val canAf = try {
+                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build())
+            } catch (_: Exception) { false }
+            val canAe = try {
+                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AE).build())
+            } catch (_: Exception) { false }
+
+            val flags = (if (canAf) FocusMeteringAction.FLAG_AF else 0) or (if (canAe) FocusMeteringAction.FLAG_AE else 0)
+            if (flags == 0) {
+                isAeAfLocked = false
+                onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "AE/AF lock not supported on this lens"))
+                return
+            }
+
+            val action = FocusMeteringAction.Builder(point, flags)
                 .disableAutoCancel()
                 .build()
-            isAeAfLocked = true
+
             val future = cam.cameraControl.startFocusAndMetering(action)
             future.addListener({
                 try {
                     val result = future.get()
-                    onComplete?.invoke(result.isFocusSuccessful)
-                } catch (_: Exception) {
-                    onComplete?.invoke(false)
+                    val isSuccess = result.isFocusSuccessful
+                    isAeAfLocked = isSuccess
+                    onComplete?.invoke(FocusResult(success = isSuccess, isLocked = isSuccess, hasAf = canAf, hasAe = canAe))
+                    Log.i(TAG, "AE/AF lock completed: success=$isSuccess at ($x, $y).")
+                } catch (e: Exception) {
+                    isAeAfLocked = false
+                    onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = canAf, hasAe = canAe, error = e.message))
                 }
             }, ContextCompat.getMainExecutor(context))
-            Log.i(TAG, "AE/AF permanently locked at ($x, $y).")
-            true
         } catch (e: Exception) {
+            isAeAfLocked = false
             Log.e(TAG, "Failed to lock AE/AF: ${e.message}")
-            false
+            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = e.message))
         }
     }
 
     /**
      * Unlocks Auto Exposure & Auto Focus, returning to continuous auto-metering.
      */
-    fun unlockAeAf() {
-        val cam = camera ?: return
-        if (isAeAfLocked) {
-            isAeAfLocked = false
+    fun unlockAeAf(onComplete: ((Boolean) -> Unit)? = null) {
+        val cam = camera
+        isAeAfLocked = false
+        if (cam != null) {
             try {
-                cam.cameraControl.cancelFocusAndMetering()
-                Log.i(TAG, "AE/AF unlocked and cancelled.")
+                val future = cam.cameraControl.cancelFocusAndMetering()
+                future.addListener({
+                    onComplete?.invoke(true)
+                }, ContextCompat.getMainExecutor(context))
+                Log.i(TAG, "AE/AF unlocked and returned to continuous auto.")
+                return
             } catch (e: Exception) {
-                Log.w(TAG, "Error cancelling focus/metering: ${e.message}")
+                Log.w(TAG, "Failed to cancel focus/metering: ${e.message}")
             }
         }
+        onComplete?.invoke(false)
     }
 
     /**
@@ -629,21 +714,26 @@ class CameraCaptureManager(private val context: Context) {
     )
 
     fun getExposureInfo(): ExposureCompensationInfo {
-        val cam = camera ?: return ExposureCompensationInfo(-4, 4, currentExposureIndex, 0.5f, true)
+        val cam = camera ?: return ExposureCompensationInfo(
+            minIndex = 0,
+            maxIndex = 0,
+            currentIndex = 0,
+            stepEv = 0f,
+            isSupported = false
+        )
         val state = cam.cameraInfo.exposureState
+        val isSupported = state.isExposureCompensationSupported
         val range = state.exposureCompensationRange
         val step = if (state.exposureCompensationStep.denominator > 0) {
             state.exposureCompensationStep.numerator.toFloat() / state.exposureCompensationStep.denominator.toFloat()
         } else {
-            0.5f
+            0f
         }
-        val supported = (range.lower < range.upper) || state.isExposureCompensationSupported
-        val minIdx = if (range.lower < range.upper) range.lower else -4
-        val maxIdx = if (range.lower < range.upper) range.upper else 4
+        val supported = isSupported && (range.lower < range.upper)
         return ExposureCompensationInfo(
-            minIndex = minIdx,
-            maxIndex = maxIdx,
-            currentIndex = currentExposureIndex.coerceIn(minIdx, maxIdx),
+            minIndex = range.lower,
+            maxIndex = range.upper,
+            currentIndex = state.exposureCompensationIndex,
             stepEv = step,
             isSupported = supported
         )
@@ -651,7 +741,47 @@ class CameraCaptureManager(private val context: Context) {
 
     /**
      * Sets exposure compensation bias index cleanly clamped to hardware capabilities.
+     * Reports actual result through asynchronous callback.
      */
+    fun setExposureIndex(index: Int, onComplete: ((Int?, String?) -> Unit)? = null): Int {
+        val cam = camera ?: run {
+            onComplete?.invoke(null, "Camera not initialized")
+            return currentExposureIndex
+        }
+        val state = cam.cameraInfo.exposureState
+        if (!state.isExposureCompensationSupported) {
+            onComplete?.invoke(null, "Exposure compensation not supported")
+            return currentExposureIndex
+        }
+        val range = state.exposureCompensationRange
+        val targetIndex = index.coerceIn(range.lower, range.upper)
+        try {
+            val future = cam.cameraControl.setExposureCompensationIndex(targetIndex)
+            future.addListener({
+                try {
+                    val applied = future.get()
+                    currentExposureIndex = applied
+                    onComplete?.invoke(applied, null)
+                    Log.i(TAG, "Exposure compensation applied: index=$applied")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Exposure compensation future failed: ${e.message}")
+                    onComplete?.invoke(null, e.message)
+                }
+            }, ContextCompat.getMainExecutor(context))
+            return targetIndex
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to dispatch exposure compensation: ${e.message}")
+            onComplete?.invoke(null, e.message)
+            return currentExposureIndex
+        }
+    }
+
+    /**
+     * Resets exposure compensation back to default (0).
+     */
+    fun resetExposure(onComplete: ((Int?, String?) -> Unit)? = null): Int {
+        return setExposureIndex(0, onComplete)
+    }
     fun setExposureIndex(index: Int): Int {
         val cam = camera ?: run {
             currentExposureIndex = index
