@@ -1,22 +1,26 @@
 """tests/test_thumbnail_freshness.py
 Comprehensive test suite verifying Dispatch video thumbnail freshness,
-automatic regeneration, atomic generation, cache invalidation, and HTTP headers.
+automatic regeneration, atomic generation, cache invalidation, sub-second
+fingerprinting, concurrency serialization, and HTTP headers.
 """
+import concurrent.futures
 import os
-import time
 import subprocess
+import time
 import unittest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dispatch.config import CLIPS_DIR, STORAGE_DIR
+from dispatch.config import CLIPS_DIR
 from dispatch import db
 from dispatch.video_engine.thumbnail import (
     is_thumbnail_stale,
     generate_thumbnail_from_video,
     ensure_clip_thumbnail,
+    get_file_fingerprint,
     get_thumbnail_version,
+    get_thumbnail_version_token,
     populate_clip_media_urls,
 )
 from dispatch.web.app import app
@@ -28,8 +32,10 @@ class TestThumbnailFreshness(unittest.TestCase):
         db.init_db()
         CLIPS_DIR.mkdir(parents=True, exist_ok=True)
         cls.test_video_path = CLIPS_DIR / "test_thumb_source.mp4"
-        # Generate a lightweight 2-second color video via ffmpeg for deterministic testing
-        cmd = [
+        cls.test_video_alt_path = CLIPS_DIR / "test_thumb_source_alt.mp4"
+
+        # Generate lightweight 2-second color videos via ffmpeg for deterministic testing
+        cmd1 = [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", "color=c=navy:s=320x240:d=2",
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
@@ -38,17 +44,29 @@ class TestThumbnailFreshness(unittest.TestCase):
             "-pix_fmt", "yuv420p",
             str(cls.test_video_path)
         ]
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if res.returncode != 0 or not cls.test_video_path.exists():
+        res1 = subprocess.run(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res1.returncode != 0 or not cls.test_video_path.exists():
             raise RuntimeError("Failed to generate test video fixture with ffmpeg")
+
+        cmd2 = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=c=crimson:s=320x240:d=2",
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-c:v", "libx264", "-t", "2",
+            "-c:a", "aac", "-shortest",
+            "-pix_fmt", "yuv420p",
+            str(cls.test_video_alt_path)
+        ]
+        subprocess.run(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     @classmethod
     def tearDownClass(cls):
-        if cls.test_video_path.exists():
-            try:
-                cls.test_video_path.unlink()
-            except Exception:
-                pass
+        for p in (cls.test_video_path, cls.test_video_alt_path):
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
 
     def test_01_is_thumbnail_stale_logic(self):
         """Test timestamp-based staleness logic across file existence and mtimes."""
@@ -81,20 +99,25 @@ class TestThumbnailFreshness(unittest.TestCase):
     def test_02_atomic_generation_and_no_leftover_temps(self):
         """Test that FFmpeg extracts frame atomically and leaves no temporary files."""
         out_thumb = CLIPS_DIR / "test_atomic_thumb.jpg"
-        if out_thumb.exists():
-            out_thumb.unlink()
+        meta_thumb = CLIPS_DIR / "test_atomic_thumb.jpg.meta"
+        for p in (out_thumb, meta_thumb):
+            if p.exists():
+                p.unlink()
 
         success = generate_thumbnail_from_video(self.test_video_path, out_thumb, timestamp_sec=0.5)
         self.assertTrue(success)
         self.assertTrue(out_thumb.exists())
         self.assertGreater(out_thumb.stat().st_size, 100)
+        self.assertTrue(meta_thumb.exists(), "Sidecar metadata must be created atomically alongside thumbnail")
 
-        # Verify no .tmp_*.jpg files remain in CLIPS_DIR
-        temp_files = list(CLIPS_DIR.glob(".tmp_*.jpg"))
+        # Verify no .tmp_* files remain in CLIPS_DIR
+        temp_files = list(CLIPS_DIR.glob(".tmp_*test_atomic_thumb*"))
         self.assertEqual(len(temp_files), 0, "No temporary thumbnail files should remain after generation")
 
         # Clean up
         out_thumb.unlink()
+        if meta_thumb.exists():
+            meta_thumb.unlink()
 
     def test_03_video_replacement_triggers_thumbnail_regeneration(self):
         """When a video is updated/replaced with same clip ID, ensure_clip_thumbnail regenerates it."""
@@ -112,6 +135,7 @@ class TestThumbnailFreshness(unittest.TestCase):
         )
         clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
         clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
 
         # Copy test video to clip_vid
         clip_vid.write_bytes(self.test_video_path.read_bytes())
@@ -144,6 +168,8 @@ class TestThumbnailFreshness(unittest.TestCase):
         # Clean up
         clip_vid.unlink()
         clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
 
     def test_04_unchanged_video_skips_unnecessary_regeneration(self):
         """Unchanged videos must preserve their cached thumbnail without re-invoking FFmpeg."""
@@ -161,6 +187,7 @@ class TestThumbnailFreshness(unittest.TestCase):
         )
         clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
         clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
 
         clip_vid.write_bytes(self.test_video_path.read_bytes())
         db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
@@ -178,9 +205,11 @@ class TestThumbnailFreshness(unittest.TestCase):
         # Clean up
         clip_vid.unlink()
         clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
 
     def test_05_populate_clip_media_urls_version_query_strings(self):
-        """populate_clip_media_urls must inject ?v={mtime} into URLs for cache invalidation."""
+        """populate_clip_media_urls must inject robust ?v={token} into URLs for cache invalidation."""
         clip_id = db.save_clip(
             session_id=None,
             chunk_id=None,
@@ -195,6 +224,7 @@ class TestThumbnailFreshness(unittest.TestCase):
         )
         clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
         clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
 
         clip_vid.write_bytes(self.test_video_path.read_bytes())
         db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
@@ -206,17 +236,20 @@ class TestThumbnailFreshness(unittest.TestCase):
         self.assertIn("video_url", populated)
         self.assertIn("source_video_url", populated)
 
-        # Check that ?v= query parameter is present with integer timestamp
-        self.assertRegex(populated["thumbnail_url"], r"^/clips/.*\.jpg\?v=\d+$")
+        # Check that robust version token is present
+        self.assertRegex(populated["thumbnail_url"], r"^/clips/.*\.jpg\?v=[\w\d_-]+$")
         self.assertRegex(populated["video_url"], r"^/clips/.*\.mp4\?v=\d+$")
 
-        # Version matches file mtime
-        thumb_v = int(clip_thumb.stat().st_mtime)
-        self.assertEqual(populated["thumbnail_url"], f"/clips/{clip_thumb.name}?v={thumb_v}")
+        # Version matches deterministic version token
+        expected_token = get_thumbnail_version_token(clip_thumb)
+        self.assertEqual(populated["thumbnail_url"], f"/clips/{clip_thumb.name}?v={expected_token}")
+        self.assertEqual(populated["thumbnail_version"], expected_token)
 
         # Clean up
         clip_vid.unlink()
         clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
 
     def test_06_http_cache_headers_and_conditional_revalidation(self):
         """Verify RFC 9111 HTTP cache headers: max-age on versioned, no-cache on unversioned, and 304."""
@@ -234,18 +267,19 @@ class TestThumbnailFreshness(unittest.TestCase):
         )
         clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
         clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
 
         clip_vid.write_bytes(self.test_video_path.read_bytes())
         db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
 
         ensure_clip_thumbnail(clip_id)
         self.assertTrue(clip_thumb.exists())
-        thumb_mtime = int(clip_thumb.stat().st_mtime)
+        thumb_v = get_thumbnail_version_token(clip_thumb)
 
         client = TestClient(app)
 
         # 1. Versioned request (?v=...) -> public, max-age=86400
-        res_v = client.get(f"/clips/{clip_thumb.name}?v={thumb_mtime}")
+        res_v = client.get(f"/clips/{clip_thumb.name}?v={thumb_v}")
         self.assertEqual(res_v.status_code, 200)
         self.assertIn("public", res_v.headers.get("cache-control", ""))
         self.assertIn("max-age=86400", res_v.headers.get("cache-control", ""))
@@ -264,6 +298,8 @@ class TestThumbnailFreshness(unittest.TestCase):
         # Clean up
         clip_vid.unlink()
         clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
 
     def test_07_direct_image_request_generates_thumbnail_dynamically(self):
         """When an image thumbnail is requested directly, it should be generated if missing."""
@@ -281,6 +317,7 @@ class TestThumbnailFreshness(unittest.TestCase):
         )
         clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
         clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
 
         clip_vid.write_bytes(self.test_video_path.read_bytes())
         db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
@@ -288,6 +325,8 @@ class TestThumbnailFreshness(unittest.TestCase):
         # Ensure thumbnail does not exist initially
         if clip_thumb.exists():
             clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
 
         client = TestClient(app)
         res = client.get(f"/clips/{clip_thumb.name}")
@@ -298,6 +337,8 @@ class TestThumbnailFreshness(unittest.TestCase):
         # Clean up
         clip_vid.unlink()
         clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
 
     def test_08_filmstrip_freshness_detection_and_regeneration(self):
         """Filmstrip frames must regenerate and return fresh ?v= parameters when video changes."""
@@ -320,6 +361,7 @@ class TestThumbnailFreshness(unittest.TestCase):
         os.utime(str(clip_vid), (t0, t0))
 
         clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
         db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
 
         client = TestClient(app)
@@ -343,13 +385,117 @@ class TestThumbnailFreshness(unittest.TestCase):
 
         # Clean up frames
         for i in range(12):
-            fpath = CLIPS_DIR / f"{clip_id}_frame_{i}.jpg"
-            if fpath.exists():
-                fpath.unlink()
+            for ext in (".jpg", ".jpg.meta"):
+                fpath = CLIPS_DIR / f"{clip_id}_frame_{i}{ext}"
+                if fpath.exists():
+                    try:
+                        fpath.unlink()
+                    except Exception:
+                        pass
         clip_vid.unlink()
-        tpath = CLIPS_DIR / f"{clip_id}.jpg"
-        if tpath.exists():
-            tpath.unlink()
+        if clip_thumb.exists():
+            clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_09_same_second_replacement_and_preserved_timestamp_detection(self):
+        """Verify that fingerprinting and nanoseconds detect replacements even with identical integer timestamps."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Fingerprint Staleness Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=85,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        # 1. Initial write of navy video
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        fixed_t = 1700000000.0  # Stable integer timestamp
+        os.utime(str(clip_vid), (fixed_t, fixed_t))
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        # Generate thumbnail
+        ensure_clip_thumbnail(clip_id)
+        self.assertTrue(clip_thumb.exists())
+        self.assertFalse(is_thumbnail_stale(clip_vid, clip_thumb))
+        initial_token = get_thumbnail_version_token(clip_thumb)
+
+        # 2. Replace with crimson video BUT preserve the exact same integer timestamp fixed_t
+        if self.test_video_alt_path.exists():
+            clip_vid.write_bytes(self.test_video_alt_path.read_bytes())
+            os.utime(str(clip_vid), (fixed_t, fixed_t))
+
+            # Fingerprint must detect that content changed even though mtime didn't increase!
+            self.assertTrue(
+                is_thumbnail_stale(clip_vid, clip_thumb),
+                "Content fingerprint must detect replacement even when timestamp is preserved"
+            )
+
+            # Regenerate thumbnail
+            ensure_clip_thumbnail(clip_id)
+            new_token = get_thumbnail_version_token(clip_thumb)
+            self.assertNotEqual(initial_token, new_token, "Version token must change when content changes")
+            self.assertFalse(is_thumbnail_stale(clip_vid, clip_thumb))
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_10_concurrent_thumbnail_requests_serialize_safely(self):
+        """Concurrent calls to ensure_clip_thumbnail for the same clip must not crash or race."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Concurrency Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        def _worker():
+            return ensure_clip_thumbnail(clip_id)
+
+        # Execute 6 parallel requests across threads
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+            futures = [executor.submit(_worker) for _ in range(6)]
+            results = [f.result() for f in futures]
+
+        for res in results:
+            self.assertIsNotNone(res)
+            self.assertEqual(res, clip_thumb)
+
+        self.assertTrue(clip_thumb.exists())
+        self.assertGreater(clip_thumb.stat().st_size, 100)
+
+        # Ensure no dangling temporary files
+        temp_files = list(CLIPS_DIR.glob(f".tmp_*{clip_id}*"))
+        self.assertEqual(len(temp_files), 0, "No orphaned temporary files should remain after concurrent runs")
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
 
 
 if __name__ == "__main__":

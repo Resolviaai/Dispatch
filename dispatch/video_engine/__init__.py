@@ -8,7 +8,9 @@ from dispatch.video_engine.thumbnail import (
     resolve_active_clip_video,
     generate_thumbnail_from_video,
     is_thumbnail_stale,
+    get_file_fingerprint,
     get_thumbnail_version,
+    get_thumbnail_version_token,
     populate_clip_media_urls
 )
 
@@ -23,6 +25,8 @@ __all__ = [
     "resolve_active_clip_video",
     "generate_thumbnail_from_video",
     "is_thumbnail_stale",
+    "get_file_fingerprint",
     "get_thumbnail_version",
+    "get_thumbnail_version_token",
     "populate_clip_media_urls"
 ]

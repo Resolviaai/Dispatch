@@ -1302,6 +1302,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [duration, setDuration] = useState<number>(0);
   const [isSourceTimebase, setIsSourceTimebase] = useState<boolean>(true);
   const [filmstripFrames, setFilmstripFrames] = useState<string[]>([]);
+  const filmstripReqIdRef = useRef<number>(0);
   const [mainVideoVolume, setMainVideoVolume] = useState<number>(100);
   const [isMainVideoMuted, setIsMainVideoMuted] = useState<boolean>(false);
 
@@ -1498,6 +1499,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       });
 
     // Defer heavy filmstrip frame extraction so active video stream and captions have top network priority
+    const reqId = ++filmstripReqIdRef.current;
     if (currentClip.thumbnail_url) {
       const tUrl = currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost);
       setFilmstripFrames([tUrl]);
@@ -1509,7 +1511,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { signal: controller.signal })
         .then((res) => (res.ok ? res.json() : null))
         .then((fsData) => {
-          if (fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
+          if (reqId === filmstripReqIdRef.current && fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
             setFilmstripFrames(fsData.frames.map((f: string) => (f.startsWith('http') ? f : apiUrl(f, pcHost))));
           }
         })
@@ -1520,7 +1522,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [currentClip?.id, pcHost]);
+  }, [currentClip?.id, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost]);
 
   // Source bounds for mapping local clip time (0 -> duration) to source video time
   const clipStart = currentClip ? (currentClip.start_time || 0) : 0;

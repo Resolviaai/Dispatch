@@ -11,6 +11,7 @@ import time
 import re
 import subprocess
 import sys
+import uuid
 import ipaddress
 import urllib.parse
 import email.utils
@@ -40,6 +41,9 @@ from dispatch.video_engine import (
     resolve_clip_source_path,
     resolve_active_clip_video,
     populate_clip_media_urls,
+    get_file_fingerprint,
+    get_thumbnail_version_token,
+    get_thumbnail_version,
 )
 from dispatch.youtube_inbox.catcher import (
     YouTubeInboxCatcher,
@@ -338,8 +342,10 @@ async def get_clip_file(filename: str, request: Request):
 
     st = target_path.stat()
     mtime = int(st.st_mtime)
+    mtime_ns = getattr(st, "st_mtime_ns", int(mtime * 1e9))
     size = st.st_size
-    etag = f'"{mtime}-{size}"'
+    etag = f'"{mtime_ns}-{size}"'
+    legacy_etag = f'"{mtime}-{size}"'
     last_modified = email.utils.formatdate(mtime, usegmt=True)
 
     is_versioned = bool(request.query_params.get("v"))
@@ -356,7 +362,7 @@ async def get_clip_file(filename: str, request: Request):
 
         if if_none_match:
             clean_inm = if_none_match.strip()
-            if clean_inm in (etag, f"W/{etag}", "*"):
+            if clean_inm in (etag, legacy_etag, f"W/{etag}", f"W/{legacy_etag}", "*"):
                 is_not_modified = True
         elif if_modified_since:
             try:
@@ -1237,35 +1243,71 @@ async def auto_reconcile_job(job_id: str, request: Request):
             }
 
 
+_filmstrip_locks: Dict[str, asyncio.Lock] = {}
+_filmstrip_locks_guard = asyncio.Lock()
+
+
+async def get_filmstrip_lock(clip_id: str) -> asyncio.Lock:
+    """Retrieve or create an asyncio Lock dedicated to a specific clip ID."""
+    async with _filmstrip_locks_guard:
+        if clip_id not in _filmstrip_locks:
+            _filmstrip_locks[clip_id] = asyncio.Lock()
+        return _filmstrip_locks[clip_id]
+
+
 @app.get("/api/clips/{clip_id}/filmstrip")
 async def get_clip_filmstrip(clip_id: str):
     """Return an array of thumbnail frames spanning the video duration for the timeline filmstrip.
     Guarantees freshness: automatically detects when underlying video has changed and regenerates frames.
+    Serializes concurrent extraction per clip_id and uses atomic temporary files.
     """
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
 
     active_video = resolve_active_clip_video(clip)
-    video_mtime = int(active_video.stat().st_mtime) if (active_video and active_video.exists()) else 0
+    if not active_video or not active_video.exists():
+        thumb = ensure_clip_thumbnail(clip)
+        if thumb and thumb.exists():
+            v_tok = get_thumbnail_version_token(thumb) or str(int(thumb.stat().st_mtime))
+            return {"frames": [f"/clips/{thumb.name}?v={v_tok}"]}
+        return {"frames": []}
 
-    # Check for existing pre-extracted frames and validate freshness against active video
-    existing_frames = []
-    is_filmstrip_stale = False
-    for i in range(12):
-        frame_name = f"{clip_id}_frame_{i}.jpg"
-        frame_path = CLIPS_DIR / frame_name
-        if frame_path.exists():
-            if video_mtime > 0 and frame_path.stat().st_mtime < video_mtime:
-                is_filmstrip_stale = True
-                break
-            existing_frames.append(f"/clips/{frame_name}?v={int(frame_path.stat().st_mtime)}")
+    video_mtime_ns = getattr(active_video.stat(), "st_mtime_ns", int(active_video.stat().st_mtime * 1e9))
+    video_fingerprint = get_file_fingerprint(active_video)
 
-    if len(existing_frames) >= 4 and not is_filmstrip_stale:
-        return {"frames": existing_frames}
+    lock = await get_filmstrip_lock(clip_id)
+    async with lock:
+        # Check for existing pre-extracted frames and validate freshness against active video
+        existing_frames = []
+        is_filmstrip_stale = False
+        for i in range(12):
+            frame_name = f"{clip_id}_frame_{i}.jpg"
+            frame_path = CLIPS_DIR / frame_name
+            meta_path = CLIPS_DIR / f"{clip_id}_frame_{i}.jpg.meta"
+            if frame_path.exists():
+                if meta_path.exists():
+                    try:
+                        m_data = json.loads(meta_path.read_text(encoding="utf-8"))
+                        if video_mtime_ns > m_data.get("video_mtime_ns", 0) or (video_fingerprint and video_fingerprint != m_data.get("video_fingerprint")):
+                            is_filmstrip_stale = True
+                            break
+                    except Exception:
+                        is_filmstrip_stale = True
+                        break
+                else:
+                    f_st = frame_path.stat()
+                    f_mtime_ns = getattr(f_st, "st_mtime_ns", int(f_st.st_mtime * 1e9))
+                    if f_mtime_ns < video_mtime_ns:
+                        is_filmstrip_stale = True
+                        break
+                frame_mtime_ns = getattr(frame_path.stat(), "st_mtime_ns", int(frame_path.stat().st_mtime * 1e9))
+                existing_frames.append(f"/clips/{frame_name}?v={frame_mtime_ns}")
 
-    # Extract dynamically if video exists on disk
-    if active_video and active_video.exists():
+        if len(existing_frames) >= 4 and not is_filmstrip_stale:
+            return {"frames": existing_frames}
+
+        # Extract dynamically if video exists on disk
         def _extract_frames() -> List[str]:
             count = 8
             dur = max(1.0, float(clip.get("duration") or 10.0))
@@ -1274,33 +1316,52 @@ async def get_clip_filmstrip(clip_id: str):
                 t = (i + 0.5) * (dur / count)
                 frame_name = f"{clip_id}_frame_{i}.jpg"
                 out_path = CLIPS_DIR / frame_name
+                nonce = uuid.uuid4().hex[:6]
+                tmp_path = CLIPS_DIR / f"{clip_id}_frame_{i}.tmp_{nonce}.jpg"
+                tmp_meta_path = CLIPS_DIR / f"{clip_id}_frame_{i}.tmp_{nonce}.jpg.meta"
                 try:
-                    subprocess.run([
+                    res = subprocess.run([
                         "ffmpeg", "-y", "-ss", str(round(t, 3)), "-i", str(active_video),
                         "-frames:v", "1", "-q:v", "3", "-vf", "scale=160:-1",
-                        str(out_path)
-                    ], capture_output=True, timeout=10)
-                    if out_path.exists():
-                        try:
-                            if out_path.stat().st_mtime < video_mtime:
-                                os.utime(str(out_path), (video_mtime + 1.0, video_mtime + 1.0))
-                        except Exception:
-                            pass
-                        dyn_frames.append(f"/clips/{frame_name}?v={int(out_path.stat().st_mtime)}")
+                        str(tmp_path)
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                    if res.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 0:
+                        meta = {
+                            "video_mtime_ns": video_mtime_ns,
+                            "video_fingerprint": video_fingerprint,
+                        }
+                        tmp_meta_path.write_text(json.dumps(meta), encoding="utf-8")
+                        os.replace(str(tmp_path), str(out_path))
+                        if tmp_meta_path.exists():
+                            os.replace(str(tmp_meta_path), str(CLIPS_DIR / f"{clip_id}_frame_{i}.jpg.meta"))
+                        frame_mtime_ns = getattr(out_path.stat(), "st_mtime_ns", int(out_path.stat().st_mtime * 1e9))
+                        dyn_frames.append(f"/clips/{frame_name}?v={frame_mtime_ns}")
                 except Exception as e:
                     logger.debug("Failed extracting filmstrip frame %d for %s: %s", i, clip_id, e)
+                finally:
+                    if tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except Exception:
+                            pass
+                    if tmp_meta_path.exists():
+                        try:
+                            tmp_meta_path.unlink()
+                        except Exception:
+                            pass
             return dyn_frames
 
         frames = await asyncio.to_thread(_extract_frames)
         if frames:
             return {"frames": frames}
 
-    # Fallback to clip thumbnail
-    thumb = ensure_clip_thumbnail(clip)
-    if thumb and thumb.exists():
-        return {"frames": [f"/clips/{thumb.name}?v={int(thumb.stat().st_mtime)}"]}
+        # Fallback to clip thumbnail
+        thumb = ensure_clip_thumbnail(clip)
+        if thumb and thumb.exists():
+            v_tok = get_thumbnail_version_token(thumb) or str(int(thumb.stat().st_mtime))
+            return {"frames": [f"/clips/{thumb.name}?v={v_tok}"]}
 
-    return {"frames": []}
+        return {"frames": []}
 
 
 @app.get("/api/presets/captions")

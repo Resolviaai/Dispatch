@@ -11,6 +11,7 @@ import {
   Eye,
   EyeOff,
   Sparkles,
+  Magnet,
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word } from './types';
 
@@ -52,6 +53,7 @@ interface DragSession {
   origStart: number;
   origEnd: number;
   origWords: Word[];
+  stableAnchors: number[];
 }
 
 export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
@@ -75,15 +77,20 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const rulerContentRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState<number>(340);
   const [pxPerSec, setPxPerSec] = useState<number>(55);
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [isSnapEnabled, setIsSnapEnabled] = useState<boolean>(false);
+  const [snapGuideTime, setSnapGuideTime] = useState<number | null>(null);
   const [dragSession, setDragSession] = useState<DragSession | null>(null);
   const [hiddenTracks, setHiddenTracks] = useState<Record<number, boolean>>({});
-  const [scrollLeft, setScrollLeft] = useState<number>(0);
   const canvasDragRef = useRef<{ startX: number; startScrollLeft: number } | null>(null);
   const leftRailRef = useRef<HTMLDivElement>(null);
   const latestBlockPatchRef = useRef<{ groupId: string; patch: Partial<CaptionGroup> } | null>(null);
+  const isProgrammaticScrollRef = useRef<boolean>(false);
+  const pendingSeekTimeRef = useRef<number | null>(null);
+  const rafSeekIdRef = useRef<number | null>(null);
 
   // CapCut-style dual drag trimmer state
   const [activeTrim, setActiveTrim] = useState<{ start: number; end: number }>({
@@ -189,6 +196,39 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     return ticks;
   }, [safeDuration, pxPerSec]);
 
+  // Coalesced seeking to prevent video playback thrashing and seek queuing
+  const scheduleSeek = (timeSec: number) => {
+    pendingSeekTimeRef.current = timeSec;
+    if (!rafSeekIdRef.current) {
+      rafSeekIdRef.current = requestAnimationFrame(() => {
+        rafSeekIdRef.current = null;
+        if (pendingSeekTimeRef.current !== null) {
+          onSeek(pendingSeekTimeRef.current);
+        }
+      });
+    }
+  };
+
+  const flushSeek = (timeSec?: number) => {
+    if (rafSeekIdRef.current) {
+      cancelAnimationFrame(rafSeekIdRef.current);
+      rafSeekIdRef.current = null;
+    }
+    const finalTime = timeSec !== undefined ? timeSec : pendingSeekTimeRef.current;
+    if (finalTime !== null && finalTime !== undefined) {
+      onSeek(finalTime);
+      pendingSeekTimeRef.current = null;
+    }
+  };
+
+  const cancelSeek = () => {
+    if (rafSeekIdRef.current) {
+      cancelAnimationFrame(rafSeekIdRef.current);
+      rafSeekIdRef.current = null;
+    }
+    pendingSeekTimeRef.current = null;
+  };
+
   // Zoom adjustments: keep the current time anchored at fixed center playhead
   const handleZoom = (delta: number) => {
     const nextPx = clamp(pxPerSec + delta, 20, 140);
@@ -196,7 +236,11 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     setPxPerSec(nextPx);
     requestAnimationFrame(() => {
       if (scrollContainerRef.current) {
+        isProgrammaticScrollRef.current = true;
         scrollContainerRef.current.scrollLeft = currentTime * nextPx;
+        if (rulerContentRef.current) {
+          rulerContentRef.current.style.transform = `translateX(${-currentTime * nextPx + halfWidth}px)`;
+        }
       }
     });
   };
@@ -209,7 +253,11 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     setPxPerSec(fitPx);
     requestAnimationFrame(() => {
       if (scrollContainerRef.current) {
+        isProgrammaticScrollRef.current = true;
         scrollContainerRef.current.scrollLeft = currentTime * fitPx;
+        if (rulerContentRef.current) {
+          rulerContentRef.current.style.transform = `translateX(${-currentTime * fitPx + halfWidth}px)`;
+        }
       }
     });
   };
@@ -236,7 +284,11 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         }
         const targetScroll = cur * pxPerSecRef.current;
         if (Math.abs(scrollEl.scrollLeft - targetScroll) > 0.5) {
+          isProgrammaticScrollRef.current = true;
           scrollEl.scrollLeft = targetScroll;
+          if (rulerContentRef.current) {
+            rulerContentRef.current.style.transform = `translateX(${-targetScroll + halfWidth}px)`;
+          }
         }
       }
 
@@ -260,7 +312,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       }
       if (animId) cancelAnimationFrame(animId);
     };
-  }, [isPlaying, isScrubbing, !!dragSession, mediaElementRef, clipStart]);
+  }, [isPlaying, isScrubbing, !!dragSession, mediaElementRef, clipStart, halfWidth]);
 
   // When paused and external seek happens (e.g. transport scrub), center timeline
   useEffect(() => {
@@ -270,26 +322,44 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     const targetScroll = currentTime * pxPerSec;
     if (Math.abs(scrollEl.scrollLeft - targetScroll) > 1) {
+      isProgrammaticScrollRef.current = true;
       scrollEl.scrollLeft = targetScroll;
+      if (rulerContentRef.current) {
+        rulerContentRef.current.style.transform = `translateX(${-targetScroll + halfWidth}px)`;
+      }
     }
-  }, [currentTime, pxPerSec, isPlaying, isScrubbing, !!dragSession]);
+  }, [currentTime, pxPerSec, isPlaying, isScrubbing, !!dragSession, halfWidth]);
 
-  // Scroll listener: updates playback time beneath the fixed center playhead
-  // CRITICAL: Only call onSeek when manually scrubbing or paused!
-  // During playback, programmatic auto-scroll must NOT trigger onSeek/video.currentTime!
+  // Synchronize ruler on mount or viewport resize
+  useEffect(() => {
+    if (rulerContentRef.current && scrollContainerRef.current) {
+      rulerContentRef.current.style.transform = `translateX(${-scrollContainerRef.current.scrollLeft + halfWidth}px)`;
+    }
+  }, [halfWidth, pxPerSec]);
+
+  // Scroll listener: updates ruler and optionally seeks during manual touch/trackpad scrub
+  // Programmatic scroll (playhead follower) never seeks or triggers recursive loops
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const sl = e.currentTarget.scrollLeft;
-    setScrollLeft(sl);
+    if (rulerContentRef.current) {
+      rulerContentRef.current.style.transform = `translateX(${-sl + halfWidth}px)`;
+    }
     if (leftRailRef.current) {
       leftRailRef.current.scrollTop = e.currentTarget.scrollTop;
     }
-    if (isScrubbing || !isPlaying) {
+
+    if (isProgrammaticScrollRef.current) {
+      isProgrammaticScrollRef.current = false;
+      return;
+    }
+
+    if (isScrubbing) {
       const scrubTime = clamp(sl / pxPerSec, 0, safeDuration);
-      onSeek(Number(scrubTime.toFixed(2)));
+      scheduleSeek(Number(scrubTime.toFixed(2)));
     }
   };
 
-  // Mouse drag on empty timeline canvas or ruler (desktop horizontal swipe/scrub)
+  // Direct swipe/scrub on canvas or ruler
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (dragSession) return;
     if ((e.target as HTMLElement).closest('[data-layer-block="true"], [data-video-track="true"], button, input, [data-handle]')) return;
@@ -305,9 +375,13 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     if (!canvasDragRef.current || !scrollContainerRef.current) return;
     const deltaX = e.clientX - canvasDragRef.current.startX;
     const targetScroll = Math.max(0, canvasDragRef.current.startScrollLeft - deltaX);
+    isProgrammaticScrollRef.current = true;
     scrollContainerRef.current.scrollLeft = targetScroll;
+    if (rulerContentRef.current) {
+      rulerContentRef.current.style.transform = `translateX(${-targetScroll + halfWidth}px)`;
+    }
     const scrubTime = clamp(targetScroll / pxPerSec, 0, safeDuration);
-    onSeek(Number(scrubTime.toFixed(2)));
+    scheduleSeek(Number(scrubTime.toFixed(2)));
   };
 
   const handleCanvasPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -319,6 +393,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
       } catch { }
 
+      flushSeek();
+
       // Genuinely empty timeline area clicked/tapped (motion < 5px): deselect active layer
       if (moved < 5) {
         const isInteractive = (e.target as HTMLElement).closest('[data-layer-block="true"], [data-video-track="true"], button, input, [data-handle]');
@@ -327,6 +403,15 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         }
       }
     }
+  };
+
+  const handleCanvasPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    canvasDragRef.current = null;
+    setIsScrubbing(false);
+    cancelSeek();
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch { }
   };
 
   // Draggable / Trimmable Layer Block Pointer Handlers
@@ -338,6 +423,18 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     e.stopPropagation();
     onSelectGroup(grp.id);
 
+    // Capture stable anchors for the entire gesture (never move with playhead)
+    const otherEdges: number[] = [];
+    if (track && track.groups) {
+      for (const g of track.groups) {
+        if (g.id !== grp.id) {
+          otherEdges.push(g.start);
+          otherEdges.push(g.end);
+        }
+      }
+    }
+    const stableAnchors = [0, safeDuration, currentTimeRef.current, ...otherEdges];
+
     setDragSession({
       type,
       groupId: grp.id,
@@ -345,6 +442,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       origStart: grp.start,
       origEnd: grp.end,
       origWords: grp.words ? [...grp.words] : [],
+      stableAnchors,
     });
 
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -355,95 +453,132 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     e.stopPropagation();
 
     const deltaSec = (e.clientX - dragSession.startX) / pxPerSec;
-    const origDuration = Math.max(0.2, dragSession.origEnd - dragSession.origStart);
+    const origDuration = Math.max(0.1, dragSession.origEnd - dragSession.origStart);
+    let activeSnap: number | null = null;
+    const snapThreshold = Math.min(0.12, 10 / pxPerSec);
 
     if (dragSession.type === 'move') {
-      let nextStart = dragSession.origStart + deltaSec;
-      let nextEnd = nextStart + origDuration;
+      let proposedStart = dragSession.origStart + deltaSec;
+      let proposedEnd = proposedStart + origDuration;
 
-      // Snapping to playhead (within ±0.15s)
-      if (Math.abs(nextStart - currentTime) < 0.15) {
-        nextStart = currentTime;
-        nextEnd = nextStart + origDuration;
-      } else if (Math.abs(nextEnd - currentTime) < 0.15) {
-        nextEnd = currentTime;
-        nextStart = nextEnd - origDuration;
+      // Bound within media duration
+      if (proposedStart < 0) {
+        proposedStart = 0;
+        proposedEnd = origDuration;
+      } else if (proposedEnd > safeDuration) {
+        proposedEnd = safeDuration;
+        proposedStart = Math.max(0, safeDuration - origDuration);
       }
 
-      // Snapping to boundaries
-      if (nextStart < 0) {
-        nextStart = 0;
-        nextEnd = origDuration;
-      } else if (nextEnd > safeDuration) {
-        nextEnd = safeDuration;
-        nextStart = Math.max(0, safeDuration - origDuration);
+      let finalStart = proposedStart;
+      let finalEnd = proposedEnd;
+
+      // Snapping is only active when explicitly enabled via Magnet toggle
+      if (isSnapEnabled) {
+        for (const anchor of dragSession.stableAnchors) {
+          if (Math.abs(proposedStart - anchor) <= snapThreshold) {
+            finalStart = anchor;
+            finalEnd = finalStart + origDuration;
+            activeSnap = anchor;
+            break;
+          }
+        }
+        if (activeSnap === null) {
+          for (const anchor of dragSession.stableAnchors) {
+            if (Math.abs(proposedEnd - anchor) <= snapThreshold) {
+              finalEnd = anchor;
+              finalStart = Math.max(0, finalEnd - origDuration);
+              activeSnap = anchor;
+              break;
+            }
+          }
+        }
       }
 
-      const timeShift = nextStart - dragSession.origStart;
+      setSnapGuideTime(activeSnap);
+
+      const timeShift = finalStart - dragSession.origStart;
       const nextWords: Word[] = dragSession.origWords.map((w) => ({
         ...w,
-        start: Number((w.start + timeShift).toFixed(2)),
-        end: Number((w.end + timeShift).toFixed(2)),
+        start: Number((w.start + timeShift).toFixed(3)),
+        end: Number((w.end + timeShift).toFixed(3)),
       }));
 
       const patch: Partial<CaptionGroup> = {
-        start: Number(nextStart.toFixed(2)),
-        end: Number(nextEnd.toFixed(2)),
+        start: Number(finalStart.toFixed(3)),
+        end: Number(finalEnd.toFixed(3)),
         words: nextWords,
       };
       latestBlockPatchRef.current = { groupId: dragSession.groupId, patch };
       onUpdateGroup(dragSession.groupId, patch, false);
-      onSeek(Number(nextStart.toFixed(2)));
+      // NOTE: Never call onSeek here. Moving a block must not continuously seek playback or move the snap reference.
     } else if (dragSession.type === 'trim-start') {
-      let nextStart = dragSession.origStart + deltaSec;
-      if (Math.abs(nextStart - currentTime) < 0.15) {
-        nextStart = currentTime;
-      }
+      let proposedStart = dragSession.origStart + deltaSec;
+      proposedStart = clamp(proposedStart, 0, dragSession.origEnd - 0.2);
 
-      nextStart = clamp(nextStart, 0, dragSession.origEnd - 0.2);
-      const newDuration = dragSession.origEnd - nextStart;
+      let finalStart = proposedStart;
+      if (isSnapEnabled) {
+        for (const anchor of dragSession.stableAnchors) {
+          if (anchor < dragSession.origEnd - 0.2 && Math.abs(proposedStart - anchor) <= snapThreshold) {
+            finalStart = anchor;
+            activeSnap = anchor;
+            break;
+          }
+        }
+      }
+      setSnapGuideTime(activeSnap);
+
+      const newDuration = dragSession.origEnd - finalStart;
       const ratio = newDuration / origDuration;
 
       const nextWords: Word[] = dragSession.origWords.map((w) => ({
         ...w,
-        start: Number((nextStart + (w.start - dragSession.origStart) * ratio).toFixed(2)),
-        end: Number((nextStart + (w.end - dragSession.origStart) * ratio).toFixed(2)),
+        start: Number((finalStart + (w.start - dragSession.origStart) * ratio).toFixed(3)),
+        end: Number((finalStart + (w.end - dragSession.origStart) * ratio).toFixed(3)),
       }));
 
       const patch: Partial<CaptionGroup> = {
-        start: Number(nextStart.toFixed(2)),
+        start: Number(finalStart.toFixed(3)),
         words: nextWords,
       };
       latestBlockPatchRef.current = { groupId: dragSession.groupId, patch };
       onUpdateGroup(dragSession.groupId, patch, false);
-      onSeek(Number(nextStart.toFixed(2)));
     } else if (dragSession.type === 'trim-end') {
-      let nextEnd = dragSession.origEnd + deltaSec;
-      if (Math.abs(nextEnd - currentTime) < 0.15) {
-        nextEnd = currentTime;
-      }
+      let proposedEnd = dragSession.origEnd + deltaSec;
+      proposedEnd = clamp(proposedEnd, dragSession.origStart + 0.2, safeDuration);
 
-      nextEnd = clamp(nextEnd, dragSession.origStart + 0.2, safeDuration);
-      const newDuration = nextEnd - dragSession.origStart;
+      let finalEnd = proposedEnd;
+      if (isSnapEnabled) {
+        for (const anchor of dragSession.stableAnchors) {
+          if (anchor > dragSession.origStart + 0.2 && Math.abs(proposedEnd - anchor) <= snapThreshold) {
+            finalEnd = anchor;
+            activeSnap = anchor;
+            break;
+          }
+        }
+      }
+      setSnapGuideTime(activeSnap);
+
+      const newDuration = finalEnd - dragSession.origStart;
       const ratio = newDuration / origDuration;
 
       const nextWords: Word[] = dragSession.origWords.map((w) => ({
         ...w,
-        start: Number((dragSession.origStart + (w.start - dragSession.origStart) * ratio).toFixed(2)),
-        end: Number((dragSession.origStart + (w.end - dragSession.origStart) * ratio).toFixed(2)),
+        start: Number((dragSession.origStart + (w.start - dragSession.origStart) * ratio).toFixed(3)),
+        end: Number((dragSession.origStart + (w.end - dragSession.origStart) * ratio).toFixed(3)),
       }));
 
       const patch: Partial<CaptionGroup> = {
-        end: Number(nextEnd.toFixed(2)),
+        end: Number(finalEnd.toFixed(3)),
         words: nextWords,
       };
       latestBlockPatchRef.current = { groupId: dragSession.groupId, patch };
       onUpdateGroup(dragSession.groupId, patch, false);
-      onSeek(Number(nextEnd.toFixed(2)));
     }
   };
 
   const handleBlockPointerUp = (e: React.PointerEvent) => {
+    setSnapGuideTime(null);
     if (latestBlockPatchRef.current && onUpdateGroup) {
       onUpdateGroup(latestBlockPatchRef.current.groupId, latestBlockPatchRef.current.patch, true);
       latestBlockPatchRef.current = null;
@@ -457,6 +592,15 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   };
 
   const handleBlockPointerCancel = (e: React.PointerEvent) => {
+    setSnapGuideTime(null);
+    if (dragSession && onUpdateGroup) {
+      // Safely revert transient changes on cancellation
+      onUpdateGroup(dragSession.groupId, {
+        start: dragSession.origStart,
+        end: dragSession.origEnd,
+        words: dragSession.origWords,
+      }, false);
+    }
     latestBlockPatchRef.current = null;
     if (dragSession) {
       setDragSession(null);
@@ -490,19 +634,20 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       const nextStart = clamp(trimDrag.initialStart + deltaSec, minBound, maxBound);
       const rounded = Number(nextStart.toFixed(2));
       setActiveTrim((prev) => ({ ...prev, start: rounded }));
-      onSeek(rounded);
+      scheduleSeek(rounded);
     } else {
       const minBound = Math.min(maxPadded, trimDrag.initialStart + 1.5);
       const maxBound = maxPadded;
       const nextEnd = clamp(trimDrag.initialEnd + deltaSec, minBound, maxBound);
       const rounded = Number(nextEnd.toFixed(2));
       setActiveTrim((prev) => ({ ...prev, end: rounded }));
-      onSeek(rounded);
+      scheduleSeek(rounded);
     }
   };
 
   const handleTrimPointerUp = (e: React.PointerEvent) => {
     if (trimDrag) {
+      flushSeek(trimDrag.side === 'start' ? activeTrim.start : activeTrim.end);
       if (onTrimChange) {
         onTrimChange(activeTrim.start, activeTrim.end);
       }
@@ -572,8 +717,27 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     <section
       className="h-[370px] max-h-[370px] bg-[#13161B] overflow-hidden select-none flex flex-col shrink-0 min-h-0"
     >
-      {/* TIMELINE UTILITY BAR: Clean compact zoom controls */}
-      <div className="h-6 px-2 bg-[#16191E] border-b border-[#232832] flex items-center justify-end text-text-secondary text-[10px] shrink-0">
+      {/* TIMELINE UTILITY BAR: Magnet Snapping + Clean compact zoom controls */}
+      <div className="h-6 px-2 bg-[#16191E] border-b border-[#232832] flex items-center justify-between text-text-secondary text-[10px] shrink-0">
+        {/* Left side: Snap / Magnet toggle */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setIsSnapEnabled(!isSnapEnabled)}
+            className={`px-1.5 h-4.5 rounded flex items-center gap-1 text-[10px] font-semibold transition-all active:scale-95 ${
+              isSnapEnabled
+                ? 'bg-primary/20 text-primary border border-primary/40 shadow-hero-sm font-bold'
+                : 'text-text-muted hover:text-text-secondary hover:bg-[#232832] border border-transparent'
+            }`}
+            title={isSnapEnabled ? 'Magnetic Snapping: ON (Click to disable)' : 'Magnetic Snapping: OFF (Click to enable)'}
+            aria-label="Toggle Magnet Snapping"
+          >
+            <Magnet size={11} className={isSnapEnabled ? 'text-primary' : 'text-text-muted'} />
+            <span>Snap {isSnapEnabled ? 'ON' : 'OFF'}</span>
+          </button>
+        </div>
+
+        {/* Right side: Zoom controls */}
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -655,7 +819,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
           ref={viewportRef}
           className="flex-1 min-h-0 flex flex-col relative overflow-hidden"
         >
-          {/* PINNED TIME RULER: Synchronized horizontally with scrollLeft */}
+          {/* PINNED TIME RULER: Synchronized horizontally with scrollContainer */}
           <div
             className="h-6 shrink-0 border-b border-[#232832] bg-[#13161B] overflow-hidden relative cursor-ew-resize select-none"
             onPointerDown={handleCanvasPointerDown}
@@ -670,9 +834,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
             }}
           >
             <div
+              ref={rulerContentRef}
               className="relative h-full flex items-center pointer-events-none"
               style={{
-                transform: `translateX(${-scrollLeft + halfWidth}px)`,
+                transform: `translateX(${-currentTime * pxPerSec + halfWidth}px)`,
                 width: `${totalTimelineWidth}px`,
                 willChange: 'transform',
               }}
@@ -849,6 +1014,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                       const isSpoken = isCaption && currentTime >= grp.start && currentTime <= grp.end;
                       const meta = getLayerMeta(grp, trackIdx);
 
+                      const isThisBlockDragging = dragSession?.groupId === grp.id;
                       const showHandles = isSelected && trueWidth >= 32;
                       const showDuration = isSelected && trueWidth >= 96;
                       const showLabel = trueWidth >= 40;
@@ -858,12 +1024,14 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                         <div
                           key={grp.id}
                           data-layer-block="true"
-                          className={`absolute top-1 bottom-1 rounded-md flex items-center overflow-hidden transition-all select-none ${
-                            isSelected
-                              ? 'bg-[#2563EB] border-2 border-white text-white font-bold shadow-[0_0_12px_rgba(37,99,235,0.6)] z-20'
+                          className={`absolute top-1 bottom-1 rounded-md flex items-center overflow-hidden select-none ${
+                            isThisBlockDragging
+                              ? 'transition-none z-30 shadow-2xl scale-[1.01]'
+                              : isSelected
+                              ? 'transition-colors duration-150 bg-[#2563EB] border-2 border-white text-white font-bold shadow-[0_0_12px_rgba(37,99,235,0.6)] z-20'
                               : isSpoken
-                              ? `${meta.bg} border-2 border-white/80 text-white font-semibold z-10`
-                              : `${meta.bg} border ${meta.border} ${meta.text} hover:opacity-100 opacity-90`
+                              ? `transition-colors duration-150 ${meta.bg} border-2 border-white/80 text-white font-semibold z-10`
+                              : `transition-colors duration-150 ${meta.bg} border ${meta.border} ${meta.text} hover:opacity-100 opacity-90`
                           }`}
                           style={{ left: `${left}px`, width: `${trueWidth}px` }}
                           onClick={(e) => {
@@ -945,6 +1113,19 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                   </div>
                 );
               })}
+
+              {/* DYNAMIC SNAP ALIGNMENT GUIDE LINE */}
+              {snapGuideTime !== null && (
+                <div
+                  className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col items-center"
+                  style={{ left: `${snapGuideTime * pxPerSec + halfWidth}px` }}
+                >
+                  <div className="w-[1.5px] h-full bg-primary shadow-[0_0_8px_rgba(37,99,235,0.9)] animate-pulse" />
+                  <div className="absolute top-0 px-1 py-0.5 rounded bg-primary text-white text-[8px] font-mono font-bold shadow-md -translate-x-1/2">
+                    {snapGuideTime.toFixed(2)}s
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
