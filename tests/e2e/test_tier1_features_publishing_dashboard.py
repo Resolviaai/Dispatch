@@ -88,7 +88,7 @@ class TestTier1PublishingDashboard(DispatchE2EBaseTestCase):
     def test_f11_outbox_queue_marks_unauthenticated_jobs_blocked_needs_auth(self):
         """F11.5: Outbox queue processor catches PermissionError and sets status blocked_needs_auth."""
         dummy_video = self.temp_dir / "clip_outbox_auth.mp4"
-        dummy_video.write_bytes(b"OUTBOX_VIDEO_BYTES")
+        self.create_synthetic_mp4(dummy_video, duration_seconds=6.0)
 
         clip_id = save_clip(
             session_id="sess_outbox_01",
@@ -108,7 +108,10 @@ class TestTier1PublishingDashboard(DispatchE2EBaseTestCase):
 
         approve_clip(clip_id, custom_platforms="youtube,instagram,linkedin,x")
 
-        with patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("YouTube auth missing")):
+        with patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("YouTube auth missing")), \
+             patch("dispatch.publisher.outbox.upload_instagram_reel", side_effect=PermissionError("Instagram auth missing")), \
+             patch("dispatch.publisher.outbox.upload_linkedin_video", side_effect=PermissionError("LinkedIn auth missing")), \
+             patch("dispatch.publisher.outbox.upload_x_video", side_effect=PermissionError("X auth missing")):
             # Process outbox without live credentials configured
             success_count = process_outbox_queue()
             self.assertEqual(success_count, 0)
@@ -125,7 +128,7 @@ class TestTier1PublishingDashboard(DispatchE2EBaseTestCase):
     def test_f11_outbox_processing_idempotency(self):
         """F11.6: Re-running outbox processor on already-processed queue does not re-upload or duplicate jobs."""
         dummy_video = self.temp_dir / "clip_outbox_idemp.mp4"
-        dummy_video.write_bytes(b"OUTBOX_IDEMP_BYTES")
+        self.create_synthetic_mp4(dummy_video, duration_seconds=6.0)
 
         clip_id = save_clip(
             session_id="sess_idemp_01",
@@ -143,11 +146,41 @@ class TestTier1PublishingDashboard(DispatchE2EBaseTestCase):
             conn.execute("UPDATE clips SET video_path = ? WHERE id = ?", (str(dummy_video), clip_id))
 
         approve_clip(clip_id, custom_platforms="youtube,instagram")
-        process_outbox_queue()
-
-        # Second pass should find 0 pending jobs and return 0
-        second_pass = process_outbox_queue()
+        with patch("dispatch.publisher.outbox.upload_youtube_short", return_value={"remote_id": "mock-yt", "remote_url": "https://youtu.be/mock-yt"}) as mock_youtube, \
+             patch("dispatch.publisher.outbox.upload_instagram_reel", return_value={"remote_id": "mock-ig", "remote_url": "https://instagram.com/reel/mock-ig"}) as mock_instagram:
+            self.assertEqual(process_outbox_queue(), 2)
+            second_pass = process_outbox_queue()
+            mock_youtube.assert_called_once()
+            mock_instagram.assert_called_once()
         self.assertEqual(second_pass, 0)
+
+    def test_f11_corrupt_media_is_rejected_before_any_publisher(self):
+        corrupt_video = self.temp_dir / "corrupt_outbox.mp4"
+        corrupt_video.write_bytes(b"not an mp4")
+        clip_id = save_clip(
+            session_id="sess_corrupt_outbox",
+            chunk_id=None,
+            start_time=0.0,
+            end_time=10.0,
+            title="Corrupt Media Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        with get_db_connection() as conn:
+            conn.execute("UPDATE clips SET video_path = ? WHERE id = ?", (str(corrupt_video), clip_id))
+        approve_clip(clip_id, custom_platforms="youtube")
+
+        with patch("dispatch.publisher.outbox.upload_youtube_short") as mock_youtube:
+            self.assertEqual(process_outbox_queue(), 0)
+            mock_youtube.assert_not_called()
+
+        with get_db_connection() as conn:
+            row = conn.execute("SELECT status, last_error FROM publishing_outbox WHERE clip_id = ?", (clip_id,)).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("Video validation failed", row["last_error"])
 
     # =========================================================================
     # FEATURE 12: Web Control Dashboard & APK Distribution
@@ -304,7 +337,7 @@ class TestTier1PublishingDashboard(DispatchE2EBaseTestCase):
     def test_f13_outbox_tests_assert_blocked_needs_auth(self):
         """F13.4: Outbox processor tests verify blocked_needs_auth status upon missing auth."""
         dummy_video = self.temp_dir / "blocked_sync.mp4"
-        dummy_video.write_bytes(b"BLOCKED_BYTES")
+        self.create_synthetic_mp4(dummy_video, duration_seconds=6.0)
         clip_id = save_clip(
             session_id=None, chunk_id=None, start_time=0.0, end_time=1.0,
             title="Blocked Test", hook="Hook", description="Desc", hashtags="#Tag",
@@ -314,7 +347,8 @@ class TestTier1PublishingDashboard(DispatchE2EBaseTestCase):
             conn.execute("UPDATE clips SET video_path = ? WHERE id = ?", (str(dummy_video), clip_id))
 
         approve_clip(clip_id, custom_platforms="instagram")
-        process_outbox_queue()
+        with patch("dispatch.publisher.outbox.upload_instagram_reel", side_effect=PermissionError("Instagram auth missing")):
+            process_outbox_queue()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()

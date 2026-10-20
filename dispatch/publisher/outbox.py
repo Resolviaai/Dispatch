@@ -191,19 +191,25 @@ def _process_outbox_queue_internal() -> int:
                 )
             continue
 
-        # Strict duration verification: 5.0s <= duration <= 180.0s for valid video media
-        is_valid, meta, _ = probe_video(video_path)
-        if is_valid and meta.get("duration") is not None:
+        # Reject corrupt or unsupported media before any publisher can perform a real upload.
+        is_valid, meta, validation_error = probe_video(video_path)
+        meta = meta or {}
+        if not is_valid or meta.get("duration") is None:
+            err_msg = f"Video validation failed: {validation_error or 'unsupported or corrupt media'}"
+        else:
             actual_duration = float(meta["duration"])
+            err_msg = None
             if actual_duration < MIN_CLIP_DURATION or actual_duration > MAX_CLIP_DURATION:
                 err_msg = f"Clip duration ({actual_duration:.2f}s) violates absolute duration requirements [{MIN_CLIP_DURATION}s, {MAX_CLIP_DURATION}s]"
-                logger.error("Job %s cannot be published: %s", job_id, err_msg)
-                with db.get_db_connection() as conn:
-                    conn.execute(
-                        "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
-                        (err_msg, job_id)
-                    )
-                continue
+
+        if err_msg:
+            logger.error("Job %s cannot be published: %s", job_id, err_msg)
+            with db.get_db_connection() as conn:
+                conn.execute(
+                    "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
+                    (err_msg, job_id)
+                )
+            continue
 
         # Atomically claim job as uploading
         with db.get_db_connection() as conn:

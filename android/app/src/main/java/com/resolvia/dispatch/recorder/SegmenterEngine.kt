@@ -1,6 +1,7 @@
 package com.resolvia.dispatch.recorder
 
 import android.content.Context
+import androidx.room.withTransaction
 import androidx.work.*
 import com.resolvia.dispatch.data.*
 import kotlinx.coroutines.*
@@ -49,7 +50,13 @@ class SegmenterEngine(
     ): String = withContext(Dispatchers.IO) {
         val sessionId = "sess_${System.currentTimeMillis()}"
         val session = SessionEntity(sessionId = sessionId, notes = notes)
-        dao.insertSession(session)
+        RecordingForegroundService.markSessionActive(sessionId)
+        try {
+            dao.insertSession(session)
+        } catch (e: Exception) {
+            RecordingForegroundService.markSessionInactive(sessionId)
+            throw e
+        }
 
         currentSessionId = sessionId
         currentSequenceNumber = 0
@@ -62,38 +69,47 @@ class SegmenterEngine(
 
         if (!bound) {
             isSessionActive = false
+            RecordingForegroundService.markSessionInactive(sessionId)
+            dao.updateSessionStatus(sessionId, 0, "FINALIZED")
             throw IllegalStateException("Failed to bind camera capture to foreground service")
         }
 
-        withContext(Dispatchers.Main) {
-            startNextSegment(cameraManager)
+        try {
+            withContext(Dispatchers.Main) {
+                startNextSegment(cameraManager)
+            }
+        } catch (e: Exception) {
+            isSessionActive = false
+            RecordingForegroundService.markSessionInactive(sessionId)
+            RecordingForegroundService.stop(context)
+            throw e
         }
 
         sessionId
     }
 
-    fun startNextSegment(cameraManager: CameraCaptureManager) {
+    suspend fun startNextSegment(cameraManager: CameraCaptureManager) {
         if (!isSessionActive) return
         val sessionId = currentSessionId ?: return
 
         currentSequenceNumber++
-        val segId = String.format("%s_seg_%04d", sessionId, currentSequenceNumber)
+        val sequenceNumber = currentSequenceNumber
+        val segId = String.format("%s_seg_%04d", sessionId, sequenceNumber)
         val tmpFile = File(recordingsDir, "$segId.tmp")
 
         currentSegmentId = segId
         currentTmpFile = tmpFile
 
-        scope.launch(Dispatchers.IO) {
-            val segment = SegmentEntity(
-                segmentId = segId,
-                sessionId = sessionId,
-                sequenceNumber = currentSequenceNumber,
-                filename = "$segId.mp4",
-                filepath = File(recordingsDir, "$segId.mp4").absolutePath,
-                status = "RECORDING"
-            )
-            dao.insertSegment(segment)
-        }
+        val segment = SegmentEntity(
+            segmentId = segId,
+            sessionId = sessionId,
+            sequenceNumber = sequenceNumber,
+            filename = "$segId.mp4",
+            filepath = File(recordingsDir, "$segId.mp4").absolutePath,
+            status = "RECORDING"
+        )
+        // Persist the row before CameraX can begin writing; recovery must always see ownership.
+        withContext(Dispatchers.IO) { dao.insertSegment(segment) }
 
         cameraManager.startSegmentRecording(
             targetTmpFile = tmpFile,
@@ -102,29 +118,65 @@ class SegmenterEngine(
                 segmentRollJob?.cancel()
                 activeFinalizeDeferred?.complete(Unit)
                 scope.launch(Dispatchers.IO) {
-                    if (errorCode == -2) {
-                        dao.deleteSegment(segId)
-                    } else {
+                    try {
+                        // Keep the row and any partial file as recovery evidence on every hardware error.
                         dao.updateSegmentStatus(segId, "ERROR_$errorCode")
-                    }
-                    if (errorCode == -1) {
-                        // Uninitialized hardware: abort session instead of infinite error loop
-                        isSessionActive = false
-                        android.util.Log.e("SegmenterEngine", "Hardware capture uninitialized; aborting session")
-                    } else if (isSessionActive) {
-                        withContext(Dispatchers.Main) {
-                            startNextSegment(cameraManager)
+                        if (errorCode == -1) {
+                            // Uninitialized hardware: abort session instead of infinite error loop.
+                            isSessionActive = false
+                            android.util.Log.e("SegmenterEngine", "Hardware capture uninitialized; aborting session")
+                        } else if (isSessionActive) {
+                            withContext(Dispatchers.Main) {
+                                startNextSegment(cameraManager)
+                            }
                         }
+                    } catch (e: Exception) {
+                        android.util.Log.e("SegmenterEngine", "Could not persist or restart after recording error", e)
+                        isSessionActive = false
+                    }
+                    if (!isSessionActive) {
+                        // Leave the session marked RECORDING so the next worker can safely recover it.
+                        RecordingForegroundService.markSessionInactive(sessionId)
+                        RecordingForegroundService.stop(context)
                     }
                 }
             },
             onFinalized = { finalizedFile, durationMs ->
-                val seq = currentSequenceNumber
                 scope.launch(Dispatchers.IO) {
-                    onSegmentHardwareFinalized(segId, sessionId, seq, finalizedFile, durationMs)
-                    if (isSessionActive) {
+                    var committed = false
+                    var sessionCanFinalize = false
+                    try {
+                        onSegmentHardwareFinalized(segId, sessionId, sequenceNumber, finalizedFile, durationMs)
+                        committed = true
+                        sessionCanFinalize = true
+                    } catch (e: Exception) {
+                        android.util.Log.e("SegmenterEngine", "Could not commit finalized segment $segId", e)
+                        runCatching { dao.updateSegmentStatus(segId, "ERROR_FINALIZATION") }
+                        activeFinalizeDeferred?.complete(Unit)
+                        isSessionActive = false
+                    }
+
+                    if (committed && isSessionActive) {
                         withContext(Dispatchers.Main) {
-                            startNextSegment(cameraManager)
+                            try {
+                                startNextSegment(cameraManager)
+                            } catch (e: Exception) {
+                                android.util.Log.e("SegmenterEngine", "Could not start the next recording segment", e)
+                                isSessionActive = false
+                                sessionCanFinalize = false
+                            }
+                        }
+                    }
+
+                    if (!isSessionActive) {
+                        try {
+                            if (sessionCanFinalize) dao.updateSessionStatus(sessionId, sequenceNumber, "FINALIZED")
+                        } catch (e: Exception) {
+                            // Keep RECORDING in Room so upload recovery can inspect the committed files.
+                            android.util.Log.e("SegmenterEngine", "Could not finalize session state", e)
+                        } finally {
+                            RecordingForegroundService.markSessionInactive(sessionId)
+                            RecordingForegroundService.stop(context)
                         }
                     }
                 }
@@ -149,8 +201,13 @@ class SegmenterEngine(
         durationMs: Long
     ) = withContext(Dispatchers.IO) {
         if (!tmpFile.exists() || tmpFile.length() == 0L || durationMs < 1000L) {
-            tmpFile.delete()
-            dao.deleteSegment(segId)
+            val failureStatus = when {
+                !tmpFile.exists() -> "FAILED_MISSING_FILE"
+                tmpFile.length() == 0L -> "FAILED_EMPTY"
+                else -> "FAILED_TOO_SHORT"
+            }
+            // Preserve the database row; retain non-empty evidence for diagnosis/recovery.
+            dao.updateSegmentStatus(segId, failureStatus)
             activeFinalizeDeferred?.complete(Unit)
             return@withContext
         }
@@ -179,17 +236,18 @@ class SegmenterEngine(
             createdAt = now - durationMs,
             finalizedAt = now
         )
-        dao.updateSegment(updatedSegment)
-
-        // Durable Outbox Entry
-        dao.insertOutbox(
-            OutboxEntity(
-                segmentId = segId,
-                sessionId = sessId,
-                remoteOffset = 0L,
-                status = "QUEUED_FOR_UPLOAD"
+        // Commit the segment state and outbox row together so a process death cannot strand a file.
+        database.withTransaction {
+            dao.updateSegment(updatedSegment)
+            dao.insertOutbox(
+                OutboxEntity(
+                    segmentId = segId,
+                    sessionId = sessId,
+                    remoteOffset = 0L,
+                    status = "QUEUED_FOR_UPLOAD"
+                )
             )
-        )
+        }
 
         // Trigger WorkManager background sync immediately
         triggerYouTubeUpload()
@@ -213,17 +271,11 @@ class SegmenterEngine(
             activeFinalizeDeferred = null
         }
 
-        // Stop foreground service after final segment is safely committed
+        // Stop foreground service after finalization has been requested. The completion callback
+        // marks the session FINALIZED and clears its recovery guard only after the file is committed.
         RecordingForegroundService.stop(context)
 
         withContext(Dispatchers.IO) {
-            val sessId = currentSessionId ?: return@withContext
-            val session = SessionEntity(
-                sessionId = sessId,
-                totalSegments = currentSequenceNumber,
-                status = "FINALIZED"
-            )
-            dao.updateSession(session)
             currentSessionId = null
             currentSegmentId = null
             currentTmpFile = null

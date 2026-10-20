@@ -172,10 +172,21 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
             # Assert ingest / download was NOT called
             mock_ingest.assert_not_called()
 
-            # Record must remain in WAITING_FOR_YOUTUBE_PROCESSING (not falsely marked COMPLETED or FAILED)
+            # Mark it actionable without treating YouTube's delay as a permanent failure.
             record = db.get_youtube_video(vid)
-            self.assertEqual(record["status"], "WAITING_FOR_YOUTUBE_PROCESSING")
+            self.assertEqual(record["status"], "STALLED_YOUTUBE_PROCESSING")
             self.assertIn("[STALLED_YOUTUBE_PROCESSING]", record["last_error"])
+
+            # A later successful YouTube result must revisit this same video ID and resume ingestion.
+            mock_status[vid]["processing_status"] = "succeeded"
+            mock_status[vid]["upload_status"] = "processed"
+            self.poller.poll_once()
+            mock_ingest.assert_called_once_with(
+                url_or_id=vid,
+                dispatch_id="dsp_test_stall",
+                session_id=None,
+                sequence_number=None
+            )
 
     def test_05_batch_status_query_parses_responses_correctly(self):
         """5. get_youtube_processing_status parses multiple items from service."""

@@ -332,7 +332,11 @@ if claimed:
             self.assertEqual(len(rows), 4)
 
         # Without live credentials configured, outbox marks jobs blocked_needs_auth
-        with patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("YouTube auth missing")):
+        with patch("dispatch.publisher.outbox.probe_video", return_value=(True, {"duration": 10.0}, None)), \
+             patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("YouTube auth missing")), \
+             patch("dispatch.publisher.outbox.upload_instagram_reel", side_effect=PermissionError("Instagram auth missing")), \
+             patch("dispatch.publisher.outbox.upload_linkedin_video", side_effect=PermissionError("LinkedIn auth missing")), \
+             patch("dispatch.publisher.outbox.upload_x_video", side_effect=PermissionError("X auth missing")):
             success_count = process_outbox_queue()
             self.assertEqual(success_count, 0)
 

@@ -176,7 +176,11 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
         self.assertEqual(res.status_code, 200)
 
         # Worker processes outbox queue with missing credentials
-        with patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("Missing YouTube OAuth")):
+        with patch("dispatch.publisher.outbox.probe_video", return_value=(True, {"duration": 10.0}, None)), \
+             patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("Missing YouTube OAuth")), \
+             patch("dispatch.publisher.outbox.upload_instagram_reel", side_effect=PermissionError("Missing Instagram auth")), \
+             patch("dispatch.publisher.outbox.upload_linkedin_video", side_effect=PermissionError("Missing LinkedIn auth")), \
+             patch("dispatch.publisher.outbox.upload_x_video", side_effect=PermissionError("Missing X auth")):
             success_count = process_outbox_queue()
             self.assertEqual(success_count, 0)
 

@@ -31,6 +31,21 @@ class RecordingForegroundService : LifecycleService() {
         @Volatile
         var cameraManager: CameraCaptureManager? = null
 
+        /** In-process ownership marker so upload recovery cannot mistake a live session for a crash. */
+        @Volatile
+        var activeSessionId: String? = null
+            private set
+
+        fun markSessionActive(sessionId: String) {
+            activeSessionId = sessionId
+        }
+
+        fun markSessionInactive(sessionId: String) {
+            if (activeSessionId == sessionId) activeSessionId = null
+        }
+
+        fun isSessionActive(sessionId: String): Boolean = activeSessionId == sessionId
+
         @Volatile
         private var onBoundCallback: ((Boolean) -> Unit)? = null
 

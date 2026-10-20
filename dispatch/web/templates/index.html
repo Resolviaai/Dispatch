@@ -694,6 +694,9 @@
           } else if (job.status === "RETRY_PENDING") {
             statusBadgeClass = "bg-amber-900/80 text-amber-200 border-amber-600";
             statusLabel = `Retry Pending (#${job.retry_count})`;
+          } else if (job.status === "STALLED") {
+            statusBadgeClass = "bg-red-950/80 text-red-300 border-red-700";
+            statusLabel = "Stalled — check YouTube processing";
           }
 
           const currentStageIdx = STAGES.indexOf(job.current_stage);

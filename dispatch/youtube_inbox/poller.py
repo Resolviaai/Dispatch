@@ -125,9 +125,11 @@ class YouTubeInboxPoller:
             except Exception as e:
                 logger.warning("Authenticated YouTube upload check failed: %s", e)
 
-            # 2. Also retrieve any videos currently waiting in the database to prevent stalling
+            # 2. Recheck waiting and stalled videos so a delayed YouTube job can recover without re-uploading.
             try:
-                waiting_in_db = db.list_youtube_inbox(status="WAITING_FOR_YOUTUBE_PROCESSING", limit=50)
+                waiting_in_db = []
+                for status in ("WAITING_FOR_YOUTUBE_PROCESSING", "STALLED_YOUTUBE_PROCESSING"):
+                    waiting_in_db.extend(db.list_youtube_inbox(status=status, limit=50))
                 known_ids = {v["video_id"] for v in discovered_videos}
                 for w in waiting_in_db:
                     vid = w["video_id"]
@@ -220,7 +222,7 @@ class YouTubeInboxPoller:
                                 "[STALLED] YouTube processing for %s (%s) has exceeded %d minutes (elapsed: %.1f min).",
                                 video_id, title, timeout_minutes, elapsed_min
                             )
-                            db.update_youtube_video(video_id, status="WAITING_FOR_YOUTUBE_PROCESSING", last_error=warn_msg)
+                            db.update_youtube_video(video_id, status="STALLED_YOUTUBE_PROCESSING", last_error=warn_msg)
                         else:
                             logger.info(
                                 "Video %s is still processing on YouTube (%.1fm elapsed). Waiting for completion without downloading.",

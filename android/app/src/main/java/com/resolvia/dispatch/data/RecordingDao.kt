@@ -11,6 +11,9 @@ interface RecordingDao {
     @Update
     suspend fun updateSession(session: SessionEntity)
 
+    @Query("UPDATE sessions SET totalSegments = :totalSegments, status = :status WHERE sessionId = :sessionId")
+    suspend fun updateSessionStatus(sessionId: String, totalSegments: Int, status: String)
+
     @Query("SELECT * FROM sessions WHERE status = 'RECORDING'")
     suspend fun getInterruptedSessions(): List<SessionEntity>
 
@@ -20,7 +23,7 @@ interface RecordingDao {
     @Update
     suspend fun updateSegment(segment: SegmentEntity)
 
-    @Query("SELECT * FROM segments WHERE sessionId = :sessionId AND status = 'RECORDING'")
+    @Query("SELECT * FROM segments WHERE sessionId = :sessionId AND (status = 'RECORDING' OR status LIKE 'ERROR_%')")
     suspend fun getUnfinalizedSegments(sessionId: String): List<SegmentEntity>
 
     @Query("SELECT * FROM segments WHERE status IN ('QUEUED_FOR_UPLOAD', 'FAILED_RETRY', 'WAITING_FOR_YOUTUBE') ORDER BY sequenceNumber ASC")

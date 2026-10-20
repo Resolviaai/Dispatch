@@ -1,12 +1,14 @@
 package com.resolvia.dispatch.sync
 
 import android.content.Context
+import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.resolvia.dispatch.data.AppDatabase
 import com.resolvia.dispatch.data.PairingManager
+import com.resolvia.dispatch.recorder.RecordingForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -514,16 +516,22 @@ class YouTubeDirectUploadWorker(
             val recordingsDir = File(context.getExternalFilesDir(null), "recordings")
 
             for (sess in interrupted) {
+                if (!shouldRecoverRecordingSession(sess.sessionId, RecordingForegroundService.activeSessionId)) {
+                    android.util.Log.i("YouTubeUploader", "Skipping recovery for live recording session ${sess.sessionId}")
+                    continue
+                }
+
                 val unfinalized = dao.getUnfinalizedSegments(sess.sessionId)
                 for (seg in unfinalized) {
                     val tmp = File(recordingsDir, "${seg.segmentId}.tmp")
                     val finalMp4 = File(recordingsDir, "${seg.segmentId}.mp4")
+                    val recoveryFile = findRecoveryCandidate(tmp, finalMp4)
 
-                    if (tmp.exists() && tmp.length() > 0L) {
+                    if (recoveryFile != null) {
                         var hasValidVideo = false
                         val retriever = MediaMetadataRetriever()
                         try {
-                            retriever.setDataSource(tmp.absolutePath)
+                            retriever.setDataSource(recoveryFile.absolutePath)
                             val hasVideo = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
                             val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                             if (hasVideo == "yes" && duration > 0L) {
@@ -537,9 +545,13 @@ class YouTubeDirectUploadWorker(
                         }
 
                         if (hasValidVideo) {
-                            val size = tmp.length()
-                            val sha = calculateSha256(tmp)
-                            if (tmp.renameTo(finalMp4)) {
+                            val size = recoveryFile.length()
+                            val sha = calculateSha256(recoveryFile)
+                            if (recoveryFile != finalMp4 && !recoveryFile.renameTo(finalMp4)) {
+                                recoveryFile.copyTo(finalMp4, overwrite = true)
+                                recoveryFile.delete()
+                            }
+                            db.withTransaction {
                                 dao.updateSegment(
                                     seg.copy(
                                         filepath = finalMp4.absolutePath,
@@ -556,16 +568,18 @@ class YouTubeDirectUploadWorker(
                                         status = "QUEUED_FOR_UPLOAD"
                                     )
                                 )
-                                android.util.Log.i("YouTubeUploader", "Recovered crash segment ${seg.segmentId} as valid mp4.")
                             }
+                            android.util.Log.i("YouTubeUploader", "Recovered crash segment ${seg.segmentId} as valid mp4.")
                         } else {
-                            android.util.Log.w("YouTubeUploader", "Discarding unplayable crash segment ${seg.segmentId}")
-                            try { tmp.delete() } catch (_: Exception) {}
+                            android.util.Log.w("YouTubeUploader", "Preserving unplayable crash segment ${seg.segmentId} for recovery")
+                            // Non-empty partial media is evidence; keep it available for repair/export.
                             dao.updateSegmentStatus(seg.segmentId, "FAILED_CORRUPT")
                         }
                     } else if (tmp.exists() && tmp.length() == 0L) {
                         try { tmp.delete() } catch (_: Exception) {}
                         dao.updateSegmentStatus(seg.segmentId, "FAILED_EMPTY")
+                    } else if (!tmp.exists()) {
+                        dao.updateSegmentStatus(seg.segmentId, "FAILED_MISSING_FILE")
                     }
                 }
                 dao.updateSession(sess.copy(status = "CRASH_RECOVERED"))

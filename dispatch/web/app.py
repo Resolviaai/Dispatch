@@ -424,14 +424,14 @@ async def get_pipeline_jobs():
             if st in (
                 "DOWNLOADING", "VALIDATING", "WAITING_FOR_TRANSCRIPT",
                 "TRANSCRIBED", "ANALYZING", "CLIPS_DEFINED",
-                "RENDERING", "WAITING_FOR_YOUTUBE_PROCESSING"
+                "RENDERING", "WAITING_FOR_YOUTUBE_PROCESSING", "STALLED_YOUTUBE_PROCESSING"
             ):
                 jobs.append({
                     "id": f"yt_{item['video_id']}",
                     "chunk_id": item.get("dispatch_id") or item["video_id"],
                     "session_id": item.get("session_id") or "",
-                    "current_stage": st.lower(),
-                    "status": "processing",
+                    "current_stage": "waiting_for_youtube_processing" if st == "STALLED_YOUTUBE_PROCESSING" else st.lower(),
+                    "status": "STALLED" if st == "STALLED_YOUTUBE_PROCESSING" else "processing",
                     "title": item.get("title", ""),
                     "video_id": item["video_id"],
                     "created_at": item.get("discovered_at") or item.get("upload_time"),
