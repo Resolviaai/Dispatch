@@ -2503,39 +2503,21 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 })}
               />
 
-              {/* Spoken Word Active Highlight: Caption Layers ONLY */}
+              {/* Spoken Word Active Highlight Color: Caption Layers ONLY */}
               {isCaption && (
-                <div className="space-y-2 pt-1 border-t border-[#232832]">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-[11px] font-medium text-text-main">Active-Word Highlight</div>
-                      <div className="text-[10px] text-text-muted">Color spoken words dynamically as audio plays</div>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={currentStyle?.highlight_enabled ?? true}
-                        onChange={(e) => patch({ highlight_enabled: e.target.checked })}
-                        className="sr-only peer"
-                      />
-                      <div className="w-8 h-4.5 bg-surface-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-primary"></div>
-                    </label>
-                  </div>
-
-                  {(currentStyle?.highlight_enabled ?? true) && (
-                    <CapCutColorRow
-                      label="Highlight Color"
-                      value={currentStyle?.highlight_color}
-                      defaultValue="#FFE600"
-                      onChange={(c) => patch({ highlight_color: c })}
-                      onOpenCustom={() => setActiveColorPicker({
-                        isOpen: true,
-                        title: 'Custom Spoken Highlight Color',
-                        property: 'highlight_color',
-                        color: currentStyle?.highlight_color || '#FFE600',
-                      })}
-                    />
-                  )}
+                <div className="pt-2 border-t border-[#232832]">
+                  <CapCutColorRow
+                    label="Highlight Color"
+                    value={currentStyle?.highlight_color}
+                    defaultValue="#FFE600"
+                    onChange={(c) => patch({ highlight_color: c })}
+                    onOpenCustom={() => setActiveColorPicker({
+                      isOpen: true,
+                      title: 'Custom Spoken Highlight Color',
+                      property: 'highlight_color',
+                      color: currentStyle?.highlight_color || '#FFE600',
+                    })}
+                  />
                 </div>
               )}
 

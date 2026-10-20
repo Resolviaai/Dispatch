@@ -1361,6 +1361,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // Canonical Caption Track with Stale Protection
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [captionClipId, setCaptionClipId] = useState<string | null>(null);
+  const [captionLoadingState, setCaptionLoadingState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle');
+  const [captionErrorMessage, setCaptionErrorMessage] = useState<string | null>(null);
   const {
     track: captionTrack,
     setTrack: setCaptionTrack,
@@ -1509,23 +1511,48 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
 
     // Fetch canonical caption track for current clip
+    setCaptionLoadingState('loading');
+    setCaptionErrorMessage(null);
+    setCaptionClipId(null); // Clear previous track association immediately
+
     const controller = new AbortController();
     fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { signal: controller.signal })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((rawData) => {
-        if (rawData) {
-          const norm = normalizeCaptionTrack(rawData, currentClip.id, currentClip.duration || 40);
-          resetHistory(norm);
-          setCaptionClipId(currentClip.id);
-          setSaveStatus('saved');
-          if (norm.groups && norm.groups.length > 0) {
-            setSelectedGroupId(norm.groups[0].id);
+      .then(async (res) => {
+        if (res.ok) {
+          const rawData = await res.json().catch(() => null);
+          if (rawData && Array.isArray(rawData.groups)) {
+            const norm = normalizeCaptionTrack(rawData, currentClip.id, currentClip.duration || 40);
+            resetHistory(norm);
+            setCaptionClipId(currentClip.id);
+            setCaptionLoadingState(norm.groups.length > 0 ? 'success' : 'empty');
+            setSaveStatus('saved');
+            if (norm.groups && norm.groups.length > 0) {
+              setSelectedGroupId(norm.groups[0].id);
+            }
+          } else {
+            const emptyTrack = normalizeCaptionTrack({ clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
+            resetHistory(emptyTrack);
+            setCaptionClipId(currentClip.id);
+            setCaptionLoadingState('empty');
+            setSaveStatus('saved');
           }
+        } else if (res.status === 404) {
+          // Genuinely empty initial track for fresh clip
+          const emptyTrack = normalizeCaptionTrack({ clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
+          resetHistory(emptyTrack);
+          setCaptionClipId(currentClip.id);
+          setCaptionLoadingState('empty');
+          setSaveStatus('saved');
+        } else {
+          setCaptionLoadingState('error');
+          setCaptionErrorMessage(`HTTP ${res.status}: Failed to load captions`);
         }
       })
       .catch((err) => {
         if ((err as DOMException)?.name !== 'AbortError') {
           console.warn('Captions unavailable for clip:', err);
+          setCaptionLoadingState('error');
+          setCaptionErrorMessage(err.message || 'Network communication failure');
         }
       });
 
@@ -1872,7 +1899,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // Explicit / Auto Save Captions to Server
   const handleSaveCaptions = async (): Promise<boolean> => {
-    if (!currentClip || !captionTrack) return true;
+    if (!currentClip) return false;
+    if (!captionTrack) return true;
+    if (captionTrack.clip_id && captionTrack.clip_id !== currentClip.id) {
+      console.error(`Refusing to save caption track: clip_id mismatch (${captionTrack.clip_id} !== ${currentClip.id})`);
+      setSaveStatus('error');
+      setFeedback('Error: Caption track mismatch. Refusing to overwrite another clip.');
+      return false;
+    }
     setSaveStatus('saving');
     try {
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
@@ -2004,6 +2038,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     try {
       if (captionTrack) {
+        if (captionTrack.clip_id && captionTrack.clip_id !== currentClip.id) {
+          throw new Error(`Refusing to approve: caption track (${captionTrack.clip_id}) belongs to another clip (${currentClip.id})`);
+        }
         const capRes = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
           method: 'POST',
           headers: getAuthHeaders(),
@@ -2735,7 +2772,31 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // VIEW 3: FULL CAPTION STUDIO (Deep Edit Workspace)
   // =========================================================================
   const renderStudioView = () => {
-    if (!currentClip) return null;
+    if (!currentClip) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-[#0D1014] text-text-main p-6 select-none">
+          <div className="w-12 h-12 rounded-2xl bg-surface-200 border border-border flex items-center justify-center mb-3 text-text-muted">
+            <Film size={24} />
+          </div>
+          <h3 className="text-sm font-semibold text-text-main mb-1">Clip Unavailable</h3>
+          <p className="text-xs text-text-secondary text-center max-w-xs mb-4">
+            The requested clip was not found or has been unloaded from the library.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setViewMode('library');
+              setSelectedClipId(null);
+              setSelectedGroupId(null);
+            }}
+            className="h-8 px-4 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-all shadow-hero-sm"
+          >
+            <ChevronLeft size={14} />
+            <span>Return to Library</span>
+          </button>
+        </div>
+      );
+    }
 
     return (
       <div className="w-full h-full flex flex-col bg-[#0D1014] text-text-main overflow-hidden select-none relative">
@@ -2937,28 +2998,84 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <>
               {/* 4. MULTI-TRACK TIMELINE (Seamless edge-to-edge surface filling available workspace) */}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-[#13161B]">
-                <CaptionTimeline
-                  track={visibleCaptionTrack}
-                  currentTime={currentTime}
-                  duration={duration || currentClip.duration || 40}
-                  selectedGroupId={selectedGroupId}
-                  isVideoSelected={isVideoSelected}
-                  isPlaying={isPlaying}
-                  filmstripFrames={filmstripFrames}
-                  mediaElementRef={videoRef}
-                  clipStart={currentClip.start_time}
-                  clipEnd={currentClip.end_time}
-                  paddedStart={currentClip.padded_start}
-                  paddedEnd={currentClip.padded_end}
-                  onTrimChange={handleTrimChange}
-                  onSeek={handleSeek}
-                  onSelectGroup={handleSelectGroup}
-                  onSelectVideo={() => {
-                    setIsVideoSelected(true);
-                    setSelectedGroupId(null);
-                  }}
-                  onUpdateGroup={handleUpdateGroup}
-                />
+                {captionLoadingState === 'loading' && !visibleCaptionTrack ? (
+                  <div className="flex-1 min-h-[200px] flex flex-col items-center justify-center text-text-muted gap-2">
+                    <RotateCw size={22} className="animate-spin text-primary" />
+                    <span className="text-xs">Loading captions…</span>
+                  </div>
+                ) : captionLoadingState === 'error' && !visibleCaptionTrack ? (
+                  <div className="flex-1 min-h-[200px] flex flex-col items-center justify-center p-4 text-center">
+                    <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center mb-2">
+                      <AlertCircle size={20} />
+                    </div>
+                    <p className="text-xs font-semibold text-text-main mb-1">Failed to load captions</p>
+                    <p className="text-[11px] text-text-muted mb-3 max-w-xs">{captionErrorMessage || 'HTTP communication failure'}</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCaptionLoadingState('loading');
+                          fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost))
+                            .then(async (res) => {
+                              if (res.ok) {
+                                const raw = await res.json().catch(() => null);
+                                const norm = normalizeCaptionTrack(raw || { clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
+                                resetHistory(norm);
+                                setCaptionClipId(currentClip.id);
+                                setCaptionLoadingState(norm.groups.length > 0 ? 'success' : 'empty');
+                              } else {
+                                setCaptionLoadingState('error');
+                                setCaptionErrorMessage(`HTTP ${res.status}`);
+                              }
+                            })
+                            .catch((err) => {
+                              setCaptionLoadingState('error');
+                              setCaptionErrorMessage(err.message || 'Network error');
+                            });
+                        }}
+                        className="h-7 px-3 rounded-md bg-surface-200 hover:bg-surface-300 border border-border text-xs font-medium text-text-main flex items-center gap-1 active:scale-95"
+                      >
+                        <RotateCw size={12} />
+                        <span>Retry</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const emptyTrack = normalizeCaptionTrack({ clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
+                          resetHistory(emptyTrack);
+                          setCaptionClipId(currentClip.id);
+                          setCaptionLoadingState('empty');
+                        }}
+                        className="h-7 px-3 rounded-md bg-primary hover:bg-primary-hover text-xs font-medium text-white flex items-center gap-1 active:scale-95"
+                      >
+                        <span>Start Fresh</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <CaptionTimeline
+                    track={visibleCaptionTrack}
+                    currentTime={currentTime}
+                    duration={duration || currentClip.duration || 40}
+                    selectedGroupId={selectedGroupId}
+                    isVideoSelected={isVideoSelected}
+                    isPlaying={isPlaying}
+                    filmstripFrames={filmstripFrames}
+                    mediaElementRef={videoRef}
+                    clipStart={currentClip.start_time}
+                    clipEnd={currentClip.end_time}
+                    paddedStart={currentClip.padded_start}
+                    paddedEnd={currentClip.padded_end}
+                    onTrimChange={handleTrimChange}
+                    onSeek={handleSeek}
+                    onSelectGroup={handleSelectGroup}
+                    onSelectVideo={() => {
+                      setIsVideoSelected(true);
+                      setSelectedGroupId(null);
+                    }}
+                    onUpdateGroup={handleUpdateGroup}
+                  />
+                )}
               </div>
 
               {/* 5. CONTEXTUAL BOTTOM WORKSPACE / EXPANDED TOOL PANEL (Docked flush edge-to-edge) */}

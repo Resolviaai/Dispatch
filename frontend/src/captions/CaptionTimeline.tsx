@@ -50,11 +50,15 @@ interface DragSession {
   type: 'move' | 'trim-start' | 'trim-end';
   groupId: string;
   startX: number;
+  startY: number;
+  lastY: number;
   origStart: number;
   origEnd: number;
   origWords: Word[];
   stableAnchors: number[];
   playheadTime: number;
+  isIntentLocked?: boolean;
+  isVerticalScroll?: boolean;
 }
 
 export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
@@ -368,9 +372,29 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   };
 
   const handleLeftRailWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop += e.deltaY;
     }
+  };
+
+  const leftRailTouchRef = useRef<{ startY: number; startScrollTop: number } | null>(null);
+  const handleLeftRailTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length > 0) {
+      leftRailTouchRef.current = {
+        startY: e.touches[0].clientY,
+        startScrollTop: scrollContainerRef.current?.scrollTop || 0,
+      };
+    }
+  };
+  const handleLeftRailTouchMove = (e: React.TouchEvent) => {
+    if (leftRailTouchRef.current && scrollContainerRef.current && e.touches.length > 0) {
+      const dy = e.touches[0].clientY - leftRailTouchRef.current.startY;
+      scrollContainerRef.current.scrollTop = leftRailTouchRef.current.startScrollTop - dy;
+    }
+  };
+  const handleLeftRailTouchEnd = () => {
+    leftRailTouchRef.current = null;
   };
 
   // Direct swipe/scrub on canvas or ruler (distinguishes horizontal scrub from vertical scrolling)
@@ -477,19 +501,52 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       type,
       groupId: grp.id,
       startX: e.clientX,
+      startY: e.clientY,
+      lastY: e.clientY,
       origStart: grp.start,
       origEnd: grp.end,
       origWords: grp.words ? [...grp.words] : [],
       stableAnchors,
       playheadTime: currentTimeRef.current,
+      isIntentLocked: type !== 'move',
+      isVerticalScroll: false,
     });
 
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (type !== 'move') {
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    }
   };
 
   const handleBlockPointerMove = (e: React.PointerEvent) => {
     if (!dragSession || !onUpdateGroup) return;
     e.stopPropagation();
+
+    // Intent arbitration: distinguish vertical scrolling across multiple layer tracks from horizontal dragging
+    if (!dragSession.isIntentLocked && dragSession.type === 'move') {
+      const dx = Math.abs(e.clientX - dragSession.startX);
+      const dy = Math.abs(e.clientY - dragSession.startY);
+      if (dx > 5 || dy > 5) {
+        if (dy > dx) {
+          dragSession.isIntentLocked = true;
+          dragSession.isVerticalScroll = true;
+        } else {
+          dragSession.isIntentLocked = true;
+          dragSession.isVerticalScroll = false;
+          (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        }
+      } else {
+        return;
+      }
+    }
+
+    if (dragSession.isVerticalScroll) {
+      if (scrollContainerRef.current) {
+        const deltaY = e.clientY - dragSession.lastY;
+        scrollContainerRef.current.scrollTop -= deltaY;
+        dragSession.lastY = e.clientY;
+      }
+      return;
+    }
 
     const deltaSec = (e.clientX - dragSession.startX) / pxPerSec;
     const origDuration = Math.max(0.1, dragSession.origEnd - dragSession.origStart);
@@ -602,21 +659,13 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       }
       setSnapGuideTime(activeSnap);
 
-      // Preserve authentic speech word timestamps without proportional stretching
+      // Preserve authentic speech word timestamps without proportional stretching or fabricating words
       const remainingWords = dragSession.origWords.filter((w) => w.end > finalStart);
-      const nextWords: Word[] = remainingWords.length > 0
-        ? remainingWords.map((w) => ({
-            ...w,
-            start: Math.max(finalStart, w.start),
-            end: Math.max(finalStart, w.end),
-          }))
-        : dragSession.origWords.length > 0
-        ? [{
-            ...dragSession.origWords[dragSession.origWords.length - 1],
-            start: finalStart,
-            end: dragSession.origEnd,
-          }]
-        : [];
+      const nextWords: Word[] = remainingWords.map((w) => ({
+        ...w,
+        start: Math.max(finalStart, w.start),
+        end: Math.max(finalStart, w.end),
+      }));
 
       const patch: Partial<CaptionGroup> = {
         start: Number(finalStart.toFixed(3)),
@@ -643,21 +692,13 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       }
       setSnapGuideTime(activeSnap);
 
-      // Preserve authentic speech word timestamps without proportional stretching
+      // Preserve authentic speech word timestamps without proportional stretching or fabricating words
       const remainingWords = dragSession.origWords.filter((w) => w.start < finalEnd);
-      const nextWords: Word[] = remainingWords.length > 0
-        ? remainingWords.map((w) => ({
-            ...w,
-            start: Math.min(finalEnd, w.start),
-            end: Math.min(finalEnd, w.end),
-          }))
-        : dragSession.origWords.length > 0
-        ? [{
-            ...dragSession.origWords[0],
-            start: dragSession.origStart,
-            end: finalEnd,
-          }]
-        : [];
+      const nextWords: Word[] = remainingWords.map((w) => ({
+        ...w,
+        start: Math.min(finalEnd, w.start),
+        end: Math.min(finalEnd, w.end),
+      }));
 
       const patch: Partial<CaptionGroup> = {
         end: Number(finalEnd.toFixed(3)),
@@ -670,10 +711,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const handleBlockPointerUp = (e: React.PointerEvent) => {
     setSnapGuideTime(null);
-    if (latestBlockPatchRef.current && onUpdateGroup) {
+    if (!dragSession?.isVerticalScroll && latestBlockPatchRef.current && onUpdateGroup) {
       onUpdateGroup(latestBlockPatchRef.current.groupId, latestBlockPatchRef.current.patch, true);
-      latestBlockPatchRef.current = null;
     }
+    latestBlockPatchRef.current = null;
     if (dragSession) {
       setDragSession(null);
       try {
@@ -684,7 +725,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const handleBlockPointerCancel = (e: React.PointerEvent) => {
     setSnapGuideTime(null);
-    if (dragSession && onUpdateGroup) {
+    if (dragSession && !dragSession.isVerticalScroll && onUpdateGroup) {
       // Safely revert transient changes on cancellation
       onUpdateGroup(dragSession.groupId, {
         start: dragSession.origStart,
@@ -809,7 +850,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   return (
     <section
-      className="h-[370px] max-h-[370px] bg-[#13161B] overflow-hidden select-none flex flex-col shrink-0 min-h-0"
+      className="w-full flex-1 min-h-[220px] max-h-full bg-[#13161B] overflow-hidden select-none flex flex-col min-h-0"
     >
       {/* TIMELINE UTILITY BAR: Magnet Snapping + Clean compact zoom controls */}
       <div className="h-6 px-2 bg-[#16191E] border-b border-[#232832] flex items-center justify-between text-text-secondary text-[10px] shrink-0">
@@ -873,7 +914,14 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
           <div className="h-6 border-b border-[#232832] bg-[#16191E]" />
 
           {/* Track Headers (scrolls vertically with tracks) */}
-          <div ref={leftRailRef} onWheel={handleLeftRailWheel} className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <div
+            ref={leftRailRef}
+            onWheel={handleLeftRailWheel}
+            onTouchStart={handleLeftRailTouchStart}
+            onTouchMove={handleLeftRailTouchMove}
+            onTouchEnd={handleLeftRailTouchEnd}
+            className="flex-1 min-h-0 overflow-hidden flex flex-col touch-none"
+          >
             {/* Header: Main Video Track */}
             <button
               type="button"
@@ -967,7 +1015,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                 onSelectGroup(null);
               }
             }}
-            className="flex-1 overflow-x-auto overflow-y-auto relative bg-[#0D1014] no-scrollbar select-none cursor-ew-resize"
+            className="flex-1 overflow-x-auto overflow-y-auto relative bg-[#0D1014] timeline-scroll-canvas select-none cursor-ew-resize"
             style={{ touchAction: 'pan-x pan-y' }}
           >
             <div

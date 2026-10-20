@@ -98,6 +98,26 @@
   scrollbar-width: none;
 }
 
+/* Subtle, responsive vertical scrollbar for multi-layer timeline tracks */
+.timeline-scroll-canvas::-webkit-scrollbar {
+  width: 5px;
+  height: 0px;
+}
+.timeline-scroll-canvas::-webkit-scrollbar-track {
+  background: rgba(13, 16, 20, 0.6);
+}
+.timeline-scroll-canvas::-webkit-scrollbar-thumb {
+  background: #2E3239;
+  border-radius: 9999px;
+}
+.timeline-scroll-canvas::-webkit-scrollbar-thumb:hover {
+  background: #3E434D;
+}
+.timeline-scroll-canvas {
+  scrollbar-width: thin;
+  scrollbar-color: #2E3239 rgba(13, 16, 20, 0.6);
+}
+
 /* Polished creator-app scrubber */
 .creator-scrubber {
   -webkit-appearance: none;

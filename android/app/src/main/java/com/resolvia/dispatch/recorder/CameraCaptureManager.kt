@@ -139,10 +139,13 @@ class CameraCaptureManager(private val context: Context) {
         private set
 
     val isInitialized: Boolean
-        get() = videoCapture != null
+        get() = camera != null && videoCapture != null && !isBindingCamera
 
     var activePreviewView: PreviewView? = null
         private set
+
+    private val pendingReadyCallbacks = mutableListOf<() -> Unit>()
+    private val pendingErrorCallbacks = mutableListOf<(String) -> Unit>()
 
     /**
      * Builds a ResolutionSelector targeting crisp 16:9 aspect ratio and 1080p resolution across all devices.
@@ -213,9 +216,20 @@ class CameraCaptureManager(private val context: Context) {
         currentLensFacing = lensFacing
 
         if (isBindingCamera) {
-            Log.w(TAG, "Camera binding already in progress, ignoring duplicate trigger.")
+            Log.i(TAG, "Camera binding already in progress, queuing callbacks.")
+            onReady?.let { pendingReadyCallbacks.add(it) }
+            onError?.let { pendingErrorCallbacks.add(it) }
             return
         }
+
+        if (camera != null && videoCapture != null && activeLifecycleOwner == lifecycleOwner && currentLensFacing == lensFacing) {
+            Log.i(TAG, "Camera already cleanly bound and active. Re-confirming ready.")
+            onReady?.invoke()
+            return
+        }
+
+        onReady?.let { pendingReadyCallbacks.add(it) }
+        onError?.let { pendingErrorCallbacks.add(it) }
         isBindingCamera = true
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -264,13 +278,21 @@ class CameraCaptureManager(private val context: Context) {
 
                 isBindingCamera = false
                 Log.i(TAG, "CameraX High-Resolution 1080p VideoCapture bound successfully (Lens: $currentLensFacing).")
-                onReady?.invoke()
+                val callbacks = pendingReadyCallbacks.toList()
+                pendingReadyCallbacks.clear()
+                pendingErrorCallbacks.clear()
+                callbacks.forEach { it.invoke() }
 
             } catch (exc: Exception) {
                 isBindingCamera = false
+                camera = null
+                videoCapture = null
                 val msg = exc.message ?: "Camera binding failed"
                 Log.e(TAG, "Failed to bind CameraX lifecycle: $msg", exc)
-                onError?.invoke(msg)
+                val errCallbacks = pendingErrorCallbacks.toList()
+                pendingReadyCallbacks.clear()
+                pendingErrorCallbacks.clear()
+                errCallbacks.forEach { it.invoke(msg) }
             }
         }, ContextCompat.getMainExecutor(context))
     }

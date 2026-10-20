@@ -227,6 +227,27 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
   };
 
+  // Reliable stream attachment callback ref: guarantees stream connects when conditional video element mounts
+  const attachStreamToVideo = useCallback((videoEl: HTMLVideoElement | null) => {
+    videoRef.current = videoEl;
+    if (videoEl && streamRef.current) {
+      if (videoEl.srcObject !== streamRef.current) {
+        videoEl.srcObject = streamRef.current;
+        videoEl.play().catch(() => {});
+      }
+    }
+  }, []);
+
+  // Post-mount synchronization effect for stream attachment
+  useEffect(() => {
+    if (hasWebcam && videoRef.current && streamRef.current) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.play().catch(() => {});
+      }
+    }
+  }, [hasWebcam]);
+
   // Reliable camera hardware capability synchronization (exposure, zoom, facing)
   const syncCameraHardwareState = useCallback(() => {
     const info = Bridge.getExposureInfo();
@@ -712,7 +733,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         {/* Desktop Web Preview */}
         {hasWebcam ? (
           <video
-            ref={videoRef}
+            ref={attachStreamToVideo}
             autoPlay
             playsInline
             muted
