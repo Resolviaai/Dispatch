@@ -38,7 +38,24 @@ interface PreviewStageProps {
   onTriggerRender: () => Promise<void>;
   isRendering: boolean;
   pcHost: string;
+  onRetryClip: () => void;
 }
+
+export const PreviewMediaNotice: React.FC<{ title: string; detail: string; onRetry: () => void }> = ({ title, detail, onRetry }) => (
+  <div className="mx-auto max-w-sm p-6 text-center" role="alert">
+    <Film size={32} className="mx-auto mb-3 text-text-muted" />
+    <h3 className="text-[14px] font-semibold text-text-main">{title}</h3>
+    <p className="mt-2 text-[12px] text-text-muted">{detail}</p>
+    <button
+      type="button"
+      onClick={onRetry}
+      className="mt-4 inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border bg-surface-200 px-4 text-[12px] font-medium text-text-main hover:bg-surface-300 active:scale-[0.98]"
+    >
+      <RefreshCw size={14} />
+      Retry preview
+    </button>
+  </div>
+);
 
 function formatTimecode(sec: number): string {
   const safe = Math.max(0, Number.isFinite(sec) ? sec : 0);
@@ -65,6 +82,7 @@ export const PreviewStage: React.FC<PreviewStageProps> = ({
   onTriggerRender,
   isRendering,
   pcHost,
+  onRetryClip,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageContainerRef = useRef<HTMLDivElement>(null);
@@ -72,6 +90,8 @@ export const PreviewStage: React.FC<PreviewStageProps> = ({
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [failedSourceKey, setFailedSourceKey] = useState<string | null>(null);
+  const [mediaAttempt, setMediaAttempt] = useState(0);
 
   // Synchronize external seek with native video element
   useEffect(() => {
@@ -127,6 +147,14 @@ export const PreviewStage: React.FC<PreviewStageProps> = ({
     : clip?.source_video_url
     ? (clip.source_video_url.startsWith('http') ? clip.source_video_url : apiUrl(clip.source_video_url, pcHost))
     : null;
+
+  const mediaSourceKey = clip && resolvedVideoUrl ? `${clip.id}:${resolvedVideoUrl}` : null;
+  const hasPreviewError = Boolean(mediaSourceKey && failedSourceKey === mediaSourceKey);
+
+  const retryPreview = () => {
+    setFailedSourceKey(null);
+    setMediaAttempt((attempt) => attempt + 1);
+  };
 
   const currentLayoutMode: LayoutMode = clip?.layout_mode || 'fit_black';
 
@@ -196,10 +224,23 @@ export const PreviewStage: React.FC<PreviewStageProps> = ({
 
       {/* VIDEO PREVIEW STAGE CANVAS */}
       <div className="flex-1 min-h-0 w-full flex items-center justify-center p-3 relative overflow-hidden bg-[#0D0F12]">
-        {clip && resolvedVideoUrl ? (
+        {clip && resolvedVideoUrl && hasPreviewError ? (
+          <PreviewMediaNotice
+            title="Video preview failed to load"
+            detail="The media may be missing, unsupported, or temporarily unreachable. Your selected clip and captions are still available."
+            onRetry={retryPreview}
+          />
+        ) : clip && !resolvedVideoUrl ? (
+          <PreviewMediaNotice
+            title="Preview source unavailable"
+            detail="This selected clip has no video URL. Retry loading its details from the PC."
+            onRetry={onRetryClip}
+          />
+        ) : clip && resolvedVideoUrl ? (
           <div className="relative h-full aspect-[9/16] max-w-full max-h-full rounded-xl bg-black border border-[#2E3239] shadow-2xl overflow-hidden flex items-center justify-center group">
             {/* HTML5 Video Element with progressive poster */}
             <video
+              key={`${resolvedVideoUrl}:${mediaAttempt}`}
               ref={videoRef}
               src={resolvedVideoUrl}
               poster={clip.thumbnail_url ? (clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)) : undefined}
@@ -216,6 +257,11 @@ export const PreviewStage: React.FC<PreviewStageProps> = ({
                 if (videoRef.current) {
                   onDurationChange(videoRef.current.duration || clip.duration || 1);
                 }
+              }}
+              onError={(event) => {
+                const code = event.currentTarget.error?.code;
+                console.error(`Video preview failed for clip ${clip.id}${code ? ` (media error ${code})` : ''}`);
+                setFailedSourceKey(mediaSourceKey);
               }}
               onEnded={() => onSeek(0)}
             />

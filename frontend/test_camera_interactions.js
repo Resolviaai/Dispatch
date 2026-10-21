@@ -72,6 +72,11 @@ assert.equal(timedOutLock.status, 'failed');
 assert.equal(timedOutLock.isLocked, false);
 assert.match(timedOutLock.error, /timed out/i);
 assert.equal(applyNativeLockState(timedOutLock, true).isLocked, true, 'a direct native status read can confirm a delayed lock');
+const delayedLockResult = applyFocusResult(timedOutLock, {
+  triggerId: 1001, success: true, isLocked: true, hasAf: false, hasAe: true,
+});
+assert.equal(delayedLockResult.status, 'locked', 'a delayed native result restores the confirmed AE-only lock');
+assert.equal(delayedLockResult.isLocked, true);
 
 const failedUnlock = applyUnlockResult(aeOnlyConfirmed, false);
 assert.equal(failedUnlock.isLocked, true, 'failed unlock keeps confirmed lock UI in sync');

@@ -254,6 +254,60 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
             self.assertEqual(result["status"], "DOWNLOADED")
             self.assertTrue(result["verified"])
 
+    def test_08_terminal_failure_wins_over_uploaded_status(self):
+        """A failed processing state must not be mislabeled as still processing."""
+        vid = "tt_failupl08"
+        db.register_youtube_video(video_id=vid, title="Failed upload-status fixture")
+        db.update_youtube_video(vid, status="WAITING_FOR_YOUTUBE_PROCESSING")
+        status = {
+            vid: {
+                "video_id": vid,
+                "upload_status": "uploaded",
+                "processing_status": "failed",
+                "failure_reason": "transcodingFailed",
+                "duration": "P0D",
+            }
+        }
+
+        with patch("dispatch.youtube_inbox.poller.list_authenticated_user_uploads", return_value=[{"video_id": vid}]), \
+             patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=status), \
+             patch.object(self.catcher, "ingest_video") as mock_ingest:
+            self.poller.poll_once()
+
+        mock_ingest.assert_not_called()
+        record = db.get_youtube_video(vid)
+        self.assertEqual(record["status"], "FAILED")
+        self.assertIn("transcodingFailed", record["last_error"])
+        self.assertIn("upload_status=uploaded", record["last_error"])
+
+        terminal_error = record["last_error"]
+        status[vid]["processing_status"] = None
+        with patch("dispatch.youtube_inbox.poller.list_authenticated_user_uploads", return_value=[{"video_id": vid}]), \
+             patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=status), \
+             patch.object(self.catcher, "ingest_video") as mock_ingest:
+            self.poller.poll_once()
+        mock_ingest.assert_not_called()
+        record = db.get_youtube_video(vid)
+        self.assertEqual(record["status"], "FAILED")
+        self.assertEqual(record["last_error"], terminal_error)
+
+    def test_09_status_api_error_preserves_existing_state_and_does_not_download(self):
+        """A status API outage is visible and cannot trigger an unverified media download."""
+        vid = "tt_apierr09"
+        db.register_youtube_video(video_id=vid, title="Status API outage fixture")
+        db.update_youtube_video(vid, status="STALLED_YOUTUBE_PROCESSING", last_error="previous status")
+
+        with patch("dispatch.youtube_inbox.poller.list_authenticated_user_uploads", return_value=[{"video_id": vid}]), \
+             patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", side_effect=RuntimeError("network timeout")), \
+             patch.object(self.catcher, "ingest_video") as mock_ingest:
+            self.poller.poll_once()
+
+        mock_ingest.assert_not_called()
+        record = db.get_youtube_video(vid)
+        self.assertEqual(record["status"], "STALLED_YOUTUBE_PROCESSING")
+        self.assertIn("YOUTUBE_STATUS_UNAVAILABLE", record["last_error"])
+        self.assertIn("network timeout", record["last_error"])
+
 
 if __name__ == "__main__":
     unittest.main()

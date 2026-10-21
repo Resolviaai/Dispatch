@@ -79,7 +79,10 @@ class DispatchNativeBridge(
                         cameraManager = cameraCaptureManager,
                         notes = "Dispatch Studio Android Capture"
                     )
+                    (activity as? com.resolvia.dispatch.MainActivity)
+                        ?.setRecordingScreenDimmingEnabled(segmenterEngine.isSessionActive || cameraCaptureManager.isRecording)
                 } catch (e: Exception) {
+                    (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(false)
                     android.util.Log.e("DispatchBridge", "startRecording failed: ${e.message}", e)
                     android.widget.Toast.makeText(activity, "Recording failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                 }
@@ -93,11 +96,15 @@ class DispatchNativeBridge(
             activity.lifecycleScope.launch {
                 try {
                     segmenterEngine.stopSession(cameraManager = cameraCaptureManager)
+                    (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(false)
                     segmenterEngine.triggerYouTubeUpload()
                     cameraCaptureManager.activePreviewView?.let { pv ->
                         cameraCaptureManager.initializeCamera(activity, pv)
                     }
                 } catch (e: Exception) {
+                    (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(
+                        segmenterEngine.isSessionActive || cameraCaptureManager.isRecording
+                    )
                     android.util.Log.e("DispatchBridge", "stopRecording failed: ${e.message}", e)
                 }
             }
@@ -106,7 +113,9 @@ class DispatchNativeBridge(
 
     @JavascriptInterface
     fun isRecording(): Boolean {
-        return segmenterEngine.isSessionActive || cameraCaptureManager.isRecording
+        val recording = segmenterEngine.isSessionActive || cameraCaptureManager.isRecording
+        (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(recording)
+        return recording
     }
 
     @JavascriptInterface
@@ -613,19 +622,28 @@ class DispatchNativeBridge(
     @JavascriptInterface
     fun getStorageInfo(): String {
         return try {
-            val storagePath = activity.getExternalFilesDir(null)?.absolutePath ?: activity.filesDir.absolutePath
+            val recordingDirectory = java.io.File(activity.getExternalFilesDir(null) ?: activity.filesDir, "recordings")
+            if (!recordingDirectory.isDirectory && !recordingDirectory.mkdirs()) {
+                throw IllegalStateException("Recording directory is unavailable")
+            }
+            val storagePath = recordingDirectory.absolutePath
             val stat = StatFs(storagePath)
             val bytesAvailable = stat.availableBlocksLong * stat.blockSizeLong
             val bytesTotal = stat.blockCountLong * stat.blockSizeLong
-            val freeGb = (bytesAvailable / (1024 * 1024 * 1024L)).toInt()
-            val totalGb = (bytesTotal / (1024 * 1024 * 1024L)).toInt()
+            val bytesPerGb = 1024.0 * 1024.0 * 1024.0
             val obj = JsonObject().apply {
-                addProperty("freeGb", freeGb)
-                addProperty("totalGb", totalGb)
+                addProperty("available", true)
+                addProperty("freeGb", bytesAvailable / bytesPerGb)
+                addProperty("totalGb", bytesTotal / bytesPerGb)
+                addProperty("freeBytes", bytesAvailable)
+                addProperty("totalBytes", bytesTotal)
             }
             obj.toString()
-        } catch (e: Exception) {
-            "{\"freeGb\": 48, \"totalGb\": 128}"
+        } catch (_: Exception) {
+            JsonObject().apply {
+                addProperty("available", false)
+                addProperty("error", "Storage information is unavailable")
+            }.toString()
         }
     }
 

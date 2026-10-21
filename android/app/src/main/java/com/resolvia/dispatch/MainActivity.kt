@@ -6,6 +6,9 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
@@ -32,6 +35,8 @@ import com.resolvia.dispatch.bridge.DispatchNativeBridge
 import com.resolvia.dispatch.data.AppDatabase
 import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.recorder.CameraCaptureManager
+import com.resolvia.dispatch.recorder.RecordingScreenDimmingState
+import com.resolvia.dispatch.recorder.RecordingTouchAction
 import com.resolvia.dispatch.recorder.SegmenterEngine
 
 class MainActivity : ComponentActivity() {
@@ -43,6 +48,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var previewView: PreviewView
     private lateinit var bridge: DispatchNativeBridge
+
+    private val screenDimmingState = RecordingScreenDimmingState()
+    private val screenDimmingHandler = Handler(Looper.getMainLooper())
+    private var originalScreenBrightness: Float? = null
+    private val screenDimmingRunnable = Runnable {
+        if (!isFinishing && screenDimmingState.onInactivityTimeout()) {
+            applyRecordingScreenDimmed(true)
+        }
+    }
+
+    companion object {
+        private const val RECORDING_IDLE_DIM_DELAY_MS = 150_000L
+    }
 
     private val permissionsToRequest = buildList {
         add(Manifest.permission.CAMERA)
@@ -104,6 +122,73 @@ class MainActivity : ComponentActivity() {
                 Toast.makeText(this@MainActivity, "Camera error: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    fun setRecordingScreenDimmingEnabled(enabled: Boolean) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            updateRecordingScreenDimming(enabled)
+        } else {
+            runOnUiThread { updateRecordingScreenDimming(enabled) }
+        }
+    }
+
+    private fun updateRecordingScreenDimming(enabled: Boolean) {
+        val changed = screenDimmingState.recordingEnabled != enabled
+        screenDimmingState.setRecordingEnabled(enabled)
+        if (!enabled) {
+            screenDimmingHandler.removeCallbacks(screenDimmingRunnable)
+            applyRecordingScreenDimmed(false)
+        } else if (changed) {
+            scheduleRecordingScreenDim()
+        }
+    }
+
+    private fun scheduleRecordingScreenDim() {
+        screenDimmingHandler.removeCallbacks(screenDimmingRunnable)
+        if (screenDimmingState.shouldRunInactivityTimer) {
+            screenDimmingHandler.postDelayed(screenDimmingRunnable, RECORDING_IDLE_DIM_DELAY_MS)
+        }
+    }
+
+    private fun applyRecordingScreenDimmed(dimmed: Boolean) {
+        if (dimmed) {
+            if (originalScreenBrightness == null) {
+                originalScreenBrightness = window.attributes.screenBrightness
+            }
+            val attributes = window.attributes
+            if (attributes.screenBrightness != WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF) {
+                attributes.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF
+                window.attributes = attributes
+            }
+            return
+        }
+
+        val originalBrightness = originalScreenBrightness ?: return
+        val attributes = window.attributes
+        attributes.screenBrightness = originalBrightness
+        window.attributes = attributes
+        originalScreenBrightness = null
+    }
+
+    private fun toRecordingTouchAction(action: Int): RecordingTouchAction = when (action) {
+        MotionEvent.ACTION_DOWN -> RecordingTouchAction.DOWN
+        MotionEvent.ACTION_POINTER_DOWN -> RecordingTouchAction.POINTER_DOWN
+        MotionEvent.ACTION_MOVE -> RecordingTouchAction.MOVE
+        MotionEvent.ACTION_UP -> RecordingTouchAction.UP
+        MotionEvent.ACTION_CANCEL -> RecordingTouchAction.CANCEL
+        else -> RecordingTouchAction.OTHER
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val outcome = screenDimmingState.onTouch(toRecordingTouchAction(event.actionMasked))
+        if (outcome.wokeScreen) {
+            applyRecordingScreenDimmed(false)
+        }
+        if (outcome.userActivity) {
+            scheduleRecordingScreenDim()
+        }
+        if (outcome.consume) return true
+        return super.dispatchTouchEvent(event)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -235,6 +320,22 @@ class MainActivity : ComponentActivity() {
         checkAndRequestPermissions()
     }
 
+    override fun onResume() {
+        super.onResume()
+        screenDimmingState.onActivityResumed()
+        if (::segmenterEngine.isInitialized && (segmenterEngine.isSessionActive || cameraCaptureManager.isRecording)) {
+            updateRecordingScreenDimming(true)
+        }
+        scheduleRecordingScreenDim()
+    }
+
+    override fun onPause() {
+        screenDimmingHandler.removeCallbacks(screenDimmingRunnable)
+        screenDimmingState.onActivityPaused()
+        applyRecordingScreenDimmed(false)
+        super.onPause()
+    }
+
     private fun checkAndRequestPermissions() {
         val camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -253,6 +354,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        screenDimmingHandler.removeCallbacks(screenDimmingRunnable)
+        screenDimmingState.setRecordingEnabled(false)
+        applyRecordingScreenDimmed(false)
         super.onDestroy()
         cameraCaptureManager.destroy()
         if (::webView.isInitialized) {

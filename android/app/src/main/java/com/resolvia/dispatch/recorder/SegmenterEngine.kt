@@ -1,6 +1,8 @@
 package com.resolvia.dispatch.recorder
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
+import android.os.StatFs
 import androidx.room.withTransaction
 import androidx.work.*
 import com.resolvia.dispatch.data.*
@@ -20,7 +22,7 @@ class SegmenterEngine(
     private val database: AppDatabase
 ) {
     private val dao = database.recordingDao()
-    private val recordingsDir: File = File(context.getExternalFilesDir(null), "recordings").apply {
+    private val recordingsDir: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "recordings").apply {
         if (!exists()) mkdirs()
     }
 
@@ -40,6 +42,7 @@ class SegmenterEngine(
     var segmentDurationMs: Long = 10 * 60 * 1000L
 
     private var segmentRollJob: Job? = null
+    private var storageMonitorJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private var activeFinalizeDeferred: CompletableDeferred<Unit>? = null
@@ -48,6 +51,7 @@ class SegmenterEngine(
         cameraManager: CameraCaptureManager,
         notes: String = ""
     ): String = withContext(Dispatchers.IO) {
+        requireRecordingStorage()
         val sessionId = "sess_${System.currentTimeMillis()}"
         val session = SessionEntity(sessionId = sessionId, notes = notes)
         RecordingForegroundService.markSessionActive(sessionId)
@@ -77,9 +81,13 @@ class SegmenterEngine(
         try {
             withContext(Dispatchers.Main) {
                 startNextSegment(cameraManager)
+                startStorageMonitor(cameraManager)
             }
         } catch (e: Exception) {
             isSessionActive = false
+            if (e is RecordingStorageException) {
+                runCatching { dao.updateSessionStatus(sessionId, 0, "FINALIZED") }
+            }
             RecordingForegroundService.markSessionInactive(sessionId)
             RecordingForegroundService.stop(context)
             throw e
@@ -90,6 +98,7 @@ class SegmenterEngine(
 
     suspend fun startNextSegment(cameraManager: CameraCaptureManager) {
         if (!isSessionActive) return
+        requireRecordingStorage()
         val sessionId = currentSessionId ?: return
 
         currentSequenceNumber++
@@ -110,6 +119,10 @@ class SegmenterEngine(
         )
         // Persist the row before CameraX can begin writing; recovery must always see ownership.
         withContext(Dispatchers.IO) { dao.insertSegment(segment) }
+        if (!isSessionActive) {
+            withContext(Dispatchers.IO) { dao.updateSegmentStatus(segId, "ERROR_STOPPED_BEFORE_START") }
+            return
+        }
 
         cameraManager.startSegmentRecording(
             targetTmpFile = tmpFile,
@@ -121,20 +134,17 @@ class SegmenterEngine(
                     try {
                         // Keep the row and any partial file as recovery evidence on every hardware error.
                         dao.updateSegmentStatus(segId, "ERROR_$errorCode")
-                        if (errorCode == -1) {
-                            // Uninitialized hardware: abort session instead of infinite error loop.
-                            isSessionActive = false
-                            android.util.Log.e("SegmenterEngine", "Hardware capture uninitialized; aborting session")
-                        } else if (isSessionActive) {
-                            withContext(Dispatchers.Main) {
-                                startNextSegment(cameraManager)
-                            }
-                        }
+                        // CameraX errors can indicate an encoder or storage failure. Preserve the
+                        // partial file and end this session instead of immediately retrying blindly.
+                        isSessionActive = false
+                        storageMonitorJob?.cancel()
+                        android.util.Log.e("SegmenterEngine", "Hardware capture failed; stopping session without automatic retry")
                     } catch (e: Exception) {
-                        android.util.Log.e("SegmenterEngine", "Could not persist or restart after recording error", e)
+                        android.util.Log.e("SegmenterEngine", "Could not persist recording error state; stopping session", e)
                         isSessionActive = false
                     }
                     if (!isSessionActive) {
+                        storageMonitorJob?.cancel()
                         // Leave the session marked RECORDING so the next worker can safely recover it.
                         RecordingForegroundService.markSessionInactive(sessionId)
                         RecordingForegroundService.stop(context)
@@ -163,12 +173,21 @@ class SegmenterEngine(
                             } catch (e: Exception) {
                                 android.util.Log.e("SegmenterEngine", "Could not start the next recording segment", e)
                                 isSessionActive = false
-                                sessionCanFinalize = false
+                                storageMonitorJob?.cancel()
+                                if (e is RecordingStorageException) {
+                                    sessionCanFinalize = true
+                                    withContext(Dispatchers.Main) {
+                                        android.widget.Toast.makeText(context, e.message, android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                } else {
+                                    sessionCanFinalize = false
+                                }
                             }
                         }
                     }
 
                     if (!isSessionActive) {
+                        storageMonitorJob?.cancel()
                         try {
                             if (sessionCanFinalize) dao.updateSessionStatus(sessionId, sequenceNumber, "FINALIZED")
                         } catch (e: Exception) {
@@ -200,10 +219,17 @@ class SegmenterEngine(
         tmpFile: File,
         durationMs: Long
     ) = withContext(Dispatchers.IO) {
-        if (!tmpFile.exists() || tmpFile.length() == 0L || durationMs < 1000L) {
+        if (RecordingSafetyPolicy.isAlreadyCommittedSegmentStatus(dao.getSegmentById(segId)?.status)) {
+            activeFinalizeDeferred?.complete(Unit)
+            return@withContext
+        }
+
+        val finalMp4 = File(recordingsDir, "$segId.mp4")
+        val mediaFile = RecordingSafetyPolicy.finalizedFileCandidate(tmpFile, finalMp4)
+        if (mediaFile == null || durationMs < 1000L) {
             val failureStatus = when {
-                !tmpFile.exists() -> "FAILED_MISSING_FILE"
-                tmpFile.length() == 0L -> "FAILED_EMPTY"
+                mediaFile == null && !tmpFile.exists() && !finalMp4.exists() -> "FAILED_MISSING_FILE"
+                mediaFile == null -> "FAILED_EMPTY"
                 else -> "FAILED_TOO_SHORT"
             }
             // Preserve the database row; retain non-empty evidence for diagnosis/recovery.
@@ -212,16 +238,28 @@ class SegmenterEngine(
             return@withContext
         }
 
-        val finalMp4 = File(recordingsDir, "$segId.mp4")
-        val fileSize = tmpFile.length()
-        val sha256 = calculateSha256(tmpFile)
-
-        // Atomic commit: .tmp -> .mp4 with safe copy fallback
-        val renamed = tmpFile.renameTo(finalMp4)
-        if (!renamed) {
-            tmpFile.copyTo(finalMp4, overwrite = true)
-            tmpFile.delete()
+        if (!isReadableVideo(mediaFile)) {
+            android.util.Log.e("SegmenterEngine", "Finalized media is unreadable; preserving ${mediaFile.absolutePath}")
+            dao.updateSegmentStatus(segId, "FAILED_CORRUPT")
+            activeFinalizeDeferred?.complete(Unit)
+            return@withContext
         }
+
+        // CameraX may deliver a duplicate completion after a rename-before-Room interruption.
+        // Reuse the already-promoted file instead of changing a queued row back to failed.
+        if (mediaFile != finalMp4) {
+            if (!mediaFile.renameTo(finalMp4)) {
+                val expectedLength = mediaFile.length()
+                mediaFile.copyTo(finalMp4, overwrite = true)
+                if (!finalMp4.isFile || finalMp4.length() != expectedLength) {
+                    throw java.io.IOException("Could not verify copied finalized segment $segId")
+                }
+                mediaFile.delete()
+            }
+        }
+
+        val fileSize = finalMp4.length()
+        val sha256 = calculateSha256(finalMp4)
 
         val now = System.currentTimeMillis()
         val updatedSegment = SegmentEntity(
@@ -259,6 +297,8 @@ class SegmenterEngine(
         isSessionActive = false
         segmentRollJob?.cancel()
         segmentRollJob = null
+        storageMonitorJob?.cancel()
+        storageMonitorJob = null
 
         // Await active recording finalization to ensure tail segment is committed
         if (cameraManager.isRecording) {
@@ -311,5 +351,66 @@ class SegmenterEngine(
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun isReadableVideo(file: File): Boolean {
+        if (!file.isFile || file.length() <= 0L) return false
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) == "yes" &&
+                (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) > 0L
+        } catch (e: Exception) {
+            android.util.Log.w("SegmenterEngine", "Could not read finalized recording ${file.name}: ${e.message}")
+            false
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    private fun availableRecordingBytes(): Long {
+        if (!recordingsDir.isDirectory && !recordingsDir.mkdirs()) {
+            throw RecordingStorageException("Recording storage is unavailable. Check the phone's storage and try again.")
+        }
+        return try {
+            StatFs(recordingsDir.absolutePath).availableBytes
+        } catch (e: Exception) {
+            throw RecordingStorageException("Could not check recording storage. Recording was stopped to protect your files.", e)
+        }
+    }
+
+    private fun requireRecordingStorage(): Long {
+        return RecordingSafetyPolicy.requireAvailableSpace(availableRecordingBytes())
+    }
+
+    private fun startStorageMonitor(cameraManager: CameraCaptureManager) {
+        storageMonitorJob?.cancel()
+        storageMonitorJob = scope.launch {
+            while (isSessionActive) {
+                delay(15_000L)
+                val issue = try {
+                    val availableBytes = availableRecordingBytes()
+                    if (RecordingSafetyPolicy.hasEnoughSpace(availableBytes)) null else {
+                        val availableMb = availableBytes / (1024L * 1024L)
+                        "Recording stopped to protect your footage: only $availableMb MB of free storage remains."
+                    }
+                } catch (e: RecordingStorageException) {
+                    e.message ?: "Recording stopped because phone storage could not be checked."
+                }
+                if (issue != null && isSessionActive) {
+                    isSessionActive = false
+                    segmentRollJob?.cancel()
+                    android.util.Log.e("SegmenterEngine", issue)
+                    android.widget.Toast.makeText(context, issue, android.widget.Toast.LENGTH_LONG).show()
+                    if (cameraManager.isRecording) {
+                        cameraManager.stopActiveRecording()
+                    } else {
+                        currentSessionId?.let { RecordingForegroundService.markSessionInactive(it) }
+                        RecordingForegroundService.stop(context)
+                    }
+                    break
+                }
+            }
+        }
     }
 }

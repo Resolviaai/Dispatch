@@ -10,12 +10,14 @@ import com.resolvia.dispatch.data.AppDatabase
 import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.recorder.RecordingForegroundService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.security.MessageDigest
 import javax.crypto.Mac
@@ -33,7 +35,8 @@ import java.util.concurrent.TimeUnit
  */
 data class DirectUploadResult(
     val success: Boolean,
-    val youtubeVideoId: String? = null
+    val youtubeVideoId: String? = null,
+    val failureReason: String? = null
 )
 
 class YouTubeDirectUploadWorker(
@@ -178,6 +181,9 @@ class YouTubeDirectUploadWorker(
                 } else {
                     hasFailures = true
                     failedInThisRun.add(seg.segmentId)
+                    result.failureReason?.let {
+                        android.util.Log.e("YouTubeUploader", "Retryable upload failure for ${seg.segmentId}: $it")
+                    }
                     val offset = dao.getOutboxOffset(seg.segmentId) ?: 0L
                     if (offset >= file.length() && file.length() > 0L) {
                         android.util.Log.w("YouTubeUploader", "Segment ${seg.segmentId} bytes fully sent but remote ID unconfirmed; keeping outbox entry for reconciliation.")
@@ -203,7 +209,8 @@ class YouTubeDirectUploadWorker(
         accessToken: String,
         file: File,
         dispatchId: String,
-        seg: com.resolvia.dispatch.data.SegmentEntity
+        seg: com.resolvia.dispatch.data.SegmentEntity,
+        sessionRestarted: Boolean = false
     ): DirectUploadResult {
         var currentAccessToken = accessToken
         val segId = seg.segmentId
@@ -288,18 +295,38 @@ class YouTubeDirectUploadWorker(
 
         // 2. Chunked Resumable Upload (8 MB chunks) with persistent byte progress
         val chunkSize = 8 * 1024 * 1024L // 8MB chunks
-        var currentOffset = dao.getOutboxOffset(segId) ?: 0L
+        val savedOffset = dao.getOutboxOffset(segId) ?: 0L
 
         // Query session status if resuming after disconnect or retrying existing session
         val probedOffset = queryUploadStatus(destination, currentAccessToken, totalBytes)
         if (probedOffset == -1L) {
             // Session expired on YouTube: clear and restart fresh
+            if (sessionRestarted) {
+                return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
+            }
             pairingManager.clearUploadSessionUrl(segId)
             dao.updateOutboxOffset(segId, 0L)
-            return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg)
-        } else if (probedOffset != null && probedOffset > currentOffset) {
-            currentOffset = probedOffset
-            dao.updateOutboxOffset(segId, currentOffset)
+            return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, sessionRestarted = true)
+        }
+        val confirmedInitialOffset = probedOffset
+            ?: return DirectUploadResult(false, failureReason = "Could not confirm resumable upload offset; source retained for retry")
+        // The session query is authoritative, including when the device's saved offset is ahead.
+        var currentOffset: Long = confirmedInitialOffset
+        if (currentOffset != savedOffset) dao.updateOutboxOffset(segId, currentOffset)
+        val progress = ConfirmedUploadProgress(currentOffset, totalBytes)
+
+        suspend fun reconcileServerOffset(serverOffset: Long?): Boolean {
+            val changed = progress.observe(serverOffset)
+            currentOffset = progress.offset
+            if (changed) dao.updateOutboxOffset(segId, currentOffset)
+            return changed
+        }
+
+        suspend fun waitForNoProgressRetry(): Boolean {
+            if (progress.retryExhausted) return false
+            val jitter = kotlin.random.Random.nextLong(0L, ConfirmedUploadProgress.MAX_JITTER_MS + 1L)
+            delay(progress.retryDelayMs(jitter))
+            return true
         }
 
         // Upload in 8MB slices
@@ -326,7 +353,29 @@ class YouTubeDirectUploadWorker(
                     .build()
 
                 var retryWithNewToken = false
-                client.newCall(chunkReq).execute().use { resp ->
+                var waitForNoProgress = false
+                val response = try {
+                    client.newCall(chunkReq).execute()
+                } catch (e: IOException) {
+                    android.util.Log.w("YouTubeUploader", "Ambiguous chunk failure for $segId at $start; checking server offset", e)
+                    val probed = queryUploadStatus(destination, currentAccessToken, totalBytes)
+                    if (probed == -1L) {
+                        if (sessionRestarted) {
+                            return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
+                        }
+                        pairingManager.clearUploadSessionUrl(segId)
+                        dao.updateOutboxOffset(segId, 0L)
+                        return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, sessionRestarted = true)
+                    }
+                    if (!reconcileServerOffset(probed)) {
+                        if (!waitForNoProgressRetry()) {
+                            return DirectUploadResult(false, failureReason = "Upload made no confirmed progress after ${progress.consecutiveNoProgress} status checks")
+                        }
+                    }
+                    continue
+                }
+
+                response.use { resp ->
                     when (resp.code) {
                         308 -> {
                             // Validate server's Range header.
@@ -334,17 +383,27 @@ class YouTubeDirectUploadWorker(
                             val rangeHeader = resp.header("Range")
                             val confirmedOffset = parseConfirmedRangeOffset(rangeHeader, totalBytes)
 
-                            if (confirmedOffset != null && confirmedOffset > currentOffset) {
-                                currentOffset = confirmedOffset
-                                dao.updateOutboxOffset(segId, currentOffset)
-                                android.util.Log.i("YouTubeUploader", "Chunk uploaded for $segId: $start-$end ($currentOffset/$totalBytes)")
+                            val serverOffset = if (confirmedOffset != null) {
+                                confirmedOffset
                             } else {
                                 android.util.Log.w("YouTubeUploader", "308 with missing/invalid/non-advancing Range header ('$rangeHeader') for $segId; querying server status.")
                                 val probed = queryUploadStatus(destination, currentAccessToken, totalBytes)
-                                if (probed != null && probed > currentOffset) {
-                                    currentOffset = probed
-                                    dao.updateOutboxOffset(segId, currentOffset)
+                                if (probed == -1L) {
+                                    if (sessionRestarted) {
+                                        return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
+                                    }
+                                    pairingManager.clearUploadSessionUrl(segId)
+                                    dao.updateOutboxOffset(segId, 0L)
+                                    return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, sessionRestarted = true)
                                 }
+                                probed
+                            }
+                            val changed = reconcileServerOffset(serverOffset)
+                            if (!changed) {
+                                waitForNoProgress = true
+                                android.util.Log.w("YouTubeUploader", "No confirmed upload progress for $segId at offset $currentOffset")
+                            } else {
+                                android.util.Log.i("YouTubeUploader", "Server-confirmed upload offset for $segId: $currentOffset/$totalBytes")
                             }
                         }
                         200, 201 -> {
@@ -392,6 +451,9 @@ class YouTubeDirectUploadWorker(
 
                 if (retryWithNewToken) {
                     continue
+                }
+                if (waitForNoProgress && !waitForNoProgressRetry()) {
+                    return DirectUploadResult(false, failureReason = "Upload made no confirmed progress after ${progress.consecutiveNoProgress} responses")
                 }
             }
         } catch (e: Exception) {
@@ -513,7 +575,7 @@ class YouTubeDirectUploadWorker(
     private suspend fun recoverInterruptedSessions(context: Context) {
         try {
             val interrupted = dao.getInterruptedSessions()
-            val recordingsDir = File(context.getExternalFilesDir(null), "recordings")
+            val recordingsDir = File(context.getExternalFilesDir(null) ?: context.filesDir, "recordings")
 
             for (sess in interrupted) {
                 if (!shouldRecoverRecordingSession(sess.sessionId, RecordingForegroundService.activeSessionId)) {

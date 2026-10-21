@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CaptionDock } from './src/studio/CaptionDock';
-import { PreviewStage } from './src/studio/PreviewStage';
+import { PreviewMediaNotice, PreviewStage } from './src/studio/PreviewStage';
+import { ClipLibraryNotice } from './src/studio/ClipLibraryNotice';
+import { parseClipListResponse } from './src/studio/clipLibrary';
 import { normalizeCaptionTrack, resolveStudioClip, trackForClip } from './src/captions/normalizeTrack';
 
 console.log('Studio clip render regressions...');
@@ -46,6 +48,7 @@ const previewMarkup = renderToStaticMarkup(React.createElement(PreviewStage, {
   onTriggerRender: async () => {},
   isRendering: false,
   pcHost: 'localhost:8000',
+  onRetryClip: () => {},
 }));
 assert.match(previewMarkup, /Selected fixture clip/, 'selected clip mounts the preview header');
 assert.match(previewMarkup, /<video/, 'selected clip mounts its video preview');
@@ -64,4 +67,32 @@ const timelineMarkup = renderToStaticMarkup(React.createElement(CaptionDock, {
 assert.match(timelineMarkup, /Caption Timeline/, 'selected clip mounts the timeline');
 assert.match(timelineMarkup, /Editor/, 'normalized caption word is available in the timeline');
 
-console.log('  passed: clip resolution, stale-track isolation, normalized preview, and timeline mounting');
+const clipErrorMarkup = renderToStaticMarkup(React.createElement(ClipLibraryNotice, {
+  state: 'error',
+  error: 'HTTP 503: Failed to load clips',
+  onRetry: () => {},
+}));
+assert.match(clipErrorMarkup, /Couldn’t load clips/, 'clip-list failures are visible');
+assert.match(clipErrorMarkup, /HTTP 503/, 'clip-list failure detail is surfaced');
+assert.match(clipErrorMarkup, />Retry</, 'clip-list failure exposes a retry action');
+
+const emptyClipMarkup = renderToStaticMarkup(React.createElement(ClipLibraryNotice, {
+  state: 'loaded',
+  onRetry: () => {},
+}));
+assert.match(emptyClipMarkup, /No clips available/, 'a successful empty library is distinct from a failed request');
+
+const previewErrorMarkup = renderToStaticMarkup(React.createElement(PreviewMediaNotice, {
+  title: 'Video preview failed to load',
+  detail: 'The media may be temporarily unreachable.',
+  onRetry: () => {},
+}));
+assert.match(previewErrorMarkup, /role="alert"/, 'video-load failures are announced');
+assert.match(previewErrorMarkup, /Retry preview/, 'video-load failures expose a retry action');
+
+assert.deepEqual(parseClipListResponse([]), [], 'a valid empty array is an empty library');
+assert.equal(parseClipListResponse({ ready: [{ id: 'clip-loaded' }], recent_approved: [] })[0].id, 'clip-loaded');
+assert.throws(() => parseClipListResponse({}), /invalid response/, 'unknown API payloads are not silently shown as empty libraries');
+assert.throws(() => parseClipListResponse([{ title: 'missing id' }]), /invalid clip entry/);
+
+console.log('  passed: selection, preview/timeline mounting, clip loading states, and media recovery UI');

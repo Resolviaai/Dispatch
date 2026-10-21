@@ -391,7 +391,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
   const finishLockAttempt = (triggerId: number, error: string) => {
     setFocusState((prev) => markLockAttemptTimedOut(prev, triggerId) || prev);
-    Bridge.unlockAeAf();
     if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
     unlockTimeoutRef.current = setTimeout(() => {
       const status = Bridge.getCameraStatus();

@@ -11,9 +11,13 @@ import android.os.Looper
 import android.util.Log
 import android.util.Range
 import android.util.Rational
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.util.Size
 import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -36,10 +40,15 @@ import kotlin.coroutines.resume
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import com.google.common.util.concurrent.ListenableFuture
 
-internal fun isAeAfLockConfirmed(hasAf: Boolean, hasAe: Boolean, focusSuccessful: Boolean): Boolean =
-    hasAe || (hasAf && focusSuccessful)
+internal fun isAeAfLockConfirmed(afLockConfirmed: Boolean, aeLockConfirmed: Boolean): Boolean =
+    afLockConfirmed || aeLockConfirmed
+
+internal fun clampExposureIndex(index: Int, minIndex: Int, maxIndex: Int): Int =
+    index.coerceIn(minIndex, maxIndex)
 
 /**
  * CameraX Video Capture Engine for POCO C65 and Android devices.
@@ -50,6 +59,8 @@ class CameraCaptureManager(private val context: Context) {
 
     companion object {
         private const val TAG = "CameraCaptureManager"
+        private const val LOCK_CONFIRMATION_TIMEOUT_MS = 4_500L
+        private const val LOCK_RECOVERY_TIMEOUT_MS = 1_800L
     }
 
     private val recordingExecutor = Executors.newSingleThreadExecutor()
@@ -58,7 +69,8 @@ class CameraCaptureManager(private val context: Context) {
     private var camera: Camera? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
-    private val focusOperationGeneration = AtomicLong(0)
+    private val focusOperationGeneration = CameraRequestGeneration()
+    private val exposureOperationGeneration = CameraRequestGeneration()
     private var boundLifecycleOwner: LifecycleOwner? = null
     private var boundLensFacing: Int? = null
     
@@ -71,8 +83,14 @@ class CameraCaptureManager(private val context: Context) {
     var isTorchEnabled: Boolean = false
         private set
 
-    @Volatile var isAeAfLocked: Boolean = false
+    @Volatile var isAeLocked: Boolean = false
         private set
+    @Volatile var isAfLocked: Boolean = false
+        private set
+    @Volatile var isAeAfLockUncertain: Boolean = false
+        private set
+    val isAeAfLocked: Boolean
+        get() = isAeAfLockConfirmed(isAfLocked, isAeLocked)
 
     var currentZoomRatio: Float = 1.0f
         private set
@@ -237,8 +255,9 @@ class CameraCaptureManager(private val context: Context) {
         }
 
         currentLensFacing = lensFacing
-        focusOperationGeneration.incrementAndGet()
-        isAeAfLocked = false
+        focusOperationGeneration.invalidate()
+        exposureOperationGeneration.invalidate()
+        clearConfirmedLockState()
 
         onReady?.let { pendingReadyCallbacks.add(it) }
         onError?.let { pendingErrorCallbacks.add(it) }
@@ -283,13 +302,15 @@ class CameraCaptureManager(private val context: Context) {
 
                 // Restore previous state if applicable
                 boundCamera.cameraControl.setZoomRatio(currentZoomRatio)
-                if (currentExposureIndex != 0) {
-                    val exp = boundCamera.cameraInfo.exposureState
-                    if (exp.isExposureCompensationSupported) {
+                val exposure = boundCamera.cameraInfo.exposureState
+                val range = exposure.exposureCompensationRange
+                if (exposure.isExposureCompensationSupported && range.lower < range.upper) {
+                    currentExposureIndex = clampExposureIndex(currentExposureIndex, range.lower, range.upper)
+                    if (currentExposureIndex != exposure.exposureCompensationIndex) {
                         boundCamera.cameraControl.setExposureCompensationIndex(currentExposureIndex)
-                    } else {
-                        currentExposureIndex = 0
                     }
+                } else {
+                    currentExposureIndex = 0
                 }
 
                 isBindingCamera = false
@@ -461,8 +482,9 @@ class CameraCaptureManager(private val context: Context) {
             CameraSelector.LENS_FACING_BACK
         }
         isTorchEnabled = false
-        isAeAfLocked = false
-        focusOperationGeneration.incrementAndGet()
+        clearConfirmedLockState()
+        focusOperationGeneration.invalidate()
+        exposureOperationGeneration.invalidate()
         val owner = activeLifecycleOwner
         val pv = activePreviewView
         if (owner != null && pv != null) {
@@ -498,7 +520,7 @@ class CameraCaptureManager(private val context: Context) {
             CameraSelector.LENS_FACING_BACK
         }
         isTorchEnabled = false
-        isAeAfLocked = false
+        clearConfirmedLockState()
         initializeCamera(lifecycleOwner, previewView, nextLens, onReady)
     }
 
@@ -522,7 +544,7 @@ class CameraCaptureManager(private val context: Context) {
         onComplete: ((FocusResult) -> Unit)? = null
     ) {
         val operationGeneration = focusOperationGeneration.incrementAndGet()
-        isAeAfLocked = false
+        clearConfirmedLockState()
         val cam = camera
         if (cam == null) {
             onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Camera not initialized"))
@@ -942,19 +964,26 @@ class CameraCaptureManager(private val context: Context) {
                         RecordingForegroundService.instance?.updateNotification()
                     }
                     val durationMs = recordEvent.recordingStats.recordedDurationNanos / 1_000_000
-                    if (!recordEvent.hasError()) {
-                        if (durationMs < 1000L || targetTmpFile.length() == 0L) {
-                            Log.w(TAG, "Discarding sub-second or empty segment (${durationMs}ms, ${targetTmpFile.length()} bytes): ${targetTmpFile.name}")
-                            targetTmpFile.delete()
-                            onError?.invoke(-2, IllegalStateException("Recording too short (<1s)"))
-                        } else {
+                    when (RecordingSafetyPolicy.finalizeDisposition(
+                        hasCameraError = recordEvent.hasError(),
+                        fileLength = targetTmpFile.length(),
+                        durationMs = durationMs
+                    )) {
+                        RecordingFinalizeDisposition.COMMIT -> {
                             Log.i(TAG, "Segment finalized successfully: ${targetTmpFile.name} (${durationMs}ms, ${targetTmpFile.length()} bytes)")
                             onFinalized(targetTmpFile, durationMs)
                         }
-                    } else {
-                        Log.e(TAG, "Segment recording failed with error code: ${recordEvent.error}", recordEvent.cause)
-                        targetTmpFile.delete()
-                        onError?.invoke(recordEvent.error, recordEvent.cause)
+                        RecordingFinalizeDisposition.DELETE_EMPTY_AND_REPORT_ERROR -> {
+                            Log.w(TAG, "Removing empty finalized segment: ${targetTmpFile.name}")
+                            targetTmpFile.delete()
+                            onError?.invoke(-2, IllegalStateException("Recording produced an empty segment"))
+                        }
+                        RecordingFinalizeDisposition.PRESERVE_AND_REPORT_ERROR -> {
+                            val errorCode = if (recordEvent.hasError()) recordEvent.error else -2
+                            val cause = recordEvent.cause ?: IllegalStateException("Recording segment was too short to finalize safely")
+                            Log.e(TAG, "Preserving failed segment ${targetTmpFile.name} (${targetTmpFile.length()} bytes, ${durationMs}ms), error code: $errorCode", cause)
+                            onError?.invoke(errorCode, cause)
+                        }
                     }
                 }
             }

@@ -6,6 +6,9 @@ import { CaptionDock } from './CaptionDock';
 import { InspectorPane } from './InspectorPane';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import { BatchConfirmModal } from './BatchConfirmModal';
+import { ClipLibraryNotice } from './ClipLibraryNotice';
+import type { ClipLibraryLoadState } from './ClipLibraryNotice';
+import { parseClipListResponse } from './clipLibrary';
 import {
   ClipItem,
   SystemStatus,
@@ -29,6 +32,8 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   // --- Data States ---
   const [clips, setClips] = useState<ClipItem[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [clipLoadState, setClipLoadState] = useState<ClipLibraryLoadState>('loading');
+  const [clipLoadError, setClipLoadError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [track, setTrack] = useState<CaptionTrack | null>(null);
   const [captionClipId, setCaptionClipId] = useState<string | null>(null);
@@ -79,6 +84,9 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
   const prevCollapsedStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
   const metadataDraftsRef = useRef<Record<string, Partial<ClipItem>>>({});
+  const clipFetchControllerRef = useRef<AbortController | null>(null);
+  const clipFetchSucceededRef = useRef(false);
+  const clipListHasItemsRef = useRef(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -86,31 +94,48 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   };
 
   // 1. Fetch Clips (preserves local metadata drafts across 6s background polling)
-  const fetchClips = useCallback(async () => {
+  const fetchClips = useCallback(async (force = false) => {
+    if (clipFetchControllerRef.current) {
+      if (!force) return;
+      clipFetchControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    clipFetchControllerRef.current = controller;
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 15_000);
     try {
-      const res = await fetch(apiUrl('/api/clips', pcHost));
-      if (res.ok) {
-        const data = await res.json();
-        const allClips: ClipItem[] = Array.isArray(data)
-          ? data
-          : [
-              ...(Array.isArray(data.ready) ? data.ready : []),
-              ...(Array.isArray(data.recent_approved) ? data.recent_approved : []),
-              ...(Array.isArray(data.ready_for_review) ? data.ready_for_review : []),
-            ];
-        const mergedClips = allClips.map((clip) => {
-          const draft = metadataDraftsRef.current[clip.id];
-          return draft ? { ...clip, ...draft } : clip;
-        });
-        setClips(mergedClips);
-        // If no clip selected or selected clip no longer exists, default to first clip
-        setSelectedClipId(prev => {
-          if (prev && mergedClips.some(c => c.id === prev)) return prev;
-          return mergedClips.length > 0 ? mergedClips[0].id : null;
-        });
-      }
+      const res = await fetch(apiUrl('/api/clips', pcHost), { signal: controller.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load clips`);
+      const data: unknown = await res.json();
+      const allClips = parseClipListResponse(data);
+      if (controller.signal.aborted) return;
+      const mergedClips = allClips.map((clip) => {
+        const draft = metadataDraftsRef.current[clip.id];
+        return draft ? { ...clip, ...draft } : clip;
+      });
+      setClips(mergedClips);
+      clipFetchSucceededRef.current = true;
+      clipListHasItemsRef.current = mergedClips.length > 0;
+      setClipLoadState('loaded');
+      setClipLoadError(null);
+      // If no clip selected or selected clip no longer exists, default to first clip
+      setSelectedClipId(prev => {
+        if (prev && mergedClips.some(c => c.id === prev)) return prev;
+        return mergedClips.length > 0 ? mergedClips[0].id : null;
+      });
     } catch (err) {
+      if ((controller.signal.aborted || (err as DOMException)?.name === 'AbortError') && !timedOut) return;
+      if (!clipFetchSucceededRef.current || !clipListHasItemsRef.current) setClipLoadState('error');
+      setClipLoadError(timedOut
+        ? 'The PC clip library did not respond within 15 seconds. Check the connection and retry.'
+        : err instanceof Error ? err.message : 'Network communication failure');
       console.warn('Failed to fetch clips:', err);
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (clipFetchControllerRef.current === controller) clipFetchControllerRef.current = null;
     }
   }, [pcHost]);
 
@@ -139,13 +164,21 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
   // Initial and recurring poll
   useEffect(() => {
+    clipFetchSucceededRef.current = false;
+    clipListHasItemsRef.current = false;
+    setClipLoadState('loading');
+    setClipLoadError(null);
     fetchClips();
     fetchTelemetry();
     const interval = setInterval(() => {
       fetchClips();
       fetchTelemetry();
     }, 6000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      clipFetchControllerRef.current?.abort();
+      clipFetchControllerRef.current = null;
+    };
   }, [fetchClips, fetchTelemetry]);
 
   // 3. Derived current selected clip
@@ -600,6 +633,18 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
         {/* CENTER PANE: VIDEO PREVIEW STAGE + DOCKED CAPTION TIMELINE */}
         <div className="flex-1 min-w-0 h-full flex flex-col bg-[#0D0F12] overflow-hidden">
+          {!currentClip ? (
+            <div className="flex flex-1 items-center justify-center">
+              <ClipLibraryNotice state={clipLoadState} error={clipLoadError} onRetry={() => { void fetchClips(true); }} />
+            </div>
+          ) : (
+            <>
+              {clipLoadError && (
+                <div className="flex min-h-[44px] items-center justify-between gap-3 border-b border-border bg-surface-100 px-3 text-[12px] text-text-muted" role="status">
+                  <span>Clip list refresh failed: {clipLoadError}</span>
+                  <button type="button" onClick={() => { void fetchClips(true); }} className="min-h-[44px] px-3 text-text-main underline">Retry</button>
+                </div>
+              )}
           {/* Top Video Stage */}
           <PreviewStage
             clip={currentClip}
@@ -618,6 +663,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
             onTriggerRender={handleTriggerRender}
             isRendering={isRendering}
             pcHost={pcHost}
+            onRetryClip={() => { void fetchClips(true); }}
           />
 
           {/* Bottom Docked Caption Timeline */}
@@ -633,6 +679,8 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
             captionLoadError={captionLoadError}
             onRetryCaptions={handleRetryCaptionLoad}
           />
+            </>
+          )}
         </div>
 
         {/* RIGHT PANE: INSPECTOR & PUBLISHING */}

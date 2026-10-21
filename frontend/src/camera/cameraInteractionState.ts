@@ -79,8 +79,9 @@ export function applyFocusResult(
     return current;
   }
 
-  const lockConfirmed = current.status === 'locking' && result.success && result.isLocked;
-  if (current.status === 'locking') {
+  const canConfirmDelayedLock = current.status === 'failed' && result.success && result.isLocked;
+  const lockConfirmed = result.success && result.isLocked;
+  if (current.status === 'locking' || canConfirmDelayedLock) {
     return {
       ...current,
       status: lockConfirmed ? 'locked' : 'failed',

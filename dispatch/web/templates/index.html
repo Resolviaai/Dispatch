@@ -664,10 +664,12 @@
         const badge = document.getElementById("active-jobs-badge");
         const jobs = data.jobs || [];
 
-        const activeJobs = jobs.filter(j => j.status !== 'COMPLETED');
-        badge.innerText = `${activeJobs.length} active`;
+        const visibleJobs = jobs.filter(j => j.status !== 'COMPLETED');
+        const activeCount = visibleJobs.filter(j => j.status !== 'FAILED').length;
+        const failedCount = visibleJobs.length - activeCount;
+        badge.innerText = failedCount > 0 ? `${activeCount} active · ${failedCount} failed` : `${activeCount} active`;
 
-        if (activeJobs.length === 0) {
+        if (visibleJobs.length === 0) {
           container.innerHTML = `
             <div id="pipeline-idle-placeholder" class="surface-nested rounded-lg p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
               <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -680,7 +682,7 @@
         }
 
         container.innerHTML = "";
-        activeJobs.forEach(job => {
+        visibleJobs.forEach(job => {
           const card = document.createElement("div");
           card.className = "surface-nested rounded-lg p-3 space-y-2 border border-white/5";
 
@@ -697,6 +699,9 @@
           } else if (job.status === "STALLED") {
             statusBadgeClass = "bg-red-950/80 text-red-300 border-red-700";
             statusLabel = "Stalled — check YouTube processing";
+          } else if (job.status === "FAILED") {
+            statusBadgeClass = "bg-red-950/80 text-red-300 border-red-700";
+            statusLabel = "Processing failed";
           }
 
           const currentStageIdx = STAGES.indexOf(job.current_stage);
@@ -737,6 +742,12 @@
           `;
 
           container.appendChild(card);
+          if (job.last_error) {
+            const diagnostic = document.createElement("p");
+            diagnostic.className = "text-[10px] leading-relaxed text-red-300 break-words";
+            diagnostic.textContent = job.last_error;
+            card.appendChild(diagnostic);
+          }
         });
 
       } catch (e) {

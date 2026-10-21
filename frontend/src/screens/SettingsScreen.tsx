@@ -32,7 +32,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [isChecking, setIsChecking] = useState(false);
   const [isStartingAuth, setIsStartingAuth] = useState(false);
   const [wifiOnly, setWifiOnly] = useState(true);
-  const [storageInfo, setStorageInfo] = useState<StorageInfo>({ freeGb: 48, totalGb: 128 });
+  const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [inputHost, setInputHost] = useState(pcHost);
   const [pairingCode, setPairingCode] = useState('');
@@ -83,9 +83,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   useEffect(() => {
     fetchYouTubeStatus();
     setWifiOnly(Bridge.getWifiOnly());
-    if (Bridge.isAvailable()) {
-      setStorageInfo(Bridge.getStorageInfo());
-    }
+    setStorageInfo(Bridge.getStorageInfo());
   }, [pcHost]);
 
   useEffect(() => setInputHost(pcHost), [pcHost]);
@@ -450,18 +448,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               <span className="text-xs font-semibold text-text-main">Storage</span>
             </div>
             <span className="text-xs font-mono tabular-nums text-text-muted">
-              {storageInfo.freeGb}&nbsp;GB free / {storageInfo.totalGb}&nbsp;GB
+              {storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb)
+                ? <>{storageInfo.freeGb!.toFixed(1)}&nbsp;GB free / {storageInfo.totalGb!.toFixed(1)}&nbsp;GB</>
+                : 'Unavailable'}
             </span>
           </div>
 
-          <div className="w-full h-2 rounded-full bg-surface-300 overflow-hidden mt-1">
-            <div 
-              className="h-full bg-primary rounded-full transition-all duration-300" 
-              style={{ width: `${Math.round(((storageInfo.totalGb - storageInfo.freeGb) / storageInfo.totalGb) * 100)}%` }}
-            />
-          </div>
+          {storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb) && storageInfo.totalGb! > 0 ? (
+            <div className="w-full h-2 rounded-full bg-surface-300 overflow-hidden mt-1">
+              <div
+                className="h-full bg-primary rounded-full transition-all duration-300"
+                style={{ width: `${Math.max(0, Math.min(100, Math.round(((storageInfo.totalGb! - storageInfo.freeGb!) / storageInfo.totalGb!) * 100)))}%` }}
+              />
+            </div>
+          ) : (
+            <p className="text-[10px] text-text-muted" role="status">
+              {storageInfo?.error || 'Storage information is loading.'}
+            </p>
+          )}
           <span className="text-[10px] font-mono text-text-muted block pt-1">
-            Location: Internal Storage / DCIM / Dispatch
+            Location: App-specific recording storage
           </span>
         </div>
 

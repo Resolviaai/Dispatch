@@ -26,8 +26,12 @@ export interface YouTubeStatus {
 }
 
 export interface StorageInfo {
-  freeGb: number;
-  totalGb: number;
+  available: boolean;
+  freeGb?: number;
+  totalGb?: number;
+  freeBytes?: number;
+  totalBytes?: number;
+  error?: string;
 }
 
 export interface ExposureInfo {
@@ -347,12 +351,14 @@ export const Bridge = {
     if (window.DispatchBridge?.getStorageInfo) {
       try {
         const raw = window.DispatchBridge.getStorageInfo();
-        return JSON.parse(raw);
+        const info = JSON.parse(raw) as StorageInfo;
+        if (info.available && Number.isFinite(info.freeGb) && Number.isFinite(info.totalGb)) return info;
+        return { available: false, error: info.error || 'Storage information is unavailable' };
       } catch {
-        return { freeGb: 48, totalGb: 128 };
+        return { available: false, error: 'Storage information could not be read' };
       }
     }
-    return { freeGb: 48, totalGb: 128 };
+    return { available: false, error: 'Storage information is available only in the Android app' };
   },
 
   async pingPc(pcHost: string): Promise<{ success: boolean; message: string }> {

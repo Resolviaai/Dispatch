@@ -164,9 +164,11 @@ class YouTubeInboxPoller:
             # 3. Batch query authoritative YouTube processing status
             candidate_ids = [item["video_id"] for item in candidate_items]
             status_map: Dict[str, Dict[str, Any]] = {}
+            status_query_error: Optional[str] = None
             try:
                 status_map = get_youtube_processing_status(candidate_ids)
             except Exception as e:
+                status_query_error = str(e)
                 logger.warning("Batch YouTube processing status check failed: %s", e)
 
             processed_items = []
@@ -196,58 +198,101 @@ class YouTubeInboxPoller:
 
                 st_info = status_map.get(video_id)
 
-                if st_info:
-                    p_status = st_info.get("processing_status")
-                    u_status = st_info.get("upload_status")
-                    fail_reason = st_info.get("failure_reason")
-
-                    # Case A: Video is still processing on YouTube
-                    if p_status == "processing" or (u_status == "uploaded" and p_status != "succeeded"):
-                        # Calculate elapsed processing time
-                        start_time_str = pub_time or (existing.get("discovered_at") if existing else None)
-                        elapsed_min = 0.0
-                        if start_time_str:
-                            dt = parse_iso_datetime(start_time_str)
-                            if dt:
-                                now_utc = datetime.now(timezone.utc)
-                                elapsed_sec = (now_utc - dt).total_seconds()
-                                elapsed_min = max(0.0, elapsed_sec / 60.0)
-
-                        if elapsed_min >= timeout_minutes:
-                            warn_msg = (
-                                f"[STALLED_YOUTUBE_PROCESSING] Processing exceeded {timeout_minutes}m "
-                                f"({elapsed_min:.0f}m elapsed). YouTube server delay. Check YouTube Studio or sync directly over LAN."
-                            )
-                            logger.warning(
-                                "[STALLED] YouTube processing for %s (%s) has exceeded %d minutes (elapsed: %.1f min).",
-                                video_id, title, timeout_minutes, elapsed_min
-                            )
-                            db.update_youtube_video(video_id, status="STALLED_YOUTUBE_PROCESSING", last_error=warn_msg)
-                        else:
-                            logger.info(
-                                "Video %s is still processing on YouTube (%.1fm elapsed). Waiting for completion without downloading.",
-                                video_id, elapsed_min
-                            )
-                            db.update_youtube_video(
-                                video_id,
-                                status="WAITING_FOR_YOUTUBE_PROCESSING",
-                                last_error=f"Processing on YouTube ({elapsed_min:.0f}m elapsed)..."
-                            )
-                        continue
-
-                    # Case B: Video explicitly failed processing on YouTube
-                    if p_status in ("failed", "terminated") or u_status in ("failed", "rejected"):
-                        err_msg = f"YouTube processing failed: {fail_reason or 'rejected'}"
-                        logger.error("Video %s failed processing on YouTube: %s", video_id, err_msg)
-                        db.update_youtube_video(video_id, status="FAILED", last_error=err_msg)
-                        continue
-
-                    # Case C: Video processing confirmed SUCCEEDED on YouTube
-                    if p_status == "succeeded" or u_status == "processed":
-                        logger.info(
-                            "YouTube video %s processing confirmed SUCCEEDED (Duration: %s). Proceeding to Pillar 1 media download.",
-                            video_id, st_info.get("duration")
+                if not st_info:
+                    # A failed status query is not evidence that YouTube is still processing or
+                    # that the source should be downloaded again. Keep the current durable state.
+                    if existing and existing.get("status") != "FAILED":
+                        query_detail = status_query_error or "YouTube returned no status for this video ID"
+                        db.update_youtube_video(
+                            video_id,
+                            status=existing.get("status") or "DISCOVERED",
+                            last_error=f"[YOUTUBE_STATUS_UNAVAILABLE] {query_detail}; will check again without re-uploading."
                         )
+                    continue
+
+                p_status = st_info.get("processing_status")
+                u_status = st_info.get("upload_status")
+                fail_reason = st_info.get("failure_reason")
+
+                # Check terminal states before the broad uploaded/in-progress condition below.
+                if p_status in ("failed", "terminated") or u_status in ("failed", "rejected", "deleted"):
+                    err_msg = (
+                        "[YOUTUBE_PROCESSING_FAILED] "
+                        f"upload_status={u_status or 'unknown'}; processing_status={p_status or 'unknown'}; "
+                        f"failure_reason={fail_reason or 'not provided'}; duration={st_info.get('duration') or 'unknown'}"
+                    )
+                    logger.error("Video %s failed processing on YouTube: %s", video_id, err_msg)
+                    if not existing or existing.get("status") != "FAILED" or existing.get("last_error") != err_msg:
+                        db.update_youtube_video(video_id, status="FAILED", last_error=err_msg)
+                    continue
+
+                if existing and existing.get("status") == "FAILED" and not (
+                    p_status == "succeeded" or u_status == "processed"
+                ):
+                    # Do not turn a durable terminal failure into a generic waiting state
+                    # when the API later omits or weakens its processing status.
+                    continue
+
+                # Case A: Video is still processing on YouTube
+                if p_status == "processing" or (u_status == "uploaded" and p_status != "succeeded"):
+                    # Calculate elapsed processing time
+                    start_time_str = pub_time or (existing.get("discovered_at") if existing else None)
+                    elapsed_min = 0.0
+                    if start_time_str:
+                        dt = parse_iso_datetime(start_time_str)
+                        if dt:
+                            now_utc = datetime.now(timezone.utc)
+                            elapsed_sec = (now_utc - dt).total_seconds()
+                            elapsed_min = max(0.0, elapsed_sec / 60.0)
+
+                    if elapsed_min >= timeout_minutes:
+                        warn_msg = (
+                            f"[STALLED_YOUTUBE_PROCESSING] Processing exceeded {timeout_minutes}m "
+                            f"({elapsed_min:.0f}m elapsed); upload_status={u_status or 'unknown'}, "
+                            f"processing_status={p_status or 'unknown'}, failure_reason={fail_reason or 'not provided'}. "
+                            "Check YouTube Studio or sync directly over LAN."
+                        )
+                        logger.warning(
+                            "[STALLED] YouTube processing for %s (%s) has exceeded %d minutes (elapsed: %.1f min).",
+                            video_id, title, timeout_minutes, elapsed_min
+                        )
+                        db.update_youtube_video(video_id, status="STALLED_YOUTUBE_PROCESSING", last_error=warn_msg)
+                    else:
+                        logger.info(
+                            "Video %s is still processing on YouTube (%.1fm elapsed). Waiting for completion without downloading.",
+                            video_id, elapsed_min
+                        )
+                        db.update_youtube_video(
+                            video_id,
+                            status="WAITING_FOR_YOUTUBE_PROCESSING",
+                            last_error=(
+                                f"[WAITING_FOR_YOUTUBE_PROCESSING] upload_status={u_status or 'unknown'}; "
+                                f"processing_status={p_status or 'unknown'}; elapsed={elapsed_min:.0f}m; "
+                                f"failure_reason={fail_reason or 'not provided'}"
+                            )
+                        )
+                    continue
+
+                # Case B: Video processing confirmed SUCCEEDED on YouTube
+                if p_status == "succeeded" or u_status == "processed":
+                    logger.info(
+                        "YouTube video %s processing confirmed SUCCEEDED (Duration: %s). Proceeding to Pillar 1 media download.",
+                        video_id, st_info.get("duration")
+                    )
+                    if existing:
+                        db.update_youtube_video(video_id, status=existing.get("status") or "DISCOVERED", last_error="")
+                else:
+                    # Unknown API states are not permission to attempt a media download.
+                    state = existing.get("status") if existing else "DISCOVERED"
+                    db.update_youtube_video(
+                        video_id,
+                        status=state or "DISCOVERED",
+                        last_error=(
+                            f"[YOUTUBE_STATUS_UNAVAILABLE] Unrecognized upload_status={u_status or 'unknown'}; "
+                            f"processing_status={p_status or 'unknown'}; retrying status check without re-uploading."
+                        )
+                    )
+                    continue
 
                 # Ingestion: Discover -> Download -> Validate -> DOWNLOADED
                 try:
