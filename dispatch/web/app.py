@@ -47,7 +47,8 @@ from dispatch.video_engine import (
 )
 from dispatch.youtube_inbox.catcher import (
     YouTubeInboxCatcher,
-    extract_youtube_video_id
+    extract_youtube_video_id,
+    is_ingestion_in_flight
 )
 from dispatch.captions import (
     CaptionTrack,
@@ -1938,6 +1939,18 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
     video_id = extract_youtube_video_id(payload.url)
     if not video_id:
         raise HTTPException(status_code=400, detail="Invalid YouTube URL or Video ID")
+
+    # Truthful duplicate handling: check the shared single-flight guard BEFORE launching
+    # another background thread, so repeat submissions get a distinct status instead of a
+    # misleading processing_queued. The guard inside ingest_video() remains the backstop
+    # against the residual check-then-spawn race (worst case: one extra no-op thread).
+    if is_ingestion_in_flight(video_id):
+        return {
+            "status": "already_processing",
+            "video_id": video_id,
+            "duplicate": True,
+            "message": f"YouTube video {video_id} is already being ingested. Track its progress in the inbox."
+        }
 
     # Start background processing thread so API returns immediately to client
     catcher = YouTubeInboxCatcher()

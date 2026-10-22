@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Film, 
+import {
+  Film,
   RotateCw,
   ExternalLink,
   ChevronDown,
@@ -14,9 +14,21 @@ import {
   Clock,
   HardDrive,
   Camera,
-  Play
+  Play,
+  Youtube,
+  CheckCircle2
 } from 'lucide-react';
-import { RecordingItem, apiUrl } from '../bridge';
+import { RecordingItem, apiUrl, getAuthHeaders } from '../bridge';
+
+interface YouTubeInboxItem {
+  video_id: string;
+  title?: string;
+  status: string;
+  last_error?: string | null;
+  transcript_source?: string | null;
+  discovered_at?: string;
+  duration?: number;
+}
 
 export const isUploadedSegment = (item: RecordingItem): boolean => {
   if (item.youtubeVideoId && item.youtubeVideoId.trim().length > 0) return true;
@@ -63,6 +75,19 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [modalVideo, setModalVideo] = useState<{ url: string; title: string } | null>(null);
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(new Set());
   const [expandedDetailIds, setExpandedDetailIds] = useState<Set<string>>(new Set());
+  const [importUrl, setImportUrl] = useState('');
+  const [importState, setImportState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
+
+  // Mirrors the server-side video ID extraction (dispatch/youtube_inbox/catcher.py)
+  const extractVideoId = (raw: string): string | null => {
+    const cleaned = raw.trim();
+    if (/^[a-zA-Z0-9_-]{11}$/.test(cleaned)) return cleaned;
+    const match = cleaned.match(/(?:v=|\/|youtu\.be\/|embed\/|shorts\/)([a-zA-Z0-9_-]{11})(?:\?|&|$)/);
+    return match ? match[1] : null;
+  };
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0\u00a0B';
@@ -138,6 +163,67 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       clearInterval(interval);
     };
   }, [pcHost]);
+
+  // Poll the existing YouTube Inbox API so imported link statuses stay live
+  useEffect(() => {
+    if (!pcHost) return;
+    let isMounted = true;
+    const fetchInbox = async () => {
+      try {
+        const res = await fetch(apiUrl('/api/youtube/inbox', pcHost));
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          setInboxItems(Array.isArray(data.items) ? data.items : []);
+        }
+      } catch {
+        // silent offline fallback
+      }
+    };
+    fetchInbox();
+    const interval = setInterval(fetchInbox, 5000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [pcHost]);
+
+  const handleImportSubmit = async (rawOverride?: string) => {
+    const value = (rawOverride ?? importUrl).trim();
+    const videoId = extractVideoId(value);
+    if (!videoId) {
+      setImportState('error');
+      setImportNotice(null);
+      setImportError('Enter a valid YouTube link (e.g. https://youtu.be/XXXXXXXXXXX) or an 11-character video ID.');
+      return;
+    }
+    setImportState('submitting');
+    setImportError(null);
+    setImportNotice(null);
+    try {
+      const res = await fetch(apiUrl('/api/youtube/ingest', pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ url: value })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        // Truthful feedback only after the API responds; live progress appears in the imported list below.
+        setImportState('queued');
+        setImportNotice(
+          data.status === 'already_processing'
+            ? 'This video is already being processed — tracking it below.'
+            : 'Accepted — video queued for download and processing. Track progress below.'
+        );
+        if (!rawOverride) setImportUrl('');
+      } else {
+        setImportState('error');
+        setImportError(data.detail || `Import rejected (HTTP ${res.status}).`);
+      }
+    } catch (e: any) {
+      setImportState('error');
+      setImportError(e?.message || 'Could not reach the PC. Check the connection and retry.');
+    }
+  };
 
   // Group recording segments by their authentic sessionId
   const sessions: SessionGroup[] = useMemo(() => {
@@ -257,13 +343,19 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return sessions;
   }, [sessions, filter]);
 
+  // Imported links = inbox records not produced by a native phone upload already shown in Sessions.
+  // The youtube_inbox table stays the single source of truth; native videos keep their own cards.
+  const importedItems = useMemo(() => {
+    const nativeIds = new Set(recordings.map(r => r.youtubeVideoId).filter(Boolean) as string[]);
+    return inboxItems.filter(item => !nativeIds.has(item.video_id));
+  }, [inboxItems, recordings]);
+
   const queuedSessionsCount = sessions.filter(s => s.status !== 'UPLOADED_TO_YOUTUBE').length;
   const uploadedSessionsCount = sessions.filter(s => s.status === 'UPLOADED_TO_YOUTUBE').length;
   const totalStorageBytes = recordings.reduce((acc, r) => acc + (r.fileSizeBytes || 0), 0);
   const totalFootageDuration = recordings.reduce((acc, r) => acc + (r.durationSeconds || 0), 0);
 
-  const renderSessionStatusBadge = (session: SessionGroup) => {
-    switch (session.status) {
+  const renderSessionStatusBadge = (session: SessionGroup) => {    switch (session.status) {
       case 'UPLOADED_TO_YOUTUBE':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
@@ -301,6 +393,39 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
           </span>
         );
     }
+  };
+
+  const renderImportStatusBadge = (status: string) => {
+    if (status === 'CLIPS_CREATED' || status === 'COMPLETED') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 shrink-0">
+          <CheckCircle2 size={10} className="text-emerald-400" />
+          Clips Ready
+        </span>
+      );
+    }
+    if (status === 'FAILED' || status === 'STALLED_YOUTUBE_PROCESSING') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-red-500/15 border border-red-500/30 text-red-300 shrink-0">
+          <AlertCircle size={10} className="text-red-400" />
+          {status === 'FAILED' ? 'Failed' : 'Stalled'}
+        </span>
+      );
+    }
+    if (status === 'DISCOVERED') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-surface-200 border border-border text-text-muted shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+          Queued
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300 shrink-0">
+        <RotateCw size={10} className="text-amber-400 animate-spin" />
+        Processing…
+      </span>
+    );
   };
 
   return (
@@ -405,7 +530,113 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
       {/* 3. SESSIONS SCROLL AREA - Single-direction vertical flow */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5">
-        
+
+        {/* ROUTE B ENTRY POINT: Import from YouTube (POST /api/youtube/ingest) */}
+        <div className="rounded-2xl bg-surface-100 border border-border p-3.5 space-y-2.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-surface-200 border border-border flex items-center justify-center shrink-0">
+              <Youtube size={15} className="text-red-400" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-xs font-semibold text-text-main">Import from YouTube</h2>
+              <p className="text-[10px] text-text-muted leading-relaxed">
+                Record with your normal camera, upload to YouTube, then paste the link here.
+              </p>
+            </div>
+          </div>
+
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleImportSubmit(); }}
+            className="flex items-center gap-2"
+          >
+            <input
+              type="text"
+              inputMode="url"
+              value={importUrl}
+              onChange={(e) => {
+                setImportUrl(e.target.value);
+                if (importState === 'error') { setImportState('idle'); setImportError(null); }
+                if (importState === 'queued') { setImportState('idle'); setImportNotice(null); }
+              }}
+              placeholder="https://youtube.com/watch?v=…"
+              disabled={importState === 'submitting'}
+              aria-label="YouTube video link"
+              className="flex-1 min-w-0 min-h-[44px] px-3 py-2 rounded-lg bg-surface-200 border border-border text-xs font-mono text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={importState === 'submitting' || !importUrl.trim()}
+              className="min-h-[44px] px-4 py-2 rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-xs font-semibold text-text-main flex items-center gap-1.5 shrink-0 transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
+            >
+              {importState === 'submitting'
+                ? <RotateCw size={13} className="animate-spin" />
+                : <Download size={13} />}
+              <span>{importState === 'submitting' ? 'Importing…' : 'Import session'}</span>
+            </button>
+          </form>
+
+          {importState === 'error' && importError && (
+            <p className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2.5 py-2 flex items-start gap-1.5">
+              <AlertCircle size={13} className="shrink-0 mt-0.5" />
+              <span className="break-words">{importError}</span>
+            </p>
+          )}
+          {importState === 'queued' && importNotice && (
+            <p className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-2.5 py-2 break-words">
+              {importNotice}
+            </p>
+          )}
+        </div>
+
+        {/* IMPORTED YOUTUBE SESSIONS (existing youtube_inbox records, live status) */}
+        {importedItems.length > 0 && (
+          <div className="space-y-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted font-semibold">
+              Imported YouTube Sessions ({importedItems.length})
+            </span>
+            {importedItems.map((item) => {
+              const isFailed = item.status === 'FAILED' || item.status === 'STALLED_YOUTUBE_PROCESSING';
+              const isReady = item.status === 'CLIPS_CREATED' || item.status === 'COMPLETED';
+              return (
+                <div key={item.video_id} className="rounded-xl bg-surface-100 border border-border p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="text-xs font-semibold text-text-main truncate">{item.title || `YouTube ${item.video_id}`}</h3>
+                      <p className="text-[10px] font-mono tabular-nums text-text-muted mt-0.5">
+                        ID: {item.video_id}{item.duration ? ` · ${formatDuration(item.duration)}` : ''}
+                      </p>
+                    </div>
+                    {renderImportStatusBadge(item.status)}
+                  </div>
+                  {isFailed && (
+                    <div className="space-y-2">
+                      {item.last_error && (
+                        <p className="text-[10px] font-mono text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2.5 py-2 break-words">
+                          {item.last_error}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleImportSubmit(`https://youtu.be/${item.video_id}`)}
+                        disabled={importState === 'submitting'}
+                        className="min-h-[44px] px-3 py-2 rounded-lg bg-red-500/15 border border-red-500/30 text-xs text-red-300 hover:bg-red-500/25 flex items-center gap-1.5 transition-all duration-150 active:scale-[0.98] disabled:opacity-50"
+                      >
+                        <RotateCw size={12} />
+                        <span>Retry Import</span>
+                      </button>
+                    </div>
+                  )}
+                  {isReady && (
+                    <p className="text-[10px] font-mono text-emerald-300">
+                      Clips are in the review queue.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {filteredSessions.length === 0 ? (
           /* HONEST EMPTY STATE (Clean & Minimalist) */
           <div className="h-full min-h-[280px] flex flex-col items-center justify-center text-center p-8 rounded-2xl bg-surface-100 border border-border">

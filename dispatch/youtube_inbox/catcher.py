@@ -8,6 +8,7 @@ import os
 import json
 import logging
 import subprocess
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -48,6 +49,21 @@ def _apply_auth_opts(ydl_opts: Dict[str, Any]) -> None:
         ydl_opts["cookiefile"] = str(Path(cookies_file).resolve())
     elif cookies_browser:
         ydl_opts["cookiesfrombrowser"] = (cookies_browser,)
+
+
+# Single-flight ingestion state: video IDs with an ingestion run currently active
+# in this process. Shared by all callers (dashboard endpoint threads + poller) so a
+# duplicate submission can never start a competing yt-dlp download for the same video.
+# NOTE: process-local only. The single-process dispatch daemon is the only writer;
+# multi-process deployments would additionally need a database-level claim.
+_INGEST_INFLIGHT_LOCK = threading.Lock()
+_INGEST_INFLIGHT: set = set()
+
+
+def is_ingestion_in_flight(video_id: str) -> bool:
+    """True if an ingestion run for this video is currently active in this process."""
+    with _INGEST_INFLIGHT_LOCK:
+        return video_id in _INGEST_INFLIGHT
 
 
 class YouTubeInboxCatcher:
@@ -228,16 +244,18 @@ class YouTubeInboxCatcher:
         sequence_number: Optional[int] = None
     ) -> Dict[str, Any]:
         """Pillar 1: Dedicated YouTube Ingestion & Media Validation.
-        
+
         Contract:
           1. Discover & register video record in youtube_inbox idempotently (status: DISCOVERED).
           2. Transition to DOWNLOADING and download video via yt-dlp.
           3. Transition to VALIDATING and run real ffprobe validation (stream, decodable, duration, dimensions).
           4. Persist verified metadata and local path, then transition to DOWNLOADED.
           5. STOP. (Downstream stages consume DOWNLOADED records).
+
+        Single-flight: only one ingestion run per video may be active in this process
+        at a time, regardless of caller (dashboard endpoint threads or the poller).
         """
         from dispatch.ingestion.validator import probe_video
-        from dispatch.youtube_inbox.oauth import extract_dispatch_id, extract_session_metadata
 
         video_id = extract_youtube_video_id(url_or_id)
         if not video_id:
@@ -261,6 +279,38 @@ class YouTubeInboxCatcher:
                         "local_video_path": str(local_path),
                         "verified": True
                     }
+
+        with _INGEST_INFLIGHT_LOCK:
+            if video_id in _INGEST_INFLIGHT:
+                logger.info("Ingestion already running for video %s. Skipping duplicate run.", video_id)
+                return {
+                    "video_id": video_id,
+                    "status": "ALREADY_INGESTING",
+                    "verified": False,
+                    "duplicate": True
+                }
+            _INGEST_INFLIGHT.add(video_id)
+        try:
+            return self._ingest_video_locked(
+                video_id=video_id,
+                dispatch_id=dispatch_id,
+                session_id=session_id,
+                sequence_number=sequence_number
+            )
+        finally:
+            with _INGEST_INFLIGHT_LOCK:
+                _INGEST_INFLIGHT.discard(video_id)
+
+    def _ingest_video_locked(
+        self,
+        video_id: str,
+        dispatch_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        sequence_number: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Pillar 1 run body. Caller must hold the per-video in-flight slot from ingest_video()."""
+        from dispatch.ingestion.validator import probe_video
+        from dispatch.youtube_inbox.oauth import extract_dispatch_id, extract_session_metadata
 
         logger.info("Starting Pillar 1 Ingestion for YouTube video: %s", video_id)
 

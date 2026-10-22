@@ -2,11 +2,12 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
     namespace = "com.resolvia.dispatch"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.resolvia.dispatch"
@@ -50,10 +51,7 @@ android {
     buildFeatures {
         compose = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
-    }
-}
+   }
 
 dependencies {
     // Core Android & Lifecycle
@@ -96,3 +94,4 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
 }
+
