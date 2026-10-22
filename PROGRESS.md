@@ -1,6 +1,19 @@
 # Current Handoff for Antigravity — 2026-10-23 (verification run)
 
-This checkpoint supersedes older status and test-count notes below. Branch `main`, HEAD `79444b7db6afc3c0cf74612b4e44f96808fb15cd` ("feat: add database layer…"; the commit message is misleading — the content is the editor/long-input reliability + Route B regression work from the previous checkpoint, now committed). The verification below was run against exactly this HEAD from a clean working tree.
+This checkpoint supersedes older status and test-count notes below. Branch `main`, HEAD `55b17909f6124dd965030654da77db1b5e49ab59` (synced with `origin/main`; includes the two doc/cleanup commits on top of the `79444b7` reliability work — see the 2026-10-23 verification note further down).
+
+## Runtime run (2026-10-23, later the same day)
+
+- Git: `main` == `origin/main` == `55b1790`, clean tree, no fast-forward needed.
+- Python: repaired pip via `ensurepip` (pip 24.0), installed `pip install -e .` into the existing `.venv` (Python 3.11.15) — `google-genai 2.32.0` and all declared deps now import; `from google import genai` **passes**. FFmpeg/ffprobe 8.0.1 on PATH.
+- Credentials (presence only, values withheld): `.env` has `GEMINI_API_KEY` set (len 53); `youtube_token.json` and `client_secrets.json` present and untouched. Publishing mode left private.
+- Frontend: `npm ci`, `npm test`, `npm run build` all exit 0; build emitted `index-Bd9C_B3d.js` (590.93 kB, deterministic — same hash as the prior verified build) and the generated `index.html` references it.
+- Android (JDK 17.0.5): `:app:testDebugUnitTest :app:assembleDebug` BUILD SUCCESSFUL (46 tasks up-to-date — sources unchanged); unit-test XML shows **18 tests, 0 failures, 0 errors**. APK `app-debug.apk` (15,189,951 bytes) byte-compared: packaged `index.html` and `index-Bd9C_B3d.js` are **byte-identical** to the fresh build.
+- ADB: daemon started, **no devices attached** — APK not installed. Install command for later: `& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r C:\CODE\Dispatch\android\app\build\outputs\apk\debug\app-debug.apk` then launch `com.resolvia.dispatch`.
+- **PC server: running.** `.\.venv\Scripts\python.exe -m dispatch.main` booted cleanly (PID 7620, listening `127.0.0.1:8000`): DB initialized, boot recovery clean, FFmpeg verified, all four workers (poller/transcription/highlight/outbox) active. Dashboard `GET /` and `GET /api/clips` return **HTTP 200** with real data. On boot it refreshed the stored YouTube OAuth token and completed a **live authenticated YouTube uploads poll** (1 already-known candidate re-verified; nothing new ingested; no Gemini request made; no upload performed). No errors in the log. One pre-existing inbox row sits at `STALLED_YOUTUBE_PROCESSING` (video `AHaEgBYcHoo`-session part 1, from 2026-10-20) — untouched.
+- Live YouTube/Gemini end-to-end and POCO C65 device verification remain **not performed**.
+
+## Previous verification run (2026-10-23, at HEAD `79444b7`)
 
 ## Verification run (2026-10-23, automated only)
 
