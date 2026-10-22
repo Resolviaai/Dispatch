@@ -231,7 +231,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
     setIsPlaying(false);
 
     return () => controller.abort();
-  }, [currentClip?.id, currentClip?.duration, pcHost, captionRetryCount]);
+  }, [currentClip?.id, currentClip?.duration, currentClip?.range_revision, pcHost, captionRetryCount]);
 
   const handleRetryCaptionLoad = () => {
     setCaptionLoadState('loading');
@@ -349,6 +349,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
           platforms: currentClip.platform_targets || 'youtube',
           layout_mode: currentClip.layout_mode,
           caption_track: visibleTrack,
+          range_revision: currentClip.range_revision || 0,
         }),
       });
       if (res.ok) {

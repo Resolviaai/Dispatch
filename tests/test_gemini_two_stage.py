@@ -151,10 +151,12 @@ class TestGeminiTwoStage(unittest.TestCase):
             with patch.dict(sys.modules, {"google.genai": fake_genai_module()}), \
                  patch("dispatch.transcription.gemini_engine.get_gemini_client", return_value=client), \
                  patch("dispatch.transcription.gemini_engine.split_audio_for_transcription",
-                       return_value=[(first, 0.0), (second, 598.0)]):
+                       return_value=[(first, 0.0), (second, 595.0)]) as split_audio:
                 segments = transcribe_stage1_flash_lite(source)
 
-        self.assertEqual([item["start"] for item in segments], [9.0, 599.0])
+        split_audio.assert_called_once()
+        self.assertEqual(split_audio.call_args.kwargs["overlap_seconds"], 5.0)
+        self.assertEqual([item["start"] for item in segments], [9.0, 596.0])
         self.assertEqual([item["text"] for item in segments], ["first", "second"])
         self.assertEqual(client.files.delete.call_count, 2)
         self.assertEqual(_parse_stage1_time("01:02:03.5"), 3723.5)
@@ -165,7 +167,7 @@ class TestGeminiTwoStage(unittest.TestCase):
             {"start": 598.1, "end": 600.2, "text": "Same phrase.", "speaker": "one", "_source_part_index": 1},
             {"start": 601.0, "end": 602.0, "text": "same phrase", "speaker": "one", "_source_part_index": 1},
         ]
-        merged = _deduplicate_overlapping_segments(segments, overlap_seconds=2.0)
+        merged = _deduplicate_overlapping_segments(segments, overlap_seconds=5.0)
         self.assertEqual(len(merged), 2)
         self.assertEqual(merged[0]["start"], 597.5)
         self.assertEqual(merged[0]["end"], 600.2)

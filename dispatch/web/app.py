@@ -314,6 +314,7 @@ class ApproveRequest(BaseModel):
     platforms: Optional[str] = None     # "youtube,instagram"
     layout_mode: Optional[str] = None   # "fit_blur", "crop_follow", "landscape"
     caption_track: Optional[Dict[str, Any]] = None
+    range_revision: Optional[int] = None
 
 
 class RejectRequest(BaseModel):
@@ -323,6 +324,7 @@ class RejectRequest(BaseModel):
 class TrimClipRequest(BaseModel):
     start_time: float
     end_time: float
+    range_revision: Optional[int] = None
 
 
 class LayoutModeRequest(BaseModel):
@@ -685,6 +687,8 @@ async def list_clips():
     """List clips grouped by status with source media URLs and stale render flags."""
     ready_clips = db.get_clips_for_review()
     for c in ready_clips:
+        chunk = db.get_chunk_by_id(c.get("chunk_id")) if c.get("chunk_id") else None
+        c["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
         populate_clip_media_urls(c)
         ctx = get_clip_framing_context(c)
         c["source_orientation"] = ctx["source_orientation"]
@@ -743,6 +747,8 @@ async def get_clip_detail(clip_id: str):
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
     populate_clip_media_urls(clip)
+    chunk = db.get_chunk_by_id(clip.get("chunk_id")) if clip.get("chunk_id") else None
+    clip["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
     ctx = get_clip_framing_context(clip)
     clip["source_orientation"] = ctx["source_orientation"]
     clip["source_aspect_ratio"] = ctx["source_aspect_ratio"]
@@ -965,19 +971,24 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
             aspect_ratio=ctx["source_aspect_ratio"],
             layout_mode=target_layout,
             segments=segments,
-            subtitle_options={"enabled": False, "preserve_timing": True}
+            subtitle_options={"enabled": False, "preserve_timing": True},
+            expected_range_revision=int(clip.get("range_revision") or 0),
         )
         out_file = Path(render_res["video_path"])
         if not out_file.exists() or out_file.stat().st_size == 0:
             raise RuntimeError("Render output file is missing or zero bytes")
 
         with db.get_db_connection() as conn:
-            conn.execute(
-                "UPDATE clips SET layout_mode = ?, rendered_layout_mode = ?, video_path = ?, render_stale = 0 WHERE id = ?",
-                (target_layout, target_layout, str(out_file), clip_id)
+            cursor = conn.execute(
+                "UPDATE clips SET layout_mode = ?, rendered_layout_mode = ?, video_path = ?, render_stale = 0 WHERE id = ? AND range_revision = ?",
+                (target_layout, target_layout, str(out_file), clip_id, int(clip.get("range_revision") or 0))
             )
             conn.commit()
+            if cursor.rowcount != 1:
+                raise HTTPException(status_code=409, detail="Clip range changed while rendering. Reload and retry.")
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
         logger.error("Failed to render clip %s: %s", clip_id, e)
         raise HTTPException(status_code=500, detail=f"Couldn't render selected framing: {str(e)}")
 
@@ -1022,9 +1033,13 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
                 source_duration = float(source_info["duration"])
 
     success = db.update_clip_trim(
-        clip_id, payload.start_time, payload.end_time, source_duration=source_duration
+        clip_id, payload.start_time, payload.end_time, source_duration=source_duration,
+        expected_range_revision=payload.range_revision,
     )
     if not success:
+        latest = db.get_clip_by_id(clip_id)
+        if payload.range_revision is not None and latest and int(latest.get("range_revision") or 0) != payload.range_revision:
+            raise HTTPException(status_code=409, detail="The selected range changed elsewhere. Reload the clip and retry.")
         raise HTTPException(
             status_code=400,
             detail="Trim must stay inside the source and be between 5 and 180 seconds.",
@@ -1037,6 +1052,8 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
         "start_time": updated["start_time"],
         "end_time": updated["end_time"],
         "duration": updated["duration"],
+        "range_revision": updated["range_revision"],
+        "source_duration": source_duration,
         "padded_start": updated.get("padded_start"),
         "padded_end": updated.get("padded_end"),
         "is_render_stale": clip_render_is_stale(updated),
@@ -1059,6 +1076,9 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest):
         return {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail=f"Clip cannot be approved from status '{clip.get('status')}'")
+    current_revision = int(clip.get("range_revision") or 0)
+    if payload.range_revision is not None and payload.range_revision != current_revision:
+        raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")
 
     ctx = get_clip_framing_context(clip)
     raw_mode = payload.layout_mode or clip.get("layout_mode") or ctx["layout_mode"]
@@ -1070,15 +1090,44 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest):
     if payload.caption_track is not None:
         try:
             caption_track = CaptionTrack.from_dict(payload.caption_track)
+            if caption_track.clip_id and caption_track.clip_id != clip_id:
+                raise ValueError("Caption track belongs to another clip")
             caption_snapshot = caption_track.to_dict()
-            db.save_clip_caption_data(clip_id, json.dumps(caption_snapshot, ensure_ascii=False))
+            saved = db.save_clip_caption_data(
+                clip_id, json.dumps(caption_snapshot, ensure_ascii=False),
+                expected_range_revision=current_revision,
+                source_range_start=float(clip["start_time"]),
+                source_range_end=float(clip["end_time"]),
+                timing_warning=payload.caption_track.get("timing_warning"),
+            )
+            if not saved:
+                raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")
+            clip = db.get_clip_by_id(clip_id) or clip
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             raise HTTPException(status_code=400, detail=f"Invalid caption track: {e}") from e
     else:
         try:
             caption_snapshot = json.loads(clip["caption_data"]) if clip.get("caption_data") else None
         except Exception:
             caption_snapshot = None
+        if caption_snapshot and int(clip.get("caption_range_revision") or 0) != current_revision:
+            raise HTTPException(status_code=409, detail="Saved captions belong to an older clip range. Reload and save captions before approving.")
+
+    if clip.get("caption_timing_warning"):
+        raise HTTPException(status_code=422, detail=str(clip["caption_timing_warning"]))
+    if caption_snapshot:
+        unreliable = [
+            group for group in caption_snapshot.get("groups", [])
+            if (not group.get("type") or group.get("type") == "caption")
+            and (not group.get("has_word_timing", True) or group.get("timing_mode", "word") != "word")
+        ]
+        if unreliable:
+            raise HTTPException(
+                status_code=422,
+                detail="These captions do not have reliable word-level timings. Retry transcription or remove the inexact caption groups before publishing.",
+            )
 
     source_path = resolve_clip_source_path(clip)
     if not source_path or not source_path.is_file():
@@ -1115,21 +1164,35 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest):
             aspect_ratio=ctx["source_aspect_ratio"],
             layout_mode=target_layout,
             segments=segments,
-            subtitle_options={"enabled": True, "caption_track": caption_snapshot, "preserve_timing": True}
+            subtitle_options={"enabled": True, "caption_track": caption_snapshot, "preserve_timing": True},
+            expected_range_revision=current_revision,
         )
         out_file = Path(render_res["video_path"])
         if not out_file.is_file() or out_file.stat().st_size == 0:
             raise RuntimeError("Final render is missing or empty")
         from dispatch.ingestion.validator import probe_video
-        is_valid, _, validation_error = probe_video(out_file)
+        is_valid, probe_data, validation_error = probe_video(out_file)
         if not is_valid:
             raise RuntimeError(f"Final render failed playback validation: {validation_error or 'invalid media'}")
+        actual_duration = float(probe_data.get("duration") or 0.0) if isinstance(probe_data, dict) else 0.0
+        expected_duration = end_t - start_t
+        if actual_duration > 0 and abs(actual_duration - expected_duration) > 1.0:
+            raise RuntimeError(
+                f"Final render duration {actual_duration:.2f}s does not match selected range {expected_duration:.2f}s"
+            )
     except Exception as e:
         logger.error("Failed to render clip %s with layout %s: %s", clip_id, target_layout, e)
         raise HTTPException(
             status_code=500,
             detail=f"Couldn't create a valid final render: {str(e)}"
         ) from e
+
+    latest = db.get_clip_by_id(clip_id)
+    if not latest or int(latest.get("range_revision") or 0) != current_revision:
+        with db.get_db_connection() as conn:
+            conn.execute("UPDATE clips SET render_stale = 1 WHERE id = ?", (clip_id,))
+            conn.commit()
+        raise HTTPException(status_code=409, detail="The clip range changed while rendering. The render was marked stale; review and approve again.")
 
     db.approve_clip(
         clip_id=clip_id,
@@ -1459,21 +1522,38 @@ async def get_caption_presets():
 @app.get("/api/clips/{clip_id}/captions")
 async def get_clip_captions(clip_id: str):
     """Return saved captions or derive a lightweight preview from the stored transcript."""
-    cached_json = db.get_clip_caption_data(clip_id)
-    if cached_json:
-        try:
-            cached_track = json.loads(cached_json)
-            if isinstance(cached_track, dict) and isinstance(cached_track.get("groups"), list):
-                return cached_track
-        except Exception:
-            pass
-
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
 
+    cached_json = db.get_clip_caption_data(clip_id)
+    current_revision = int(clip.get("range_revision") or 0)
+    if cached_json:
+        try:
+            cached_track = json.loads(cached_json)
+            if (
+                isinstance(cached_track, dict)
+                and isinstance(cached_track.get("groups"), list)
+                and int(clip.get("caption_range_revision") if clip.get("caption_range_revision") is not None else current_revision) == current_revision
+            ):
+                cached_track["range_revision"] = current_revision
+                cached_track["timing_warning"] = clip.get("caption_timing_warning")
+                if not cached_track["timing_warning"] and any(
+                    not group.get("has_word_timing", True) or group.get("timing_mode") == "phrase"
+                    for group in cached_track.get("groups", [])
+                    if group.get("type", "caption") == "caption"
+                ):
+                    cached_track["timing_warning"] = "Some captions have phrase-level timing only. Retry transcription before publishing."
+                return cached_track
+        except Exception:
+            pass
+
     chunk_id = clip.get("chunk_id")
     session_id = clip.get("session_id")
+    clip_start = float(clip.get("start_time", 0.0))
+    clip_end = float(clip.get("end_time", clip_start + 15.0))
+    if (clip_end - clip_start) > MAX_CLIP_DURATION:
+        clip_end = clip_start + MAX_CLIP_DURATION
 
     # Fetch transcript segments strictly matching this clip's chunk or session
     segments = []
@@ -1535,16 +1615,31 @@ async def get_clip_captions(clip_id: str):
             default_layout=preset_data["layout"],
             default_animation=preset_data["animation"]
         )
-        return empty_track.to_dict()
+        track_dict = empty_track.to_dict()
+        timing_warning = None
+        if cached_json:
+            try:
+                from dispatch.captions.range_sync import rebase_caption_track
+                old_track = json.loads(cached_json)
+                old_start = float(clip.get("caption_range_start") if clip.get("caption_range_start") is not None else clip_start)
+                old_end = float(clip.get("caption_range_end") if clip.get("caption_range_end") is not None else clip_end)
+                track_dict, needs_warning = rebase_caption_track(old_track, old_start, clip_start, clip_end)
+                if needs_warning or clip_start < old_start or clip_end > old_end:
+                    timing_warning = "The selected range exceeds saved caption coverage, and no persisted source transcript is available to align the added footage. Retry transcription before publishing."
+            except Exception as error:
+                logger.warning("Could not safely rebase captions for clip %s: %s", clip_id, error)
+                timing_warning = "Saved captions could not be aligned safely to the selected range. Retry transcription before publishing."
+        if any(
+            not group.get("has_word_timing", True) or group.get("timing_mode") == "phrase"
+            for group in track_dict.get("groups", []) if group.get("type", "caption") == "caption"
+        ):
+            timing_warning = "Some captions have phrase-level timing only. Retry transcription before publishing."
+        track_dict["range_revision"] = current_revision
+        track_dict["timing_warning"] = timing_warning
+        return track_dict
 
     # Transliterate Devanagari Hindi text to natural Roman Hinglish with 1:1 token mapping
     clean_segments = transliterate_segments_to_hinglish(segments)
-
-    clip_start = float(clip.get("start_time", 0.0))
-    clip_end = float(clip.get("end_time", clip_start + 15.0))
-    # Hard clamp duration to MAX_CLIP_DURATION (180s)
-    if (clip_end - clip_start) > MAX_CLIP_DURATION:
-        clip_end = clip_start + MAX_CLIP_DURATION
 
     track = group_words_into_captions(
         raw_segments=clean_segments,
@@ -1554,7 +1649,38 @@ async def get_clip_captions(clip_id: str):
         preset_id=get_default_preset_id()
     )
 
-    return track.to_dict()
+    track_dict = track.to_dict()
+    timing_warning = None
+    if any(not group.has_word_timing or group.timing_mode != "word" for group in track.groups if group.type == "caption"):
+        timing_warning = "Some transcript captions have phrase-level timing only. Retry transcription before publishing."
+
+    # If a saved track belongs to an older selection, rebase its clip-relative
+    # words and append exact words newly exposed by the range expansion.
+    if cached_json:
+        try:
+            from dispatch.captions.range_sync import rebase_caption_track
+            cached_track = json.loads(cached_json)
+            old_start = float(clip.get("caption_range_start") if clip.get("caption_range_start") is not None else clip["start_time"])
+            old_end = float(clip.get("caption_range_end") if clip.get("caption_range_end") is not None else clip["end_time"])
+            transcript_dict = track_dict if segments else None
+            track_dict, needs_warning = rebase_caption_track(
+                cached_track, old_start, clip_start, clip_end, transcript_dict
+            )
+            if needs_warning:
+                timing_warning = "The expanded range contains transcript without reliable word-level timings. Retry transcription before publishing."
+            elif not any(
+                not group.get("has_word_timing", True) or group.get("timing_mode") == "phrase"
+                for group in track_dict.get("groups", []) if group.get("type", "caption") == "caption"
+            ):
+                timing_warning = None
+        except Exception as error:
+            logger.warning("Could not safely rebase captions for clip %s: %s", clip_id, error)
+            timing_warning = "Saved captions could not be aligned safely to the selected range. Retry transcription before publishing."
+            track_dict = track.to_dict() if segments else {**track_dict, "groups": []}
+
+    track_dict["range_revision"] = current_revision
+    track_dict["timing_warning"] = timing_warning
+    return track_dict
 
 
 @app.post("/api/clips/{clip_id}/captions")
@@ -1570,14 +1696,27 @@ async def save_clip_captions(clip_id: str, request: Request):
 
     data = await request.json()
     track = CaptionTrack.from_dict(data)
+    if track.clip_id and track.clip_id != clip_id:
+        raise HTTPException(status_code=409, detail="Caption track belongs to another clip")
+    expected_revision = data.get("range_revision", int(clip.get("range_revision") or 0))
+    if expected_revision != int(clip.get("range_revision") or 0):
+        raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before saving.")
     track_dict = track.to_dict()
-    db.save_clip_caption_data(clip_id, json.dumps(track_dict))
+    timing_warning = data.get("timing_warning")
+    if any(not group.has_word_timing or group.timing_mode != "word" for group in track.groups if group.type in ("caption", "")):
+        timing_warning = "Some transcript captions have phrase-level timing only. Retry transcription before publishing."
+    if not db.save_clip_caption_data(
+        clip_id, json.dumps(track_dict), expected_range_revision=expected_revision,
+        source_range_start=float(clip["start_time"]), source_range_end=float(clip["end_time"]),
+        timing_warning=timing_warning,
+    ):
+        raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before saving.")
 
     # Export ASS file with exact parity
     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
     export_to_ass(track, ass_path)
 
-    return {"status": "success", "message": "Captions saved and exported to ASS"}
+    return {"status": "success", "message": "Captions saved and exported to ASS", "range_revision": expected_revision}
 
 
 @app.post("/api/media/upload")

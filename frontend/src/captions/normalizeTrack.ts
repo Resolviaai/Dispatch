@@ -130,6 +130,8 @@ export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: nu
     default_layout,
     default_animation,
     groups,
+    range_revision: typeof source.range_revision === 'number' ? source.range_revision : undefined,
+    timing_warning: typeof source.timing_warning === 'string' ? source.timing_warning : null,
   };
 }
 

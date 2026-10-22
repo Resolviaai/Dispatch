@@ -28,7 +28,8 @@ def render_clip(
     aspect_ratio: Optional[str] = None,
     layout_mode: str = "fit_blur",
     segments: Optional[List[Dict[str, Any]]] = None,
-    subtitle_options: Optional[Dict[str, Any]] = None
+    subtitle_options: Optional[Dict[str, Any]] = None,
+    expected_range_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Render a single candidate short-form video clip.
     
@@ -43,6 +44,11 @@ def render_clip(
     """
     if not source_video.exists():
         raise FileNotFoundError(f"Source video not found: {source_video}")
+
+    clip_at_start = db.get_clip_by_id(clip_id)
+    render_range_revision = expected_range_revision
+    if render_range_revision is None and clip_at_start:
+        render_range_revision = int(clip_at_start.get("range_revision") or 0)
 
     from dispatch.ingestion.validator import inspect_video_orientation
     info = inspect_video_orientation(source_video)
@@ -108,7 +114,14 @@ def render_clip(
                     preset_id=sub_opts.get("style_preset") or get_default_preset_id()
                 )
                 export_to_ass(track, ass_path)
-                db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
+                saved = db.save_clip_caption_data(
+                    clip_id, json.dumps(track.to_dict()),
+                    expected_range_revision=render_range_revision,
+                    source_range_start=start_time,
+                    source_range_end=end_time,
+                )
+                if render_range_revision is not None and not saved:
+                    raise RuntimeError("Clip range changed while captions were being rendered")
             except Exception as e:
                 logger.warning("Failed to generate subtitles via CaptionTrack: %s", e)
                 ass_path = None
@@ -264,12 +277,15 @@ def render_clip(
             pass
 
     # 6. Update DB with verified rendered layout
-    db.update_clip_media(
+    media_updated = db.update_clip_media(
         clip_id=clip_id,
         video_path=str(output_video_path),
         thumbnail_path=str(output_thumb_path) if output_thumb_path.exists() else None,
-        rendered_layout_mode=layout_mode
+        rendered_layout_mode=layout_mode,
+        expected_range_revision=render_range_revision,
     )
+    if render_range_revision is not None and not media_updated:
+        raise RuntimeError("Clip range changed during rendering; obsolete media was not installed")
 
     logger.info("Successfully rendered clip %s -> %s (duration: %.2fs)", clip_id, output_video_path.name, actual_duration)
 

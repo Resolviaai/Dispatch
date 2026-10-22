@@ -1,5 +1,6 @@
 export const MAX_CLIP_SELECTION_SECONDS = 180;
 export const MIN_CLIP_SELECTION_SECONDS = 5;
+export const RANGE_CONTROL_STEP_SECONDS = 0.5;
 
 export interface SourceRange {
   start: number;
@@ -24,6 +25,39 @@ export function sourceTimeToClipTime(sourceTime: number, clipStart: number, clip
 
 export function captionTimeIsActive(time: number, start: number, end: number): boolean {
   return Number.isFinite(time) && time >= start && time <= end;
+}
+
+export function extendSourceRange(
+  range: SourceRange,
+  side: 'start' | 'end',
+  deltaSeconds: number,
+  sourceDuration: number,
+): SourceRange {
+  if (!Number.isFinite(sourceDuration) || sourceDuration <= 0 || !Number.isFinite(deltaSeconds)) return range;
+  return moveTrimPointer(
+    { side, pointerId: 0, startX: 0, initialRange: range },
+    0,
+    deltaSeconds,
+    1,
+    sourceDuration,
+  );
+}
+
+export function sourceContextRange(
+  range: SourceRange,
+  side: 'before' | 'after',
+  sourceDuration: number,
+  seconds = 4,
+): SourceRange | null {
+  if (!Number.isFinite(sourceDuration) || sourceDuration <= 0 || seconds <= 0) return null;
+  const context = side === 'before'
+    ? { start: Math.max(0, range.start - seconds), end: range.start }
+    : { start: range.end, end: Math.min(sourceDuration, range.end + seconds) };
+  return context.end > context.start ? context : null;
+}
+
+export function shouldStopSourcePlayback(currentTime: number, selectedEnd: number): boolean {
+  return Number.isFinite(currentTime) && Number.isFinite(selectedEnd) && currentTime >= selectedEnd;
 }
 
 export function beginTrimPointer(

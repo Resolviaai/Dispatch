@@ -1,0 +1,295 @@
+[
+  {
+    "family": "Impact",
+    "category": "Bold / Captions",
+    "weights": [
+      "400"
+    ],
+    "filename": "impact.ttf",
+    "license": "System / Core Web Font",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/impact.ttf"
+  },
+  {
+    "family": "Anton",
+    "category": "Bold / Captions",
+    "weights": [
+      "400"
+    ],
+    "filename": "Anton-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Anton-Regular.ttf"
+  },
+  {
+    "family": "Archivo Black",
+    "category": "Bold / Captions",
+    "weights": [
+      "400"
+    ],
+    "filename": "ArchivoBlack-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/ArchivoBlack-Regular.ttf"
+  },
+  {
+    "family": "Bebas Neue",
+    "category": "Decorative",
+    "weights": [
+      "400"
+    ],
+    "filename": "BebasNeue-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/BebasNeue-Regular.ttf"
+  },
+  {
+    "family": "Montserrat",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "Montserrat-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Montserrat-Variable.ttf"
+  },
+  {
+    "family": "Oswald",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700"
+    ],
+    "filename": "Oswald-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Oswald-Variable.ttf"
+  },
+  {
+    "family": "Barlow Condensed",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "BarlowCondensed-Bold.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/BarlowCondensed-Bold.ttf"
+  },
+  {
+    "family": "League Spartan",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "LeagueSpartan-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/LeagueSpartan-Variable.ttf"
+  },
+  {
+    "family": "Poppins",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "Poppins-Bold.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Poppins-Bold.ttf"
+  },
+  {
+    "family": "Inter",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "Inter-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Inter-Variable.ttf"
+  },
+  {
+    "family": "Roboto",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "700",
+      "900"
+    ],
+    "filename": "Roboto-Variable.ttf",
+    "license": "Apache License 2.0",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Roboto-Variable.ttf"
+  },
+  {
+    "family": "Open Sans",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800"
+    ],
+    "filename": "OpenSans-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/OpenSans-Variable.ttf"
+  },
+  {
+    "family": "Noto Sans",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800"
+    ],
+    "filename": "NotoSans-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/NotoSans-Variable.ttf"
+  },
+  {
+    "family": "Space Grotesk",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700"
+    ],
+    "filename": "SpaceGrotesk-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/SpaceGrotesk-Variable.ttf"
+  },
+  {
+    "family": "Bangers",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "Bangers-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Bangers-Regular.ttf"
+  },
+  {
+    "family": "Luckiest Guy",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "LuckiestGuy-Regular.ttf",
+    "license": "Apache License 2.0",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/LuckiestGuy-Regular.ttf"
+  },
+  {
+    "family": "Russo One",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "RussoOne-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/RussoOne-Regular.ttf"
+  },
+  {
+    "family": "Titan One",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "TitanOne-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/TitanOne-Regular.ttf"
+  },
+  {
+    "family": "Bungee",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "Bungee-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Bungee-Regular.ttf"
+  },
+  {
+    "family": "Permanent Marker",
+    "category": "Decorative",
+    "weights": [
+      "400"
+    ],
+    "filename": "PermanentMarker-Regular.ttf",
+    "license": "Apache License 2.0",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/PermanentMarker-Regular.ttf"
+  },
+  {
+    "family": "Noto Sans Devanagari",
+    "category": "Language Support",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800"
+    ],
+    "filename": "NotoSansDevanagari-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/NotoSansDevanagari-Variable.ttf"
+  }
+]

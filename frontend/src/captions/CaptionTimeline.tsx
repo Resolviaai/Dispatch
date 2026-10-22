@@ -18,7 +18,10 @@ import {
   beginTrimPointer,
   captionTimeIsActive,
   clipTimeToSourceTime,
+  extendSourceRange,
   moveTrimPointer,
+  RANGE_CONTROL_STEP_SECONDS,
+  sourceContextRange,
   sourceTimeToClipTime,
   type TrimPointerState,
 } from './timelineInteraction';
@@ -39,6 +42,7 @@ interface CaptionTimelineProps {
   sourceDuration?: number;
   sourceTimebase?: boolean;
   onTrimChange?: (sourceStart: number, sourceEnd: number) => Promise<boolean | void> | boolean | void;
+  onPreviewContext?: (range: { start: number; end: number }) => void;
   onSeek: (seconds: number) => void;
   onTogglePlay?: () => void;
   onSelectGroup: (groupId: string | null) => void;
@@ -87,6 +91,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   sourceDuration,
   sourceTimebase = true,
   onTrimChange,
+  onPreviewContext,
   onSeek,
   onSelectGroup,
   onSelectVideo,
@@ -130,6 +135,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const [trimDrag, setTrimDrag] = useState<TrimPointerState | null>(null);
   const trimDragRef = useRef<TrimPointerState | null>(null);
+  const [trimSaveState, setTrimSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   useLayoutEffect(() => {
     const nextRange = {
@@ -147,6 +153,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const safeDuration = timelineDuration;
   const totalTimelineWidth = Math.max(340, Math.round(safeDuration * pxPerSec));
+  const selectionDuration = Math.max(0, activeTrim.end - activeTrim.start);
+  const canEditSelection = Boolean(sourceDuration && sourceDuration > 0 && onTrimChange);
+  const beforeContext = sourceContextRange(activeTrim, 'before', sourceDuration || 0);
+  const afterContext = sourceContextRange(activeTrim, 'after', sourceDuration || 0);
 
   // Measure timeline viewport width to anchor fixed center playhead (50% horizontal center)
   useEffect(() => {
@@ -759,11 +769,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   };
 
   const handleTrimPointerDown = (side: 'start' | 'end', e: React.PointerEvent) => {
+    if (!(sourceDuration && sourceDuration > 0) || !onTrimChange || trimSaveState === 'saving') return;
     e.stopPropagation();
     const nextDrag = beginTrimPointer(side, e.pointerId, e.clientX, activeTrimRef.current);
     trimDragRef.current = nextDrag;
     setTrimDrag(nextDrag);
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    try { (e.target as HTMLElement).setPointerCapture?.(e.pointerId); } catch { /* pointer can end before capture */ }
   };
 
   const handleTrimPointerMove = (e: React.PointerEvent) => {
@@ -785,6 +796,37 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     } catch { }
   };
 
+  const persistTrimRange = async (range: { start: number; end: number }) => {
+    if (!onTrimChange || !(sourceDuration && sourceDuration > 0)) return false;
+    const previous = { start: Math.max(0, clipStart), end: clipEnd ?? (clipStart + duration) };
+    setTrimSaveState('saving');
+    try {
+      const saved = await onTrimChange(range.start, range.end);
+      if (saved === false) {
+        activeTrimRef.current = previous;
+        setActiveTrim(previous);
+        setTrimSaveState('error');
+        return false;
+      }
+      setTrimSaveState('saved');
+      return true;
+    } catch {
+      activeTrimRef.current = previous;
+      setActiveTrim(previous);
+      setTrimSaveState('error');
+      return false;
+    }
+  };
+
+  const applyRangeExtension = (side: 'start' | 'end', delta: number) => {
+    const previous = activeTrimRef.current;
+    const next = extendSourceRange(previous, side, delta, sourceDuration || 0);
+    if (next.start === previous.start && next.end === previous.end) return;
+    activeTrimRef.current = next;
+    setActiveTrim(next);
+    void persistTrimRange(next);
+  };
+
   const handleTrimPointerUp = (e: React.PointerEvent) => {
     const drag = trimDragRef.current;
     if (drag) {
@@ -795,15 +837,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       trimDragRef.current = null;
       setTrimDrag(null);
       releaseTrimPointer(e);
-      if (onTrimChange) {
-        Promise.resolve(onTrimChange(finalRange.start, finalRange.end)).then((saved) => {
-          if (saved === false) {
-            const previous = { start: Math.max(0, clipStart), end: clipEnd ?? (clipStart + duration) };
-            activeTrimRef.current = previous;
-            setActiveTrim(previous);
-          }
-        });
-      }
+      if (onTrimChange) void persistTrimRange(finalRange);
     }
   };
 
@@ -934,6 +968,44 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
             <Maximize2 size={11} />
           </button>
         </div>
+      </div>
+
+      <div
+        aria-label="Selected source range controls"
+        className="h-11 min-h-11 px-2 bg-[#16191E] border-b border-[#232832] flex items-center gap-2 overflow-x-auto whitespace-nowrap text-[10px]"
+      >
+        <span className="text-text-secondary font-mono tabular-nums" aria-live="polite">
+          Start {formatTimeRuler(activeTrim.start)} · End {formatTimeRuler(activeTrim.end)} · {selectionDuration.toFixed(1)} s
+        </span>
+        <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
+          onClick={() => applyRangeExtension('start', -RANGE_CONTROL_STEP_SECONDS)}
+          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
+          aria-label={`Extend selection start earlier by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
+          Start −0.5 s
+        </button>
+        <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
+          onClick={() => applyRangeExtension('end', RANGE_CONTROL_STEP_SECONDS)}
+          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
+          aria-label={`Extend selection end later by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
+          End +0.5 s
+        </button>
+        <button type="button" disabled={!beforeContext || !onPreviewContext || !sourceTimebase}
+          onClick={() => beforeContext && onPreviewContext?.(beforeContext)}
+          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
+          aria-label="Preview four seconds before the selected range">
+          Preview before
+        </button>
+        <button type="button" disabled={!afterContext || !onPreviewContext || !sourceTimebase}
+          onClick={() => afterContext && onPreviewContext?.(afterContext)}
+          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
+          aria-label="Preview four seconds after the selected range">
+          Preview after
+        </button>
+        <span role="status" className={trimSaveState === 'error' ? 'text-red-400' : 'text-text-muted'}>
+          {trimSaveState === 'saving' ? 'Saving range…' : trimSaveState === 'saved' ? 'Range saved' : trimSaveState === 'error' ? 'Range save failed' : ''}
+        </span>
+        {track?.timing_warning && <span role="alert" className="text-amber-400">{track.timing_warning}</span>}
+        {!sourceDuration && <span className="text-text-muted">Source duration unavailable; range editing is disabled.</span>}
       </div>
 
       {/* TIMELINE MAIN BODY: Sticky Left Rail + Canvas Viewport with Fixed Center Playhead */}

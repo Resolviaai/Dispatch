@@ -171,7 +171,14 @@ def init_db():
                 chunk_id TEXT,
                 start_time REAL NOT NULL,
                 end_time REAL NOT NULL,
+                ai_suggested_start_time REAL,
+                ai_suggested_end_time REAL,
                 duration REAL NOT NULL,
+                range_revision INTEGER NOT NULL DEFAULT 0,
+                caption_range_revision INTEGER,
+                caption_range_start REAL,
+                caption_range_end REAL,
+                caption_timing_warning TEXT,
                 title TEXT NOT NULL,
                 hook TEXT,
                 description TEXT,
@@ -346,6 +353,38 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN padded_start REAL;")
         if "padded_end" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN padded_end REAL;")
+        if "ai_suggested_start_time" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_start_time REAL;")
+        if "ai_suggested_end_time" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_end_time REAL;")
+        if "range_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN range_revision INTEGER NOT NULL DEFAULT 0;")
+        if "caption_range_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_revision INTEGER;")
+        if "caption_range_start" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_start REAL;")
+        if "caption_range_end" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_end REAL;")
+        if "caption_timing_warning" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_timing_warning TEXT;")
+
+        # Suggestions are immutable candidate metadata. Legacy selected ranges
+        # are the only safe backfill source; never rewrite their active bounds.
+        cursor.execute("""
+            UPDATE clips
+            SET ai_suggested_start_time = COALESCE(ai_suggested_start_time, start_time),
+                ai_suggested_end_time = COALESCE(ai_suggested_end_time, end_time)
+            WHERE ai_suggested_start_time IS NULL OR ai_suggested_end_time IS NULL
+        """)
+        # Legacy caption tracks used the active clip's relative timebase. Record
+        # that anchor once so later trims can rebase saved words safely.
+        cursor.execute("""
+            UPDATE clips
+            SET caption_range_revision = COALESCE(caption_range_revision, range_revision, 0),
+                caption_range_start = COALESCE(caption_range_start, start_time),
+                caption_range_end = COALESCE(caption_range_end, end_time)
+            WHERE caption_data IS NOT NULL AND caption_range_revision IS NULL
+        """)
 
         # Migration: Ensure outbox columns exist if created with older schema
         cursor.execute("PRAGMA table_info(publishing_outbox);")
@@ -485,13 +524,15 @@ def save_clip(
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO clips (
-                id, session_id, chunk_id, start_time, end_time, duration,
+                id, session_id, chunk_id, start_time, end_time,
+                ai_suggested_start_time, ai_suggested_end_time, range_revision, duration,
                 title, hook, description, hashtags, virality_score,
                 layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
                 padded_start, padded_end
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?)
         """, (
-            clip_id, session_id, chunk_id, start_time, end_time, final_duration,
+            clip_id, session_id, chunk_id, start_time, end_time,
+            start_time, end_time, final_duration,
             title, hook, description, hashtags, virality_score,
             layout_mode, rendered_layout_mode, publish_mode, platform_targets,
             p_start, p_end
@@ -505,17 +546,21 @@ def update_clip_trim(
     start_time: float,
     end_time: float,
     source_duration: Optional[float] = None,
+    expected_range_revision: Optional[int] = None,
 ) -> bool:
     """Persist a source-relative range within source and product duration limits."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT cl.video_path, ch.duration AS source_duration
+            SELECT cl.video_path, cl.start_time, cl.end_time, cl.range_revision,
+                   ch.duration AS source_duration
             FROM clips cl LEFT JOIN chunks ch ON ch.id = cl.chunk_id
             WHERE cl.id = ?
         """, (clip_id,))
         row = cursor.fetchone()
         if not row:
+            return False
+        if expected_range_revision is not None and int(row["range_revision"] or 0) != expected_range_revision:
             return False
 
         known_source_duration = source_duration
@@ -542,37 +587,51 @@ def update_clip_trim(
             return False
 
         new_duration = round(new_duration, 2)
+        changed = (
+            abs(clamped_start - float(row["start_time"])) > 0.001
+            or abs(clamped_end - float(row["end_time"])) > 0.001
+        )
         cursor.execute("""
             UPDATE clips 
             SET start_time = ?, end_time = ?, duration = ?,
-                render_stale = CASE WHEN video_path IS NOT NULL THEN 1 ELSE 0 END
-            WHERE id = ?
-        """, (clamped_start, clamped_end, new_duration, clip_id))
+                range_revision = range_revision + ?,
+                render_stale = CASE WHEN ? = 1 AND video_path IS NOT NULL THEN 1 ELSE render_stale END,
+                caption_timing_warning = CASE WHEN ? = 1 THEN NULL ELSE caption_timing_warning END
+            WHERE id = ? AND range_revision = ?
+        """, (
+            clamped_start, clamped_end, new_duration, int(changed), int(changed), int(changed),
+            clip_id, int(row["range_revision"] or 0),
+        ))
         conn.commit()
-        return True
+        return cursor.rowcount == 1
 
 
 def update_clip_media(
     clip_id: str,
     video_path: str,
     thumbnail_path: Optional[str],
-    rendered_layout_mode: Optional[str] = None
-):
+    rendered_layout_mode: Optional[str] = None,
+    expected_range_revision: Optional[int] = None,
+) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        revision_clause = " AND range_revision = ?" if expected_range_revision is not None else ""
         if rendered_layout_mode:
             cursor.execute("""
                 UPDATE clips 
                 SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = ?, render_stale = 0, status = 'ready_review'
-                WHERE id = ?
-            """, (video_path, thumbnail_path, rendered_layout_mode, clip_id))
+                WHERE id = ?""" + revision_clause,
+                (video_path, thumbnail_path, rendered_layout_mode, clip_id)
+                + ((expected_range_revision,) if expected_range_revision is not None else ()))
         else:
             cursor.execute("""
                 UPDATE clips 
                 SET video_path = ?, thumbnail_path = ?, status = 'ready_review'
-                WHERE id = ?
-            """, (video_path, thumbnail_path, clip_id))
+                WHERE id = ?""" + revision_clause,
+                (video_path, thumbnail_path, clip_id)
+                + ((expected_range_revision,) if expected_range_revision is not None else ()))
         conn.commit()
+        return cursor.rowcount == 1
 
 
 def approve_clip(
@@ -623,11 +682,40 @@ def get_clip_caption_data(clip_id: str) -> Optional[str]:
         return row["caption_data"] if row and row["caption_data"] else None
 
 
-def save_clip_caption_data(clip_id: str, caption_json: str):
+def save_clip_caption_data(
+    clip_id: str,
+    caption_json: str,
+    expected_range_revision: Optional[int] = None,
+    source_range_start: Optional[float] = None,
+    source_range_end: Optional[float] = None,
+    timing_warning: Optional[str] = None,
+) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE clips SET caption_data = ? WHERE id = ?", (caption_json, clip_id))
+        if expected_range_revision is None or source_range_start is None or source_range_end is None:
+            cursor.execute(
+                "SELECT range_revision, start_time, end_time FROM clips WHERE id = ?", (clip_id,)
+            )
+            clip = cursor.fetchone()
+            if not clip:
+                return False
+            if expected_range_revision is None:
+                expected_range_revision = int(clip["range_revision"] or 0)
+            if source_range_start is None:
+                source_range_start = float(clip["start_time"] or 0.0)
+            if source_range_end is None:
+                source_range_end = float(clip["end_time"] or 0.0)
+        cursor.execute("""
+            UPDATE clips
+            SET caption_data = ?, caption_range_revision = ?, caption_range_start = ?, caption_range_end = ?,
+                caption_timing_warning = ?
+            WHERE id = ? AND range_revision = ?
+        """, (
+            caption_json, expected_range_revision, source_range_start, source_range_end,
+            timing_warning, clip_id, expected_range_revision,
+        ))
         conn.commit()
+        return cursor.rowcount == 1
 
 
 def get_clip_by_id(clip_id: str) -> Optional[Dict[str, Any]]:
@@ -986,12 +1074,14 @@ def save_clip_definitions(
             cursor.execute("""
                 INSERT INTO clips (
                     id, session_id, chunk_id, start_time, end_time, duration,
+                    ai_suggested_start_time, ai_suggested_end_time, range_revision,
                     title, hook, description, hashtags, virality_score,
                     layout_mode, status, publish_mode, platform_targets,
                     video_path, thumbnail_path, padded_start, padded_end
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?)
             """, (
                 clip_id, session_id, chunk_id, start_t, end_t, duration,
+                start_t, end_t,
                 title, hook, description, hashtags, virality_score,
                 layout_mode, publish_mode, platform_targets,
                 p_start, p_end

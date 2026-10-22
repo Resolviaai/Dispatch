@@ -23,6 +23,10 @@ export interface ClipItem {
   start_time: number;
   end_time: number;
   duration: number;
+  source_duration?: number | null;
+  range_revision?: number;
+  ai_suggested_start_time?: number;
+  ai_suggested_end_time?: number;
   title: string;
   hook: string;
   description?: string;

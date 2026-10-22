@@ -45,6 +45,7 @@ import { preserveWordTimingsOnEdit } from '../captions/timingPreservation';
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, getAuthHeaders } from '../bridge';
+import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
 
 export type LayoutMode = 'fit_black' | 'fit_blur' | 'native_916' | 'crop_916' | 'crop_follow' | 'native_169' | 'landscape';
 export type ViewMode = 'library' | 'detail' | 'studio' | 'publish';
@@ -78,6 +79,10 @@ export interface ClipItem {
   end_time: number;
   padded_start?: number;
   padded_end?: number;
+  source_duration?: number | null;
+  range_revision?: number;
+  ai_suggested_start_time?: number;
+  ai_suggested_end_time?: number;
   duration: number;
   title: string;
   hook: string;
@@ -1231,6 +1236,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [saveStatus, setSaveStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved' | 'error'>('idle');
   const [playbackFeedback, setPlaybackFeedback] = useState<string | null>(null);
   const previewAnimRef = useRef<{ active: boolean; restoreTime: number; endTime: number } | null>(null);
+  const contextPreviewRef = useRef<{ sourceEnd: number; restoreTime: number } | null>(null);
 
   // Canonical Caption Track with Stale Protection
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -1354,6 +1360,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
 
     // Clear stale caption track and reset playback
+    contextPreviewRef.current = null;
+    previewAnimRef.current = null;
     setCaptionClipId(null);
     setSelectedGroupId(null);
     setCurrentTime(0);
@@ -1454,7 +1462,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [currentClip?.id, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost]);
+  }, [currentClip?.id, currentClip?.range_revision, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost]);
 
   // Source bounds for mapping local clip time (0 -> duration) to source video time
   const clipStart = currentClip ? (currentClip.start_time || 0) : 0;
@@ -1463,7 +1471,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const timelineSourceDuration = currentClip
     ? (sourceDurationForClip?.clipId === currentClip.id
       ? sourceDurationForClip.seconds
-      : Math.max(clipEnd, currentClip.padded_end || clipEnd))
+      : (currentClip.source_duration || 0))
     : 0;
 
   // 3. Playback Controls & Dual-Layer Video Sync with Adaptive Timebase Mapping
@@ -1495,11 +1503,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } else {
       video.pause();
       if (bgVideoRef.current) bgVideoRef.current.pause();
+      contextPreviewRef.current = null;
       setIsPlaying(false);
     }
   };
 
   const handleSeek = (targetSec: number) => {
+    contextPreviewRef.current = null;
     if (previewAnimRef.current?.active) {
       previewAnimRef.current = null;
     }
@@ -1551,10 +1561,43 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     });
   };
 
+  const handlePreviewContext = (range: { start: number; end: number }) => {
+    const video = videoRef.current;
+    if (!video || !isSourceTimebase || range.end <= range.start) return;
+    const restoreTime = clamp(video.currentTime - clipStart, 0, clipDuration);
+    previewAnimRef.current = null;
+    contextPreviewRef.current = { sourceEnd: range.end, restoreTime };
+    video.currentTime = range.start;
+    if (bgVideoRef.current) bgVideoRef.current.currentTime = range.start;
+    video.play().then(() => {
+      setIsPlaying(true);
+      if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
+    }).catch(() => {
+      contextPreviewRef.current = null;
+      setIsPlaying(false);
+      setPlaybackFeedback('Source preview could not start. Tap play manually.');
+      setTimeout(() => setPlaybackFeedback(null), 3500);
+    });
+  };
+
   const handleTimeUpdate = () => {
     const video = videoRef.current;
     if (!video) return;
     const cur = video.currentTime;
+
+    if (isSourceTimebase && contextPreviewRef.current) {
+      const context = contextPreviewRef.current;
+      if (cur >= context.sourceEnd) {
+        contextPreviewRef.current = null;
+        video.pause();
+        if (bgVideoRef.current) bgVideoRef.current.pause();
+        setIsPlaying(false);
+        handleSeek(context.restoreTime);
+        return;
+      }
+      setCurrentTime(clamp(cur - clipStart, 0, clipDuration));
+      return;
+    }
 
     if (isSourceTimebase) {
       const localTime = Math.max(0, cur - clipStart);
@@ -1573,7 +1616,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
 
       // Source bounds: stop when end of clip is reached
-      if (cur >= clipEnd) {
+      if (shouldStopSourcePlayback(cur, clipEnd)) {
         video.pause();
         video.currentTime = clipStart;
         if (bgVideoRef.current) {
@@ -1814,6 +1857,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   const handleTrimChange = async (sourceStart: number, sourceEnd: number): Promise<boolean> => {
     if (!currentClip) return false;
+    if (!(timelineSourceDuration > 0)) {
+      setFeedback('Source duration is not verified yet. Range changes are disabled.');
+      return false;
+    }
+    if (!(await handleSaveCaptions())) return false;
     const newStart = Number(sourceStart.toFixed(2));
     const newEnd = Number(sourceEnd.toFixed(2));
     videoRef.current?.pause();
@@ -1823,7 +1871,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ start_time: newStart, end_time: newEnd }),
+        body: JSON.stringify({ start_time: newStart, end_time: newEnd, range_revision: currentClip.range_revision || 0 }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -1837,6 +1885,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   duration: data.duration,
                   padded_start: data.padded_start,
                   padded_end: data.padded_end,
+                  range_revision: data.range_revision,
+                  source_duration: data.source_duration || c.source_duration,
                   is_render_stale: data.is_render_stale,
                 }
               : c
@@ -1852,6 +1902,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   duration: data.duration,
                   padded_start: data.padded_start,
                   padded_end: data.padded_end,
+                  range_revision: data.range_revision,
+                  source_duration: data.source_duration || c.source_duration,
                   is_render_stale: data.is_render_stale,
                 }
               : c
@@ -1963,6 +2015,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           publish_mode: publishMode,
           platforms: selectedPlatforms.map((p) => p === 'youtube_shorts' ? 'youtube' : p).join(','),
           layout_mode: layoutMode,
+          range_revision: currentClip.range_revision || 0,
         }),
       });
 
@@ -2494,7 +2547,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
               videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
               poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
-              preferRendered={Boolean(currentClip.video_url && !currentClip.is_render_stale)}
+              preferRendered={false}
               clipStart={clipStart}
               clipEnd={clipEnd}
               clipDuration={clipDuration}
@@ -2972,6 +3025,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     paddedStart={currentClip.padded_start}
                     paddedEnd={currentClip.padded_end}
                     onTrimChange={handleTrimChange}
+                    onPreviewContext={handlePreviewContext}
                     onSeek={handleSeek}
                     onSelectGroup={handleSelectGroup}
                     onSelectVideo={() => {
@@ -3074,7 +3128,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
                 videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
                 poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
-                preferRendered={Boolean(currentClip.video_url && !currentClip.is_render_stale)}
+                preferRendered={false}
                 clipStart={clipStart}
                 clipEnd={clipEnd}
                 clipDuration={clipDuration}

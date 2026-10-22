@@ -261,6 +261,7 @@ class HighlightWorker:
 
             c_start = float(clip["start_time"])
             c_end = float(clip["end_time"])
+            range_revision = int(clip.get("range_revision") or 0)
             c_layout = clip.get("layout_mode", "fit_blur")
             p_start = float(clip["padded_start"]) if clip.get("padded_start") is not None else max(0.0, c_start - 4.0)
             p_end = float(clip["padded_end"]) if clip.get("padded_end") is not None else (c_end + 4.0)
@@ -286,10 +287,19 @@ class HighlightWorker:
                     speech_end = p_start + stage2_res.get("speech_end", c_end - p_start)
                     snapped_start = max(p_start, round(speech_start - 0.2, 2))
                     snapped_end = min(p_end, round(speech_end + 0.3, 2))
-                    if db.update_clip_trim(clip_id, snapped_start, snapped_end):
+                    range_trimmed = db.update_clip_trim(
+                        clip_id, snapped_start, snapped_end,
+                        expected_range_revision=range_revision,
+                    )
+                    if range_trimmed:
                         c_start = snapped_start
                         c_end = snapped_end
-                    else:
+                    latest = db.get_clip_by_id(clip_id)
+                    if not latest or abs(float(latest["start_time"]) - c_start) > 0.01 or abs(float(latest["end_time"]) - c_end) > 0.01:
+                        logger.info("Skipping stale Stage 2 result for %s after its range changed", clip_id)
+                        continue
+                    range_revision = int(latest.get("range_revision") or 0)
+                    if not range_trimmed:
                         logger.info(
                             "Keeping original clip range for %s because the speech-tightened range "
                             "is outside source or product limits.", clip_id
@@ -316,7 +326,12 @@ class HighlightWorker:
                     )
                     track_dict = track.to_dict()
                     track_dict["words"] = clean_words
-                    db.save_clip_caption_data(clip_id, json.dumps(track_dict))
+                    if not db.save_clip_caption_data(
+                        clip_id, json.dumps(track_dict), expected_range_revision=range_revision,
+                        source_range_start=c_start, source_range_end=c_end,
+                    ):
+                        logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                        continue
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
                     export_to_ass(track, ass_path)
                     active_segs = clean_words
@@ -331,7 +346,12 @@ class HighlightWorker:
                         clip_id=clip_id,
                         preset_id=get_default_preset_id()
                     )
-                    db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
+                    if not db.save_clip_caption_data(
+                        clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
+                        source_range_start=c_start, source_range_end=c_end,
+                    ):
+                        logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                        continue
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
                     export_to_ass(track, ass_path)
                     active_segs = clean_segs
@@ -357,7 +377,12 @@ class HighlightWorker:
                         clip_id=clip_id,
                         preset_id=get_default_preset_id()
                     )
-                    db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
+                    if not db.save_clip_caption_data(
+                        clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
+                        source_range_start=c_start, source_range_end=c_end,
+                    ):
+                        logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                        continue
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
                     export_to_ass(track, ass_path)
                     active_segs = clean_segs
@@ -376,7 +401,8 @@ class HighlightWorker:
                         aspect_ratio=None,
                         layout_mode=c_layout,
                         segments=active_segs,
-                        subtitle_options={"enabled": False, "preserve_timing": True}
+                        subtitle_options={"enabled": False, "preserve_timing": True},
+                        expected_range_revision=range_revision,
                     )
                     with db.get_db_connection() as conn:
                         conn.cursor().execute("UPDATE clips SET status = 'ready_review' WHERE id = ?", (clip_id,))

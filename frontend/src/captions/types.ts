@@ -151,4 +151,6 @@ export interface CaptionTrack {
   default_layout: LayoutConfig;
   default_animation: AnimationConfig;
   groups: CaptionGroup[];
+  range_revision?: number;
+  timing_warning?: string | null;
 }

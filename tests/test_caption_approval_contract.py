@@ -72,6 +72,38 @@ class TestCaptionApprovalContract(unittest.TestCase):
         save_track.assert_not_called()
         export_ass.assert_not_called()
 
+    def test_stale_range_cannot_save_or_approve_captions(self):
+        stale_track = {"clip_id": self.clip_id, "range_revision": 7, "groups": []}
+        save_response = client.post(f"/api/clips/{self.clip_id}/captions", json=stale_track)
+        self.assertEqual(save_response.status_code, 409)
+        self.assertIsNone(db.get_clip_by_id(self.clip_id)["caption_data"])
+
+        approve_response = client.post(
+            f"/api/clips/{self.clip_id}/approve",
+            json={"range_revision": 7, "platforms": "youtube"},
+        )
+        self.assertEqual(approve_response.status_code, 409)
+        self.assertEqual(db.get_clip_by_id(self.clip_id)["status"], "ready_review")
+
+    def test_phrase_only_caption_timing_cannot_be_published(self):
+        phrase_track = {
+            "clip_id": self.clip_id,
+            "groups": [{
+                "id": "phrase", "type": "caption", "start": 0, "end": 2,
+                "has_word_timing": False, "timing_mode": "phrase",
+                "words": [{"id": "phrase-word", "text": "unverified timing", "start": 0, "end": 2, "is_exact": False}],
+            }],
+        }
+        response = client.post(
+            f"/api/clips/{self.clip_id}/approve",
+            json={"caption_track": phrase_track, "range_revision": 0},
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(db.get_clip_by_id(self.clip_id)["status"], "ready_review")
+        with db.get_db_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM publishing_outbox WHERE clip_id = ?", (self.clip_id,)).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_failed_final_render_keeps_edits_and_never_queues_publish(self):
         caption_snapshot = self._caption_snapshot()
         normalized_snapshot = CaptionTrack.from_dict(caption_snapshot).to_dict()
