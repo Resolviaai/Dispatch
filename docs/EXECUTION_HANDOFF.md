@@ -4,10 +4,10 @@ This checkpoint supersedes the historical milestones below. See `PROGRESS.md` fo
 
 ## Current state
 
-- Work is on `main` at base `997f4c6`; changes are uncommitted.
+- Work is on `main` at committed HEAD `79444b7` ("add database layer…" — message is misleading; content is the editor/long-input reliability + Route B regression work). Working tree was clean at verification time; the only pending changes are the handoff doc updates and the prepared test-artifact cleanup (staged untrack of `.dispatch-test-tmp/`, `.gitignore` rules), intentionally not committed.
 - Editor range selection/synchronization and long-audio Stage 1/Stage 2 failure handling have focused production regressions. Caption approval and Route B workflow boundaries have automated coverage.
-- Frontend `npm test` and `npm run build` passed. The full focused Route B/editor Python set passed **76 tests**; the trim stale-render follow-up passed **1 test**. Android `:app:testDebugUnitTest :app:assembleDebug` passed.
-- The debug APK contains the new frontend bundle. ADB daemon started successfully but no device was listed. No physical POCO C65 or real Route B upload/transcription was tested.
+- Verification at this exact HEAD (2026-10-23): frontend `npm test` and `npm run build` passed (bundle `index-Bd9C_B3d.js`, 590.93 kB). The focused Python suite passed **80 tests in 74.1 s** (prior 76 + 4 new, including `tests.test_caption_range_sync`). Android `:app:testDebugUnitTest` forced re-run passed **18 tests, 0 failures**; `:app:assembleDebug` passed. Debug APK `android/app/build/outputs/apk/debug/app-debug.apk` (15,189,951 bytes) packages `index-Bd9C_B3d.js`, matching the committed web entry.
+- ADB daemon works but no device was attached. No physical POCO C65, no live Route B upload/transcription, and no live Gemini request were tested (`google.genai` still not importable in the venv; mocked tests only). These remain unverified: local manual UI walkthrough, live YouTube/Gemini E2E, physical-device camera proof.
 - Route A cross-segment continuity is not started; optional automatic cuts remain deferred until after real Route B E2E.
 
 ## Next actions for Antigravity

@@ -1,6 +1,20 @@
-# Current Handoff for Antigravity — 2026-10-23
+# Current Handoff for Antigravity — 2026-10-23 (verification run)
 
-This checkpoint supersedes older status and test-count notes below. Branch `main`, current base `997f4c6`; changes are in the working tree and are not committed.
+This checkpoint supersedes older status and test-count notes below. Branch `main`, HEAD `79444b7db6afc3c0cf74612b4e44f96808fb15cd` ("feat: add database layer…"; the commit message is misleading — the content is the editor/long-input reliability + Route B regression work from the previous checkpoint, now committed). The verification below was run against exactly this HEAD from a clean working tree.
+
+## Verification run (2026-10-23, automated only)
+
+- `git status`/`git diff --stat` clean at HEAD; `git diff --check` passed.
+- Frontend `npm test` — passed (exit 0): caption/editor integrity, camera interaction-state, Studio render-path, and production timeline interaction regressions.
+- Frontend `npm run build` — passed (exit 0, 17.9 s); emitted `android/app/src/main/assets/web/assets/index-Bd9C_B3d.js` (590.93 kB) + `index-v1OxcV46.css`. Only Vite's non-blocking >500 kB chunk advisory.
+- Python focused suite from `C:\CODE\Dispatch` with `TEMP`/`TMP` redirected to `.dispatch-test-tmp` (command below plus the new `tests.test_caption_range_sync`): **80 tests, OK, 74.1 s** — the previously documented 76 plus 4 tests added by HEAD (2 in `test_caption_range_sync`, 2 in existing suites). All Gemini/YouTube boundaries mocked.
+- Android from `android/` with `JAVA_HOME=C:\Program Files\Java\jdk-17.0.5`: `gradlew.bat :app:testDebugUnitTest --rerun-tasks` — **18 tests, 0 failures, 0 errors** (BUILD SUCCESSFUL in 31 s; forced re-run so tests actually executed, not Gradle up-to-date). `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` — **BUILD SUCCESSFUL**.
+- APK `android/app/build/outputs/apk/debug/app-debug.apk`: **15,189,951 bytes**. ZIP inspection confirmed packaged `assets/web/index.html` references `assets/web/assets/index-Bd9C_B3d.js` (591,049 bytes in APK) — matching the committed web entry and the fresh deterministic rebuild. (The earlier handoff's `index-BchKp7b8.js` was the pre-commit bundle; the committed entry is `index-Bd9C_B3d.js`.)
+- ADB (`%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`): daemon works, `devices -l` listed **no devices**. No physical POCO C65 testing was done; camera behavior remains unverified.
+- Gemini SDK: `from google import genai` **fails** (`ImportError`) in `.\.venv` — `google-genai>=1.0.0` is declared in `requirements.txt` but not installed, and the venv currently lacks `pip`. No live Gemini verification was performed; mocked tests prove nothing about live requests.
+- `.dispatch-test-tmp/` test artifacts: 8 files (4 test sandboxes × `test_dispatch.db` + `fonts_manifest.json`) were accidentally committed in `79444b7`; verified as disposable test outputs (test-schema DBs, generated font manifests, synthetic media). Prepared but **not committed**: `git rm -r --cached .dispatch-test-tmp` (files kept on disk) plus `.gitignore` rules for `.dispatch-test-tmp/` and `android/.kotlin/`.
+
+Scope note: this run covers automated tests plus build/APK inspection only. No local manual UI walkthrough, no live YouTube/Gemini end-to-end run, and no physical-device verification were performed.
 
 ## Current completion (priority order)
 
@@ -9,7 +23,7 @@ This checkpoint supersedes older status and test-count notes below. Branch `main
 - **Editor recovery:** the existing Clip Unavailable recovery and caption loading/error/retry UI remain covered with selected-clip and preview/timeline mount/recovery regressions. APK packaging was verified against the new Vite entry/asset. This does not establish POCO UI behavior.
 - **Route A:** cross-recording-segment clip continuity has not been addressed yet; it remains after Route B's real end-to-end gate. Optional automatic cuts remain deferred.
 
-## Automated verification (2026-10-23)
+## Previous automated verification (2026-10-23, pre-commit working tree at base `997f4c6`; superseded by the committed-HEAD run above)
 
 - Frontend: from `C:\CODE\Dispatch\frontend`, `npm test` — passed, including caption/editor integrity, camera interaction-state, Studio render-path, and production timeline interaction regressions (trim pointer flow, source/clip seeking, caption timing, and clip switching). `npm run build` — passed; Vite emitted `index-BchKp7b8.js` for Android. The JS bundle is above Vite's 500 kB advisory threshold.
 - Python full focused suite: ran from `C:\CODE\Dispatch` in PowerShell. Exact command and result:

@@ -99,3 +99,7 @@ Transcript/
 transcription_benchmarks/
 dispatch.egg-info/
 download_drive_video.py
+
+# Local test-run scratch sandboxes (test DBs, font manifests, synthetic media)
+.dispatch-test-tmp/
+android/.kotlin/

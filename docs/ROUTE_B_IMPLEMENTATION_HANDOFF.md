@@ -1,9 +1,9 @@
 # Route B Implementation Handoff
 
-Updated: 2026-10-23
+Updated: 2026-10-23 (verification run against committed HEAD)
 
-Branch/base: `main` / `997f4c6`
-State: editor and long-input reliability changes are in the uncommitted working tree. Route B has automated coverage; live YouTube/Gemini end-to-end execution is still required. Keep Route A continuity and optional automatic cuts behind that gate.
+Branch/base: `main` / HEAD `79444b7db6afc3c0cf74612b4e44f96808fb15cd`
+State: the editor and long-input reliability changes plus the Route B regressions are **committed** at `79444b7` (commit message reads "add database layer…" but the content is this work, including new clip-range columns/migrations). All verification below ran against exactly this HEAD from a clean tree. Live YouTube/Gemini end-to-end execution is still required. Keep Route A continuity and optional automatic cuts behind that gate.
 
 ## Current priority
 
@@ -32,19 +32,20 @@ The original downloaded MP4 remains one canonical inbox file/row. Stage 1 audio 
 - Caption GET remains side-effect-free; edits are persisted and rendered from the submitted snapshot. Render output must exist and pass ffprobe before approval can enqueue publishing. Caption export failure stops before FFmpeg/publishing, and repeated approval is idempotent.
 - Frontend regressions cover selected-clip/loading/error/retry and preview/timeline mounting/recovery. These source tests are not physical-device proof.
 
-## Automated verification (2026-10-23)
+## Automated verification (2026-10-23, committed HEAD `79444b7`; supersedes the pre-commit run)
 
-- `cd frontend; npm test` — passed, including editor, timeline interaction, camera interaction-state, and Studio render-path regressions.
-- `cd frontend; npm run build` — passed; generated `android/app/src/main/assets/web/assets/index-BchKp7b8.js`. Vite reported only its non-blocking >500 kB chunk advisory.
-- From `C:\CODE\Dispatch`, with TEMP/TMP set to `.dispatch-test-tmp`: `python -m unittest tests.test_caption_approval_contract tests.test_web tests.test_youtube_ingest_endpoint tests.test_youtube_inbox tests.test_youtube_processing_tracker tests.test_youtube_caption_timing_fix tests.test_captions_subsystem tests.test_gemini_two_stage tests.test_video_engine tests.e2e.test_tier1_features_publishing_dashboard tests.test_clip_trim_contract tests.test_layout_framing_architecture -v` — **76 passed in 69.844s**.
-- Focused trim follow-up: `python -m unittest tests.test_clip_trim_contract -v` — **1 passed**.
-- From `android`, with `JAVA_HOME=C:\Program Files\Java\jdk-17.0.5`: `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` — **BUILD SUCCESSFUL**.
-- APK `android/app/build/outputs/apk/debug/app-debug.apk`: **15,188,645 bytes**. ZIP inspection verified packaged `index.html` points to `index-BchKp7b8.js` (586,990 bytes); `MainActivity` loads the packaged web entry.
-- `adb devices -l` — daemon started, no attached devices. No POCO C65 check was done; camera behavior is not verified.
-- All Gemini/YouTube API boundaries in this test run are mocked. No real download, Gemini request, remote publish, or YouTube processing status was observed.
+- `git diff --check` — passed (clean tree at HEAD).
+- `cd frontend; npm test` — passed (exit 0), including editor, timeline interaction, camera interaction-state, and Studio render-path regressions.
+- `cd frontend; npm run build` — passed (exit 0); emitted `android/app/src/main/assets/web/assets/index-Bd9C_B3d.js` (590.93 kB). Vite reported only its non-blocking >500 kB chunk advisory.
+- From `C:\CODE\Dispatch`, with TEMP/TMP set to `.dispatch-test-tmp`: `python -m unittest tests.test_caption_range_sync tests.test_caption_approval_contract tests.test_clip_trim_contract tests.test_gemini_two_stage tests.test_web tests.test_youtube_ingest_endpoint tests.test_youtube_inbox tests.test_youtube_processing_tracker tests.test_youtube_caption_timing_fix tests.test_captions_subsystem tests.test_video_engine tests.e2e.test_tier1_features_publishing_dashboard tests.test_layout_framing_architecture -v` — **80 passed in 74.1 s** (prior 76 plus 4 tests added with HEAD, including the new `tests.test_caption_range_sync` expansion/shrink regressions).
+- From `android`, with `JAVA_HOME=C:\Program Files\Java\jdk-17.0.5`: `gradlew.bat :app:testDebugUnitTest --rerun-tasks` — **18 tests, 0 failures, 0 errors** (forced execution, BUILD SUCCESSFUL in 31 s); `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` — **BUILD SUCCESSFUL**.
+- APK `android/app/build/outputs/apk/debug/app-debug.apk`: **15,189,951 bytes**. ZIP inspection verified packaged `index.html` points to `index-Bd9C_B3d.js` (591,049 bytes in APK), identical to the committed web entry and the fresh rebuild. The earlier `index-BchKp7b8.js` reference was the pre-commit bundle and is resolved: the committed entry and the current APK both use `index-Bd9C_B3d.js`.
+- ADB (`platform-tools/adb.exe`) — daemon works, no attached devices. No POCO C65 check was done; camera behavior is not verified.
+- All Gemini/YouTube API boundaries in this test run are mocked. `from google import genai` still fails in `.\.venv` (`google-genai` declared in `requirements.txt` but not installed; the venv also lacks `pip`). No real download, Gemini request, remote publish, or YouTube processing status was observed.
 
 ## Exact remaining steps
 
+0. Review the prepared (uncommitted) test-artifact cleanup: `git rm -r --cached .dispatch-test-tmp` plus `.gitignore` rules for `.dispatch-test-tmp/` and `android/.kotlin/` — the 8 accidentally committed sandbox files (test DBs/font manifests, no user data) are staged for untracking, files kept on disk. Commit when satisfied.
 1. In `C:\CODE\Dispatch`, install declared requirements if needed: `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`; verify `.\.venv\Scripts\python.exe -c "from google import genai; print('Gemini SDK import OK')"`. The current venv was previously observed missing `google.genai`.
 2. With intended credentials and a network connection, import one accessible unlisted source. Record the real statuses and logs at ingest, download/probe, transcription, clip generation, caption edit/approval, render/probe, outbox, and remote YouTube upload/processing. Do not infer YouTube processing from local upload completion.
 3. After Route B E2E succeeds, implement/test Route A session grouping and clips that cross recording-segment boundaries. Do not add automatic cuts in this pass.
