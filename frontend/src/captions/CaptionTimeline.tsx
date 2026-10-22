@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useMemo, useEffect, useLayoutEffect } from 'react';
 import {
   ZoomIn,
   ZoomOut,
@@ -14,6 +14,14 @@ import {
   Magnet,
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word } from './types';
+import {
+  beginTrimPointer,
+  captionTimeIsActive,
+  clipTimeToSourceTime,
+  moveTrimPointer,
+  sourceTimeToClipTime,
+  type TrimPointerState,
+} from './timelineInteraction';
 
 interface CaptionTimelineProps {
   track: CaptionTrack | null;
@@ -28,7 +36,9 @@ interface CaptionTimelineProps {
   clipEnd?: number;
   paddedStart?: number;
   paddedEnd?: number;
-  onTrimChange?: (newStart: number, newEnd: number) => void;
+  sourceDuration?: number;
+  sourceTimebase?: boolean;
+  onTrimChange?: (sourceStart: number, sourceEnd: number) => Promise<boolean | void> | boolean | void;
   onSeek: (seconds: number) => void;
   onTogglePlay?: () => void;
   onSelectGroup: (groupId: string | null) => void;
@@ -74,6 +84,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   clipEnd,
   paddedStart,
   paddedEnd,
+  sourceDuration,
+  sourceTimebase = true,
   onTrimChange,
   onSeek,
   onSelectGroup,
@@ -104,32 +116,36 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const pendingSeekTimeRef = useRef<number | null>(null);
   const rafSeekIdRef = useRef<number | null>(null);
 
-  // CapCut-style dual drag trimmer state (clip-relative [0, duration])
+  const timelineDuration = Math.max(1, sourceDuration || clipEnd || (clipStart + duration), duration);
+  const safeClipDuration = Math.max(1, duration);
+  const timelineCurrentTime = clipTimeToSourceTime(currentTime, clipStart);
+
+  // Trim boundaries and the filmstrip use source time. Caption words stay clip-relative.
   const [activeTrim, setActiveTrim] = useState<{ start: number; end: number }>({
-    start: 0,
-    end: duration || 40,
+    start: clipStart,
+    end: clipEnd ?? (clipStart + duration),
   });
+  const activeTrimRef = useRef(activeTrim);
+  activeTrimRef.current = activeTrim;
 
-  const [trimDrag, setTrimDrag] = useState<{
-    side: 'start' | 'end';
-    startX: number;
-    initialStart: number;
-    initialEnd: number;
-  } | null>(null);
+  const [trimDrag, setTrimDrag] = useState<TrimPointerState | null>(null);
+  const trimDragRef = useRef<TrimPointerState | null>(null);
 
-  useEffect(() => {
-    setActiveTrim({
-      start: 0,
-      end: duration || 40,
-    });
-  }, [duration]);
+  useLayoutEffect(() => {
+    const nextRange = {
+      start: Math.max(0, clipStart),
+      end: Math.min(timelineDuration, clipEnd ?? (clipStart + duration)),
+    };
+    activeTrimRef.current = nextRange;
+    setActiveTrim(nextRange);
+  }, [clipStart, clipEnd, duration, timelineDuration]);
 
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
   const pxPerSecRef = useRef(pxPerSec);
   pxPerSecRef.current = pxPerSec;
 
-  const safeDuration = Math.max(1, duration);
+  const safeDuration = timelineDuration;
   const totalTimelineWidth = Math.max(340, Math.round(safeDuration * pxPerSec));
 
   // Measure timeline viewport width to anchor fixed center playhead (50% horizontal center)
@@ -249,9 +265,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     requestAnimationFrame(() => {
       if (scrollContainerRef.current) {
         isProgrammaticScrollRef.current = true;
-        scrollContainerRef.current.scrollLeft = currentTime * nextPx;
+        scrollContainerRef.current.scrollLeft = timelineCurrentTime * nextPx;
         if (rulerContentRef.current) {
-          rulerContentRef.current.style.transform = `translateX(${-currentTime * nextPx + halfWidth}px)`;
+          rulerContentRef.current.style.transform = `translateX(${-timelineCurrentTime * nextPx + halfWidth}px)`;
         }
       }
     });
@@ -266,9 +282,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     requestAnimationFrame(() => {
       if (scrollContainerRef.current) {
         isProgrammaticScrollRef.current = true;
-        scrollContainerRef.current.scrollLeft = currentTime * fitPx;
+        scrollContainerRef.current.scrollLeft = timelineCurrentTime * fitPx;
         if (rulerContentRef.current) {
-          rulerContentRef.current.style.transform = `translateX(${-currentTime * fitPx + halfWidth}px)`;
+          rulerContentRef.current.style.transform = `translateX(${-timelineCurrentTime * fitPx + halfWidth}px)`;
         }
       }
     });
@@ -289,10 +305,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       if (cancelled) return;
       const scrollEl = scrollContainerRef.current;
       if (scrollEl) {
-        let cur = currentTimeRef.current;
+        let cur = clipStart + currentTimeRef.current;
         if (v && !v.paused) {
           const raw = v.currentTime;
-          cur = Math.max(0, raw - (clipStart || 0));
+          cur = sourceTimebase ? raw : clipStart + raw;
         }
         const targetScroll = cur * pxPerSecRef.current;
         if (Math.abs(scrollEl.scrollLeft - targetScroll) > 0.5) {
@@ -324,7 +340,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       }
       if (animId) cancelAnimationFrame(animId);
     };
-  }, [isPlaying, isScrubbing, !!dragSession, mediaElementRef, clipStart, halfWidth]);
+  }, [isPlaying, isScrubbing, !!dragSession, mediaElementRef, clipStart, sourceTimebase, halfWidth]);
 
   // When paused and external seek happens (e.g. transport scrub), center timeline
   useEffect(() => {
@@ -332,7 +348,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     const scrollEl = scrollContainerRef.current;
     if (!scrollEl) return;
 
-    const targetScroll = currentTime * pxPerSec;
+    const targetScroll = timelineCurrentTime * pxPerSec;
     if (Math.abs(scrollEl.scrollLeft - targetScroll) > 1) {
       isProgrammaticScrollRef.current = true;
       scrollEl.scrollLeft = targetScroll;
@@ -340,7 +356,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         rulerContentRef.current.style.transform = `translateX(${-targetScroll + halfWidth}px)`;
       }
     }
-  }, [currentTime, pxPerSec, isPlaying, isScrubbing, !!dragSession, halfWidth]);
+  }, [timelineCurrentTime, pxPerSec, isPlaying, isScrubbing, !!dragSession, halfWidth]);
 
   // Synchronize ruler on mount or viewport resize
   useEffect(() => {
@@ -367,7 +383,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     if (isScrubbing) {
       const scrubTime = clamp(sl / pxPerSec, 0, safeDuration);
-      scheduleSeek(Number(scrubTime.toFixed(2)));
+      scheduleSeek(Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2)));
     }
   };
 
@@ -436,7 +452,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         rulerContentRef.current.style.transform = `translateX(${-targetScroll + halfWidth}px)`;
       }
       const scrubTime = clamp(targetScroll / pxPerSec, 0, safeDuration);
-      scheduleSeek(Number(scrubTime.toFixed(2)));
+      scheduleSeek(Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2)));
     } else {
       // Smooth vertical scrolling
       scrollContainerRef.current.scrollTop = canvasDragRef.current.startScrollTop - dy;
@@ -495,7 +511,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         }
       }
     }
-    const stableAnchors = [0, safeDuration, ...otherEdges];
+    const stableAnchors = [0, safeClipDuration, ...otherEdges];
 
     setDragSession({
       type,
@@ -562,9 +578,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       if (proposedStart < 0) {
         proposedStart = 0;
         proposedEnd = origDuration;
-      } else if (proposedEnd > safeDuration) {
-        proposedEnd = safeDuration;
-        proposedStart = Math.max(0, safeDuration - origDuration);
+      } else if (proposedEnd > safeClipDuration) {
+        proposedEnd = safeClipDuration;
+        proposedStart = Math.max(0, safeClipDuration - origDuration);
       }
 
       let finalStart = proposedStart;
@@ -675,7 +691,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       onUpdateGroup(dragSession.groupId, patch, false);
     } else if (dragSession.type === 'trim-end') {
       let proposedEnd = dragSession.origEnd + deltaSec;
-      proposedEnd = clamp(proposedEnd, dragSession.origStart + 0.2, safeDuration);
+      proposedEnd = clamp(proposedEnd, dragSession.origStart + 0.2, safeClipDuration);
 
       let finalEnd = proposedEnd;
       if (isSnapEnabled) {
@@ -744,48 +760,62 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const handleTrimPointerDown = (side: 'start' | 'end', e: React.PointerEvent) => {
     e.stopPropagation();
-    setTrimDrag({
-      side,
-      startX: e.clientX,
-      initialStart: activeTrim.start,
-      initialEnd: activeTrim.end,
-    });
+    const nextDrag = beginTrimPointer(side, e.pointerId, e.clientX, activeTrimRef.current);
+    trimDragRef.current = nextDrag;
+    setTrimDrag(nextDrag);
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
   };
 
   const handleTrimPointerMove = (e: React.PointerEvent) => {
-    if (!trimDrag) return;
+    const drag = trimDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
     e.stopPropagation();
-    const deltaSec = (e.clientX - trimDrag.startX) / pxPerSec;
+    const nextRange = moveTrimPointer(drag, e.pointerId, e.clientX, pxPerSec, safeDuration);
+    nextRange.start = Number(nextRange.start.toFixed(2));
+    nextRange.end = Number(nextRange.end.toFixed(2));
+    activeTrimRef.current = nextRange;
+    setActiveTrim(nextRange);
+    const sourceSeek = drag.side === 'start' ? nextRange.start : nextRange.end;
+    scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration));
+  };
 
-    if (trimDrag.side === 'start') {
-      const minBound = 0;
-      const maxBound = Math.max(0, trimDrag.initialEnd - 0.5);
-      const nextStart = clamp(trimDrag.initialStart + deltaSec, minBound, maxBound);
-      const rounded = Number(nextStart.toFixed(2));
-      setActiveTrim((prev) => ({ ...prev, start: rounded }));
-      scheduleSeek(rounded);
-    } else {
-      const minBound = Math.min(safeDuration, trimDrag.initialStart + 0.5);
-      const maxBound = safeDuration;
-      const nextEnd = clamp(trimDrag.initialEnd + deltaSec, minBound, maxBound);
-      const rounded = Number(nextEnd.toFixed(2));
-      setActiveTrim((prev) => ({ ...prev, end: rounded }));
-      scheduleSeek(rounded);
-    }
+  const releaseTrimPointer = (e: React.PointerEvent) => {
+    try {
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch { }
   };
 
   const handleTrimPointerUp = (e: React.PointerEvent) => {
-    if (trimDrag) {
-      flushSeek(trimDrag.side === 'start' ? activeTrim.start : activeTrim.end);
-      if (onTrimChange) {
-        onTrimChange(activeTrim.start, activeTrim.end);
-      }
+    const drag = trimDragRef.current;
+    if (drag) {
+      if (drag.pointerId !== e.pointerId) return;
+      const finalRange = activeTrimRef.current;
+      const sourceSeek = drag.side === 'start' ? finalRange.start : finalRange.end;
+      flushSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration));
+      trimDragRef.current = null;
       setTrimDrag(null);
-      try {
-        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-      } catch { }
+      releaseTrimPointer(e);
+      if (onTrimChange) {
+        Promise.resolve(onTrimChange(finalRange.start, finalRange.end)).then((saved) => {
+          if (saved === false) {
+            const previous = { start: Math.max(0, clipStart), end: clipEnd ?? (clipStart + duration) };
+            activeTrimRef.current = previous;
+            setActiveTrim(previous);
+          }
+        });
+      }
     }
+  };
+
+  const handleTrimPointerCancel = (e: React.PointerEvent) => {
+    const drag = trimDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    cancelSeek();
+    activeTrimRef.current = drag.initialRange;
+    setActiveTrim(drag.initialRange);
+    trimDragRef.current = null;
+    setTrimDrag(null);
+    releaseTrimPointer(e);
   };
 
   const toggleTrackVisibility = (idx: number) => {
@@ -979,7 +1009,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
               ref={rulerContentRef}
               className="relative h-full flex items-center pointer-events-none"
               style={{
-                transform: `translateX(${-currentTime * pxPerSec + halfWidth}px)`,
+                transform: `translateX(${-timelineCurrentTime * pxPerSec + halfWidth}px)`,
                 width: `${totalTimelineWidth}px`,
                 willChange: 'transform',
               }}
@@ -1103,8 +1133,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                           onPointerDown={(e) => handleTrimPointerDown('start', e)}
                           onPointerMove={handleTrimPointerMove}
                           onPointerUp={handleTrimPointerUp}
-                          onPointerCancel={handleTrimPointerUp}
-                          className="absolute left-0 top-0 bottom-0 w-3.5 -translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-l cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform"
+                          onPointerCancel={handleTrimPointerCancel}
+                          onLostPointerCapture={handleTrimPointerCancel}
+                          className="absolute left-0 top-0 bottom-0 w-3.5 -translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-l cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
                           title="Drag to trim start (reveals earlier speech in safety handle)"
                         >
                           <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
@@ -1116,8 +1147,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                           onPointerDown={(e) => handleTrimPointerDown('end', e)}
                           onPointerMove={handleTrimPointerMove}
                           onPointerUp={handleTrimPointerUp}
-                          onPointerCancel={handleTrimPointerUp}
-                          className="absolute right-0 top-0 bottom-0 w-3.5 translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-r cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform"
+                          onPointerCancel={handleTrimPointerCancel}
+                          onLostPointerCapture={handleTrimPointerCancel}
+                          className="absolute right-0 top-0 bottom-0 w-3.5 translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-r cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
                           title="Drag to trim end (extends ending speech into safety handle)"
                         >
                           <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
@@ -1148,12 +1180,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                     style={{ width: `${totalTimelineWidth}px` }}
                   >
                     {rowGroups.map((grp) => {
-                      const left = grp.start * pxPerSec;
+                      const left = (clipStart + grp.start) * pxPerSec;
                       const rawDur = Math.max(0.04, grp.end - grp.start);
                       const trueWidth = Math.max(4, rawDur * pxPerSec);
                       const isSelected = selectedGroupId === grp.id;
                       const isCaption = !grp.type || grp.type === 'caption';
-                      const isSpoken = isCaption && currentTime >= grp.start && currentTime <= grp.end;
+                      const isSpoken = isCaption && captionTimeIsActive(currentTime, grp.start, grp.end);
                       const isGroupHidden = grp.is_hidden || hiddenTracks[trackIdx];
                       const meta = getLayerMeta(grp, trackIdx);
 

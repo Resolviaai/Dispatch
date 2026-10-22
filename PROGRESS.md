@@ -1,30 +1,47 @@
 # Current Handoff for Antigravity — 2026-10-23
 
-This checkpoint supersedes older status and test-count notes below. Branch `main`, base `1ab62b6`; changes are in the working tree and are not committed.
+This checkpoint supersedes older status and test-count notes below. Branch `main`, current base `997f4c6`; changes are in the working tree and are not committed.
 
-## Current completion
+## Current completion (priority order)
 
-- **Route B ingestion:** manual YouTube URL import enters the durable inbox, downloads and validates media, then the transcription and highlight workers continue from persisted state. Duplicate imports, failures, retries, and processing status have focused regression coverage.
-- **Long transcription input:** Gemini Stage 1 audio is split into verified chunks of at most 600 seconds; transcript times are restored to the original timeline and temporary parts are cleaned up. The original downloaded video remains one canonical inbox file/row; this is not physical MP4 segmentation.
-- **Caption approval/publishing:** caption reads are side-effect-free; edits are persisted and the submitted caption snapshot is used for the final render. Approval queues publishing only after render output exists and probes as valid. Caption-export failure now aborts before FFmpeg/publishing; approval retries do not create another outbox job. Cancelled requests waiting for a clip mutation lock release it safely.
-- **Editor/camera source fixes:** production frontend state regressions cover editor clip selection, caption loading/error/retry and preview/timeline mounting; camera pointer/exposure and lock state regressions are automated. These are source/test results only.
-- **Android packaging:** Vite generated `index-EuxHzvMB.js`; the debug APK contains it and its packaged `index.html` references it. `MainActivity` loads the packaged `android_asset/web/index.html` entry.
+- **Editor and long-input reliability:** source-relative trim can extend beyond Gemini's suggested padding while staying within source bounds and the 5–180 second product limit. The timeline now maps source time to clip-relative playback/caption time, seeks the selected source interval, and marks an existing render stale after trim until a successful render replaces it. Long Stage 1 audio uses overlapping verified windows with boundary deduplication. Stage 2 extraction retries bounded clip extraction and never falls back to uploading/transcribing the full source.
+- **Route B:** ingestion, persisted processing status/retry, caption edits/approval, render validation, and publishing safeguards have automated coverage. This is not a live end-to-end YouTube/Gemini proof; no external upload was performed.
+- **Editor recovery:** the existing Clip Unavailable recovery and caption loading/error/retry UI remain covered with selected-clip and preview/timeline mount/recovery regressions. APK packaging was verified against the new Vite entry/asset. This does not establish POCO UI behavior.
+- **Route A:** cross-recording-segment clip continuity has not been addressed yet; it remains after Route B's real end-to-end gate. Optional automatic cuts remain deferred.
 
 ## Automated verification (2026-10-23)
 
-- `cd frontend; npm test` — passed: caption/editor integrity, camera interaction state, and Studio render-path regressions.
-- `cd frontend; npm run build` — passed; Vite emitted the Android web assets. Non-blocking warning: the JS bundle is above 500 kB.
-- From `C:\CODE\Dispatch` in PowerShell, run `$scratch = Join-Path (Get-Location) '.dispatch-test-tmp'; New-Item -ItemType Directory -Force -Path $scratch | Out-Null; $env:TEMP = $scratch; $env:TMP = $scratch; .\.venv\Scripts\python.exe -m unittest tests.test_caption_approval_contract tests.test_web tests.test_youtube_ingest_endpoint tests.test_youtube_inbox tests.test_youtube_processing_tracker tests.test_youtube_caption_timing_fix tests.test_captions_subsystem tests.test_gemini_two_stage tests.test_video_engine tests.e2e.test_tier1_features_publishing_dashboard -v` — **65 tests passed**.
-- From `android`: `$env:JAVA_HOME='C:\Program Files\Java\jdk-17.0.5'; $env:Path="$env:JAVA_HOME\bin;$env:Path"; .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` — **BUILD SUCCESSFUL**.
-- APK: `android/app/build/outputs/apk/debug/app-debug.apk` (15,187,763 bytes). ZIP inspection confirmed the latest JS asset and matching index reference.
-- `adb devices -l` — no device attached. Camera/recording behavior is **not verified on the POCO C65**.
+- Frontend: from `C:\CODE\Dispatch\frontend`, `npm test` — passed, including caption/editor integrity, camera interaction-state, Studio render-path, and production timeline interaction regressions (trim pointer flow, source/clip seeking, caption timing, and clip switching). `npm run build` — passed; Vite emitted `index-BchKp7b8.js` for Android. The JS bundle is above Vite's 500 kB advisory threshold.
+- Python full focused suite: ran from `C:\CODE\Dispatch` in PowerShell. Exact command and result:
+
+  ```powershell
+  $scratch = Join-Path (Get-Location) '.dispatch-test-tmp'
+  New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+  $env:TEMP = $scratch; $env:TMP = $scratch
+  .\.venv\Scripts\python.exe -u -m unittest tests.test_caption_approval_contract tests.test_web tests.test_youtube_ingest_endpoint tests.test_youtube_inbox tests.test_youtube_processing_tracker tests.test_youtube_caption_timing_fix tests.test_captions_subsystem tests.test_gemini_two_stage tests.test_video_engine tests.e2e.test_tier1_features_publishing_dashboard tests.test_clip_trim_contract tests.test_layout_framing_architecture -v
+  ```
+
+  Result: **76 tests passed in 69.844 seconds**. Gemini and YouTube external-service boundaries are mocked.
+- Focused stale-render follow-up, from the same root with TEMP/TMP set as above: `.\.venv\Scripts\python.exe -m unittest tests.test_clip_trim_contract -v` — **1 test passed**, including stale marker set/clear.
+- Android, from `C:\CODE\Dispatch\android` in PowerShell:
+
+  ```powershell
+  $env:JAVA_HOME = 'C:\Program Files\Java\jdk-17.0.5'
+  $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+  .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
+  ```
+
+  Result: **BUILD SUCCESSFUL**.
+- APK: `android/app/build/outputs/apk/debug/app-debug.apk` (**15,188,645 bytes**). ZIP inspection confirmed `assets/web/index.html` references packaged `assets/web/assets/index-BchKp7b8.js` (586,990 bytes); `MainActivity` loads the packaged `android_asset/web/index.html` entry.
+- ADB `devices -l` — daemon started successfully but listed no devices. No physical POCO C65 check was performed; camera recording is **not verified**.
+- `git diff --check` — passed after the handoff edits; Git emitted only its configured LF-to-CRLF advisory warnings.
 
 ## Remaining verification and exact next steps
 
-1. Install updated dependencies in the project venv: `cd C:\CODE\Dispatch; .\.venv\Scripts\python.exe -m pip install -r requirements.txt`. Current venv check reports `google.genai` missing; automated Gemini tests mock the SDK, so they do not prove a live Gemini call.
-2. With the intended YouTube/Gemini credentials and network available, run Dispatch and import an accessible unlisted test video. Confirm inbox → transcript → clips → edited captions → final render → outbox, and verify the resulting private/unlisted YouTube upload. No live external E2E upload was performed here.
-3. Connect the POCO C65 and install this debug APK. Test rear and front camera exposure in both directions and reset, AE/AF lock and unlock, wait while locked, lens switching, recording through screen dim/wake, then reopen Studio on a selected clip. Record device/Android version and logs. Do not describe recording as verified until this passes.
-4. If the phone test reveals a defect, capture logs and fix only the observed failure; otherwise hand off the remaining live checks to Antigravity.
+1. On the PC environment with network and intended credentials, install declared dependencies if needed (`cd C:\CODE\Dispatch; .\.venv\Scripts\python.exe -m pip install -r requirements.txt`) and confirm `from google import genai` imports. The current venv was previously observed without `google.genai`; mocks do not prove a live request.
+2. Run one real Route B test with an accessible unlisted source. Record each observed transition: ingest → download/probe → transcript → review clip → caption edit/approval → final render/probe → outbox → remote upload/YouTube processing. Stop at and capture the first failing state. No real video or remote publish was done in this checkpoint.
+3. Only after Route B E2E is confirmed, implement and test Route A session grouping and clips crossing recording-segment boundaries. Keep optional automatic cuts out of scope.
+4. For camera proof, connect the POCO C65, install this APK, then test front and back exposure up/down/reset; AE/AF lock, wait, unlock; lens switching; and reopen Studio on a selected clip. Record device/Android version and logs. Mark camera recording verified only after this real-device run.
 
 ## Historical checkpoints
 

@@ -109,10 +109,13 @@ def split_audio_for_transcription(
     audio_path: Path,
     output_dir: Path,
     chunk_seconds: int = 600,
+    overlap_seconds: float = 2.0,
 ) -> List[Tuple[Path, float]]:
-    """Split long audio for bounded API requests; return each part with source offset."""
+    """Create bounded, overlapping audio windows with exact source-time offsets."""
     if chunk_seconds <= 0:
         raise ValueError("chunk_seconds must be positive")
+    if overlap_seconds < 0:
+        raise ValueError("overlap_seconds cannot be negative")
     if not audio_path.is_file() or audio_path.stat().st_size == 0:
         raise FileNotFoundError(f"Audio file is missing or empty: {audio_path}")
 
@@ -120,37 +123,48 @@ def split_audio_for_transcription(
     if duration <= chunk_seconds:
         return [(audio_path, 0.0)]
 
+    # Small test/custom windows still need overlap without making the step invalid.
+    overlap = min(float(overlap_seconds), chunk_seconds * 0.1)
+    step = chunk_seconds - overlap
+    if step <= 0:
+        raise ValueError("overlap_seconds must be smaller than chunk_seconds")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     if any(output_dir.glob("audio_part_*.mp3")):
         raise FileExistsError(f"Transcription part directory is not empty: {output_dir}")
-    output_pattern = output_dir / "audio_part_%03d.mp3"
-    split = subprocess.run(
-        [
-            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-i", str(audio_path), "-map", "0:a:0", "-c:a", "copy",
-            "-f", "segment", "-segment_time", str(chunk_seconds),
-            "-reset_timestamps", "1", str(output_pattern),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if split.returncode != 0:
-        raise RuntimeError(f"Could not split long transcription audio: {split.stderr.strip()}")
-
-    part_paths = sorted(output_dir.glob("audio_part_*.mp3"))
-    if len(part_paths) < 2 or any(not path.is_file() or path.stat().st_size == 0 for path in part_paths):
-        raise RuntimeError("Long audio split did not produce complete sequential parts")
-
+    if any(output_dir.glob("audio_part_*.mp3")):
+        raise FileExistsError(f"Transcription part directory is not empty: {output_dir}")
     parts: List[Tuple[Path, float]] = []
     source_offset = 0.0
-    for part_path in part_paths:
-        parts.append((part_path, source_offset))
-        source_offset += _probe_audio_duration(part_path)
-    if abs(source_offset - duration) > max(1.0, len(part_paths) * 0.05):
-        raise RuntimeError(
-            f"Long audio split duration mismatch: source={duration:.3f}s parts={source_offset:.3f}s"
+    part_index = 0
+    while source_offset < duration:
+        window_duration = min(float(chunk_seconds), duration - source_offset)
+        part_path = output_dir / f"audio_part_{part_index:03d}.mp3"
+        split = subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-i", str(audio_path), "-ss", f"{source_offset:.3f}",
+                "-t", f"{window_duration:.3f}", "-map", "0:a:0", "-vn",
+                "-c:a", "libmp3lame", "-b:a", "96k", "-ar", "44100",
+                str(part_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
         )
+        if split.returncode != 0:
+            raise RuntimeError(f"Could not extract transcription window {part_index + 1}: {split.stderr.strip()}")
+        if not part_path.is_file() or part_path.stat().st_size == 0:
+            raise RuntimeError(f"Transcription window {part_index + 1} is missing or empty")
+        part_duration = _probe_audio_duration(part_path)
+        if part_duration <= 0 or part_duration > chunk_seconds + 0.25:
+            raise RuntimeError(f"Transcription window {part_index + 1} has invalid duration {part_duration:.3f}s")
+        parts.append((part_path, source_offset))
+        source_offset = round(source_offset + step, 3)
+        part_index += 1
+
+    if len(parts) < 2 or parts[-1][1] + _probe_audio_duration(parts[-1][0]) < duration - 0.25:
+        raise RuntimeError("Long audio split did not cover the complete source timeline")
     return parts
 

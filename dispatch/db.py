@@ -8,10 +8,14 @@ import json
 import uuid
 import contextlib
 import logging
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pathlib import Path
-from dispatch.config import DB_PATH, DATABASE_DIR, DEFAULT_PUBLISH_MODE
+from dispatch.config import (
+    DB_PATH, DATABASE_DIR, DEFAULT_PUBLISH_MODE,
+    MAX_CLIP_DURATION, MIN_CLIP_DURATION,
+)
 
 logger = logging.getLogger("dispatch.db")
 
@@ -175,6 +179,7 @@ def init_db():
                 virality_score INTEGER DEFAULT 0,
                 layout_mode TEXT DEFAULT 'fit_blur', -- crop_follow, fit_blur, native_portrait
                 rendered_layout_mode TEXT,           -- records the framing mode used for current video_path
+                render_stale INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'ready_review', -- ready_review, approved, rejected, published
                 publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
                 platform_targets TEXT DEFAULT 'youtube,instagram',
@@ -335,6 +340,8 @@ def init_db():
         if "rendered_layout_mode" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN rendered_layout_mode TEXT;")
             cursor.execute("UPDATE clips SET rendered_layout_mode = layout_mode WHERE rendered_layout_mode IS NULL AND video_path IS NOT NULL;")
+        if "render_stale" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN render_stale INTEGER NOT NULL DEFAULT 0;")
         if "padded_start" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN padded_start REAL;")
         if "padded_end" not in clip_cols:
@@ -496,28 +503,49 @@ def save_clip(
 def update_clip_trim(
     clip_id: str,
     start_time: float,
-    end_time: float
+    end_time: float,
+    source_duration: Optional[float] = None,
 ) -> bool:
-    """Update clip active trim boundaries within padded safety margins."""
+    """Persist a source-relative range within source and product duration limits."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT padded_start, padded_end, duration FROM clips WHERE id = ?", (clip_id,))
+        cursor.execute("""
+            SELECT cl.video_path, ch.duration AS source_duration
+            FROM clips cl LEFT JOIN chunks ch ON ch.id = cl.chunk_id
+            WHERE cl.id = ?
+        """, (clip_id,))
         row = cursor.fetchone()
         if not row:
             return False
 
-        p_start = float(row["padded_start"]) if row["padded_start"] is not None else max(0.0, start_time - 4.0)
-        p_end = float(row["padded_end"]) if row["padded_end"] is not None else (end_time + 4.0)
-
-        clamped_start = max(p_start, round(start_time, 3))
-        clamped_end = min(p_end, round(end_time, 3))
-        if clamped_end <= clamped_start:
+        known_source_duration = source_duration
+        if known_source_duration is None and row["source_duration"] is not None:
+            known_source_duration = float(row["source_duration"])
+        if (
+            known_source_duration is None
+            or not math.isfinite(float(known_source_duration))
+            or known_source_duration <= 0
+            or not math.isfinite(float(start_time))
+            or not math.isfinite(float(end_time))
+        ):
             return False
 
-        new_duration = round(clamped_end - clamped_start, 2)
+        clamped_start = round(float(start_time), 3)
+        clamped_end = round(float(end_time), 3)
+        new_duration = clamped_end - clamped_start
+        if (
+            clamped_start < 0
+            or clamped_end > known_source_duration
+            or new_duration < MIN_CLIP_DURATION
+            or new_duration > MAX_CLIP_DURATION
+        ):
+            return False
+
+        new_duration = round(new_duration, 2)
         cursor.execute("""
             UPDATE clips 
-            SET start_time = ?, end_time = ?, duration = ?
+            SET start_time = ?, end_time = ?, duration = ?,
+                render_stale = CASE WHEN video_path IS NOT NULL THEN 1 ELSE 0 END
             WHERE id = ?
         """, (clamped_start, clamped_end, new_duration, clip_id))
         conn.commit()
@@ -535,7 +563,7 @@ def update_clip_media(
         if rendered_layout_mode:
             cursor.execute("""
                 UPDATE clips 
-                SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = ?, status = 'ready_review'
+                SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = ?, render_stale = 0, status = 'ready_review'
                 WHERE id = ?
             """, (video_path, thumbnail_path, rendered_layout_mode, clip_id))
         else:

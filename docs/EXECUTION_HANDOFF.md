@@ -1,19 +1,21 @@
 # Dispatch Execution Handoff — Current Checkpoint (2026-10-23)
 
-This checkpoint supersedes the historical milestones below. See `PROGRESS.md` for the verification record and `docs/ROUTE_B_IMPLEMENTATION_HANDOFF.md` for Route B details.
+This checkpoint supersedes the historical milestones below. See `PROGRESS.md` for exact commands/results and `docs/ROUTE_B_IMPLEMENTATION_HANDOFF.md` for the workflow handoff.
 
 ## Current state
 
-- Work is on `main` at base `1ab62b6`; changes are uncommitted.
-- Route B ingestion, caption approval and publishing safeguards have focused automated coverage. Live YouTube/Gemini processing and publishing remain unverified; the current venv lacks `google.genai` although the dependency is declared.
-- `npm test`, `npm run build`, 65 focused Python tests, Android debug unit tests, and `:app:assembleDebug` passed. The APK packages the latest frontend bundle.
-- ADB reports no attached phone. Route A camera recording is not verified on the POCO C65.
+- Work is on `main` at base `997f4c6`; changes are uncommitted.
+- Editor range selection/synchronization and long-audio Stage 1/Stage 2 failure handling have focused production regressions. Caption approval and Route B workflow boundaries have automated coverage.
+- Frontend `npm test` and `npm run build` passed. The full focused Route B/editor Python set passed **76 tests**; the trim stale-render follow-up passed **1 test**. Android `:app:testDebugUnitTest :app:assembleDebug` passed.
+- The debug APK contains the new frontend bundle. ADB daemon started successfully but no device was listed. No physical POCO C65 or real Route B upload/transcription was tested.
+- Route A cross-segment continuity is not started; optional automatic cuts remain deferred until after real Route B E2E.
 
 ## Next actions for Antigravity
 
-1. Install `requirements.txt` into `C:\CODE\Dispatch\.venv` and confirm `google.genai` imports.
-2. Run one real unlisted-video Route B flow through ingest, transcription, caption edit/approval, final render, publishing outbox, and remote upload; report each observed status and any logs.
-3. Install the debug APK on the POCO C65 and run the exact exposure, AE/AF lock/unlock, lens-switch, screen dim/wake, and selected-clip editor checks listed in `PROGRESS.md`. Mark camera recording verified only after this device run.
+1. With network and intended credentials, install declared `requirements.txt` if needed and confirm `google.genai` imports.
+2. Complete one real unlisted-video Route B flow, recording each state and logs from ingest through YouTube processing. No live external E2E proof exists yet.
+3. Only after Route B passes end to end, implement and verify Route A session grouping and clips crossing recording-segment boundaries.
+4. Connect the POCO C65 and install the current debug APK. Verify both-lens exposure up/down/reset, AE/AF lock/wait/unlock, lens switching, and selected-clip Studio reopening. Do not mark camera recording verified without this run.
 
 ---
 

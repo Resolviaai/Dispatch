@@ -672,6 +672,14 @@ def get_clip_framing_context(clip: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def clip_render_is_stale(clip: Dict[str, Any]) -> bool:
+    """A trim or framing change invalidates the previously rendered media."""
+    return bool(clip.get("render_stale")) or bool(
+        clip.get("rendered_layout_mode")
+        and not is_matching_layout(clip.get("rendered_layout_mode"), clip.get("layout_mode"))
+    )
+
+
 @app.get("/api/clips")
 async def list_clips():
     """List clips grouped by status with source media URLs and stale render flags."""
@@ -684,9 +692,7 @@ async def list_clips():
         c["available_layout_modes"] = ctx["available_layout_modes"]
         c["layout_mode"] = ctx["layout_mode"]
         c["target_aspect"] = ctx["target_aspect"]
-        c["is_render_stale"] = bool(
-            c.get("rendered_layout_mode") and c["layout_mode"] != c.get("rendered_layout_mode")
-        )
+        c["is_render_stale"] = clip_render_is_stale(c)
 
     # 1. Trigger 7-day storage cleanup for expired local videos (preserves thumbnails!)
     try:
@@ -717,9 +723,7 @@ async def list_clips():
             c["available_layout_modes"] = ctx["available_layout_modes"]
             c["layout_mode"] = ctx["layout_mode"]
             c["target_aspect"] = ctx["target_aspect"]
-            c["is_render_stale"] = bool(
-                c.get("rendered_layout_mode") and c["layout_mode"] != c.get("rendered_layout_mode")
-            )
+            c["is_render_stale"] = clip_render_is_stale(c)
 
     queued_clips = db.get_queued_transcription_clips(limit=50)
     queue_stats = db.get_transcription_queue_stats()
@@ -745,9 +749,7 @@ async def get_clip_detail(clip_id: str):
     clip["available_layout_modes"] = ctx["available_layout_modes"]
     clip["layout_mode"] = ctx["layout_mode"]
     clip["target_aspect"] = ctx["target_aspect"]
-    clip["is_render_stale"] = bool(
-        clip.get("rendered_layout_mode") and clip["layout_mode"] != clip.get("rendered_layout_mode")
-    )
+    clip["is_render_stale"] = clip_render_is_stale(clip)
     return clip
 
 
@@ -890,7 +892,9 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
     updated_clip = db.get_clip_by_id(clip_id)
     updated_ctx = get_clip_framing_context(updated_clip)
     rendered_mode = updated_clip.get("rendered_layout_mode") if updated_clip else None
-    is_stale = bool(rendered_mode and not is_matching_layout(rendered_mode, raw_mode))
+    is_stale = bool(updated_clip and updated_clip.get("render_stale")) or bool(
+        rendered_mode and not is_matching_layout(rendered_mode, raw_mode)
+    )
 
     return {
         "status": "success",
@@ -969,7 +973,7 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
 
         with db.get_db_connection() as conn:
             conn.execute(
-                "UPDATE clips SET layout_mode = ?, rendered_layout_mode = ?, video_path = ? WHERE id = ?",
+                "UPDATE clips SET layout_mode = ?, rendered_layout_mode = ?, video_path = ?, render_stale = 0 WHERE id = ?",
                 (target_layout, target_layout, str(out_file), clip_id)
             )
             conn.commit()
@@ -1004,9 +1008,27 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can be trimmed")
 
-    success = db.update_clip_trim(clip_id, payload.start_time, payload.end_time)
+    source_duration = None
+    chunk_id = clip.get("chunk_id")
+    chunk = db.get_chunk_by_id(chunk_id) if chunk_id else None
+    if chunk and float(chunk.get("duration") or 0) > 0:
+        source_duration = float(chunk["duration"])
+    else:
+        source_path = resolve_clip_source_path(clip)
+        if source_path:
+            from dispatch.ingestion.validator import inspect_video_orientation
+            source_info = inspect_video_orientation(source_path)
+            if source_info.get("valid") and float(source_info.get("duration") or 0) > 0:
+                source_duration = float(source_info["duration"])
+
+    success = db.update_clip_trim(
+        clip_id, payload.start_time, payload.end_time, source_duration=source_duration
+    )
     if not success:
-        raise HTTPException(status_code=400, detail="Invalid trim boundaries (end must be > start)")
+        raise HTTPException(
+            status_code=400,
+            detail="Trim must stay inside the source and be between 5 and 180 seconds.",
+        )
 
     updated = db.get_clip_by_id(clip_id)
     return {
@@ -1016,7 +1038,8 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
         "end_time": updated["end_time"],
         "duration": updated["duration"],
         "padded_start": updated.get("padded_start"),
-        "padded_end": updated.get("padded_end")
+        "padded_end": updated.get("padded_end"),
+        "is_render_stale": clip_render_is_stale(updated),
     }
 
 

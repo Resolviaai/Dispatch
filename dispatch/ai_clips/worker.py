@@ -9,7 +9,7 @@ import json
 import time
 import logging
 import threading
-import subprocess
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
@@ -229,6 +229,7 @@ class HighlightWorker:
 
         from dispatch.transcription.gemini_engine import (
             check_and_increment_daily_transcribe_quota,
+            extract_stage2_clip_audio,
             transcribe_stage2_precision_words,
         )
 
@@ -268,26 +269,15 @@ class HighlightWorker:
 
             # Stage 2: Precision Word Alignment via gemini-3.5-transcribe
             try:
-                slice_mp3 = PROCESSING_DIR / f"{clip_id}_slice.mp3"
-                if source_video_path and source_video_path.exists():
-                    slice_cmd = [
-                        "ffmpeg", "-y",
-                        "-ss", str(round(p_start, 3)),
-                        "-to", str(round(p_end, 3)),
-                        "-i", str(source_video_path),
-                        "-vn", "-acodec", "libmp3lame", "-b:a", "96k",
-                        str(slice_mp3)
-                    ]
-                    subprocess.run(slice_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-
-                target_media = slice_mp3 if (slice_mp3.exists() and slice_mp3.stat().st_size > 0) else source_video_path
-                stage2_res = transcribe_stage2_precision_words(target_media) if target_media else {"words": []}
-
-                if slice_mp3.exists():
-                    try:
-                        slice_mp3.unlink()
-                    except Exception:
-                        pass
+                if not source_video_path or not source_video_path.exists():
+                    raise RuntimeError("Cannot extract bounded Stage 2 audio: source video is unavailable")
+                PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(
+                    prefix=f"dispatch_stage2_{clip_id}_", dir=str(PROCESSING_DIR)
+                ) as temp_dir:
+                    slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
+                    extract_stage2_clip_audio(source_video_path, p_start, p_end, slice_mp3)
+                    stage2_res = transcribe_stage2_precision_words(slice_mp3)
 
                 words = stage2_res.get("words", [])
                 if words:
@@ -296,9 +286,14 @@ class HighlightWorker:
                     speech_end = p_start + stage2_res.get("speech_end", c_end - p_start)
                     snapped_start = max(p_start, round(speech_start - 0.2, 2))
                     snapped_end = min(p_end, round(speech_end + 0.3, 2))
-                    db.update_clip_trim(clip_id, snapped_start, snapped_end)
-                    c_start = snapped_start
-                    c_end = snapped_end
+                    if db.update_clip_trim(clip_id, snapped_start, snapped_end):
+                        c_start = snapped_start
+                        c_end = snapped_end
+                    else:
+                        logger.info(
+                            "Keeping original clip range for %s because the speech-tightened range "
+                            "is outside source or product limits.", clip_id
+                        )
 
                     # 5.1 Word-by-Word Caption Data Mapping
                     clean_words = []

@@ -16,6 +16,7 @@ async function run() {
     await server.ssrLoadModule('/test_editor_repair_integrity.ts');
     await server.ssrLoadModule('/frontend/test_camera_interactions.js');
     await server.ssrLoadModule('/frontend/test_studio_render_path.js');
+    await server.ssrLoadModule('/frontend/test_clip_timeline_interactions.js');
   } catch (err) {
     console.error('Test execution failed:', err);
     process.exit(1);

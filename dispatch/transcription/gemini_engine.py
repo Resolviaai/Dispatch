@@ -9,6 +9,8 @@ import os
 import json
 import time
 import logging
+import re
+import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +18,12 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
 from dispatch.config import GEMINI_API_KEY
-from dispatch.transcription.audio import extract_compressed_audio, split_audio_for_transcription
+from dispatch.transcription.audio import (
+    _probe_audio_duration,
+    extract_compressed_audio,
+    split_audio_for_transcription,
+)
+from dispatch.config import MAX_CLIP_DURATION, PROCESSING_DIR
 
 logger = logging.getLogger("dispatch.transcription.gemini")
 
@@ -105,7 +112,9 @@ def transcribe_stage1_flash_lite(
             extract_compressed_audio(media_path, work_path / "source.mp3")
             if is_video else media_path
         )
-        chunks = split_audio_for_transcription(audio_path, work_path / "parts", chunk_seconds=600)
+        chunks = split_audio_for_transcription(
+            audio_path, work_path / "parts", chunk_seconds=600, overlap_seconds=2.0
+        )
         logger.info("Stage 1: Transcribing %s as %d bounded audio part(s)", media_path.name, len(chunks))
 
         for part_index, (part_path, source_offset) in enumerate(chunks):
@@ -141,6 +150,7 @@ def transcribe_stage1_flash_lite(
                         "end": end,
                         "text": str(segment.get("text", "")).strip(),
                         "speaker": str(segment.get("speaker", "spk:0")).strip(),
+                        "_source_part_index": part_index,
                     })
             finally:
                 if uploaded_file is not None:
@@ -150,7 +160,44 @@ def transcribe_stage1_flash_lite(
                         logger.warning("Could not delete Gemini file for part %d: %s",
                                         part_index + 1, cleanup_error)
 
-    return sorted(normalized_segments, key=lambda segment: (segment["start"], segment["end"]))
+    return _deduplicate_overlapping_segments(normalized_segments, overlap_seconds=2.0)
+
+
+def _deduplicate_overlapping_segments(
+    segments: List[Dict[str, Any]], overlap_seconds: float
+) -> List[Dict[str, Any]]:
+    """Merge exact duplicate phrases reported by adjacent overlapping windows."""
+    ordered = sorted(segments, key=lambda segment: (segment["start"], segment["end"]))
+    kept: List[Dict[str, Any]] = []
+    for segment in ordered:
+        part_index = int(segment.get("_source_part_index", 0))
+        normalized_text = re.sub(r"[^\w]+", " ", segment.get("text", "").casefold()).strip()
+        duplicate = None
+        if part_index > 0 and normalized_text:
+            for previous in reversed(kept):
+                if int(previous.get("_source_part_index", 0)) < part_index - 1:
+                    break
+                if int(previous.get("_source_part_index", 0)) != part_index - 1:
+                    continue
+                if previous["end"] < segment["start"] - overlap_seconds - 0.5:
+                    break
+                previous_text = re.sub(r"[^\w]+", " ", previous.get("text", "").casefold()).strip()
+                intersection = min(previous["end"], segment["end"]) - max(previous["start"], segment["start"])
+                if previous_text == normalized_text and intersection >= -0.35:
+                    duplicate = previous
+                    break
+        if duplicate is None:
+            kept.append(dict(segment))
+        else:
+            duplicate["start"] = min(duplicate["start"], segment["start"])
+            duplicate["end"] = max(duplicate["end"], segment["end"])
+            if len(segment.get("text", "")) > len(duplicate.get("text", "")):
+                duplicate["text"] = segment["text"]
+
+    return [
+        {key: value for key, value in segment.items() if key != "_source_part_index"}
+        for segment in kept
+    ]
 
 
 def _parse_stage1_time(value: Any) -> float:
@@ -187,6 +234,19 @@ def transcribe_stage2_precision_words(
           - speech_start: float timestamp of first spoken word
           - speech_end: float timestamp of last spoken word
     """
+    max_stage2_seconds = MAX_CLIP_DURATION + 16.0
+    if media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
+        from dispatch.ingestion.validator import inspect_video_orientation
+        info = inspect_video_orientation(media_path)
+        media_duration = float(info.get("duration") or 0.0) if info.get("valid") else 0.0
+    else:
+        media_duration = _probe_audio_duration(media_path)
+    if media_duration <= 0 or media_duration > max_stage2_seconds:
+        raise ValueError(
+            f"Stage 2 accepts only a bounded clip audio input (<= {max_stage2_seconds:.0f}s); "
+            f"received {media_duration:.1f}s. Full-source transcription is disabled."
+        )
+
     client = get_gemini_client()
     from google.genai import types
 
@@ -256,6 +316,51 @@ def transcribe_stage2_precision_words(
                 pass
 
 
+def extract_stage2_clip_audio(
+    source_path: Path,
+    start_seconds: float,
+    end_seconds: float,
+    output_path: Path,
+    attempts: int = 2,
+) -> Path:
+    """Extract only a bounded clip window; never substitute the full source."""
+    duration = end_seconds - start_seconds
+    if start_seconds < 0 or duration <= 0 or duration > MAX_CLIP_DURATION + 16.0:
+        raise ValueError(f"Invalid bounded Stage 2 range [{start_seconds:.2f}, {end_seconds:.2f}]")
+    last_error = "no extraction attempt completed"
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                    "-ss", f"{start_seconds:.3f}", "-i", str(source_path),
+                    "-t", f"{duration:.3f}", "-map", "0:a:0", "-vn",
+                    "-acodec", "libmp3lame", "-b:a", "96k", str(output_path),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if result.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+                return output_path
+            last_error = result.stderr.strip() or f"ffmpeg exited {result.returncode}"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last_error = str(exc)
+        if output_path.exists():
+            output_path.unlink()
+        logger.warning(
+            "Stage 2 bounded audio extraction attempt %d/%d failed for %s: %s",
+            attempt, max(1, attempts), source_path.name, last_error,
+        )
+
+    raise RuntimeError(
+        f"Stage 2 bounded audio extraction failed after {max(1, attempts)} attempts; "
+        f"full-source transcription is disabled. {last_error}"
+    )
+
+
 def drain_queued_transcriptions(max_batch: int = 10) -> int:
     """FIFO Rolling Backlog Auto-Drain.
     
@@ -292,26 +397,15 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             p_start = float(clip["padded_start"]) if clip.get("padded_start") is not None else max(0.0, c_start - 4.0)
             p_end = float(clip["padded_end"]) if clip.get("padded_end") is not None else (c_end + 4.0)
 
-            from dispatch.config import PROCESSING_DIR
-            slice_mp3 = PROCESSING_DIR / f"{clip_id}_slice.mp3"
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(round(p_start, 3)),
-                "-to", str(round(p_end, 3)),
-                "-i", str(source_path),
-                "-vn", "-acodec", "libmp3lame", "-b:a", "96k",
-                str(slice_mp3)
-            ]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            slice_duration = p_end - p_start
+            if p_start < 0 or slice_duration <= 0 or slice_duration > MAX_CLIP_DURATION + 16.0:
+                raise ValueError(f"Invalid bounded Stage 2 range [{p_start:.2f}, {p_end:.2f}]")
 
-            if slice_mp3.exists() and slice_mp3.stat().st_size > 0:
+            PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=f"dispatch_stage2_{clip_id}_", dir=str(PROCESSING_DIR)) as temp_dir:
+                slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
+                extract_stage2_clip_audio(source_path, p_start, p_end, slice_mp3)
                 stage2_res = transcribe_stage2_precision_words(slice_mp3)
-                try:
-                    slice_mp3.unlink()
-                except Exception:
-                    pass
-            else:
-                stage2_res = transcribe_stage2_precision_words(source_path)
 
             words = stage2_res.get("words", [])
             if words:
@@ -319,9 +413,14 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                 speech_end = p_start + stage2_res.get("speech_end", c_end - p_start)
                 snapped_start = max(p_start, round(speech_start - 0.2, 2))
                 snapped_end = min(p_end, round(speech_end + 0.3, 2))
-                db.update_clip_trim(clip_id, snapped_start, snapped_end)
-                c_start = snapped_start
-                c_end = snapped_end
+                if db.update_clip_trim(clip_id, snapped_start, snapped_end):
+                    c_start = snapped_start
+                    c_end = snapped_end
+                else:
+                    logger.info(
+                        "Keeping original clip range for %s because the speech-tightened range "
+                        "is outside source or product limits.", clip_id
+                    )
 
                 clean_words = []
                 for w in words:

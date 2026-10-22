@@ -877,7 +877,7 @@ interface FramedVideoStageProps {
   isPlaying: boolean;
   onTogglePlay: () => void;
   onTimeUpdate?: () => void;
-  onLoadedMetadata?: (isSourceTimebase?: boolean) => void;
+  onLoadedMetadata?: (isSourceTimebase?: boolean, mediaDuration?: number) => void;
   videoRef: React.RefObject<HTMLVideoElement>;
   bgVideoRef: React.RefObject<HTMLVideoElement>;
   setIsPlaying: (playing: boolean) => void;
@@ -1097,7 +1097,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 if (v.videoWidth > 0 && v.videoHeight > 0) {
                   setVideoDimensions({ width: v.videoWidth, height: v.videoHeight });
                 }
-                onLoadedMetadata?.(isSourceTimebase);
+                onLoadedMetadata?.(isSourceTimebase, v.duration);
               }}
               onTimeUpdate={onTimeUpdate}
               onError={() => {
@@ -1205,6 +1205,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [isSourceTimebase, setIsSourceTimebase] = useState<boolean>(true);
+  const [sourceDurationForClip, setSourceDurationForClip] = useState<{ clipId: string; seconds: number } | null>(null);
   const [filmstripFrames, setFilmstripFrames] = useState<string[]>([]);
   const filmstripReqIdRef = useRef<number>(0);
   const [mainVideoVolume, setMainVideoVolume] = useState<number>(100);
@@ -1459,6 +1460,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const clipStart = currentClip ? (currentClip.start_time || 0) : 0;
   const clipEnd = currentClip ? (currentClip.end_time || (clipStart + (currentClip.duration || 40))) : 40;
   const clipDuration = currentClip ? Math.max(0.1, currentClip.duration || (clipEnd - clipStart)) : 40;
+  const timelineSourceDuration = currentClip
+    ? (sourceDurationForClip?.clipId === currentClip.id
+      ? sourceDurationForClip.seconds
+      : Math.max(clipEnd, currentClip.padded_end || clipEnd))
+    : 0;
 
   // 3. Playback Controls & Dual-Layer Video Sync with Adaptive Timebase Mapping
   const handleTogglePlay = () => {
@@ -1674,10 +1680,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     };
   }, [isPlaying, isSourceTimebase, clipStart, clipEnd, clipDuration, layoutMode]);
 
-  const handleLoadedMetadata = (isSource?: boolean) => {
+  const handleLoadedMetadata = (isSource?: boolean, mediaDuration?: number) => {
     const isSourceEffective = (typeof isSource === 'boolean') ? isSource : isSourceTimebase;
     setIsSourceTimebase(isSourceEffective);
     const video = videoRef.current;
+    const loadedDuration = Number.isFinite(mediaDuration) ? mediaDuration : video?.duration;
+    if (currentClip && isSourceEffective && loadedDuration && Number.isFinite(loadedDuration)) {
+      setSourceDurationForClip({ clipId: currentClip.id, seconds: loadedDuration });
+    }
     if (video) {
       if (isSourceEffective) {
         if (video.duration >= clipStart && clipStart > 0) {
@@ -1802,11 +1812,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
   };
 
-  const handleTrimChange = async (relStart: number, relEnd: number) => {
-    if (!currentClip) return;
-    const baseStart = currentClip.start_time ?? 0;
-    const newStart = Number((baseStart + relStart).toFixed(2));
-    const newEnd = Number((baseStart + relEnd).toFixed(2));
+  const handleTrimChange = async (sourceStart: number, sourceEnd: number): Promise<boolean> => {
+    if (!currentClip) return false;
+    const newStart = Number(sourceStart.toFixed(2));
+    const newEnd = Number(sourceEnd.toFixed(2));
+    videoRef.current?.pause();
+    bgVideoRef.current?.pause();
+    setIsPlaying(false);
     try {
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
         method: 'POST',
@@ -1825,6 +1837,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   duration: data.duration,
                   padded_start: data.padded_start,
                   padded_end: data.padded_end,
+                  is_render_stale: data.is_render_stale,
                 }
               : c
           )
@@ -1839,13 +1852,30 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   duration: data.duration,
                   padded_start: data.padded_start,
                   padded_end: data.padded_end,
+                  is_render_stale: data.is_render_stale,
                 }
               : c
           )
         );
+        if (isSourceTimebase && videoRef.current) {
+          videoRef.current.currentTime = data.start_time;
+          if (bgVideoRef.current && layoutMode === 'fit_blur') bgVideoRef.current.currentTime = data.start_time;
+        }
+        if (isSourceTimebase) {
+          lastTimeUpdateRef.current = 0;
+          setCurrentTime(0);
+          setDuration(data.duration);
+        }
+        return true;
+      } else {
+        const err = await res.json().catch(() => null);
+        setFeedback(err?.detail || `Failed to save trim (HTTP ${res.status}). The previous range is restored.`);
+        return false;
       }
     } catch (e) {
       console.error('Failed to update trim', e);
+      setFeedback('Failed to save trim. Check the connection and retry; the previous range is restored.');
+      return false;
     }
   };
 
@@ -2930,6 +2960,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     track={visibleCaptionTrack}
                     currentTime={currentTime}
                     duration={duration || currentClip.duration || 40}
+                    sourceDuration={timelineSourceDuration}
+                    sourceTimebase={isSourceTimebase}
                     selectedGroupId={selectedGroupId}
                     isVideoSelected={isVideoSelected}
                     isPlaying={isPlaying}
