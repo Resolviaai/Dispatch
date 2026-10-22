@@ -6,18 +6,20 @@ import org.junit.Test
 
 class CameraCaptureManagerLockTest {
     @Test
-    fun aeOnlySupportConfirmsLockWithoutAutofocusSuccess() {
-        assertTrue(isAeAfLockConfirmed(hasAf = false, hasAe = true, focusSuccessful = false))
+    fun confirmedAeOnlyLockDoesNotRequireAutofocusSuccess() {
+        assertTrue(isAeAfLockConfirmed(afLockConfirmed = false, aeLockConfirmed = true))
     }
 
     @Test
-    fun autofocusOnlySupportRequiresSuccessfulFocus() {
-        assertTrue(isAeAfLockConfirmed(hasAf = true, hasAe = false, focusSuccessful = true))
-        assertFalse(isAeAfLockConfirmed(hasAf = true, hasAe = false, focusSuccessful = false))
+    fun autofocusOnlyLockRequiresConfirmedFocusResult() {
+        assertTrue(isAeAfLockConfirmed(afLockConfirmed = true, aeLockConfirmed = false))
+        assertFalse(isAeAfLockConfirmed(afLockConfirmed = false, aeLockConfirmed = false))
     }
 
     @Test
-    fun unsupportedMeteringCannotConfirmLock() {
-        assertFalse(isAeAfLockConfirmed(hasAf = false, hasAe = false, focusSuccessful = true))
+    fun channelCapabilityAloneIsNotAConfirmedLock() {
+        // Capability is not passed to the production confirmation function; only successful
+        // hardware results can mark an individual lock as confirmed.
+        assertFalse(isAeAfLockConfirmed(afLockConfirmed = false, aeLockConfirmed = false))
     }
 }

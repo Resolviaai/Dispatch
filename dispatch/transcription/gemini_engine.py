@@ -9,13 +9,14 @@ import os
 import json
 import time
 import logging
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
 from dispatch.config import GEMINI_API_KEY
-from dispatch.transcription.audio import extract_compressed_audio
+from dispatch.transcription.audio import extract_compressed_audio, split_audio_for_transcription
 
 logger = logging.getLogger("dispatch.transcription.gemini")
 
@@ -86,83 +87,89 @@ def transcribe_stage1_flash_lite(
     client = get_gemini_client()
     from google.genai import types
 
-    # Extract lightweight MP3 if passed a video
-    if media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
-        audio_path = extract_compressed_audio(media_path)
-        cleanup_audio = True
-    else:
-        audio_path = media_path
-        cleanup_audio = False
+    system_instruction = (
+        "You are an expert audio transcription engine. "
+        "Transcribe the spoken audio verbatim in original language (detect Hindi, English, Hinglish). "
+        "Provide precise timestamps for each spoken segment/phrase in valid JSON format: "
+        '[{"start": "00:00.00", "end": "00:02.50", "text": "...", "speaker": "Speaker 1"}]. '
+        "Return ONLY the JSON array."
+    )
+    normalized_segments: List[Dict[str, Any]] = []
+    is_video = media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm")
 
-    try:
-        logger.info("Stage 1: Uploading %s to Gemini Files API...", audio_path.name)
-        uploaded_file = client.files.upload(file=str(audio_path), config=dict(mime_type="audio/mp3"))
-
-        system_instruction = (
-            "You are an expert audio transcription engine. "
-            "Transcribe the spoken audio verbatim in original language (detect Hindi, English, Hinglish). "
-            "Provide precise timestamps for each spoken segment/phrase in valid JSON format: "
-            '[{"start": "00:00.00", "end": "00:02.50", "text": "...", "speaker": "Speaker 1"}]. '
-            "Return ONLY the JSON array."
+    # Keep the original source and its single inbox job intact. Bound each Gemini
+    # request to ten minutes and restore each part's timestamps to source time.
+    with tempfile.TemporaryDirectory(prefix="dispatch_stage1_") as work_dir:
+        work_path = Path(work_dir)
+        audio_path = (
+            extract_compressed_audio(media_path, work_path / "source.mp3")
+            if is_video else media_path
         )
+        chunks = split_audio_for_transcription(audio_path, work_path / "parts", chunk_seconds=600)
+        logger.info("Stage 1: Transcribing %s as %d bounded audio part(s)", media_path.name, len(chunks))
 
-        logger.info("Stage 1: Calling gemini-3.5-flash-lite...")
-        t0 = time.time()
-        response = client.models.generate_content(
-            model="gemini-3.5-flash-lite",
-            contents=[uploaded_file, prompt or system_instruction],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.0
-            )
-        )
-        elapsed = time.time() - t0
-        logger.info("Stage 1 completed in %.2fs", elapsed)
-
-        raw_text = response.text or "[]"
-        segments_raw = json.loads(raw_text)
-
-        # Normalize segment structures to float start/end seconds
-        normalized_segments: List[Dict[str, Any]] = []
-        for s in segments_raw:
-            st = s.get("start", 0.0)
-            en = s.get("end", 0.0)
-
-            # Convert mm:ss.ms string or float to float seconds
-            if isinstance(st, str):
-                parts = st.split(":")
-                if len(parts) == 2:
-                    st = float(parts[0]) * 60 + float(parts[1])
-                else:
-                    st = _parse_offset_to_seconds(st)
-            if isinstance(en, str):
-                parts = en.split(":")
-                if len(parts) == 2:
-                    en = float(parts[0]) * 60 + float(parts[1])
-                else:
-                    en = _parse_offset_to_seconds(en)
-
-            normalized_segments.append({
-                "start": float(st),
-                "end": float(en),
-                "text": str(s.get("text", "")).strip(),
-                "speaker": str(s.get("speaker", "spk:0")).strip()
-            })
-
-        # Cleanup remote cloud file
-        try:
-            client.files.delete(name=uploaded_file.name)
-        except Exception:
-            pass
-
-        return normalized_segments
-
-    finally:
-        if cleanup_audio and audio_path.exists() and audio_path != media_path:
+        for part_index, (part_path, source_offset) in enumerate(chunks):
+            uploaded_file = None
             try:
-                audio_path.unlink()
-            except Exception:
-                pass
+                logger.info("Stage 1: Uploading %s (part %d/%d) to Gemini Files API...",
+                            part_path.name, part_index + 1, len(chunks))
+                uploaded_file = client.files.upload(file=str(part_path), config=dict(mime_type="audio/mp3"))
+                t0 = time.time()
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash-lite",
+                    contents=[uploaded_file, prompt or system_instruction],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.0,
+                    ),
+                )
+                logger.info("Stage 1 part %d/%d completed in %.2fs",
+                            part_index + 1, len(chunks), time.time() - t0)
+                segments_raw = json.loads(response.text or "[]")
+                if not isinstance(segments_raw, list):
+                    raise ValueError(f"Gemini returned a non-list transcript for part {part_index + 1}")
+
+                for segment in segments_raw:
+                    if not isinstance(segment, dict):
+                        continue
+                    start = _parse_stage1_time(segment.get("start", 0.0)) + source_offset
+                    end = _parse_stage1_time(segment.get("end", 0.0)) + source_offset
+                    if end < start:
+                        continue
+                    normalized_segments.append({
+                        "start": start,
+                        "end": end,
+                        "text": str(segment.get("text", "")).strip(),
+                        "speaker": str(segment.get("speaker", "spk:0")).strip(),
+                    })
+            finally:
+                if uploaded_file is not None:
+                    try:
+                        client.files.delete(name=uploaded_file.name)
+                    except Exception as cleanup_error:
+                        logger.warning("Could not delete Gemini file for part %d: %s",
+                                        part_index + 1, cleanup_error)
+
+    return sorted(normalized_segments, key=lambda segment: (segment["start"], segment["end"]))
+
+
+def _parse_stage1_time(value: Any) -> float:
+    """Parse Gemini seconds or MM:SS / HH:MM:SS timestamps."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if text.endswith("s"):
+        text = text[:-1]
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            if len(parts) == 2:
+                return float(parts[0]) * 60 + float(parts[1])
+            if len(parts) == 3:
+                return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+        except ValueError:
+            return 0.0
+    return _parse_offset_to_seconds(text)
 
 
 def transcribe_stage2_precision_words(
@@ -260,6 +267,7 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
         return 0
 
     from dispatch.captions.grouper import group_words_into_captions
+    from dispatch.captions.presets import get_default_preset_id
     from dispatch.video_engine.renderer import render_clip
     import subprocess
 
@@ -331,7 +339,7 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                     clip_start=c_start,
                     clip_end=c_end,
                     clip_id=clip_id,
-                    preset_id="yellow_pop"
+                    preset_id=get_default_preset_id()
                 )
                 db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
 
@@ -341,7 +349,8 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                 start_time=c_start,
                 end_time=c_end,
                 aspect_ratio=None,
-                layout_mode=clip.get("layout_mode", "fit_blur")
+                layout_mode=clip.get("layout_mode", "fit_blur"),
+                subtitle_options={"enabled": False, "preserve_timing": True}
             )
 
             with db.get_db_connection() as conn:

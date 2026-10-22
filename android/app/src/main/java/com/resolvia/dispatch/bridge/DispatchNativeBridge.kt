@@ -191,6 +191,9 @@ class DispatchNativeBridge(
             addProperty("isRecording", cameraCaptureManager.isRecording)
             addProperty("isTorchEnabled", cameraCaptureManager.isTorchEnabled)
             addProperty("isAeAfLocked", cameraCaptureManager.isAeAfLocked)
+            addProperty("isAeLocked", cameraCaptureManager.isAeLocked)
+            addProperty("isAfLocked", cameraCaptureManager.isAfLocked)
+            addProperty("isAeAfLockUncertain", cameraCaptureManager.isAeAfLockUncertain)
             addProperty("isAudioEnabled", cameraCaptureManager.isAudioEnabled)
 
             val exp = cameraCaptureManager.getExposureInfo()
@@ -232,6 +235,9 @@ class DispatchNativeBridge(
             addProperty("isRecording", cameraCaptureManager.isRecording)
             addProperty("isTorchEnabled", cameraCaptureManager.isTorchEnabled)
             addProperty("isAeAfLocked", cameraCaptureManager.isAeAfLocked)
+            addProperty("isAeLocked", cameraCaptureManager.isAeLocked)
+            addProperty("isAfLocked", cameraCaptureManager.isAfLocked)
+            addProperty("isAeAfLockUncertain", cameraCaptureManager.isAeAfLockUncertain)
             addProperty("isAudioEnabled", cameraCaptureManager.isAudioEnabled)
             add("exposure", JsonObject().apply {
                 addProperty("minIndex", exp.minIndex)
@@ -282,6 +288,7 @@ class DispatchNativeBridge(
                     addProperty("isLocked", false)
                     addProperty("hasAf", res.hasAf)
                     addProperty("hasAe", res.hasAe)
+                    addProperty("lockStateUncertain", res.lockStateUncertain)
                     if (res.error != null) addProperty("error", res.error)
                 })
             }
@@ -326,6 +333,7 @@ class DispatchNativeBridge(
                     addProperty("isLocked", res.isLocked)
                     addProperty("hasAf", res.hasAf)
                     addProperty("hasAe", res.hasAe)
+                    addProperty("lockStateUncertain", res.lockStateUncertain)
                     if (res.error != null) addProperty("error", res.error)
                 })
             }

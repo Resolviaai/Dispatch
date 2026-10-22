@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val RECORDING_IDLE_DIM_DELAY_MS = 150_000L
+        private const val RECORDING_DIM_BRIGHTNESS = 0.01f
     }
 
     private val permissionsToRequest = buildList {
@@ -156,8 +157,8 @@ class MainActivity : ComponentActivity() {
                 originalScreenBrightness = window.attributes.screenBrightness
             }
             val attributes = window.attributes
-            if (attributes.screenBrightness != WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF) {
-                attributes.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF
+            if (attributes.screenBrightness != RECORDING_DIM_BRIGHTNESS) {
+                attributes.screenBrightness = RECORDING_DIM_BRIGHTNESS
                 window.attributes = attributes
             }
             return
@@ -183,6 +184,7 @@ class MainActivity : ComponentActivity() {
         val outcome = screenDimmingState.onTouch(toRecordingTouchAction(event.actionMasked))
         if (outcome.wokeScreen) {
             applyRecordingScreenDimmed(false)
+            scheduleRecordingScreenDim()
         }
         if (outcome.userActivity) {
             scheduleRecordingScreenDim()

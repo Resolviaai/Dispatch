@@ -1,4 +1,21 @@
-# Dispatch Execution Handoff & Milestone Checkpoint
+# Dispatch Execution Handoff — Current Checkpoint (2026-10-23)
+
+This checkpoint supersedes the historical milestones below. See `PROGRESS.md` for the verification record and `docs/ROUTE_B_IMPLEMENTATION_HANDOFF.md` for Route B details.
+
+## Current state
+
+- Work is on `main` at base `1ab62b6`; changes are uncommitted.
+- Route B ingestion, caption approval and publishing safeguards have focused automated coverage. Live YouTube/Gemini processing and publishing remain unverified; the current venv lacks `google.genai` although the dependency is declared.
+- `npm test`, `npm run build`, 65 focused Python tests, Android debug unit tests, and `:app:assembleDebug` passed. The APK packages the latest frontend bundle.
+- ADB reports no attached phone. Route A camera recording is not verified on the POCO C65.
+
+## Next actions for Antigravity
+
+1. Install `requirements.txt` into `C:\CODE\Dispatch\.venv` and confirm `google.genai` imports.
+2. Run one real unlisted-video Route B flow through ingest, transcription, caption edit/approval, final render, publishing outbox, and remote upload; report each observed status and any logs.
+3. Install the debug APK on the POCO C65 and run the exact exposure, AE/AF lock/unlock, lens-switch, screen dim/wake, and selected-clip editor checks listed in `PROGRESS.md`. Mark camera recording verified only after this device run.
+
+---
 
 **Date:** 2026-10-09  
 **Branch:** `main`  

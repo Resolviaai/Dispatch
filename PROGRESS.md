@@ -1,8 +1,40 @@
-# Current Handoff for Antigravity — 2026-10-10
+# Current Handoff for Antigravity — 2026-10-23
 
-This section is the current source of truth and supersedes conflicting historical implementation notes below. Historical notes and architecture decisions are retained for context.
+This checkpoint supersedes older status and test-count notes below. Branch `main`, base `1ab62b6`; changes are in the working tree and are not committed.
 
-## 0. Latest checkpoint — 2026-10-10
+## Current completion
+
+- **Route B ingestion:** manual YouTube URL import enters the durable inbox, downloads and validates media, then the transcription and highlight workers continue from persisted state. Duplicate imports, failures, retries, and processing status have focused regression coverage.
+- **Long transcription input:** Gemini Stage 1 audio is split into verified chunks of at most 600 seconds; transcript times are restored to the original timeline and temporary parts are cleaned up. The original downloaded video remains one canonical inbox file/row; this is not physical MP4 segmentation.
+- **Caption approval/publishing:** caption reads are side-effect-free; edits are persisted and the submitted caption snapshot is used for the final render. Approval queues publishing only after render output exists and probes as valid. Caption-export failure now aborts before FFmpeg/publishing; approval retries do not create another outbox job. Cancelled requests waiting for a clip mutation lock release it safely.
+- **Editor/camera source fixes:** production frontend state regressions cover editor clip selection, caption loading/error/retry and preview/timeline mounting; camera pointer/exposure and lock state regressions are automated. These are source/test results only.
+- **Android packaging:** Vite generated `index-EuxHzvMB.js`; the debug APK contains it and its packaged `index.html` references it. `MainActivity` loads the packaged `android_asset/web/index.html` entry.
+
+## Automated verification (2026-10-23)
+
+- `cd frontend; npm test` — passed: caption/editor integrity, camera interaction state, and Studio render-path regressions.
+- `cd frontend; npm run build` — passed; Vite emitted the Android web assets. Non-blocking warning: the JS bundle is above 500 kB.
+- From `C:\CODE\Dispatch` in PowerShell, run `$scratch = Join-Path (Get-Location) '.dispatch-test-tmp'; New-Item -ItemType Directory -Force -Path $scratch | Out-Null; $env:TEMP = $scratch; $env:TMP = $scratch; .\.venv\Scripts\python.exe -m unittest tests.test_caption_approval_contract tests.test_web tests.test_youtube_ingest_endpoint tests.test_youtube_inbox tests.test_youtube_processing_tracker tests.test_youtube_caption_timing_fix tests.test_captions_subsystem tests.test_gemini_two_stage tests.test_video_engine tests.e2e.test_tier1_features_publishing_dashboard -v` — **65 tests passed**.
+- From `android`: `$env:JAVA_HOME='C:\Program Files\Java\jdk-17.0.5'; $env:Path="$env:JAVA_HOME\bin;$env:Path"; .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` — **BUILD SUCCESSFUL**.
+- APK: `android/app/build/outputs/apk/debug/app-debug.apk` (15,187,763 bytes). ZIP inspection confirmed the latest JS asset and matching index reference.
+- `adb devices -l` — no device attached. Camera/recording behavior is **not verified on the POCO C65**.
+
+## Remaining verification and exact next steps
+
+1. Install updated dependencies in the project venv: `cd C:\CODE\Dispatch; .\.venv\Scripts\python.exe -m pip install -r requirements.txt`. Current venv check reports `google.genai` missing; automated Gemini tests mock the SDK, so they do not prove a live Gemini call.
+2. With the intended YouTube/Gemini credentials and network available, run Dispatch and import an accessible unlisted test video. Confirm inbox → transcript → clips → edited captions → final render → outbox, and verify the resulting private/unlisted YouTube upload. No live external E2E upload was performed here.
+3. Connect the POCO C65 and install this debug APK. Test rear and front camera exposure in both directions and reset, AE/AF lock and unlock, wait while locked, lens switching, recording through screen dim/wake, then reopen Studio on a selected clip. Record device/Android version and logs. Do not describe recording as verified until this passes.
+4. If the phone test reveals a defect, capture logs and fix only the observed failure; otherwise hand off the remaining live checks to Antigravity.
+
+## Historical checkpoints
+
+The entries below record older milestones and should not be read as current verification.
+
+# Historical Handoff for Antigravity — 2026-10-10
+
+Historical checkpoint only; superseded by the 2026-10-23 checkpoint above.
+
+## Historical checkpoint — 2026-10-10
 
 - **Branch/base:** `main`, based on `64b1d37` (`fix(reliability): harden upload and clip processing`).
 - **Changes prepared in this checkpoint:**

@@ -1,7 +1,9 @@
 """Unit test for video reframing, subtitle generation, and rendering."""
 import unittest
 import subprocess
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
 from dispatch.config import PROCESSING_DIR, CLIPS_DIR
 from dispatch.video_engine.subtitle_generator import generate_ass_subtitles
 from dispatch.video_engine.reframer import build_filter_complex, escape_ffmpeg_filter_path
@@ -85,6 +87,36 @@ class TestVideoEngine(unittest.TestCase):
         test_src.unlink()
         out_video.unlink()
         out_thumb.unlink()
+
+    def test_final_caption_export_failure_stops_render(self):
+        from dispatch.captions import CaptionTrack
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.mp4"
+            source.write_bytes(b"source")
+            track = CaptionTrack(clip_id="caption_export_failure")
+
+            with patch("dispatch.ingestion.validator.inspect_video_orientation", return_value={
+                "valid": True,
+                "orientation": "landscape",
+                "has_audio": True,
+            }), patch("dispatch.captions.exporter.export_to_ass", side_effect=OSError("disk full")), \
+                 patch("dispatch.video_engine.renderer.subprocess.run") as ffmpeg:
+                with self.assertRaisesRegex(RuntimeError, "Final caption export failed"):
+                    render_clip(
+                        source_video=source,
+                        clip_id="caption_export_failure",
+                        start_time=0,
+                        end_time=10,
+                        layout_mode="fit_blur",
+                        subtitle_options={
+                            "enabled": True,
+                            "caption_track": track.to_dict(),
+                            "preserve_timing": True,
+                        },
+                    )
+
+            ffmpeg.assert_not_called()
 
 
 if __name__ == "__main__":

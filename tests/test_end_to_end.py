@@ -14,7 +14,10 @@ from unittest.mock import patch
 import asyncio
 import subprocess
 from pathlib import Path
-import edge_tts
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
 
 from dispatch.config import INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR
 from dispatch.ingestion.watcher import process_incoming_file
@@ -30,13 +33,14 @@ async def generate_speech_audio(output_audio_path: Path):
         "Basically you just hit record on your phone and forget everything else. "
         "The entire pipeline runs locally on your PC and generates polished shorts automatically."
     )
-    try:
-        communicate = edge_tts.Communicate(text, "hi-IN-MadhurNeural")
-        await communicate.save(str(output_audio_path))
-        if output_audio_path.exists() and output_audio_path.stat().st_size > 1000:
-            return
-    except Exception:
-        pass
+    if edge_tts is not None:
+        try:
+            communicate = edge_tts.Communicate(text, "hi-IN-MadhurNeural")
+            await communicate.save(str(output_audio_path))
+            if output_audio_path.exists() and output_audio_path.stat().st_size > 1000:
+                return
+        except Exception:
+            pass
 
     # Fallback 1: Windows SAPI offline speech synthesis
     try:

@@ -44,8 +44,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import com.google.common.util.concurrent.ListenableFuture
 
-internal fun isAeAfLockConfirmed(hasAf: Boolean, hasAe: Boolean, focusSuccessful: Boolean): Boolean =
-    hasAe || (hasAf && focusSuccessful)
+internal fun isAeAfLockConfirmed(afLockConfirmed: Boolean, aeLockConfirmed: Boolean): Boolean =
+    afLockConfirmed || aeLockConfirmed
 
 internal fun clampExposureIndex(index: Int, minIndex: Int, maxIndex: Int): Int =
     index.coerceIn(minIndex, maxIndex)
@@ -83,11 +83,19 @@ class CameraCaptureManager(private val context: Context) {
     var isTorchEnabled: Boolean = false
         private set
 
-    @Volatile var isAeAfLocked: Boolean = false
+    @Volatile var isAeLocked: Boolean = false
         private set
+    @Volatile var isAfLocked: Boolean = false
+        private set
+    @Volatile var isAeAfLockUncertain: Boolean = false
+        private set
+    val isAeAfLocked: Boolean
+        get() = isAeLocked || isAfLocked
 
     private fun clearConfirmedLockState() {
-        isAeAfLocked = false
+        isAeLocked = false
+        isAfLocked = false
+        isAeAfLockUncertain = false
     }
 
     var currentZoomRatio: Float = 1.0f
@@ -381,7 +389,7 @@ class CameraCaptureManager(private val context: Context) {
 
                 camera?.cameraControl?.setZoomRatio(currentZoomRatio)
                 if (currentExposureIndex != 0) {
-                    camera?.cameraControl?.setExposureCompensationIndex(currentExposureIndex)
+                    setExposureIndex(currentExposureIndex, null)
                 }
 
                 Log.i(TAG, "VideoCapture bound to Lifecycle (Lens: $currentLensFacing).")
@@ -442,7 +450,7 @@ class CameraCaptureManager(private val context: Context) {
 
                 camera?.cameraControl?.setZoomRatio(currentZoomRatio)
                 if (currentExposureIndex != 0) {
-                    camera?.cameraControl?.setExposureCompensationIndex(currentExposureIndex)
+                    setExposureIndex(currentExposureIndex, null)
                 }
 
                 Log.i(TAG, "VideoCapture bound to LifecycleService (Lens: $currentLensFacing).")
@@ -529,7 +537,8 @@ class CameraCaptureManager(private val context: Context) {
         val isLocked: Boolean,
         val hasAf: Boolean,
         val hasAe: Boolean,
-        val error: String? = null
+        val error: String? = null,
+        val lockStateUncertain: Boolean = false
     )
 
     /**
@@ -541,6 +550,10 @@ class CameraCaptureManager(private val context: Context) {
         previewView: PreviewView,
         onComplete: ((FocusResult) -> Unit)? = null
     ) {
+        if (isAeAfLocked || isAeAfLockUncertain) {
+            onComplete?.invoke(FocusResult(false, isAeAfLocked, isAfLocked, isAeLocked, "Unlock the camera before focusing", isAeAfLockUncertain))
+            return
+        }
         val operationGeneration = focusOperationGeneration.begin()
         clearConfirmedLockState()
         val cam = camera
@@ -549,7 +562,6 @@ class CameraCaptureManager(private val context: Context) {
             return
         }
         try {
-            isAeAfLocked = false
             val point = previewView.meteringPointFactory.createPoint(x, y)
             lastMeteringPoint = point
 
@@ -593,8 +605,9 @@ class CameraCaptureManager(private val context: Context) {
      */
     fun focusOnPoint(meteringPoint: MeteringPoint) {
         val cam = camera ?: return
+        if (isAeAfLocked || isAeAfLockUncertain) return
         focusOperationGeneration.begin()
-        isAeAfLocked = false
+        clearConfirmedLockState()
         lastMeteringPoint = meteringPoint
         val action = FocusMeteringAction.Builder(meteringPoint, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
             .setAutoCancelDuration(3, TimeUnit.SECONDS)
@@ -603,10 +616,7 @@ class CameraCaptureManager(private val context: Context) {
         Log.i(TAG, "Focus and metering point dispatched.")
     }
 
-    /**
-     * Locks Auto Exposure & Auto Focus (AE/AF Lock) permanently at the specified (x, y) coordinate.
-     * Accurately updates isAeAfLocked and reports completion ONLY after the hardware future succeeds.
-     */
+    /** Locks only the channels whose hardware requests were actually confirmed. */
     fun lockAeAfAtPoint(
         x: Float,
         y: Float,
@@ -614,110 +624,201 @@ class CameraCaptureManager(private val context: Context) {
         onComplete: ((FocusResult) -> Unit)? = null
     ) {
         val operationGeneration = focusOperationGeneration.begin()
-        isAeAfLocked = false
+        clearConfirmedLockState()
         val cam = camera
         if (cam == null) {
-            isAeAfLocked = false
             onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Camera not initialized"))
             return
         }
-        try {
-            val point = previewView.meteringPointFactory.createPoint(x, y)
-            lastMeteringPoint = point
+        val aeLockSupported = cameraSupportsAeLock(cam)
+        val point = try {
+            previewView.meteringPointFactory.createPoint(x, y).also { lastMeteringPoint = it }
+        } catch (e: Exception) {
+            onComplete?.invoke(FocusResult(false, false, false, false, e.message))
+            return
+        }
+        val canAf = runCatching {
+            cam.cameraInfo.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build())
+        }.getOrDefault(false)
+        val canAeRegion = runCatching {
+            cam.cameraInfo.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AE).build())
+        }.getOrDefault(false)
+        val flags = (if (canAf) FocusMeteringAction.FLAG_AF else 0) or
+            (if (canAeRegion) FocusMeteringAction.FLAG_AE else 0)
+        val completed = AtomicBoolean(false)
+        lateinit var timeout: Runnable
 
-            val info = cam.cameraInfo
-            val canAf = try {
-                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build())
-            } catch (_: Exception) { false }
-            val canAe = try {
-                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AE).build())
-            } catch (_: Exception) { false }
+        fun finish(afConfirmed: Boolean, aeConfirmed: Boolean, error: String? = null) {
+            if (!completed.compareAndSet(false, true)) return
+            mainHandler.removeCallbacks(timeout)
+            isAfLocked = afConfirmed
+            isAeLocked = aeConfirmed
+            isAeAfLockUncertain = false
+            val locked = isAeAfLockConfirmed(afConfirmed, aeConfirmed)
+            onComplete?.invoke(FocusResult(locked, locked, afConfirmed, aeConfirmed, error))
+            Log.i(TAG, "Camera lock confirmation: af=$afConfirmed ae=$aeConfirmed")
+        }
 
-            val flags = (if (canAf) FocusMeteringAction.FLAG_AF else 0) or (if (canAe) FocusMeteringAction.FLAG_AE else 0)
-            if (flags == 0) {
-                isAeAfLocked = false
-                onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "AE/AF lock not supported on this lens"))
+        fun recoverAndFinish(error: String) {
+            if (!completed.compareAndSet(false, true)) return
+            mainHandler.removeCallbacks(timeout)
+            focusOperationGeneration.invalidate()
+            val recoveryGeneration = focusOperationGeneration.begin()
+            isAeAfLockUncertain = true
+            recoverCameraLocks(cam, aeLockSupported) { released ->
+                if (!focusOperationGeneration.isCurrent(recoveryGeneration) || camera !== cam) return@recoverCameraLocks
+                if (released) clearConfirmedLockState() else isAeAfLockUncertain = true
+                onComplete?.invoke(FocusResult(false, false, false, false, error, lockStateUncertain = !released))
+            }
+        }
+
+        timeout = Runnable { recoverAndFinish("Camera lock confirmation timed out; attempting recovery") }
+        mainHandler.postDelayed(timeout, LOCK_CONFIRMATION_TIMEOUT_MS)
+
+        fun applyAeLock(afConfirmed: Boolean, focusError: String? = null) {
+            if (!focusOperationGeneration.isCurrent(operationGeneration)) return
+            if (!aeLockSupported) {
+                if (afConfirmed) finish(true, false, "AE lock is unsupported on this lens; AF remains locked")
+                else recoverAndFinish(focusError ?: "This lens could not confirm an AE or AF lock")
                 return
             }
+            try {
+                val aeFuture = setCameraAeLock(cam, true)
+                aeFuture.addListener({
+                    if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
+                    try {
+                        aeFuture.get()
+                        finish(afConfirmed, true, if (!afConfirmed && canAf) "AE locked; AF did not confirm" else null)
+                    } catch (e: Exception) {
+                        if (afConfirmed) finish(true, false, "AF is locked, but AE lock was rejected: ${e.message}")
+                        else recoverAndFinish("Camera did not confirm AE lock: ${e.message}")
+                    }
+                }, ContextCompat.getMainExecutor(context))
+            } catch (e: Exception) {
+                if (afConfirmed) finish(true, false, "AF is locked, but AE lock could not be requested: ${e.message}")
+                else recoverAndFinish("Camera could not request AE lock: ${e.message}")
+            }
+        }
 
-            val action = FocusMeteringAction.Builder(point, flags)
-                .disableAutoCancel()
-                .build()
-
-            val future = cam.cameraControl.startFocusAndMetering(action)
-            future.addListener({
+        if (flags == 0) {
+            applyAeLock(false, "This lens does not support focus metering")
+            return
+        }
+        try {
+            val action = FocusMeteringAction.Builder(point, flags).disableAutoCancel().build()
+            val focusFuture = cam.cameraControl.startFocusAndMetering(action)
+            focusFuture.addListener({
                 if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
                 try {
-                    val result = future.get()
-                    val isSuccess = isAeAfLockConfirmed(canAf, canAe, result.isFocusSuccessful)
-                    isAeAfLocked = isSuccess
-                    onComplete?.invoke(FocusResult(success = isSuccess, isLocked = isSuccess, hasAf = canAf, hasAe = canAe))
-                    Log.i(TAG, "AE/AF lock completed: success=$isSuccess at ($x, $y).")
+                    val focusResult = focusFuture.get()
+                    applyAeLock(canAf && focusResult.isFocusSuccessful)
                 } catch (e: Exception) {
-                    if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
-                    isAeAfLocked = false
-                    onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = canAf, hasAe = canAe, error = e.message))
+                    applyAeLock(false, "Focus request failed: ${e.message}")
                 }
             }, ContextCompat.getMainExecutor(context))
         } catch (e: Exception) {
-            if (focusOperationGeneration.isCurrent(operationGeneration)) isAeAfLocked = false
-            Log.e(TAG, "Failed to lock AE/AF: ${e.message}")
-            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = e.message))
+            applyAeLock(false, "Focus request failed: ${e.message}")
         }
     }
 
-    /**
-     * Unlocks Auto Exposure & Auto Focus, returning to continuous auto-metering.
-     */
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun cameraSupportsAeLock(cam: Camera): Boolean = try {
+        Camera2CameraInfo.from(cam.cameraInfo)
+            .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read AE lock capability: ${e.message}")
+        false
+    }
+
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun setCameraAeLock(cam: Camera, locked: Boolean): ListenableFuture<Void?> =
+        Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(
+            CaptureRequestOptions.Builder()
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, locked)
+                .build()
+        )
+
+    private fun recoverCameraLocks(cam: Camera, releaseAe: Boolean, onComplete: (Boolean) -> Unit) {
+        val futures = mutableListOf<ListenableFuture<*>>()
+        var requestsCreated = true
+        try {
+            futures += cam.cameraControl.cancelFocusAndMetering()
+        } catch (e: Exception) {
+            requestsCreated = false
+            Log.w(TAG, "Could not request AF unlock: ${e.message}")
+        }
+        if (releaseAe) {
+            try {
+                futures += setCameraAeLock(cam, false)
+            } catch (e: Exception) {
+                requestsCreated = false
+                Log.w(TAG, "Could not request AE unlock: ${e.message}")
+            }
+        }
+        if (futures.isEmpty()) {
+            onComplete(false)
+            return
+        }
+
+        val remaining = AtomicInteger(futures.size)
+        val allSucceeded = AtomicBoolean(requestsCreated)
+        val completed = AtomicBoolean(false)
+        val timeout = Runnable {
+            if (completed.compareAndSet(false, true)) onComplete(false)
+        }
+        mainHandler.postDelayed(timeout, LOCK_RECOVERY_TIMEOUT_MS)
+        futures.forEach { future ->
+            future.addListener({
+                val succeeded = try {
+                    future.get()
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "Camera lock recovery request failed: ${e.message}")
+                    false
+                }
+                if (!succeeded) allSucceeded.set(false)
+                if (remaining.decrementAndGet() == 0 && completed.compareAndSet(false, true)) {
+                    mainHandler.removeCallbacks(timeout)
+                    onComplete(allSucceeded.get())
+                }
+            }, ContextCompat.getMainExecutor(context))
+        }
+    }
+
+    /** Unlocks both native lock mechanisms and confirms recovery before clearing the UI state. */
     fun unlockAeAf(onComplete: ((Boolean) -> Unit)? = null) {
         val operationGeneration = focusOperationGeneration.begin()
         val cam = camera
-        if (cam != null) {
-            try {
-                val future = cam.cameraControl.cancelFocusAndMetering()
-                future.addListener({
-                    if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
-                    try {
-                        future.get()
-                        isAeAfLocked = false
-                        onComplete?.invoke(true)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to confirm AE/AF unlock: ${e.message}")
-                        onComplete?.invoke(false)
-                    }
-                }, ContextCompat.getMainExecutor(context))
-                Log.i(TAG, "AE/AF unlock dispatched; waiting for CameraX confirmation.")
-                return
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to cancel focus/metering: ${e.message}")
-            }
+        if (cam == null) {
+            onComplete?.invoke(false)
+            return
         }
-        if (cam == null) isAeAfLocked = false
-        onComplete?.invoke(false)
+        isAeAfLockUncertain = true
+        recoverCameraLocks(cam, cameraSupportsAeLock(cam)) { released ->
+            if (!focusOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@recoverCameraLocks
+            if (released) clearConfirmedLockState() else isAeAfLockUncertain = true
+            onComplete?.invoke(released)
+        }
     }
 
     /**
      * Locks or unlocks Auto Exposure & Auto Focus (AE/AF Lock).
      */
     fun toggleAeAfLock(previewView: PreviewView? = null): Boolean {
-        val cam = camera ?: return false
-        isAeAfLocked = !isAeAfLocked
-        if (isAeAfLocked) {
-            // Lock focus & exposure permanently on last tapped spot or center
+        if (camera == null) return false
+        if (isAeAfLocked || isAeAfLockUncertain) {
+            unlockAeAf()
+            return false
+        }
+        run {
             val point = lastMeteringPoint ?: if (previewView != null && previewView.width > 0 && previewView.height > 0) {
                 previewView.meteringPointFactory.createPoint(previewView.width / 2f, previewView.height / 2f)
             } else {
                 val factory = androidx.camera.core.SurfaceOrientedMeteringPointFactory(1f, 1f)
                 factory.createPoint(0.5f, 0.5f)
             }
-            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
-                .disableAutoCancel()
-                .build()
-            cam.cameraControl.startFocusAndMetering(action)
-            Log.i(TAG, "AE/AF permanently locked.")
-        } else {
-            cam.cameraControl.cancelFocusAndMetering()
-            Log.i(TAG, "AE/AF unlocked.")
+            val pv = previewView ?: activePreviewView
+            if (pv != null) lockAeAfAtPoint(point.x, point.y, pv)
         }
         return isAeAfLocked
     }
@@ -840,17 +941,21 @@ class CameraCaptureManager(private val context: Context) {
             return currentExposureIndex
         }
         val range = state.exposureCompensationRange
-        val targetIndex = index.coerceIn(range.lower, range.upper)
+        val targetIndex = clampExposureIndex(index, range.lower, range.upper)
+        val operationGeneration = exposureOperationGeneration.begin()
         try {
             val future = cam.cameraControl.setExposureCompensationIndex(targetIndex)
             future.addListener({
+                if (!exposureOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@addListener
                 try {
                     val applied = future.get()
                     currentExposureIndex = applied
                     onComplete?.invoke(applied, null)
                     Log.i(TAG, "Exposure compensation applied: index=$applied")
                 } catch (e: Exception) {
+                    if (!exposureOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@addListener
                     Log.w(TAG, "Exposure compensation future failed: ${e.message}")
+                    currentExposureIndex = cam.cameraInfo.exposureState.exposureCompensationIndex
                     onComplete?.invoke(null, e.message)
                 }
             }, ContextCompat.getMainExecutor(context))
@@ -869,20 +974,7 @@ class CameraCaptureManager(private val context: Context) {
         return setExposureIndex(0, onComplete)
     }
     fun setExposureIndex(index: Int): Int {
-        val cam = camera ?: run {
-            currentExposureIndex = index
-            return index
-        }
-        val range = cam.cameraInfo.exposureState.exposureCompensationRange
-        val minIdx = if (range.lower < range.upper) range.lower else -4
-        val maxIdx = if (range.lower < range.upper) range.upper else 4
-        currentExposureIndex = index.coerceIn(minIdx, maxIdx)
-        try {
-            cam.cameraControl.setExposureCompensationIndex(currentExposureIndex)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to set exposure compensation index: ${e.message}")
-        }
-        return currentExposureIndex
+        return setExposureIndex(index, null)
     }
 
     /**
@@ -899,8 +991,7 @@ class CameraCaptureManager(private val context: Context) {
         val cam = camera ?: return currentExposureIndex
         val range = cam.cameraInfo.exposureState.exposureCompensationRange
         val target = (currentExposureIndex + delta).coerceIn(range.lower, range.upper)
-        setExposureIndex(target)
-        return currentExposureIndex
+        return setExposureIndex(target)
     }
 
     fun getExposureRange(): Range<Int>? {

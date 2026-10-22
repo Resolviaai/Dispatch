@@ -59,6 +59,9 @@ const aeOnlyConfirmed = applyFocusResult(pendingLock, {
 assert.equal(aeOnlyConfirmed.status, 'locked', 'native confirmation accepts AE-only locking');
 assert.equal(aeOnlyConfirmed.isLocked, true);
 assert.equal(aeOnlyConfirmed.hasAf, false);
+assert.equal(applyFocusResult(pendingLock, {
+  triggerId: 1001, success: true, isLocked: true, hasAf: false, hasAe: false,
+}).status, 'failed', 'a success flag without a confirmed channel cannot claim a lock');
 
 const failedLock = applyFocusResult(pendingLock, {
   triggerId: 1001, success: false, isLocked: false, hasAf: false, hasAe: false, error: 'Unsupported',
@@ -72,6 +75,15 @@ assert.equal(timedOutLock.status, 'failed');
 assert.equal(timedOutLock.isLocked, false);
 assert.match(timedOutLock.error, /timed out/i);
 assert.equal(applyNativeLockState(timedOutLock, true).isLocked, true, 'a direct native status read can confirm a delayed lock');
+const uncertainLock = applyFocusResult(timedOutLock, {
+  triggerId: 1001, success: false, isLocked: false, hasAf: false, hasAe: false,
+  lockStateUncertain: true, error: 'Recovery timed out',
+});
+assert.equal(uncertainLock.status, 'uncertain', 'missing confirmation remains explicitly uncertain');
+assert.equal(uncertainLock.isLocked, false, 'uncertain is never displayed as confirmed lock');
+assert.equal(applyNativeLockState(pendingLock, true, {
+  isAeLocked: true, isAfLocked: false, isAeAfLockUncertain: true,
+}).isLocked, false, 'partial channel lock plus uncertain native state is never reported as confirmed');
 const delayedLockResult = applyFocusResult(timedOutLock, {
   triggerId: 1001, success: true, isLocked: true, hasAf: false, hasAe: true,
 });
@@ -80,7 +92,10 @@ assert.equal(delayedLockResult.isLocked, true);
 
 const failedUnlock = applyUnlockResult(aeOnlyConfirmed, false);
 assert.equal(failedUnlock.isLocked, true, 'failed unlock keeps confirmed lock UI in sync');
-assert.equal(applyUnlockResult(aeOnlyConfirmed, true).isLocked, false);
+const unlocked = applyUnlockResult(aeOnlyConfirmed, true);
+assert.equal(unlocked.isLocked, false);
+assert.equal(unlocked.hasAe, false);
+assert.equal(unlocked.hasAf, false);
 
 const cameraState = { status: 'ready', lensFacing: 'back', isRecording: false, isTorchEnabled: false, isAeAfLocked: true, isAudioEnabled: true, exposure, zoom: { minZoom: 1, maxZoom: 4, currentZoom: 1 } };
 assert.equal(isCameraLifecycleTransition(cameraState, { ...cameraState, status: 'initializing' }), true);

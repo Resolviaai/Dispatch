@@ -54,8 +54,13 @@ def render_clip(
 
     has_audio = info.get("has_audio", True)
 
-    # 1. Analyze dead-air silence gaps
-    eff_duration, cuts = analyze_silence_gaps(start_time, end_time, segments)
+    # Candidate/editor renders preserve source timing so the browser caption overlay and
+    # approved render share the same clip-relative timeline.
+    sub_opts = subtitle_options or {}
+    if sub_opts.get("preserve_timing"):
+        eff_duration, cuts = max(0.0, end_time - start_time), []
+    else:
+        eff_duration, cuts = analyze_silence_gaps(start_time, end_time, segments)
     has_silence_cuts = bool(cuts)
 
     output_video_path = CLIPS_DIR / f"{clip_id}.mp4"
@@ -65,10 +70,20 @@ def render_clip(
     temp_thumb_path = CLIPS_DIR / f"{clip_id}.tmp.jpg"
 
     # 2. Subtitle generation with synchronized timeline
-    sub_opts = subtitle_options or {}
     if sub_opts.get("enabled", True):
-        existing_cap_json = db.get_clip_caption_data(clip_id)
-        if existing_cap_json and not has_silence_cuts:
+        captured_track = sub_opts.get("caption_track")
+        existing_cap_json = db.get_clip_caption_data(clip_id) if captured_track is None else None
+        if captured_track is not None and not has_silence_cuts:
+            try:
+                from dispatch.captions.model import CaptionTrack
+                from dispatch.captions.exporter import export_to_ass
+                track = CaptionTrack.from_dict(captured_track)
+                export_to_ass(track, ass_path)
+            except Exception as e:
+                logger.warning("Failed to export captured CaptionTrack for clip %s: %s", clip_id, e)
+                ass_path.unlink(missing_ok=True)
+                raise RuntimeError(f"Final caption export failed: {e}") from e
+        elif existing_cap_json and not has_silence_cuts:
             try:
                 import json
                 from dispatch.captions.model import CaptionTrack
@@ -84,12 +99,13 @@ def render_clip(
             try:
                 import json
                 from dispatch.captions import group_words_into_captions, export_to_ass
+                from dispatch.captions.presets import get_default_preset_id
                 track = group_words_into_captions(
                     raw_segments=active_segments,
                     clip_start=start_time,
                     clip_end=start_time + eff_duration if has_silence_cuts else end_time,
                     clip_id=clip_id,
-                    preset_id=sub_opts.get("style_preset", "yellow_pop")
+                    preset_id=sub_opts.get("style_preset") or get_default_preset_id()
                 )
                 export_to_ass(track, ass_path)
                 db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
@@ -195,8 +211,13 @@ def render_clip(
 
     # 4. Mandatory Duration Verification on Final Output Video
     from dispatch.ingestion.validator import probe_video
-    is_valid, meta, _ = probe_video(temp_video_path)
-    actual_duration = meta.get("duration", 0.0) if is_valid else eff_duration
+    is_valid, meta, validation_error = probe_video(temp_video_path)
+    if not is_valid or not meta or not meta.get("duration"):
+        temp_video_path.unlink(missing_ok=True)
+        if ass_path and ass_path.exists():
+            ass_path.unlink()
+        raise RuntimeError(f"Rendered clip failed media validation: {validation_error or 'invalid or unreadable output'}")
+    actual_duration = float(meta["duration"])
 
     if actual_duration > MAX_CLIP_DURATION:
         logger.error("Clip %s rendered duration (%.2fs) exceeds MAX_CLIP_DURATION (%.1fs). Rejecting.",
@@ -205,7 +226,6 @@ def render_clip(
             temp_video_path.unlink()
         if ass_path and ass_path.exists():
             ass_path.unlink()
-        db.reject_clip(clip_id, reason=f"Rendered duration exceeded {MAX_CLIP_DURATION}s ({actual_duration:.1f}s)")
         raise ValueError(f"Clip {clip_id} exceeds hard duration limit ({actual_duration:.2f}s > {MAX_CLIP_DURATION}s)")
 
     if actual_duration < MIN_CLIP_DURATION:
@@ -215,7 +235,6 @@ def render_clip(
             temp_video_path.unlink()
         if ass_path and ass_path.exists():
             ass_path.unlink()
-        db.reject_clip(clip_id, reason=f"Rendered duration below {MIN_CLIP_DURATION}s ({actual_duration:.1f}s)")
         raise ValueError(f"Clip {clip_id} below minimum duration limit ({actual_duration:.2f}s < {MIN_CLIP_DURATION}s)")
 
     # Atomic rename: guarantees system never exposes an unplayable partial video

@@ -333,6 +333,10 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   // 1. Approve Selected Clip
   const handleApproveCurrentClip = async () => {
     if (!currentClip || isApproving) return;
+    if (isSavingCaptions || !visibleTrack || captionClipId !== currentClip.id || captionLoadState === 'loading' || captionLoadState === 'error') {
+      showToast('Load captions successfully before approving this clip.');
+      return;
+    }
     setIsApproving(true);
     try {
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/approve`, pcHost), {
@@ -344,6 +348,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
           publish_mode: publishMode,
           platforms: currentClip.platform_targets || 'youtube',
           layout_mode: currentClip.layout_mode,
+          caption_track: visibleTrack,
         }),
       });
       if (res.ok) {

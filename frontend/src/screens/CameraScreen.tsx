@@ -137,18 +137,19 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           setIsIndicatorVisible(false);
         } else if (typeof data.isAeAfLocked === 'boolean') {
           setFocusState((prev) => {
-            if (!prev && data.isAeAfLocked) {
+            if (!prev && (data.isAeAfLocked || data.isAeAfLockUncertain)) {
               const x = (viewfinderRef.current?.clientWidth || window.innerWidth) / 2;
               const y = (viewfinderRef.current?.clientHeight || window.innerHeight) / 2;
               return {
                 x, y, screenNormX: 0.5, screenNormY: 0.5,
-                status: 'locked', triggerId: Date.now(), isLocked: true,
-                hasAf: true, hasAe: true, timestamp: Date.now(),
+                status: data.isAeAfLockUncertain ? 'uncertain' : 'locked', triggerId: Date.now(), isLocked: data.isAeAfLocked && !data.isAeAfLockUncertain,
+                hasAf: data.isAfLocked ?? false, hasAe: data.isAeLocked ?? false, timestamp: Date.now(),
+                error: data.isAeAfLockUncertain ? 'Camera lock state is uncertain; unlock to recover safely.' : undefined,
               };
             }
-            return applyNativeLockState(prev, data.isAeAfLocked);
+            return applyNativeLockState(prev, data.isAeAfLocked, data);
           });
-          setIsIndicatorVisible(data.isAeAfLocked);
+          setIsIndicatorVisible(data.isAeAfLocked || !!data.isAeAfLockUncertain);
         }
       } else if (event.type === 'focus_result') {
         const result = event.data as FocusResultEvent;
@@ -158,7 +159,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         }
         setFocusState(prev => {
           const next = applyFocusResult(prev, result);
-          if (next?.status === 'locked') {
+          if (next?.status === 'locked' || next?.status === 'uncertain') {
             if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
           } else if (next?.status === 'success') {
             startFadeTimer(2800);
@@ -191,7 +192,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         unlockTimeoutRef.current = null;
         setFocusState(prev => {
           const next = applyUnlockResult(prev, success);
-          if (!success && next?.isLocked) setIsIndicatorVisible(true);
+          if (!success && (next?.isLocked || next?.status === 'uncertain')) setIsIndicatorVisible(true);
           return next;
         });
         if (success) {
@@ -213,11 +214,11 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       if (initStatus.isAudioEnabled !== undefined) {
         setMicActive(initStatus.isAudioEnabled);
       }
-      if (initStatus.isAeAfLocked) {
+      if (initStatus.isAeAfLocked || initStatus.isAeAfLockUncertain) {
         const x = (viewfinderRef.current?.clientWidth || window.innerWidth) / 2;
         const y = (viewfinderRef.current?.clientHeight || window.innerHeight) / 2;
         const triggerId = Date.now();
-        setFocusState({ x, y, screenNormX: 0.5, screenNormY: 0.5, status: 'locked', triggerId, isLocked: true, hasAf: true, hasAe: true, timestamp: triggerId });
+        setFocusState({ x, y, screenNormX: 0.5, screenNormY: 0.5, status: initStatus.isAeAfLockUncertain ? 'uncertain' : 'locked', triggerId, isLocked: initStatus.isAeAfLocked && !initStatus.isAeAfLockUncertain, hasAf: initStatus.isAfLocked ?? false, hasAe: initStatus.isAeLocked ?? false, timestamp: triggerId, error: initStatus.isAeAfLockUncertain ? 'Camera lock state is uncertain; unlock to recover safely.' : undefined });
         setIsIndicatorVisible(true);
       }
     }
@@ -399,12 +400,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         setCameraStatus(status);
         setCameraFacing(status.lensFacing);
         setFocusState((prev) => {
-          if (status.isAeAfLocked) return applyNativeLockState(prev, true);
+          if (status.isAeAfLocked || status.isAeAfLockUncertain) {
+            return applyNativeLockState(prev, status.isAeAfLocked, status);
+          }
           return prev?.triggerId === triggerId
             ? { ...prev, status: 'failed', isLocked: false, error }
             : prev;
         });
-        setIsIndicatorVisible(!!status.isAeAfLocked);
+        setIsIndicatorVisible(!!status.isAeAfLocked || !!status.isAeAfLockUncertain);
       } else {
         setFocusState((prev) => prev?.triggerId === triggerId
           ? { ...prev, status: 'failed', isLocked: false, error }
@@ -416,7 +419,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   };
 
   const requestUnlock = () => {
-    setFocusState((prev) => prev?.isLocked ? { ...prev, status: 'unlocking', error: undefined } : prev);
+    setFocusState((prev) => prev?.isLocked || prev?.status === 'uncertain' ? { ...prev, status: 'unlocking', error: undefined } : prev);
     setIsIndicatorVisible(true);
     Bridge.unlockAeAf();
     if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
@@ -426,12 +429,13 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         cameraStatusRef.current = status;
         setCameraStatus(status);
         setFocusState((prev) => {
-          if (status.isAeAfLocked) {
-            return prev ? { ...applyNativeLockState(prev, true)!, status: 'locked', error: 'Unlock confirmation timed out. Try again.' } : prev;
+          if (status.isAeAfLocked || status.isAeAfLockUncertain) {
+            const nativeState = applyNativeLockState(prev, status.isAeAfLocked, status);
+            return nativeState ? { ...nativeState, status: status.isAeAfLockUncertain ? 'uncertain' : 'locked', error: 'Unlock confirmation timed out. Try again.' } : prev;
           }
-          return applyNativeLockState(prev, false);
+          return applyNativeLockState(prev, false, status);
         });
-        setIsIndicatorVisible(!!status.isAeAfLocked);
+        setIsIndicatorVisible(!!status.isAeAfLocked || !!status.isAeAfLockUncertain);
       } else {
         setFocusState((prev) => prev?.isLocked
           ? { ...prev, status: 'locked', error: 'Unlock confirmation timed out. Try again.' }
@@ -464,7 +468,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       return;
     }
 
-    if (focusState?.status === 'locking' || focusState?.status === 'unlocking') return;
+    if (focusState?.status === 'locking' || focusState?.status === 'unlocking' || focusState?.status === 'uncertain') return;
     capturePointer(e, true, freshExposure.currentIndex);
     isLongPressHandledRef.current = false;
     lastExposureRequestRef.current = freshExposure.currentIndex;
@@ -534,7 +538,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       : Math.max(0, Math.min(1, localY / rect.height));
 
     const isTouchingSlider = isIndicatorVisible && focusState && freshExposure.isSupported && checkIsNearSlider(localX, localY, focusState, bounds);
-    const lockInProgress = focusState?.status === 'locking' || focusState?.status === 'unlocking';
+    const lockInProgress = focusState?.status === 'locking' || focusState?.status === 'unlocking' || focusState?.status === 'uncertain';
     if (lockInProgress || (focusState?.isLocked && !isTouchingSlider)) return;
 
     capturePointer(e, !!isTouchingSlider, freshExposure.currentIndex);
@@ -627,7 +631,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       isLongPressHandledRef.current = false;
       return;
     }
-    if (focusState?.isLocked || focusState?.status === 'locking' || focusState?.status === 'unlocking') return;
+    if (focusState?.isLocked || focusState?.status === 'locking' || focusState?.status === 'unlocking' || focusState?.status === 'uncertain') return;
 
     const rect = e.currentTarget.getBoundingClientRect();
     const localX = e.clientX - rect.left;
@@ -926,7 +930,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
               const isFocusing = focusState.status === 'focusing' || focusState.status === 'locking';
               const isLocked = focusState.status === 'locked' || focusState.isLocked;
-              const isFailed = focusState.status === 'failed';
+              const isLockUncertain = focusState.status === 'uncertain';
+              const isFailed = focusState.status === 'failed' || isLockUncertain;
 
               const reticleColor = isFailed 
                 ? '#EF4444' 
@@ -937,7 +942,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               return (
                 <>
                   {/* AE/AF Lock Badge + Explicit Unlock Button */}
-                  {isLocked && (
+                  {(isLocked || isLockUncertain) && (
                     <div 
                       className="absolute transform -translate-x-1/2 flex items-center gap-1.5 pointer-events-auto"
                       style={{
@@ -948,14 +953,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                       <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-black shadow-[0_2px_12px_rgba(0,0,0,0.8)] border border-amber-300 animate-in fade-in zoom-in-95 duration-150">
                         <Lock size={11} strokeWidth={2.8} className="text-black shrink-0" />
                         <span className="text-[10px] font-mono font-bold tracking-tight uppercase">
-                          {focusState.status === 'unlocking' ? 'UNLOCKING…' : focusState.hasAe && !focusState.hasAf ? 'AE LOCK' : 'AE/AF LOCK'}
+                          {isLockUncertain ? 'LOCK UNCERTAIN' : focusState.status === 'unlocking' ? 'UNLOCKING…' : focusState.hasAe && focusState.hasAf ? 'AE/AF LOCK' : focusState.hasAe ? 'AE LOCK' : 'AF LOCK'}
                         </span>
                       </div>
 
                       <button
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={handleUnlockAeAf}
-                        aria-label="Unlock AE/AF"
+                        aria-label="Unlock camera lock"
                         className="flex items-center justify-center w-11 h-11 rounded-full bg-black/80 border border-white/30 text-white hover:bg-black active:scale-[0.96] shadow-md transition-all"
                       >
                         <Unlock size={14} strokeWidth={2.2} />

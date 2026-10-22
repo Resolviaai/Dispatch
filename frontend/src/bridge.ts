@@ -55,6 +55,9 @@ export interface CameraStateEvent {
   isRecording: boolean;
   isTorchEnabled: boolean;
   isAeAfLocked: boolean;
+  isAeLocked?: boolean;
+  isAfLocked?: boolean;
+  isAeAfLockUncertain?: boolean;
   isAudioEnabled: boolean;
   exposure: ExposureInfo;
   zoom: ZoomInfo;
@@ -66,6 +69,7 @@ export interface FocusResultEvent {
   isLocked: boolean;
   hasAf?: boolean;
   hasAe?: boolean;
+  lockStateUncertain?: boolean;
   normX?: number;
   normY?: number;
   error?: string;

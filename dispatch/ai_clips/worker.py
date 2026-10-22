@@ -19,6 +19,7 @@ import dispatch.config
 from dispatch.config import DEFAULT_PUBLISH_MODE, PROCESSING_DIR, GEMINI_API_KEY
 from dispatch.video_engine.renderer import render_clip
 from dispatch.captions import group_words_into_captions, export_to_ass
+from dispatch.captions.presets import get_default_preset_id
 from dispatch.ai_clips.highlight_finder import (
     call_gemini_generate_content,
     validate_and_filter_candidates,
@@ -316,7 +317,7 @@ class HighlightWorker:
                         clip_start=c_start,
                         clip_end=c_end,
                         clip_id=clip_id,
-                        preset_id="yellow_pop"
+                        preset_id=get_default_preset_id()
                     )
                     track_dict = track.to_dict()
                     track_dict["words"] = clean_words
@@ -333,7 +334,7 @@ class HighlightWorker:
                         clip_start=c_start,
                         clip_end=c_end,
                         clip_id=clip_id,
-                        preset_id="yellow_pop"
+                        preset_id=get_default_preset_id()
                     )
                     db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
@@ -359,7 +360,7 @@ class HighlightWorker:
                         clip_start=c_start,
                         clip_end=c_end,
                         clip_id=clip_id,
-                        preset_id="yellow_pop"
+                        preset_id=get_default_preset_id()
                     )
                     db.save_clip_caption_data(clip_id, json.dumps(track.to_dict()))
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
@@ -379,7 +380,8 @@ class HighlightWorker:
                         end_time=c_end,
                         aspect_ratio=None,
                         layout_mode=c_layout,
-                        segments=active_segs
+                        segments=active_segs,
+                        subtitle_options={"enabled": False, "preserve_timing": True}
                     )
                     with db.get_db_connection() as conn:
                         conn.cursor().execute("UPDATE clips SET status = 'ready_review' WHERE id = ?", (clip_id,))

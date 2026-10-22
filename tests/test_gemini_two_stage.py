@@ -1,16 +1,32 @@
 """Unit tests for Gemini Two-Stage Transcription Engine."""
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 from dispatch.transcription.gemini_engine import (
     _parse_offset_to_seconds,
     check_and_increment_daily_transcribe_quota,
     transcribe_stage1_flash_lite,
     transcribe_stage2_precision_words,
+    _parse_stage1_time,
 )
 from dispatch import db
+from dispatch.transcription.audio import _probe_audio_duration, split_audio_for_transcription
+
+
+def fake_genai_module():
+    module = ModuleType("google.genai")
+    module.types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: kwargs,
+        AudioTranscriptionConfig=lambda **kwargs: kwargs,
+    )
+    return module
 
 
 class TestGeminiTwoStage(unittest.TestCase):
@@ -52,8 +68,10 @@ class TestGeminiTwoStage(unittest.TestCase):
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_bytes(b"dummy")
 
-        try:
+        with patch.dict(sys.modules, {"google.genai": fake_genai_module()}), \
+             patch("dispatch.transcription.gemini_engine.split_audio_for_transcription", return_value=[(test_file, 0.0)]):
             segments = transcribe_stage1_flash_lite(test_file)
+        try:
             self.assertEqual(len(segments), 1)
             self.assertEqual(segments[0]["start"], 1.0)
             self.assertEqual(segments[0]["end"], 4.5)
@@ -100,8 +118,9 @@ class TestGeminiTwoStage(unittest.TestCase):
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_bytes(b"dummy")
 
-        try:
+        with patch.dict(sys.modules, {"google.genai": fake_genai_module()}):
             result = transcribe_stage2_precision_words(test_file)
+        try:
             self.assertEqual(result["full_text"], "Hello world")
             self.assertEqual(len(result["words"]), 2)
             self.assertEqual(result["words"][0]["word"], "Hello")
@@ -111,6 +130,50 @@ class TestGeminiTwoStage(unittest.TestCase):
         finally:
             if test_file.exists():
                 test_file.unlink()
+
+    def test_stage1_combines_part_transcripts_on_original_timeline(self):
+        client = MagicMock()
+        client.files.upload.side_effect = [SimpleNamespace(name="part-one"), SimpleNamespace(name="part-two")]
+        client.models.generate_content.side_effect = [
+            SimpleNamespace(text='[{"start":"00:09.00","end":"00:10.00","text":"first"}]'),
+            SimpleNamespace(text='[{"start":"00:01.00","end":"00:02.00","text":"second"}]'),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "long.mp3"
+            first = Path(tmp) / "first.mp3"
+            second = Path(tmp) / "second.mp3"
+            source.write_bytes(b"source")
+            first.write_bytes(b"part 1")
+            second.write_bytes(b"part 2")
+            with patch.dict(sys.modules, {"google.genai": fake_genai_module()}), \
+                 patch("dispatch.transcription.gemini_engine.get_gemini_client", return_value=client), \
+                 patch("dispatch.transcription.gemini_engine.split_audio_for_transcription",
+                       return_value=[(first, 0.0), (second, 600.0)]):
+                segments = transcribe_stage1_flash_lite(source)
+
+        self.assertEqual([item["start"] for item in segments], [9.0, 601.0])
+        self.assertEqual([item["text"] for item in segments], ["first", "second"])
+        self.assertEqual(client.files.delete.call_count, 2)
+        self.assertEqual(_parse_stage1_time("01:02:03.5"), 3723.5)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools are required")
+    def test_long_audio_split_keeps_order_offsets_and_short_final_part(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp3"
+            parts_dir = Path(tmp) / "parts"
+            subprocess.run(
+                ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=2.2", "-c:a", "libmp3lame",
+                 "-b:a", "32k", str(source)],
+                check=True,
+            )
+            parts = split_audio_for_transcription(source, parts_dir, chunk_seconds=1)
+            offsets = [offset for _, offset in parts]
+            self.assertEqual(offsets[0], 0.0)
+            self.assertAlmostEqual(offsets[1], 1.0, delta=0.05)
+            self.assertAlmostEqual(offsets[2], 2.0, delta=0.05)
+            self.assertTrue(all(path.is_file() and path.stat().st_size > 0 for path, _ in parts))
+            self.assertLess(_probe_audio_duration(parts[-1][0]), 1.0, "the final segment is a valid shorter remainder")
 
     def test_transcription_queue_stats_and_backlog(self):
         # Insert a queued_transcription clip directly into SQLite

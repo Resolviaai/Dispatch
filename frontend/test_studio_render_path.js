@@ -31,7 +31,7 @@ const currentTrack = trackForClip('clip-a', 'clip-a', normalized);
 assert.equal(currentTrack, normalized);
 assert.equal(trackForClip('clip-b', 'clip-a', normalized), null, 'a newly selected clip cannot render the previous clip captions');
 
-const previewMarkup = renderToStaticMarkup(React.createElement(PreviewStage, {
+const previewProps = {
   clip: firstClip,
   track: currentTrack,
   currentTime: 0,
@@ -49,10 +49,19 @@ const previewMarkup = renderToStaticMarkup(React.createElement(PreviewStage, {
   isRendering: false,
   pcHost: 'localhost:8000',
   onRetryClip: () => {},
-}));
+};
+const previewMarkup = renderToStaticMarkup(React.createElement(PreviewStage, previewProps));
 assert.match(previewMarkup, /Selected fixture clip/, 'selected clip mounts the preview header');
 assert.match(previewMarkup, /<video/, 'selected clip mounts its video preview');
 assert.match(previewMarkup, /Editor/, 'normalized captions mount in the preview canvas');
+
+const unavailablePreviewMarkup = renderToStaticMarkup(React.createElement(PreviewStage, {
+  ...previewProps,
+  clip: { ...firstClip, video_url: null },
+  track: null,
+}));
+assert.match(unavailablePreviewMarkup, /Preview source unavailable/, 'missing media keeps the recovery notice');
+assert.match(unavailablePreviewMarkup, /Retry preview/, 'missing media keeps its retry action');
 
 const timelineMarkup = renderToStaticMarkup(React.createElement(CaptionDock, {
   track: currentTrack,
@@ -66,6 +75,33 @@ const timelineMarkup = renderToStaticMarkup(React.createElement(CaptionDock, {
 }));
 assert.match(timelineMarkup, /Caption Timeline/, 'selected clip mounts the timeline');
 assert.match(timelineMarkup, /Editor/, 'normalized caption word is available in the timeline');
+
+const loadingTimelineMarkup = renderToStaticMarkup(React.createElement(CaptionDock, {
+  track: null,
+  currentTime: 0,
+  duration: 4,
+  onSeek: () => {},
+  onUpdateTrack: () => {},
+  selectedGroupId: null,
+  onSelectGroup: () => {},
+  captionLoadState: 'loading',
+}));
+assert.match(loadingTimelineMarkup, /Loading captions/, 'caption loading stays visible');
+
+const captionErrorTimelineMarkup = renderToStaticMarkup(React.createElement(CaptionDock, {
+  track: null,
+  currentTime: 0,
+  duration: 4,
+  onSeek: () => {},
+  onUpdateTrack: () => {},
+  selectedGroupId: null,
+  onSelectGroup: () => {},
+  captionLoadState: 'error',
+  captionLoadError: 'HTTP 503: captions unavailable',
+  onRetryCaptions: () => {},
+}));
+assert.match(captionErrorTimelineMarkup, /HTTP 503: captions unavailable/, 'caption errors stay visible');
+assert.match(captionErrorTimelineMarkup, /Retry captions/, 'caption errors keep a retry action');
 
 const clipErrorMarkup = renderToStaticMarkup(React.createElement(ClipLibraryNotice, {
   state: 'error',

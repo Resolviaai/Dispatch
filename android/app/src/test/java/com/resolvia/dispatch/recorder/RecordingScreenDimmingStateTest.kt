@@ -32,6 +32,7 @@ class RecordingScreenDimmingStateTest {
         assertFalse(down.userActivity)
         assertTrue(state.onTouch(RecordingTouchAction.MOVE).consume)
         assertTrue(state.onTouch(RecordingTouchAction.UP).consume)
+        assertTrue(state.shouldRunInactivityTimer)
 
         val nextTap = state.onTouch(RecordingTouchAction.DOWN)
         assertFalse(nextTap.consume)

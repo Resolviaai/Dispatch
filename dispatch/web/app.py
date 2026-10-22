@@ -15,6 +15,7 @@ import uuid
 import ipaddress
 import urllib.parse
 import email.utils
+from functools import wraps
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -57,7 +58,7 @@ from dispatch.captions import (
     export_to_ass,
     export_to_json
 )
-from dispatch.captions.presets import get_preset
+from dispatch.captions.presets import get_default_preset_id, get_preset
 from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish
 
 from dispatch.sync.receiver import router as sync_router
@@ -69,6 +70,40 @@ from dispatch.sync.pairing_codes import (
 from dispatch.sync.receiver import is_trusted_localhost
 
 logger = logging.getLogger("dispatch.web")
+_CLIP_MUTATION_LOCKS: Dict[str, Any] = {}
+_CLIP_MUTATION_LOCKS_GUARD = threading.Lock()
+
+
+def _get_clip_mutation_lock(clip_id: str) -> Any:
+    with _CLIP_MUTATION_LOCKS_GUARD:
+        return _CLIP_MUTATION_LOCKS.setdefault(clip_id, threading.Lock())
+
+
+async def _acquire_clip_mutation_lock(lock: Any) -> None:
+    acquire_task = asyncio.create_task(asyncio.to_thread(lock.acquire))
+    try:
+        await asyncio.shield(acquire_task)
+    except asyncio.CancelledError:
+        # The worker thread survives cancellation of to_thread. Release the lock if
+        # this request disappears while queued, or later requests for this clip hang.
+        def release_abandoned_lock(task: asyncio.Task) -> None:
+            if not task.cancelled() and task.exception() is None and task.result():
+                lock.release()
+
+        acquire_task.add_done_callback(release_abandoned_lock)
+        raise
+
+
+def _serialize_clip_mutation(handler):
+    @wraps(handler)
+    async def serialized(clip_id: str, *args, **kwargs):
+        lock = _get_clip_mutation_lock(clip_id)
+        await _acquire_clip_mutation_lock(lock)
+        try:
+            return await handler(clip_id, *args, **kwargs)
+        finally:
+            lock.release()
+    return serialized
 
 app = FastAPI(title="Dispatch Dashboard", version="1.0.0")
 
@@ -278,6 +313,7 @@ class ApproveRequest(BaseModel):
     publish_mode: Optional[str] = None  # "private" or "public"
     platforms: Optional[str] = None     # "youtube,instagram"
     layout_mode: Optional[str] = None   # "fit_blur", "crop_follow", "landscape"
+    caption_track: Optional[Dict[str, Any]] = None
 
 
 class RejectRequest(BaseModel):
@@ -827,12 +863,15 @@ def is_matching_layout(a: Optional[str], b: Optional[str]) -> bool:
 
 
 @app.post("/api/clips/{clip_id}/layout")
+@_serialize_clip_mutation
 async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, request: Request):
     """Persist chosen layout framing mode for a clip immediately."""
     verify_dashboard_auth(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.get("status") != "ready_review":
+        raise HTTPException(status_code=409, detail="Only reviewable clips can change layout")
 
     ctx = get_clip_framing_context(clip)
     raw_mode = (payload.layout_mode or "").strip().lower()
@@ -866,12 +905,15 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
 
 
 @app.post("/api/clips/{clip_id}/render")
+@_serialize_clip_mutation
 async def handle_render_clip(clip_id: str, request: Request, payload: Optional[LayoutModeRequest] = None):
     """Explicitly re-render a clip from source media using the current or specified layout_mode."""
     verify_dashboard_auth(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.get("status") != "ready_review":
+        raise HTTPException(status_code=409, detail="Only reviewable clips can be rendered")
 
     ctx = get_clip_framing_context(clip)
     raw_mode = (payload.layout_mode if payload and payload.layout_mode else None) or clip.get("layout_mode") or ctx["layout_mode"]
@@ -918,7 +960,8 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
             end_time=end_t,
             aspect_ratio=ctx["source_aspect_ratio"],
             layout_mode=target_layout,
-            segments=segments
+            segments=segments,
+            subtitle_options={"enabled": False, "preserve_timing": True}
         )
         out_file = Path(render_res["video_path"])
         if not out_file.exists() or out_file.stat().st_size == 0:
@@ -951,12 +994,15 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
 
 
 @app.post("/api/clips/{clip_id}/trim")
+@_serialize_clip_mutation
 async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Request):
     """Update clip active trim boundaries (CapCut-style trimming with safety handles)."""
     verify_dashboard_auth(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.get("status") != "ready_review":
+        raise HTTPException(status_code=409, detail="Only reviewable clips can be trimmed")
 
     success = db.update_clip_trim(clip_id, payload.start_time, payload.end_time)
     if not success:
@@ -975,14 +1021,21 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
 
 
 @app.post("/api/clips/{clip_id}/approve")
+@_serialize_clip_mutation
 async def handle_approve_clip(clip_id: str, payload: ApproveRequest, request: Request):
-    """Approve a clip and enqueue it to the publishing outbox.
-    Ensures rendered media matches the chosen layout_mode before approval.
-    """
     verify_dashboard_auth(request)
+    return await _approve_clip_with_render(clip_id, payload)
+
+
+async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest):
+    """Render the submitted caption snapshot and chosen layout before enqueueing publishing."""
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.get("status") in ("approved", "published"):
+        return {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}
+    if clip.get("status") != "ready_review":
+        raise HTTPException(status_code=409, detail=f"Clip cannot be approved from status '{clip.get('status')}'")
 
     ctx = get_clip_framing_context(clip)
     raw_mode = payload.layout_mode or clip.get("layout_mode") or ctx["layout_mode"]
@@ -991,72 +1044,69 @@ async def handle_approve_clip(clip_id: str, payload: ApproveRequest, request: Re
         raw_mode = ctx["layout_mode"]
 
     target_layout = raw_mode
-    rendered_layout = clip.get("rendered_layout_mode")
-    vpath = Path(clip["video_path"]) if clip.get("video_path") else None
-
-    # Only re-render if:
-    # (a) rendered_layout is recorded and differs from target_layout (explicit framing change)
-    # OR
-    # (b) video_path is missing or empty, AND source_path is available to render it
-    source_path = resolve_clip_source_path(clip)
-    needs_rerender = False
-    if rendered_layout and not is_matching_layout(rendered_layout, target_layout):
-        needs_rerender = True
-    elif (vpath is None or not vpath.exists() or vpath.stat().st_size == 0) and source_path and source_path.exists():
-        needs_rerender = True
-
-    if needs_rerender:
-        logger.info("Rendered media for clip %s requires re-rendering (rendered: %s, target: %s).",
-                    clip_id, rendered_layout, target_layout)
-        if not source_path or not source_path.exists():
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot render selected framing: original source video chunk not found on disk."
-            )
-
-        segments = None
-        if clip.get("caption_data"):
-            try:
-                cap = json.loads(clip["caption_data"])
-                groups = cap.get("groups", [])
-                if groups:
-                    segments = [{"id": g["id"], "start": g["start"], "end": g["end"], "text": g.get("text", ""),
-                                 "words": g.get("words", [])} for g in groups]
-            except Exception:
-                pass
-
-        if not segments and clip.get("chunk_id"):
-            with db.get_db_connection() as conn:
-                t_row = conn.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (clip["chunk_id"],)).fetchone()
-                if t_row and t_row["segments_json"]:
-                    try:
-                        segments = json.loads(t_row["segments_json"])
-                    except Exception:
-                        pass
-
-        start_t = float(clip["start_time"])
-        end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
-
+    if payload.caption_track is not None:
         try:
-            render_res = await asyncio.to_thread(
-                render_clip,
-                source_video=source_path,
-                clip_id=clip_id,
-                start_time=start_t,
-                end_time=end_t,
-                aspect_ratio=ctx["source_aspect_ratio"],
-                layout_mode=target_layout,
-                segments=segments
-            )
-            out_file = Path(render_res["video_path"])
-            if not out_file.exists() or out_file.stat().st_size == 0:
-                raise RuntimeError("Render output file is missing or zero bytes")
+            caption_track = CaptionTrack.from_dict(payload.caption_track)
+            caption_snapshot = caption_track.to_dict()
+            db.save_clip_caption_data(clip_id, json.dumps(caption_snapshot, ensure_ascii=False))
         except Exception as e:
-            logger.error("Failed to render clip %s with layout %s: %s", clip_id, target_layout, e)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Couldn't render selected framing: {str(e)}"
-            )
+            raise HTTPException(status_code=400, detail=f"Invalid caption track: {e}") from e
+    else:
+        try:
+            caption_snapshot = json.loads(clip["caption_data"]) if clip.get("caption_data") else None
+        except Exception:
+            caption_snapshot = None
+
+    source_path = resolve_clip_source_path(clip)
+    if not source_path or not source_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot approve this clip: original source video is unavailable for final rendering."
+        )
+
+    segments = None
+    if caption_snapshot:
+        groups = caption_snapshot.get("groups", [])
+        if groups:
+            segments = [{"id": g.get("id", index), "start": g.get("start", 0), "end": g.get("end", 0),
+                         "text": g.get("text", ""), "words": g.get("words", [])}
+                        for index, g in enumerate(groups)]
+    if not segments and clip.get("chunk_id"):
+        with db.get_db_connection() as conn:
+            t_row = conn.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (clip["chunk_id"],)).fetchone()
+            if t_row and t_row["segments_json"]:
+                try:
+                    segments = json.loads(t_row["segments_json"])
+                except Exception:
+                    segments = None
+
+    start_t = float(clip["start_time"])
+    end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
+    try:
+        render_res = await asyncio.to_thread(
+            render_clip,
+            source_video=source_path,
+            clip_id=clip_id,
+            start_time=start_t,
+            end_time=end_t,
+            aspect_ratio=ctx["source_aspect_ratio"],
+            layout_mode=target_layout,
+            segments=segments,
+            subtitle_options={"enabled": True, "caption_track": caption_snapshot, "preserve_timing": True}
+        )
+        out_file = Path(render_res["video_path"])
+        if not out_file.is_file() or out_file.stat().st_size == 0:
+            raise RuntimeError("Final render is missing or empty")
+        from dispatch.ingestion.validator import probe_video
+        is_valid, _, validation_error = probe_video(out_file)
+        if not is_valid:
+            raise RuntimeError(f"Final render failed playback validation: {validation_error or 'invalid media'}")
+    except Exception as e:
+        logger.error("Failed to render clip %s with layout %s: %s", clip_id, target_layout, e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Couldn't create a valid final render: {str(e)}"
+        ) from e
 
     db.approve_clip(
         clip_id=clip_id,
@@ -1385,20 +1435,12 @@ async def get_caption_presets():
 
 @app.get("/api/clips/{clip_id}/captions")
 async def get_clip_captions(clip_id: str):
-    """Retrieve canonical CaptionTrack JSON for a clip. Auto-generates from transcript if missing."""
+    """Return saved captions or derive a lightweight preview from the stored transcript."""
     cached_json = db.get_clip_caption_data(clip_id)
     if cached_json:
         try:
             cached_track = json.loads(cached_json)
-            # Verify if cached_track has authentic word-level timestamps (not phrase-level duplicate timings)
-            has_word_timings = False
-            for grp in cached_track.get("groups", []):
-                words = grp.get("words", [])
-                if len(words) >= 2:
-                    if words[0].get("start") != words[-1].get("start") or words[0].get("end") != words[-1].get("end"):
-                        has_word_timings = True
-                        break
-            if has_word_timings:
+            if isinstance(cached_track, dict) and isinstance(cached_track.get("groups"), list):
                 return cached_track
         except Exception:
             pass
@@ -1406,42 +1448,6 @@ async def get_clip_captions(clip_id: str):
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-
-    # If missing word-level precision, attempt Stage 2 precision alignment from local video
-    if clip.get("video_path"):
-        try:
-            from dispatch.transcription.gemini_engine import transcribe_stage2_precision_words
-            vp = Path(clip["video_path"])
-            if vp.exists() and vp.stat().st_size > 0:
-                res = transcribe_stage2_precision_words(vp)
-                words = res.get("words", [])
-                if words:
-                    clean_words = [{
-                        "word": w.get("word", ""),
-                        "start": round(w.get("start", 0.0), 3),
-                        "end": round(w.get("end", 0.0), 3),
-                        "is_exact": True
-                    } for w in words]
-                    clip_dur = float(clip.get("duration", 30.0))
-                    raw_segs = [{"id": 0, "start": 0.0, "end": clip_dur, "words": clean_words}]
-                    translit_segs = transliterate_segments_to_hinglish(raw_segs)
-                    track = group_words_into_captions(
-                        raw_segments=translit_segs,
-                        clip_start=0.0,
-                        clip_end=clip_dur,
-                        clip_id=clip_id,
-                        preset_id="yellow_pop"
-                    )
-                    track_dict = track.to_dict()
-                    db.save_clip_caption_data(clip_id, json.dumps(track_dict, ensure_ascii=False))
-                    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
-                    try:
-                        export_to_ass(track, ass_path)
-                    except Exception:
-                        pass
-                    return track_dict
-        except Exception as e:
-            logger.warning("Stage 2 word alignment during get_clip_captions for %s had error: %s", clip_id, e)
 
     chunk_id = clip.get("chunk_id")
     session_id = clip.get("session_id")
@@ -1497,7 +1503,7 @@ async def get_clip_captions(clip_id: str):
 
     # If no transcript exists for that specific source, handle honestly instead of fabricating words
     if not segments:
-        preset_data = get_preset("yellow_pop")
+        preset_data = get_preset(get_default_preset_id())
         empty_track = CaptionTrack(
             clip_id=clip_id,
             language="en",
@@ -1522,29 +1528,22 @@ async def get_clip_captions(clip_id: str):
         clip_start=clip_start,
         clip_end=clip_end,
         clip_id=clip_id,
-        preset_id="yellow_pop"
+        preset_id=get_default_preset_id()
     )
 
-    track_dict = track.to_dict()
-    db.save_clip_caption_data(clip_id, json.dumps(track_dict))
-
-    # Export ASS file with exact parity
-    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
-    try:
-        export_to_ass(track, ass_path)
-    except Exception as e:
-        logger.warning("Failed to export ASS subtitles for clip %s: %s", clip_id, e)
-
-    return track_dict
+    return track.to_dict()
 
 
 @app.post("/api/clips/{clip_id}/captions")
+@_serialize_clip_mutation
 async def save_clip_captions(clip_id: str, request: Request):
     """Save customized CaptionTrack JSON and export updated ASS file for FFmpeg render parity."""
     verify_dashboard_auth(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.get("status") != "ready_review":
+        raise HTTPException(status_code=409, detail="Only reviewable clips can change captions")
 
     data = await request.json()
     track = CaptionTrack.from_dict(data)

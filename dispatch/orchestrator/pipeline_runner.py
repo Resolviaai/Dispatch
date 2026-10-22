@@ -229,7 +229,8 @@ class PipelineStageRunner:
                     end_time=clip["end_time"],
                     aspect_ratio=aspect_ratio,
                     layout_mode=clip["layout_mode"],
-                    segments=segments
+                    segments=segments,
+                    subtitle_options={"enabled": False, "preserve_timing": True}
                 )
 
     def _run_finalize_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path):

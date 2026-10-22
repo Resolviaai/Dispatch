@@ -121,7 +121,10 @@ This is a standard YouTube manual caption.
             # Exactly 1 dialogue event for the phrase, not 7 events for each word
             self.assertEqual(len(dialogue_lines), 1)
             self.assertIn("0:00:01.00,0:00:04.00", dialogue_lines[0])
-            self.assertIn("THIS IS A STANDARD YOUTUBE MANUAL CAPTION.", dialogue_lines[0])
+            # ASS uses \N as an explicit visual line break; normalize it when
+            # asserting that phrase-mode text is preserved in one dialogue event.
+            dialogue_text = dialogue_lines[0].replace(r"\N", " ")
+            self.assertIn("THIS IS A STANDARD YOUTUBE MANUAL CAPTION.", dialogue_text)
 
     def test_3_three_word_caption_grouping_does_not_alter_source_timestamps(self):
         """3. Three-word caption grouping does not alter source timestamps."""

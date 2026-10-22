@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from tests.e2e.e2e_base import DispatchE2EBaseTestCase
 from dispatch.config import ROOT_DIR, CLIPS_DIR
-from dispatch.db import get_db_connection, save_clip, approve_clip, reject_clip, get_setting
+from dispatch.db import get_db_connection, save_clip, approve_clip, reject_clip, get_setting, update_clip_media
 from dispatch.publisher.youtube import upload_youtube_short
 from dispatch.publisher.instagram import upload_instagram_reel
 from dispatch.publisher.linkedin import upload_linkedin_video
@@ -237,12 +237,24 @@ class TestTier1PublishingDashboard(DispatchE2EBaseTestCase):
             virality_score=90,
             layout_mode="fit_blur"
         )
-        res = self.client.post(f"/api/clips/{clip_id}/approve", json={
-            "title": "Final Approved Title",
-            "hashtags": "#Shorts #AI",
-            "publish_mode": "private",
-            "platforms": "youtube,instagram"
-        })
+        source = self.temp_dir / "approval_source.mp4"
+        source.write_bytes(b"test source")
+        rendered = self.temp_dir / "approval_render.mp4"
+
+        def render_for_test(**kwargs):
+            rendered.write_bytes(b"validated render")
+            update_clip_media(kwargs["clip_id"], str(rendered), None, kwargs["layout_mode"])
+            return {"video_path": str(rendered)}
+
+        with patch("dispatch.web.app.resolve_clip_source_path", return_value=source), \
+             patch("dispatch.web.app.render_clip", side_effect=render_for_test), \
+             patch("dispatch.ingestion.validator.probe_video", return_value=(True, {"duration": 15.0}, None)):
+            res = self.client.post(f"/api/clips/{clip_id}/approve", json={
+                "title": "Final Approved Title",
+                "hashtags": "#Shorts #AI",
+                "publish_mode": "private",
+                "platforms": "youtube,instagram"
+            })
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["status"], "success")
 

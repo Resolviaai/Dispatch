@@ -1,6 +1,6 @@
 import type { ExposureInfo, ExposureResultEvent, FocusResultEvent, CameraStateEvent } from '../bridge';
 
-export type FocusStatus = 'idle' | 'focusing' | 'locking' | 'unlocking' | 'success' | 'failed' | 'locked';
+export type FocusStatus = 'idle' | 'focusing' | 'locking' | 'unlocking' | 'success' | 'failed' | 'locked' | 'uncertain';
 
 export interface FocusExposureState {
   x: number;
@@ -79,16 +79,27 @@ export function applyFocusResult(
     return current;
   }
 
-  const canConfirmDelayedLock = current.status === 'failed' && result.success && result.isLocked;
-  const lockConfirmed = result.success && result.isLocked;
+  if (result.lockStateUncertain) {
+    return {
+      ...current,
+      status: 'uncertain',
+      isLocked: false,
+      hasAf: result.hasAf ?? current.hasAf,
+      hasAe: result.hasAe ?? current.hasAe,
+      error: result.error || 'Camera lock state is uncertain; unlock to recover safely.',
+    };
+  }
+
+  const canConfirmDelayedLock = (current.status === 'failed' || current.status === 'uncertain') && result.success && result.isLocked;
+  const lockConfirmed = result.success && result.isLocked && (result.hasAf === true || result.hasAe === true);
   if (current.status === 'locking' || canConfirmDelayedLock) {
     return {
       ...current,
-      status: lockConfirmed ? 'locked' : 'failed',
+      status: result.lockStateUncertain ? 'uncertain' : lockConfirmed ? 'locked' : 'failed',
       isLocked: lockConfirmed,
       hasAf: result.hasAf ?? current.hasAf,
       hasAe: result.hasAe ?? current.hasAe,
-      error: lockConfirmed ? undefined : (result.error || 'Camera did not confirm the AE/AF lock'),
+      error: result.error || (lockConfirmed ? undefined : 'Camera did not confirm the AE/AF lock'),
     };
   }
 
@@ -123,25 +134,33 @@ export function applyUnlockResult(
 ): FocusExposureState | null {
   if (!current) return null;
   if (success) {
-    return { ...current, status: 'idle', isLocked: false, error: undefined };
+    return { ...current, status: 'idle', isLocked: false, hasAf: false, hasAe: false, error: undefined };
   }
   return {
     ...current,
-    status: current.isLocked ? 'locked' : 'failed',
+    status: current.isLocked ? 'locked' : current.status === 'unlocking' ? 'uncertain' : current.status === 'uncertain' ? 'uncertain' : 'failed',
     error: 'Camera did not confirm unlock. Try again.',
   };
 }
 
 export function applyNativeLockState(
   current: FocusExposureState | null,
-  isAeAfLocked: boolean
+  isAeAfLocked: boolean,
+  nativeState?: Pick<CameraStateEvent, 'isAeLocked' | 'isAfLocked' | 'isAeAfLockUncertain'>
 ): FocusExposureState | null {
   if (!current) return current;
-  if (isAeAfLocked) {
-    return { ...current, status: 'locked', isLocked: true, error: undefined };
+  const hasKnownChannel = current.hasAe || current.hasAf;
+  const hasAe = nativeState?.isAeLocked ?? (isAeAfLocked ? (hasKnownChannel ? current.hasAe : true) : false);
+  const hasAf = nativeState?.isAfLocked ?? (isAeAfLocked ? (hasKnownChannel ? current.hasAf : true) : false);
+  if (nativeState?.isAeAfLockUncertain) {
+    return { ...current, status: 'uncertain', isLocked: false, hasAe, hasAf, error: 'Camera lock state could not be confirmed; unlock to recover safely.' };
   }
+  if (isAeAfLocked) {
+    return { ...current, status: 'locked', isLocked: true, hasAe, hasAf, error: undefined };
+  }
+  if (current.status === 'locking') return current;
   if (current.isLocked || current.status === 'locking' || current.status === 'unlocking') {
-    return { ...current, status: current.status === 'failed' ? 'failed' : 'idle', isLocked: false };
+    return { ...current, status: current.status === 'unlocking' ? 'idle' : current.status, isLocked: false, hasAe: false, hasAf: false };
   }
   return current;
 }

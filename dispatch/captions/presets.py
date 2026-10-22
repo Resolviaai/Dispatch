@@ -1,6 +1,7 @@
 """Curated High-Impact Caption Style Presets for Dispatch.
 Provides instant, professional styling mimicking CapCut, Hormozi, and MrBeast.
 """
+import os
 from typing import Dict, Any
 from dispatch.captions.model import StyleConfig, LayoutConfig, AnimationConfig
 
@@ -185,6 +186,12 @@ CAPTION_PRESETS: Dict[str, Dict[str, Any]] = {
         )
     }
 }
+
+
+def get_default_preset_id() -> str:
+    """Return the configured default for newly created caption tracks."""
+    configured = os.getenv("DISPATCH_DEFAULT_CAPTION_PRESET", "yellow_pop").strip()
+    return configured if configured in CAPTION_PRESETS else "yellow_pop"
 
 
 def get_preset(preset_id: str) -> Dict[str, Any]:
