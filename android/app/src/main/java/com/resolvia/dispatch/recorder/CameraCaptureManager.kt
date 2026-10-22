@@ -44,8 +44,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import com.google.common.util.concurrent.ListenableFuture
 
-internal fun isAeAfLockConfirmed(afLockConfirmed: Boolean, aeLockConfirmed: Boolean): Boolean =
-    afLockConfirmed || aeLockConfirmed
+internal fun isAeAfLockConfirmed(hasAf: Boolean, hasAe: Boolean, focusSuccessful: Boolean): Boolean =
+    hasAe || (hasAf && focusSuccessful)
 
 internal fun clampExposureIndex(index: Int, minIndex: Int, maxIndex: Int): Int =
     index.coerceIn(minIndex, maxIndex)
@@ -83,14 +83,12 @@ class CameraCaptureManager(private val context: Context) {
     var isTorchEnabled: Boolean = false
         private set
 
-    @Volatile var isAeLocked: Boolean = false
+    @Volatile var isAeAfLocked: Boolean = false
         private set
-    @Volatile var isAfLocked: Boolean = false
-        private set
-    @Volatile var isAeAfLockUncertain: Boolean = false
-        private set
-    val isAeAfLocked: Boolean
-        get() = isAeAfLockConfirmed(isAfLocked, isAeLocked)
+
+    private fun clearConfirmedLockState() {
+        isAeAfLocked = false
+    }
 
     var currentZoomRatio: Float = 1.0f
         private set
@@ -543,7 +541,7 @@ class CameraCaptureManager(private val context: Context) {
         previewView: PreviewView,
         onComplete: ((FocusResult) -> Unit)? = null
     ) {
-        val operationGeneration = focusOperationGeneration.incrementAndGet()
+        val operationGeneration = focusOperationGeneration.begin()
         clearConfirmedLockState()
         val cam = camera
         if (cam == null) {
@@ -575,7 +573,7 @@ class CameraCaptureManager(private val context: Context) {
 
             val future = cam.cameraControl.startFocusAndMetering(action)
             future.addListener({
-                if (focusOperationGeneration.get() != operationGeneration) return@addListener
+                if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
                 try {
                     val result = future.get()
                     onComplete?.invoke(FocusResult(success = result.isFocusSuccessful, isLocked = false, hasAf = canAf, hasAe = canAe))
@@ -595,7 +593,7 @@ class CameraCaptureManager(private val context: Context) {
      */
     fun focusOnPoint(meteringPoint: MeteringPoint) {
         val cam = camera ?: return
-        focusOperationGeneration.incrementAndGet()
+        focusOperationGeneration.begin()
         isAeAfLocked = false
         lastMeteringPoint = meteringPoint
         val action = FocusMeteringAction.Builder(meteringPoint, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
@@ -615,7 +613,7 @@ class CameraCaptureManager(private val context: Context) {
         previewView: PreviewView,
         onComplete: ((FocusResult) -> Unit)? = null
     ) {
-        val operationGeneration = focusOperationGeneration.incrementAndGet()
+        val operationGeneration = focusOperationGeneration.begin()
         isAeAfLocked = false
         val cam = camera
         if (cam == null) {
@@ -648,7 +646,7 @@ class CameraCaptureManager(private val context: Context) {
 
             val future = cam.cameraControl.startFocusAndMetering(action)
             future.addListener({
-                if (focusOperationGeneration.get() != operationGeneration) return@addListener
+                if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
                 try {
                     val result = future.get()
                     val isSuccess = isAeAfLockConfirmed(canAf, canAe, result.isFocusSuccessful)
@@ -656,13 +654,13 @@ class CameraCaptureManager(private val context: Context) {
                     onComplete?.invoke(FocusResult(success = isSuccess, isLocked = isSuccess, hasAf = canAf, hasAe = canAe))
                     Log.i(TAG, "AE/AF lock completed: success=$isSuccess at ($x, $y).")
                 } catch (e: Exception) {
-                    if (focusOperationGeneration.get() != operationGeneration) return@addListener
+                    if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
                     isAeAfLocked = false
                     onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = canAf, hasAe = canAe, error = e.message))
                 }
             }, ContextCompat.getMainExecutor(context))
         } catch (e: Exception) {
-            if (focusOperationGeneration.get() == operationGeneration) isAeAfLocked = false
+            if (focusOperationGeneration.isCurrent(operationGeneration)) isAeAfLocked = false
             Log.e(TAG, "Failed to lock AE/AF: ${e.message}")
             onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = e.message))
         }
@@ -672,13 +670,13 @@ class CameraCaptureManager(private val context: Context) {
      * Unlocks Auto Exposure & Auto Focus, returning to continuous auto-metering.
      */
     fun unlockAeAf(onComplete: ((Boolean) -> Unit)? = null) {
-        val operationGeneration = focusOperationGeneration.incrementAndGet()
+        val operationGeneration = focusOperationGeneration.begin()
         val cam = camera
         if (cam != null) {
             try {
                 val future = cam.cameraControl.cancelFocusAndMetering()
                 future.addListener({
-                    if (focusOperationGeneration.get() != operationGeneration) return@addListener
+                    if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
                     try {
                         future.get()
                         isAeAfLocked = false
