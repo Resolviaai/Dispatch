@@ -13,9 +13,9 @@ from dispatch.cloud.config import (
 class TestCloudConfigDefaults(unittest.TestCase):
     def test_defaults_match_documented_limits(self):
         cfg = load_cloud_config(env={})
-        self.assertEqual(cfg.default_user_quota_bytes, 1 * GIB)
-        self.assertEqual(cfg.max_user_quota_bytes, 2 * GIB)
-        self.assertEqual(cfg.global_object_budget_bytes, 8 * GIB)
+        self.assertEqual(cfg.default_user_quota_bytes, 2_000_000_000)
+        self.assertEqual(cfg.max_user_quota_bytes, 10_000_000_000)
+        self.assertEqual(cfg.global_object_budget_bytes, 10_000_000_000)
         self.assertEqual(cfg.max_clip_object_bytes, 512 * MIB)
         self.assertEqual(cfg.max_thumbnail_bytes, 8 * MIB)
         self.assertEqual(cfg.max_outstanding_uploads_per_user, 3)
@@ -38,7 +38,7 @@ class TestCloudConfigEnv(unittest.TestCase):
             }
         )
         self.assertTrue(cfg.worker_ready)
-        self.assertEqual(cfg.default_user_quota_bytes, 2 * GIB)
+        self.assertEqual(cfg.default_user_quota_bytes, 2147483648)
         self.assertEqual(cfg.max_outstanding_uploads_per_user, 5)
 
     def test_invalid_integer_limit_raises(self):

@@ -9,8 +9,8 @@ MIB = 1024 ** 2
 
 def evaluate(usage=None, kind=CLIP_VIDEO, mime="video/mp4", expected=100 * MIB, **overrides):
     params = dict(
-        user_quota_bytes=1 * GIB,
-        global_budget_bytes=8 * GIB,
+        user_quota_bytes=2_000_000_000,
+        global_budget_bytes=10_000_000_000,
         max_clip_object_bytes=512 * MIB,
         max_thumbnail_bytes=8 * MIB,
         max_outstanding_uploads_per_user=3,
@@ -28,20 +28,20 @@ class TestQuotaKernel(unittest.TestCase):
         self.assertEqual(decision.reason, "ok")
 
     def test_user_quota_exceeded(self):
-        usage = UsageSummary(user_active_bytes=900 * MIB, user_pending_bytes=200 * MIB,
+        usage = UsageSummary(user_active_bytes=1_900_000_000, user_pending_bytes=200_000_000,
                              user_outstanding_reservations=0, global_active_bytes=0, global_pending_bytes=0)
-        decision = evaluate(usage, expected=100 * MIB)  # 1.1 GiB > 1 GiB quota
+        decision = evaluate(usage, expected=100 * MIB)  # 2.1 GB > 2 GB quota
         self.assertFalse(decision.allowed)
         self.assertIn("User storage quota exceeded", decision.reason)
 
     def test_user_quota_boundary_is_inclusive(self):
-        usage = UsageSummary(user_active_bytes=1024 * MIB - 100 * MIB, user_pending_bytes=0,
+        usage = UsageSummary(user_active_bytes=2_000_000_000 - 100 * MIB, user_pending_bytes=0,
                              user_outstanding_reservations=0, global_active_bytes=0, global_pending_bytes=0)
         self.assertTrue(evaluate(usage, expected=100 * MIB).allowed)
         self.assertFalse(evaluate(usage, expected=100 * MIB + 1).allowed)
 
     def test_global_budget_exceeded(self):
-        usage = UsageSummary(0, 0, 0, global_active_bytes=8 * GIB, global_pending_bytes=0)
+        usage = UsageSummary(0, 0, 0, global_active_bytes=10_000_000_000, global_pending_bytes=0)
         decision = evaluate(usage, expected=1 * MIB)
         self.assertFalse(decision.allowed)
         self.assertIn("Global storage budget exceeded", decision.reason)
@@ -80,6 +80,22 @@ class TestQuotaKernel(unittest.TestCase):
     def test_zero_and_negative_bytes_rejected(self):
         self.assertFalse(evaluate(expected=0).allowed)
         self.assertFalse(evaluate(expected=-5).allowed)
+
+
+    def test_global_budget_boundary_exact_allowed(self):
+        usage = UsageSummary(0, 0, 0, global_active_bytes=10_000_000_000 - 100 * MIB, global_pending_bytes=0)
+        self.assertTrue(evaluate(usage, expected=100 * MIB).allowed)
+
+    def test_global_budget_boundary_one_byte_over_rejected(self):
+        usage = UsageSummary(0, 0, 0, global_active_bytes=10_000_000_000 - 100 * MIB, global_pending_bytes=0)
+        self.assertFalse(evaluate(usage, expected=100 * MIB + 1).allowed)
+
+    def test_user_ceiling_cannot_exceed_global_cap(self):
+        from dispatch.cloud.config import CloudConfig
+        cfg = CloudConfig()
+        self.assertLessEqual(cfg.max_user_quota_bytes, cfg.global_object_budget_bytes)
+        self.assertEqual(cfg.default_user_quota_bytes, 2_000_000_000)
+        self.assertEqual(cfg.global_object_budget_bytes, 10_000_000_000)
 
 
 if __name__ == "__main__":

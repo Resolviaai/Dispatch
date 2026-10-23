@@ -30,8 +30,8 @@
 create table public.profiles (
   user_id uuid primary key references auth.users(id) on delete cascade,
   display_name text,
-  storage_quota_bytes bigint not null default 1073741824
-    check (storage_quota_bytes >= 0 and storage_quota_bytes <= 2147483648),
+  storage_quota_bytes bigint not null default 2000000000
+    check (storage_quota_bytes >= 0 and storage_quota_bytes <= 10000000000),
   created_at timestamptz not null default now()
 );
 
@@ -400,7 +400,7 @@ revoke execute on function public.handle_new_user(),
 --          status = 'pending' and expires_at > now()  -- expired rows are excluded
 --   3. Allow the reservation insert (status 'pending', expires_at = now() + ttl)
 --      only if: usage_bytes + expected_bytes <= user quota, the same sums across all
---      users + expected_bytes <= global budget (8 GiB), expected_bytes <= kind cap
+--      users + expected_bytes <= global budget (10 GB), expected_bytes <= kind cap
 --      (512 MiB clip / 8 MiB thumb), and the outstanding-upload limit is STRICTLY 3:
 --      count the user's status='pending' rows; refuse when the count is already 3, so
 --      the insert that would create a fourth outstanding reservation is rejected

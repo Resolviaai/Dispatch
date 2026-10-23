@@ -22,10 +22,11 @@ class CloudConfig:
     worker_url: str = ""
     worker_token: str = ""
 
-    # Server-enforced limits (plan doc D6). Byte values are overridable by env.
-    default_user_quota_bytes: int = 1 * GIB
-    max_user_quota_bytes: int = 2 * GIB
-    global_object_budget_bytes: int = 8 * GIB
+    # Server-enforced limits (plan doc D6; alpha brief 2026-10-23: decimal-byte quotas —
+    # user default 2 GB, per-user ceiling and global cap 10 GB; clip/thumbnail stay MiB).
+    default_user_quota_bytes: int = 2_000_000_000
+    max_user_quota_bytes: int = 10_000_000_000
+    global_object_budget_bytes: int = 10_000_000_000
     max_clip_object_bytes: int = 512 * MIB
     max_thumbnail_bytes: int = 8 * MIB
     max_outstanding_uploads_per_user: int = 3
