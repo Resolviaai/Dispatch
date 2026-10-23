@@ -16,13 +16,11 @@ MIB = 1024 ** 2
 
 @dataclass(frozen=True)
 class CloudConfig:
-    # Connection settings (plan doc §4). The PC talks to the Worker only; the
-    # Worker holds the R2 binding and the Supabase service-role key server-side.
+    # PC-side settings (plan doc D8/D11): the PC talks to the Worker only. The Worker
+    # holds the R2 binding and the Supabase service-role key; those credentials never
+    # leave Cloudflare and are deliberately not modeled anywhere on the PC.
     worker_url: str = ""
     worker_token: str = ""
-    supabase_url: str = ""
-    supabase_service_role_key: str = ""
-    supabase_anon_key: str = ""
 
     # Server-enforced limits (plan doc D6). Byte values are overridable by env.
     default_user_quota_bytes: int = 1 * GIB
@@ -39,15 +37,10 @@ class CloudConfig:
         """True when the PC can reach the cloud control plane."""
         return bool(self.worker_url and self.worker_token)
 
-    @property
-    def supabase_ready(self) -> bool:
-        return bool(self.supabase_url and self.supabase_service_role_key)
-
     def __repr__(self) -> str:  # pragma: no cover - trivial masking
         return (
-            "CloudConfig(worker_url=%r, worker_token=%r, supabase_url=%r, "
-            "supabase_service_role_key=<masked>, supabase_anon_key=<masked>, ...)"
-            % (self.worker_url, "<masked>" if self.worker_token else "", self.supabase_url)
+            "CloudConfig(worker_url=%r, worker_token=<masked>, ...)"
+            % (self.worker_url,)
         )
 
     __str__ = __repr__
@@ -62,12 +55,11 @@ _LIMIT_ENV = {
     "DISPATCH_CLOUD_MAX_THUMBNAIL_BYTES": "max_thumbnail_bytes",
     "DISPATCH_CLOUD_MAX_OUTSTANDING_UPLOADS": "max_outstanding_uploads_per_user",
 }
+# Worker-side variables (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY) are
+# deliberately NOT mapped here: they configure the Cloudflare Worker, never the PC.
 _TEXT_ENV = {
     "DISPATCH_WORKER_URL": "worker_url",
     "DISPATCH_WORKER_TOKEN": "worker_token",
-    "SUPABASE_URL": "supabase_url",
-    "SUPABASE_SERVICE_ROLE_KEY": "supabase_service_role_key",
-    "SUPABASE_ANON_KEY": "supabase_anon_key",
 }
 
 

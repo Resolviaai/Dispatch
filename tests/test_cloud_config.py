@@ -25,7 +25,6 @@ class TestCloudConfigDefaults(unittest.TestCase):
     def test_unconfigured_by_default(self):
         cfg = load_cloud_config(env={})
         self.assertFalse(cfg.worker_ready)
-        self.assertFalse(cfg.supabase_ready)
 
 
 class TestCloudConfigEnv(unittest.TestCase):
@@ -34,14 +33,11 @@ class TestCloudConfigEnv(unittest.TestCase):
             env={
                 "DISPATCH_WORKER_URL": "https://worker.example.com",
                 "DISPATCH_WORKER_TOKEN": "secret-token",
-                "SUPABASE_URL": "https://proj.supabase.co",
-                "SUPABASE_SERVICE_ROLE_KEY": "service-secret",
                 "DISPATCH_CLOUD_DEFAULT_USER_QUOTA_BYTES": str(2 * GIB),
                 "DISPATCH_CLOUD_MAX_OUTSTANDING_UPLOADS": "5",
             }
         )
         self.assertTrue(cfg.worker_ready)
-        self.assertTrue(cfg.supabase_ready)
         self.assertEqual(cfg.default_user_quota_bytes, 2 * GIB)
         self.assertEqual(cfg.max_outstanding_uploads_per_user, 5)
 
@@ -59,7 +55,20 @@ class TestCloudConfigEnv(unittest.TestCase):
         rendered = repr(cfg)
         self.assertNotIn("super-secret-token", rendered)
         self.assertNotIn("super-secret-key", rendered)
-        self.assertIn("<masked>", rendered)
+        self.assertNotIn("worker_token=secret-token", rendered)
+
+    def test_supabase_credentials_are_worker_side_and_never_loaded_on_the_pc(self):
+        cfg = load_cloud_config(
+            env={
+                "SUPABASE_URL": "https://proj.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-secret",
+                "SUPABASE_ANON_KEY": "anon-secret",
+            }
+        )
+        self.assertEqual(cfg.worker_url, "")
+        self.assertEqual(cfg.worker_token, "")
+        self.assertFalse(cfg.worker_ready)
+        self.assertNotIn("service", repr(cfg))
 
     def test_real_environment_secrets_never_loaded_into_placeholder_names(self):
         with patch.dict("os.environ", {"DISPATCH_WORKER_TOKEN": "from-real-env"}):
