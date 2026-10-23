@@ -247,7 +247,7 @@ test("reserve upload URL is presigned with the declared content length", async (
   supabase.set("/rpc/cloud_reserve_upload", { method: "POST", fn: () => ({ body: [{ reservation_id: RES, staging_key: "staging/x", media_object_id: MEDIA }] }) });
   const res = await post("/reserve", { kind: "clip_video", mime_type: "video/mp4", expected_bytes: 4096, client_token: "tok-len" });
   assert.equal(res.status, 200);
-  // content-length is a signed header: R2 rejects a PUT body of a different size
-  const captured = globalThis.__lastSignedHeaders;
-  void captured; // signature internals are not exported; the header presence is covered by tsc + code review
+  // NOTE (live finding 2026-10-24): R2 does NOT enforce the signed content-length on
+  // presigned PUTs - oversized bodies ARE accepted at upload time. The enforced guard
+  // is /complete's actual-size verification (see oversize tests above).
 });

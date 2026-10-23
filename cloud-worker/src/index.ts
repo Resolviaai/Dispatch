@@ -102,7 +102,7 @@ function s3Url(env: Env, key: string): string {
 async function presign(env: Env, method: "PUT" | "GET", key: string, mime?: string, contentLength?: number): Promise<string> {
   const headers: Record<string, string> = {};
   if (mime) headers["content-type"] = mime;
-  if (contentLength !== undefined) headers["content-length"] = String(contentLength);
+  if (contentLength !== undefined) headers["content-length"] = String(contentLength); // defense-in-depth only: R2 does NOT enforce signed content-length on presigned PUTs (verified live 2026-10-24); the authoritative guard is complete-time actual-size verification
   const signed = await makeS3(env).sign(
     new Request(`${s3Url(env, key)}?X-Amz-Expires=${PRESIGN_EXPIRES}`,
       { method, headers: Object.keys(headers).length ? headers : undefined }),
