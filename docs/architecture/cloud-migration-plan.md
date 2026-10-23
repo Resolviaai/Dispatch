@@ -1,0 +1,71 @@
+# Dispatch Cloud Migration — Architecture & Migration Plan
+
+Status: **Plan approved as working baseline (2026-10-23). Implementation in progress.**
+Owner brief: Principal Architect Implementation Brief (Steps 0–9). This doc is the authoritative decision record + migration checklist. Current-state index: root `AGENT_HANDOFF.md`.
+
+**Principle:** extend Dispatch into a small multi-user cloud-connected app while ALL video processing stays on the owner's Windows PC. No cloud rendering. Originals stay on YouTube. Free-tier only.
+
+## 1. Baseline findings (Step 0 — verified from code at `9db3054`)
+
+**Components & state ownership**
+- Android (`android/`, Kotlin + Compose + WebView): CameraX recording, 10-min segmentation, direct-to-YouTube upload worker. Room SQLite on phone. Does not talk to the PC.
+- PC daemon (`dispatch/main.py`): YouTube poller (`youtube_inbox/poller.py`+`oauth.py`), catcher/validator (`catcher.py`, `ingestion/validator.py`), transcription (`transcription/worker.py`, `gemini_engine.py`, `audio.py`), highlight worker (`ai_clips/worker.py`, `highlight_finder.py`), renderer (`video_engine/renderer.py`, `reframer.py`, captions/), publishing outbox (`publisher/outbox.py` + per-platform adapters), governor, orchestrator (leases/recovery). SQLite `storage/database/dispatch.db` (WAL).
+- Web/API: FastAPI `dispatch/web/app.py` serves the React studio (built into `android/app/src/main/assets/web` and the same code served at `127.0.0.1:8000`). `/download/dispatch.apk` serves the debug APK.
+
+**Exact rejection behavior** (`dispatch/db.py:729` `reject_clip`): immediately `unlink()`s `video_path` + `thumbnail_path` from disk, inserts a row into `rejections` (id, clip_id, title, transcript_snippet, reason) for negative preference learning, sets `status='rejected'`, NULLs both paths. Failure to unlink is only logged (orphan risk; DB still clears paths) — **cloud version must add a deletion-pending/retry state instead**.
+
+**Exact 7-day cleanup** (`dispatch/db.py:765` `cleanup_expired_published_clips`, invoked from `web/app.py:703`): purges local MP4 for `status IN ('published','approved')` where `published_at/approved_at/created_at` older than 7 days; **preserves `thumbnail_path`, `remote_url`, and all metadata**; sets `video_path=NULL`. Not a background scheduler — runs from the web layer.
+
+**Auth boundaries:** local FastAPI has **no auth** (grep confirms no Depends/auth/token checks); its only boundary is the loopback bind (`config.py:99` warns if non-loopback). Phone holds its own YouTube OAuth refresh token; PC holds `youtube_token.json`. No multi-user concept anywhere.
+
+**Local-only UI/API:** everything — dashboard, clips API, trim/caption/render/approve/reject endpoints, APK download. Remote access today would require exposing this server (forbidden by the brief).
+
+**Clip metadata & range-revision semantics (must be preserved):** `clips` table carries `start_time/end_time`, `ai_suggested_start_time/ai_suggested_end_time` (immutable), `range_revision` (monotonic), `caption_range_revision/start/end`, `caption_timing_warning`, `render_stale`, `layout_mode/rendered_layout_mode`, `video_path/thumbnail_path`, `published_at/remote_url`. Optimistic concurrency: `update_clip_trim`, `update_clip_media`, `save_clip_caption_data`, render finalization and approval all take/compare `expected_range_revision` (HTTP 409 on mismatch). Approval validates ffprobe + duration ±1 s and rejects phrase-timing captions (422).
+
+**Test baseline:** focused suite **80 tests OK (74.1 s)** at `79444b7` (frontend + Android results in `AGENT_HANDOFF.md` §8). "380/380" is historical (2026-10-09), not re-verified.
+
+**Migration risks:** single-account YouTube credentials (blocks friends' private uploads — D10); local absolute Windows paths stored in SQLite; rejection deletion has no retry state; unauthenticated local API must never be exposed; legacy `dispatch/sync/`/`transport/` still imported by legacy tests; SQLite↔Postgres identifier namespaces differ (need local↔cloud mapping); Supabase Free pauses after inactivity and has no managed backups.
+
+## 2. Decisions
+
+**D1 — System boundaries.** Android records/uploads to YouTube (unchanged). YouTube = canonical originals (never uploaded to R2). PC downloads/transcribes/selects/renders/publishes (unchanged). Supabase Auth = identity. Supabase Postgres = cloud truth for identity, clip metadata/review state, media-object records, quota policy, publishing history. Cloudflare R2 (private bucket) = clip video + thumbnail bytes only. Cloudflare Worker = control plane: presigned URL issuance, upload completion, signed GET URLs, deletion, quota enforcement, scheduled cleanup. Free static hosting serves the existing frontend for remote review. **Rejected:** VPS/cloud rendering; Worker as video proxy (Free request-body limits); public bucket; exposing FastAPI.
+
+**D2 — Source of truth.** Local-only (SQLite): pipeline state, leases, local paths, checkpoints, processing temps. Cloud-owned (Postgres): `user_id` ownership, cloud clip metadata + review status, media-object records, quota, publication history. Originals: YouTube. Clip media bytes: R2. Mapping: `clips_cloud.local_clip_id` + `unique(user_id, local_clip_id)` bridges namespaces (local clip IDs are not globally unique).
+
+**D3 — Conflict resolution.** Every cloud clip row carries `range_revision` + `status` + `local_updated_at`; the PC pushes new revisions monotonically. Remote approve/reject apply only against the revision the client saw (stale → 409, client reloads). Approval while PC offline: durable `approved` row; PC picks it up on next sync, renders if needed, publishes — no destructive local transition on failure (matches existing stale-render semantics). Upload retries: client-generated reservation token, idempotent completion. Approval arriving during a local run: PC re-checks `range_revision` before finalizing (existing 409 path already handles this locally).
+
+**D4 — Cloud database (reproducible SQL migrations, `supabase/migrations/`).** Tables: `profiles` (user_id PK → `auth.users`, `storage_quota_bytes` default 1 GiB, max 2 GiB), `source_sessions` (owner + `youtube_video_id`, unique per user), `clips_cloud` (minimal review metadata + `ai_suggested_*`, `range_revision`, `status` CHECK, `render_stale`), `media_objects` (kind CHECK clip_video/thumbnail, status CHECK pending/active/deletion_pending/deleted, `staging_key`/`final_key` UNIQUE, `byte_count`, `expires_at`), `upload_reservations` (client_token UNIQUE per user, expected_bytes, expires_at), `publications` (platform, remote_id/remote_url, published_at), `rejections` (lightweight audit). JSONB only for caption snapshots/versioned AI output. RLS on every user-owned table (`user_id = auth.uid()`), explicit grants, status constraints, indexes on (user_id,status), (expires_at), (final_key). Quota reservations enforced inside one Postgres transaction (count pending+active bytes + insert reservation) so concurrent uploads cannot overshoot.
+
+**D5 — Media contract.** Private bucket; no public URLs, ever. Direct client→R2 PUT via short-lived presigned URL (600 s) from a unique staging key; Worker validates ownership, MIME allowlist, declared size bound, outstanding-reservation limit, and atomically enforces user+global budgets before issuing. Completion verifies **actual** R2 object size/type (declared size is not proof), promotes staging→immutable final key, records real byte count, releases reservation; idempotent on repeat. Download: ownership + active status → 600 s signed GET. Delete: ownership + valid state → idempotent; R2 failure → `deletion_pending` + retry by scheduled cleanup; quota not released until deletion confirmed. **Rejected:** uploading bytes through Worker/Postgres; permanent URLs.
+
+**D6 — Quotas & limits (initial, all server-enforced).** Default 1 GiB/user (2 GiB only by explicit config); global active+pending ≈ 8 GiB (headroom under R2's 10 GB-month free tier); max individual clip object 512 MiB, thumbnail 8 MiB; ≤3 outstanding reservations/user; rate limits on reservation/completion/deletion endpoints; explicit quota-exceeded errors. Decision kernel in `dispatch/cloud/quota.py`; authoritative enforcement in Postgres transaction + Worker. **Documented caveat:** free tier is a ceiling, not a billing guarantee — provider pricing/accounting changes can still incur charges.
+
+**D7 — Retention (mirrors verified local behavior).** Rejected: delete video+thumbnail from R2 (deletion-pending on failure, retryable), preserve rejection record + lightweight metadata for preference learning; never report success before confirmation. Published: set `expires_at = published_at + 7 days` for the video object; delete at expiry; **keep thumbnail + publication history + remote URLs** (matches `cleanup_expired_published_clips`). Failed publishing: media retained for retry, no expiry; explicit abandon required. Orphans: scheduled Worker cleanup expires staging objects/abandoned reservations; R2 lifecycle rule on `staging/` prefix as safety net only; all cleanup idempotent.
+
+**D8 — Sync layer.** One interface (`dispatch/cloud/media_store.py`) for all cloud media ops; PC never touches R2/Supabase SDKs directly — it calls the Worker with `DISPATCH_WORKER_URL` + `DISPATCH_WORKER_TOKEN` (shared secret, server-side both ends). PC uploads only completed reviewable clip media + thumbnails after render, pushes minimal metadata, polls for remote review actions. Cloud outage = sync pauses; local pipeline unaffected; no destructive local transitions. Idempotent resume after restart (queue table keyed by local_clip_id + revision). Local file storage remains the fallback for all existing local workflows/tests.
+
+**D9 — Remote review.** Reuse the existing frontend (no redesign): Supabase Auth login, RLS-scoped clip metadata, signed-URL media playback, approve/reject with revision+status checks. Local studio controls stay distinct (local-only endpoints never exposed). No new editing features in this migration.
+
+**D10 — Multi-user YouTube processing (BLOCKER, recorded not solved).** The pipeline is bound to one PC-side YouTube account/token. Friends' private uploads require per-user authorization design (per-user tokens, consent, secure storage). **Not doing:** copying refresh tokens, plaintext token storage, shared OAuth secrets in clients, privacy changes without consent, or claiming multi-user processing works on the owner's account. Cloud storage/review foundations proceed independently.
+
+**D11 — PC↔Worker authentication.** PC = trusted server-side actor holding the owner's Worker token; end-user clients authenticate with Supabase JWTs which the Worker verifies and maps to `user_id`. Worker secrets (R2 binding, service-role key) never leave Cloudflare. R2 credentials exist only as a Worker binding — not on the PC, not in clients.
+
+## 3. Migration checklist (ordered; verify per phase)
+
+- **Phase A — Docs/baseline ✅ (2026-10-23):** this file + `AGENT_HANDOFF.md`, committed.
+- **Phase B — Config/interface skeleton:** `dispatch/cloud/` (`config.py`, `media_store.py`, `quota.py`) + `tests/test_cloud_config.py`, `tests/test_cloud_quota.py` (no SDKs, no network). Verify: unittest green; existing focused suite still green.
+- **Phase C — Supabase migrations:** `supabase/migrations/0001_init.sql` (schema+RLS+grants) with rollback notes; `tests/rls_two_user_checklist.sql` (two-user allow/deny script — real verification needs a live project; label as manual). Verify: SQL syntax review; no execution without user authorization.
+- **Phase D — Worker:** `cloud-worker/` (TypeScript) — routes reserve/complete/url/delete/reject/quota + scheduled cleanup; unit tests for quota/idempotency logic with mocked R2 binding. Verify: `npm test` in worker; deploy deferred to user.
+- **Phase E — PC sync:** `dispatch/cloud/sync.py` + SQLite `cloud_sync_queue` migration; hook post-render upload + remote-action pull; tests with mocked Worker (offline-safe, resume, no duplicates). Verify: full focused Python suite green.
+- **Phase F — Remote review UI + deployment checklist:** frontend auth + signed playback + approve/reject; `.env.example`, `docs/CLOUD_DEPLOYMENT.md` (manual setup only, no resource creation without user authorization). Verify: frontend build/tests; real RLS/storage verification = manual two-user test (pending real cloud account).
+
+## 4. Environment variables (names only — never commit values)
+`GEMINI_API_KEY` (exists) · `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` (Worker + PC only) · `SUPABASE_ANON_KEY` (frontend) · `DISPATCH_WORKER_URL` · `DISPATCH_WORKER_TOKEN` · `DISPATCH_CLOUD_SYNC_ENABLED`. Worker secrets: R2 binding config, service-role key. Android/frontend bundles must contain only the anon key.
+
+## 5. Test & proof matrix
+Unit (mocked): quota kernel, reservation idempotency, size verification, stale-URL overwrite refusal, deletion-pending retry, sync resume. SQL script: two-user RLS allow/deny (manual, real project). Existing suites must stay green after every phase. Mock results never get reported as live cloud verification.
+
+## 6. Open questions for the user
+1. Create the Supabase project + Cloudflare account/bucket/Worker when? (needs authorization)
+2. Confirm 1 GiB default / 512 MiB max-object / 8 GiB global numbers.
+3. Domain for the hosted review UI, or keep the free hosting default URL?
