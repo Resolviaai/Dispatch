@@ -64,16 +64,29 @@ $$;
 
 create or replace function pg_temp.rls_expect_reject(p_stmt text, p_sqlstate text, p_msg text) returns void
 language plpgsql as $$
+declare
+  v_got_sqlstate text;
+  v_got_message  text;
 begin
-  execute p_stmt;
-  -- expected failure did not happen
-  raise exception 'RLS TEST FAILED: % - statement unexpectedly succeeded', p_msg;
-exception
-  when others then
-    if SQLSTATE <> p_sqlstate then
-      raise exception 'RLS TEST FAILED: % - wrong failure (SQLSTATE %, message: %)', p_msg, SQLSTATE, MESSAGE_TEXT;
-    end if;
-    raise notice 'ok: % (SQLSTATE %)', p_msg, p_sqlstate;
+  -- Capture ONLY the tested statement's failure. The failure assertions below live
+  -- outside every exception handler in this function, so a helper-generated raise can
+  -- never be mistaken for the expected rejection (the old version caught its own
+  -- P0001 'unexpectedly succeeded' raise and reported false positives).
+  begin
+    execute p_stmt;
+  exception
+    when others then
+      v_got_sqlstate := SQLSTATE;
+      v_got_message  := MESSAGE_TEXT;
+  end;
+
+  if v_got_sqlstate is null then
+    raise exception 'RLS TEST FAILED: % - statement unexpectedly succeeded', p_msg;
+  end if;
+  if v_got_sqlstate <> p_sqlstate then
+    raise exception 'RLS TEST FAILED: % - wrong failure (SQLSTATE %, message: %)', p_msg, v_got_sqlstate, v_got_message;
+  end if;
+  raise notice 'ok: % (SQLSTATE %)', p_msg, p_sqlstate;
 end;
 $$;
 
