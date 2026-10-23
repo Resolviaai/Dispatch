@@ -383,10 +383,16 @@ revoke execute on function public.handle_new_user(),
 -- PHASE D CONTRACT - authoritative quota accounting (plan doc D4/D6).
 -- The tables above do NOT enforce quotas by existing; enforcement is this exact
 -- transaction, which the Worker (/reserve) must run atomically in Postgres:
---   1. ONE transaction per reserve call. First statement:
---        select storage_quota_bytes from public.profiles where user_id = $1 for update;
---      (the row lock serializes concurrent reservations per user - parallel inserts
---      cannot both pass, so the sum cannot overshoot).
+--   1. ONE transaction per reserve call takes BOTH serialization points before any
+--      accounting statement, always in the same fixed order on every path (deviating
+--      orderings must never appear - two concurrently reachable orders can deadlock):
+--        a. Global budget lock - serializes reservations ACROSS users; per-user row
+--           locks alone cannot serialize the global budget between users:
+--              select pg_advisory_xact_lock(hashtextextended('dispatch:global-quota-budget', 0));
+--           This is the only intentional advisory-lock user in the schema; the
+--           hashtextextended key is deterministic, so no magic id can collide silently.
+--        b. Per-user headroom lock - serializes reservations of the SAME user:
+--              select storage_quota_bytes from public.profiles where user_id = $1 for update;
 --   2. usage_bytes =
 --        sum(byte_count) over media_objects of the user with status in
 --          ('active','deletion_pending')  -- pending rows always have byte_count = 0
@@ -394,16 +400,28 @@ revoke execute on function public.handle_new_user(),
 --          status = 'pending' and expires_at > now()  -- expired rows are excluded
 --   3. Allow the reservation insert (status 'pending', expires_at = now() + ttl)
 --      only if: usage_bytes + expected_bytes <= user quota, the same sums across all
---      users + expected_bytes <= global budget (8 GiB), pending reservation count < 4,
---      and expected_bytes <= kind cap (512 MiB clip / 8 MiB thumb).
+--      users + expected_bytes <= global budget (8 GiB), expected_bytes <= kind cap
+--      (512 MiB clip / 8 MiB thumb), and the outstanding-upload limit is STRICTLY 3:
+--      count the user's status='pending' rows; refuse when the count is already 3, so
+--      the insert that would create a fourth outstanding reservation is rejected
+--      (matches D6 "<=3 outstanding reservations/user" and the quota kernel, which
+--      refuses when current outstanding >= max_outstanding_uploads_per_user).
 --   4. COMMIT, or ROLLBACK on any failure; never persist a partial decision and never
 --      allow the browser client a direct insert here (it has no grant - see above).
 --   5. /complete runs in ONE transaction: HEAD-verify the real R2 object size/type
 --      (declared size is not proof), then promote media_objects pending -> active with
 --      the real byte_count and flip the reservation to 'completed' together, and
 --      re-validate the usage sum; refuse (and cancel the reservation) if the real
---      size exceeds the reservation bound. Idempotent on repeat.
+--      size exceeds the reservation bound. Idempotent on repeat. Completion never
+--      raises the accounted total (real bytes <= reservation bound), so it needs no
+--      global advisory lock; it must simply flip reservation+media atomically.
 --   6. Cleanup marks stale 'pending' rows 'expired' (never deletes them) and asserting
 --      "expires_at > now()" keeps expired rows out of the accounting.
--- tests/rls_two_user_checklist.sql verifies this accounting query against fixtures
--- once the migration is applied to an authorized project (manual, live-only).
+--   7. Phase D acceptance needs the concurrency tests (plan doc Phase D): two /reserve
+--      calls from DIFFERENT users, each within its own quota but jointly over the
+--      global budget, commit exactly ONE reservation (the advisory lock serializes
+--      them); a same-user burst never leaves more than 3 outstanding rows - the
+--      fourth insert is refused.
+-- tests/rls_two_user_checklist.sql verifies the accounting query against fixtures
+-- once the migration is applied to an authorized project (manual, live-only); the
+-- global advisory-lock serialization itself is exercised by the Phase D tests above.

@@ -129,15 +129,25 @@ values
    'clip_video', 'pending', 'video/mp4')
 on conflict do nothing;
 
+-- A reservation reserves headroom for an object that has NOT completed its upload, so
+-- the pending object below (not the already-active one) is the correct fixture target;
+-- pending rows always carry byte_count = 0 (schema CHECK).
+insert into public.media_objects (user_id, clip_id, kind, status, staging_key, mime_type)
+values
+  ('@USER_B_UUID@',
+   (select id from public.clips_cloud where user_id = '@USER_B_UUID@' and local_clip_id = 'checklist-fixture'),
+   'clip_video', 'pending', 'staging/checklist-b-resv', 'video/mp4')
+on conflict do nothing;
+
 insert into public.upload_reservations (user_id, media_object_id, client_token, expected_bytes, status, expires_at)
 values
   -- fresh pending reservation: counts toward usage
   ('@USER_B_UUID@',
-   (select id from public.media_objects where user_id = '@USER_B_UUID@' and final_key = 'final/checklist-b'),
+   (select id from public.media_objects where user_id = '@USER_B_UUID@' and staging_key = 'staging/checklist-b-resv'),
    'checklist-b', 500000, 'pending', now() + interval '30 minutes'),
   -- expired pending reservation: must be EXCLUDED from usage (Phase D accounting rule)
   ('@USER_B_UUID@',
-   (select id from public.media_objects where user_id = '@USER_B_UUID@' and final_key = 'final/checklist-b'),
+   (select id from public.media_objects where user_id = '@USER_B_UUID@' and staging_key = 'staging/checklist-b-resv'),
    'checklist-b-expired', 700000, 'pending', now() - interval '1 minute')
 on conflict (user_id, client_token) do nothing;
 
@@ -171,8 +181,8 @@ select pg_temp.rls_assert((select count(*) from public.clips_cloud where local_c
   'fixtures present: exactly two checklist clips');
 select pg_temp.rls_assert(
   (select count(*) from public.media_objects m join public.clips_cloud c on c.id = m.clip_id
-   where c.local_clip_id = 'checklist-fixture') = 2,
-  'fixtures present: exactly two checklist media rows');
+   where c.local_clip_id = 'checklist-fixture') = 3,
+  'fixtures present: three checklist media rows (B active, A pending, B pending-reservation target)');
 select pg_temp.rls_assert(
   (select count(*) from public.upload_reservations
    where user_id = '@USER_B_UUID@' and client_token like 'checklist-b%') = 2,
@@ -406,6 +416,17 @@ select pg_temp.rls_assert(
                where user_id = '@USER_B_UUID@' and status = 'pending' and expires_at > now()
                  and client_token like 'checklist-b%'), 0)) = 1500000,
   'accounting: user usage = active media bytes (1000000) + fresh pending reservation (500000); the expired 700000 reservation is excluded');
+
+-- The pending fixture media objects (A and the reservation target B) must contribute
+-- zero bytes: pending rows always hold byte_count = 0, and reservations account for
+-- their own expected_bytes - the counting must never miss or double-count an upload in
+-- progress.
+select pg_temp.rls_assert(
+  (select coalesce(sum(byte_count), 0) from public.media_objects m join public.clips_cloud c on c.id = m.clip_id
+   where c.local_clip_id = 'checklist-fixture' and m.status = 'pending') = 0
+  and (select coalesce(sum(byte_count), 0) from public.media_objects m join public.clips_cloud c on c.id = m.clip_id
+   where c.local_clip_id = 'checklist-fixture' and m.status = 'active') = 1000000,
+  'accounting: pending media carry zero bytes; only the active object counts');
 
 select pg_temp.rls_assert(
   (coalesce((select sum(byte_count) from public.media_objects
