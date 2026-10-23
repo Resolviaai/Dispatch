@@ -1,0 +1,15 @@
+# Copy to wrangler.toml and fill values before deploy. NEVER commit the real file.
+name = "dispatch-cloud"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# Owner sets these via `wrangler secret put` or the dashboard — never in files:
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY,
+#   DISPATCH_WORKER_TOKEN, R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY, R2_ACCOUNT_ID
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "REPLACE_WITH_PRIVATE_BUCKET_NAME"
+
+[triggers]
+# no cron yet; scheduled cleanup/reconciliation is the next batch (plan Phase D/G)
