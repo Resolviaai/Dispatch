@@ -166,7 +166,25 @@ export default {
             results.push({ media_object_id: row.media_object_id, status: `leftover_retry_later:${e instanceof Error ? e.message : e}` });
           }
         }
-        return json(200, { processed: results.length, results });
+        // Phase 3: staging-watch sweep. Presigned PUT URLs can be replayed until
+        // they expire, recreating staging objects after completion/abandonment.
+        // Re-delete every watched key (idempotent) throughout the watch window.
+        const watched = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_watched_staging`, {
+          method: "POST",
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+          body: "{}",
+        });
+        const watchedBody = watched.ok ? await watched.json() : null;
+        const watchedKeys: Array<string> = Array.isArray(watchedBody) ? watchedBody.map((r: { staging_key: string }) => r.staging_key) : [];
+        for (const key of watchedKeys) {
+          try {
+            await env.BUCKET.delete(key);
+          } catch {
+            // retried on the next run; watch rows are pruned only after expiry
+          }
+        }
+        await rpc(env, "cloud_prune_staging_watch", {}).catch(() => {});
+        return json(200, { processed: results.length, swept_staging_keys: watchedKeys.length, results });
       }
 
         const actor = await authenticate(env, request);
