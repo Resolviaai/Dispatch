@@ -37,6 +37,12 @@ $apksigner = Join-Path $buildTools.FullName "apksigner.bat"
 $certs = & $apksigner verify --print-certs $apkOut
 $fp = ($certs | Select-String "SHA-256 digest: ([0-9a-f]+)").Matches.Groups[1].Value
 if (-not $fp) { throw "FATAL: APK is not signed or signature unreadable." }
+# ENFORCED trusted release identity (must match scripts/prepare_release.ps1 AND the
+# updater constant in DispatchUpdateManager; test_release_identity.py keeps them in sync)
+$trustedFingerprint = "94f778490fde8ffd2c7e644d0c8169249f2e79829d769b5f71aa0301c5643804"
+if ($fp -ne $trustedFingerprint) { throw "FATAL: APK signer $fp does not match the trusted Dispatch release identity $trustedFingerprint" }
+# stale-output guard: remove artifacts from any previous failed run before copying
+Remove-Item (Join-Path $outDir "*") -ErrorAction SilentlyContinue
 Write-Host "   package=$pkgName versionCode=$versionCode versionName=$versionName"
 Write-Host "   cert sha256=$fp"
 
@@ -57,7 +63,7 @@ $updateJson = [ordered]@{
   versionCode   = $versionCode
   versionName   = $versionName
   releaseTag    = $Tag
-  publishedAt   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+  generatedAt   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
   releaseNotes  = $notes
   apkAsset      = "Dispatch.apk"
   apkSizeBytes  = $size
