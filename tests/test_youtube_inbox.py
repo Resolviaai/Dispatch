@@ -20,6 +20,10 @@ from dispatch.youtube_inbox.catcher import (
 )
 from dispatch import db
 
+# Privacy-gate fixture: ingestion requires an allowed visibility verdict.
+patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
 
 class TestVTTParser(unittest.TestCase):
     """Test WebVTT subtitle parsing and normalization."""

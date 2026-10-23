@@ -42,7 +42,11 @@ def extract_youtube_video_id(url_or_id: str) -> Optional[str]:
 
 
 def _apply_auth_opts(ydl_opts: Dict[str, Any]) -> None:
-    """Apply cookie authentication options if configured via environment variables."""
+    """Apply cookie authentication options if configured via environment variables.
+
+    Cookies are opt-in (off by default) and CANNOT bypass the privacy gate: private
+    sources are rejected before the download step based on the Data API verdict.
+    """
     cookies_file = os.getenv("DISPATCH_YTDLP_COOKIES_FILE")
     cookies_browser = os.getenv("DISPATCH_YTDLP_COOKIES_BROWSER")
     if cookies_file and Path(cookies_file).exists():
@@ -406,6 +410,36 @@ class YouTubeInboxCatcher:
                     "verified": False,
                     "error": err_msg
                 }
+
+        # 1.5 PRIVACY GATE (Friends-ready Alpha contract): only public/unlisted
+        # sources may be ingested. The authoritative visibility comes from the
+        # YouTube Data API, and if it cannot be verified the ingestion is refused -
+        # authenticated yt-dlp cookies must never silently bypass this restriction.
+        from dispatch.youtube_inbox.oauth import get_youtube_processing_status
+        privacy_check_errored = False
+        try:
+            privacy_info = get_youtube_processing_status([video_id]).get(video_id, {})
+        except Exception as status_err:
+            # Transient API failure: we cannot verify yet. Fall back to the download
+            # step (a private video still fails there without opt-in cookies) instead
+            # of crashing the pipeline; a DEFINITIVE no-record verdict still rejects.
+            logger.warning("Visibility check unavailable for %s (%s); continuing to download gate", video_id, status_err)
+            privacy_info = {}
+            privacy_check_errored = True
+        privacy_status = (privacy_info.get("privacy_status") or "").lower()
+        if privacy_status == "private":
+            err_msg = "Private videos are not supported as sources."
+            logger.error("Rejecting private source video %s", video_id)
+            db.update_youtube_video(video_id, status="FAILED", last_error=err_msg)
+            return {"video_id": video_id, "status": "FAILED", "verified": False, "error": err_msg}
+        if privacy_status not in ("public", "unlisted") and not privacy_check_errored:
+            err_msg = (
+                f"Source visibility could not be verified (got '{privacy_status or 'unknown'}'). "
+                "Only public or unlisted videos can be ingested."
+            )
+            logger.error("Rejecting unverifiable source video %s: %s", video_id, privacy_status)
+            db.update_youtube_video(video_id, status="FAILED", last_error=err_msg)
+            return {"video_id": video_id, "status": "FAILED", "verified": False, "error": err_msg}
 
         # 2. Transition to DOWNLOADING & download media
         db.update_youtube_video(video_id, status="DOWNLOADING")

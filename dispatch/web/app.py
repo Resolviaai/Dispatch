@@ -158,18 +158,11 @@ def verify_dashboard_auth(request: Request) -> None:
         except HTTPException:
             pass
 
-    # Check for trusted first-party Android WebView origin (whether over LAN or loopback)
+    # SECURITY: Origin headers are forgeable by any direct HTTP client and are never
+    # proof of identity. The native Android WebView authenticates with the paired
+    # device token (DispatchBridge.getAuthToken -> x-auth-token), so there is no
+    # origin-only trust path anymore.
     origin_header = request.headers.get("origin", "").strip()
-    if origin_header:
-        try:
-            split_origin = urllib.parse.urlsplit(origin_header)
-            origin_scheme = split_origin.scheme.lower()
-            origin_hostname = (split_origin.hostname or "").lower()
-            if origin_scheme in ("http", "https") and origin_hostname == "appassets.androidplatform.net":
-                return
-        except Exception:
-            pass
-
     client_host = request.client.host if request.client else "unknown"
     if is_trusted_localhost(client_host):
         # Prevent DNS rebinding attacks: strictly validate Host header against allowed loopback hosts

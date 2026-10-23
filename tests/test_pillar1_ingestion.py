@@ -19,6 +19,10 @@ from dispatch.config import YOUTUBE_INBOX_DIR
 from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
 from dispatch.youtube_inbox.oauth import list_authenticated_user_uploads
 
+# Privacy-gate fixture: ingestion requires an allowed visibility verdict.
+patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
 
 class TestPillar1Ingestion(unittest.TestCase):
 

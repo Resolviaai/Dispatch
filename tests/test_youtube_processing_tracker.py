@@ -39,6 +39,7 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
         mock_status = {
             vid: {
                 "video_id": vid,
+                "privacy_status": "unlisted",
                 "upload_status": "uploaded",
                 "processing_status": "processing",
                 "failure_reason": None,
@@ -72,6 +73,7 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
         mock_status = {
             vid: {
                 "video_id": vid,
+                "privacy_status": "unlisted",
                 "upload_status": "processed",
                 "processing_status": "succeeded",
                 "failure_reason": None,
@@ -104,6 +106,7 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
         mock_status = {
             vid: {
                 "video_id": vid,
+                "privacy_status": "unlisted",
                 "upload_status": "failed",
                 "processing_status": "failed",
                 "failure_reason": "transcodingFailed",
@@ -143,6 +146,7 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
         mock_auth_uploads = [
             {
                 "video_id": vid,
+                "privacy_status": "unlisted",
                 "title": "[DISPATCH] Stalled Video",
                 "published_at": old_pub_time,
                 "dispatch_id": "dsp_test_stall"
@@ -152,6 +156,7 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
         mock_status = {
             vid: {
                 "video_id": vid,
+                "privacy_status": "unlisted",
                 "upload_status": "uploaded",
                 "processing_status": "processing",
                 "failure_reason": None,
@@ -262,6 +267,7 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
         status = {
             vid: {
                 "video_id": vid,
+                "privacy_status": "unlisted",
                 "upload_status": "uploaded",
                 "processing_status": "failed",
                 "failure_reason": "transcodingFailed",

@@ -104,7 +104,8 @@ class TestYouTubeIngestEndpoint(unittest.TestCase):
         def run_once(key):
             results[key] = catcher.ingest_video(vid)
 
-        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value={}), \
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}), \
              patch.object(YouTubeInboxCatcher, "fetch_video_info", fake_fetch_info), \
              patch.object(YouTubeInboxCatcher, "download_video", fake_download), \
              patch("dispatch.ingestion.validator.probe_video",
@@ -149,7 +150,8 @@ class TestYouTubeIngestEndpoint(unittest.TestCase):
             f.write_bytes(b"x" * 2048)
             return f
 
-        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value={}), \
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}), \
              patch.object(YouTubeInboxCatcher, "fetch_video_info", fake_fetch_info), \
              patch.object(YouTubeInboxCatcher, "download_video", fake_download), \
              patch("dispatch.ingestion.validator.probe_video",
@@ -196,7 +198,8 @@ class TestYouTubeIngestEndpoint(unittest.TestCase):
             finally:
                 done.set()
 
-        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value={}), \
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}), \
              patch.object(YouTubeInboxCatcher, "fetch_video_info", fake_fetch_info), \
              patch.object(YouTubeInboxCatcher, "download_video", failing_download), \
              patch.object(YouTubeInboxCatcher, "ingest_video", wrapped_ingest):
