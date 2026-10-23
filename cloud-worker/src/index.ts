@@ -99,10 +99,13 @@ export function makeS3(env: Env): AwsClient {
 function s3Url(env: Env, key: string): string {
   return `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${key}`;
 }
-async function presign(env: Env, method: "PUT" | "GET", key: string, mime?: string): Promise<string> {
+async function presign(env: Env, method: "PUT" | "GET", key: string, mime?: string, contentLength?: number): Promise<string> {
+  const headers: Record<string, string> = {};
+  if (mime) headers["content-type"] = mime;
+  if (contentLength !== undefined) headers["content-length"] = String(contentLength);
   const signed = await makeS3(env).sign(
     new Request(`${s3Url(env, key)}?X-Amz-Expires=${PRESIGN_EXPIRES}`,
-      { method, headers: mime ? { "content-type": mime } : undefined }),
+      { method, headers: Object.keys(headers).length ? headers : undefined }),
     { aws: { signQuery: true } },
   );
   return signed.url.toString(); // bearer-capable short-lived URL; never persisted or logged
@@ -134,7 +137,8 @@ export default {
           body: "{}",
         });
         if (!list.ok) return json(502, { error: `list abandoned failed: ${list.status}` });
-        const rows = (await list.json()) as Array<{ media_object_id: string; staging_key: string; reservation_id: string }>;
+        const listBody = await list.json();
+        const rows: Array<{ media_object_id: string; staging_key: string; reservation_id: string }> = Array.isArray(listBody) ? listBody : [];
         const results: Array<{ media_object_id: string; status: string }> = [];
         for (const row of rows ?? []) {
           try {
@@ -145,6 +149,22 @@ export default {
           }
           await rpc(env, "cloud_confirm_abandon", { p_media_object_id: row.media_object_id });
           results.push({ media_object_id: row.media_object_id, status: "abandoned" });
+        }
+        const leftovers = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_promotion_leftovers`, {
+          method: "POST",
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+          body: "{}",
+        });
+        const leftoverBody = leftovers.ok ? await leftovers.json() : null;
+        const leftoverRows: Array<{ media_object_id: string; staging_key: string }> = Array.isArray(leftoverBody) ? leftoverBody : [];
+        for (const row of leftoverRows) {
+          try {
+            await env.BUCKET.delete(row.staging_key);
+            await rpc(env, "cloud_confirm_staging_removed", { p_media_id: row.media_object_id });
+            results.push({ media_object_id: row.media_object_id, status: "promotion_leftover_reaped" });
+          } catch (e) {
+            results.push({ media_object_id: row.media_object_id, status: `leftover_retry_later:${e instanceof Error ? e.message : e}` });
+          }
         }
         return json(200, { processed: results.length, results });
       }
@@ -169,7 +189,7 @@ export default {
           return json(200, {
             reservation_id: r.reservation_id,
             media_object_id: r.media_object_id,
-            upload_url: await presign(env, "PUT", r.staging_key, body.mime_type),
+            upload_url: await presign(env, "PUT", r.staging_key, body.mime_type, body.expected_bytes),
             expires_in: PRESIGN_EXPIRES,
           });
         } catch (e) {
@@ -220,9 +240,15 @@ export default {
           // key so a retry overwrites it rather than accumulating orphans.
           return json(503, { error: `completion persisted failed; retry: ${e instanceof Error ? e.message : e}` });
         }
-        // DB succeeded — only now may staging be removed.
+        // DB succeeded — only now may staging be removed; then release the duplicate.
         await env.BUCKET.delete(obj.staging_key);
-        return json(200, { object_id: stored.id, final_key: stored.final_key, byte_count: stored.byte_count });
+        let stagingCleanupPending = false;
+        try {
+          await rpc(env, "cloud_confirm_staging_removed", { p_media_id: obj.id });
+        } catch {
+          stagingCleanupPending = true; // duplicate stays counted; /cleanup reaps it
+        }
+        return json(200, { object_id: stored.id, final_key: stored.final_key, byte_count: stored.byte_count, staging_cleanup_pending: stagingCleanupPending });
       }
 
       if (request.method === "POST" && url.pathname === "/media-url") {

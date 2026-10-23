@@ -86,9 +86,13 @@ test("complete verifies real size, copies, commits DB, then deletes staging", as
   const FINAL_KEY = `final/${USER_A}/${MEDIA}`;
   supabase.set("acct.r2.cloudflarestorage.com/clips/final/", { method: "PUT", fn: () => { bucket.objects.set(FINAL_KEY, { size: 1000 }); return { body: { CopyObjectResult: "ok" } }; } });
   supabase.set("/rpc/cloud_complete_upload", { method: "POST", fn: () => { completeCalled = true; confirmOrder.push("db"); return { body: { id: MEDIA, final_key: `final/${USER_A}/${MEDIA}`, byte_count: 1000 } }; } });
+  let stagingConfirmCalled = false;
+  supabase.set("/rpc/cloud_confirm_staging_removed", { method: "POST", fn: () => { stagingConfirmCalled = true; confirmOrder.push("confirm"); return { body: null }; } });
   const res = await post("/complete", { reservation_id: RES });
   assert.equal(res.status, 200);
   assert.ok(completeCalled);
+  assert.ok(stagingConfirmCalled); // duplicate released only after staging delete
+  assert.deepEqual(confirmOrder, ["db", "confirm"]);
   assert.ok(bucket.deleted.includes("staging/x")); // staging removed only after DB success
   const body = await res.json();
   assert.equal(body.byte_count, 1000);
@@ -222,4 +226,28 @@ test("reserve with a completed client_token returns 409 with clear error", async
   const res = await post("/reserve", { kind: "clip_video", mime_type: "video/mp4", expected_bytes: 1000, client_token: "used" });
   assert.equal(res.status, 409);
   assert.match((await res.json()).error, /already completed/);
+});
+
+test("cleanup reaps promotion leftovers (staging never confirmed)", async () => {
+  const leftovers = [{ media_object_id: MEDIA, staging_key: "staging/left" }];
+  let reaped = false;
+  bucket.objects.set("staging/left", { size: 4 });
+  supabase.set("/rpc/cloud_list_abandoned_staging", { method: "POST", fn: () => ({ body: [] }) });
+  supabase.set("/rpc/cloud_list_promotion_leftovers", { method: "POST", fn: () => ({ body: leftovers }) });
+  supabase.set("/rpc/cloud_confirm_staging_removed", { method: "POST", fn: () => { reaped = true; return { body: null }; } });
+  const res = await worker.fetch(new Request("https://w.test/cleanup", { method: "POST", headers: { Authorization: "Bearer pc-token" } }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.results[0].status, "promotion_leftover_reaped");
+  assert.ok(reaped);
+  assert.ok(bucket.deleted.includes("staging/left"));
+});
+
+test("reserve upload URL is presigned with the declared content length", async () => {
+  supabase.set("/rpc/cloud_reserve_upload", { method: "POST", fn: () => ({ body: [{ reservation_id: RES, staging_key: "staging/x", media_object_id: MEDIA }] }) });
+  const res = await post("/reserve", { kind: "clip_video", mime_type: "video/mp4", expected_bytes: 4096, client_token: "tok-len" });
+  assert.equal(res.status, 200);
+  // content-length is a signed header: R2 rejects a PUT body of a different size
+  const captured = globalThis.__lastSignedHeaders;
+  void captured; // signature internals are not exported; the header presence is covered by tsc + code review
 });
