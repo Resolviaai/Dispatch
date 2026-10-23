@@ -11,6 +11,7 @@ Covers:
 - Pairwise 9: Multi-Worker Concurrent Lease Claim Collision + Split-Brain Lease Fencing
 - Pairwise 10: Ingestion Deduplication & Idempotent Processing
 """
+import shutil
 import time
 import hashlib
 import threading
@@ -159,11 +160,14 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
 
     def test_p03_approval_flow_plus_multi_platform_outbox_blocked_auth(self):
         """Pairwise 3: Dashboard clip approval for 4 platforms -> outbox marks unauthenticated blocked_needs_auth."""
+        # Real tiny MP4 fixture: the approval path runs a genuine FFmpeg render +
+        # ffprobe validation, so a fake byte-string is correctly rejected (audit L1).
         dummy_video = self.temp_dir / "p03_clip.mp4"
-        dummy_video.write_bytes(b"VIDEO_CLIP_P03")
+        fixture = Path(__file__).resolve().parents[1] / "fixtures" / "tiny_valid.mp4"
+        shutil.copyfile(fixture, dummy_video)
 
         clip_id = save_clip(
-            session_id=None, chunk_id=None, start_time=0.0, end_time=15.0,
+            session_id=None, chunk_id=None, start_time=0.0, end_time=5.0,
             title="P03 Pairwise Clip", hook="High retention", description="Description",
             hashtags="#Shorts", virality_score=88, layout_mode="fit_blur"
         )
