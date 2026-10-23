@@ -21,12 +21,14 @@ language sql security definer set search_path = public as $$
   select
     coalesce(sum(case when mo.user_id = p_user_id and mo.status in ('active','deletion_pending') then mo.byte_count end), 0),
     (select coalesce(sum(ur.expected_bytes), 0) from upload_reservations ur
-       where ur.user_id = p_user_id and ur.status = 'pending' and ur.expires_at > now()),
+       join media_objects m2 on m2.id = ur.media_object_id
+       where ur.user_id = p_user_id and ur.status = 'pending' and m2.status = 'pending'),
     (select count(*) from upload_reservations ur
        where ur.user_id = p_user_id and ur.status = 'pending' and ur.expires_at > now()),
     coalesce(sum(case when mo.status in ('active','deletion_pending') then mo.byte_count end), 0),
     (select coalesce(sum(ur.expected_bytes), 0) from upload_reservations ur
-       where ur.status = 'pending' and ur.expires_at > now())
+       join media_objects m3 on m3.id = ur.media_object_id
+       where ur.status = 'pending' and m3.status = 'pending')
   from media_objects mo;
 $$;
 
@@ -38,7 +40,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   v_quota bigint; v_usage record;
   v_kind_cap bigint; v_obj uuid; v_res uuid; v_key text;
-  v_prev_kind text; v_prev_mime text; v_prev_bytes bigint;
+  v_prev_kind text; v_prev_mime text; v_prev_bytes bigint; v_prev_status text; v_prev_clip uuid;
 begin
   -- Serialize quota decisions globally; per-user row lock taken while held.
   perform pg_advisory_xact_lock(918273645);
@@ -47,13 +49,20 @@ begin
 
   -- Idempotent retry FIRST: a reused client_token must never be rejected by quota
   -- limits and must never alter the original reservation's parameters.
-  select ur.id, ur.expected_bytes, mo.id, mo.staging_key, mo.kind, mo.mime_type
-    into v_res, v_prev_bytes, v_obj, v_key, v_prev_kind, v_prev_mime
+  -- Explicit semantics for a token that is no longer pending (unique (user_id,
+  -- client_token) forbids silent re-use): completed -> reject as completed;
+  -- expired/cancelled -> reject and require a fresh token.
+  select ur.id, ur.status, ur.expected_bytes, mo.id, mo.staging_key, mo.kind, mo.mime_type, mo.clip_id
+    into v_res, v_prev_status, v_prev_bytes, v_obj, v_key, v_prev_kind, v_prev_mime, v_prev_clip
   from upload_reservations ur
   join media_objects mo on mo.id = ur.media_object_id
-  where ur.user_id = p_user_id and ur.client_token = p_client_token and ur.status = 'pending';
+  where ur.user_id = p_user_id and ur.client_token = p_client_token;
   if found then
-    if v_prev_kind <> p_kind or v_prev_mime <> p_mime or v_prev_bytes <> p_expected_bytes then
+    if v_prev_status <> 'pending' then
+      raise exception 'RESERVE: client_token already %; use a new client_token', v_prev_status;
+    end if;
+    if v_prev_kind <> p_kind or v_prev_mime <> p_mime or v_prev_bytes <> p_expected_bytes
+       or v_prev_clip is distinct from p_clip_id then
       raise exception 'RESERVE: client_token reuse with different parameters';
     end if;
     return query select v_res, v_key, v_obj;
@@ -154,6 +163,29 @@ begin
 end;
 $$;
 
+create or replace function public.cloud_list_abandoned_staging()
+returns table (media_object_id uuid, staging_key text, reservation_id uuid)
+language sql security definer set search_path = public as $$
+  -- Reservations past their expiry whose staging media object still exists.
+  -- Accounting keeps counting these (pending media object) until the R2 object
+  -- is confirmed deleted via cloud_confirm_abandon.
+  select mo.id, mo.staging_key, ur.id
+  from upload_reservations ur
+  join media_objects mo on mo.id = ur.media_object_id
+  where ur.status = 'pending' and ur.expires_at <= now() and mo.status = 'pending';
+$$;
+
+create or replace function public.cloud_confirm_abandon(p_media_object_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  -- Called by the Worker ONLY after the R2 staging object deletion succeeded
+  -- (or head confirmed absence). Releases accounting and removes the row.
+  update upload_reservations set status = 'expired'
+    where media_object_id = p_media_object_id and status = 'pending';
+  delete from media_objects where id = p_media_object_id and status = 'pending';
+end;
+$$;
+
 revoke all on function public.cloud_quota_usage(uuid) from public, authenticated, anon;
 revoke all on function public.cloud_fail_reservation_by_media(uuid) from public, authenticated, anon;
 revoke all on function public.cloud_reserve_upload(uuid, text, text, bigint, text, uuid) from public, authenticated, anon;
@@ -164,3 +196,24 @@ revoke all on function public.cloud_mark_deletion(uuid) from public, authenticat
 revoke all on function public.cloud_confirm_deletion(uuid) from public, authenticated, anon;
 -- Only service_role (the Worker) retains execute; verify with:
 --   select proname, proacl from pg_proc where proname like 'cloud_%';
+
+-- Explicit least-privilege grants: service_role only. (Postgres grants EXECUTE on
+-- functions to PUBLIC by default, so the revokes above are load-bearing.)
+grant execute on function public.cloud_quota_usage(uuid) to service_role;
+grant execute on function public.cloud_reserve_upload(uuid, text, text, bigint, text, uuid) to service_role;
+grant execute on function public.cloud_complete_upload(uuid, bigint, text) to service_role;
+grant execute on function public.cloud_reserve_lookup(uuid) to service_role;
+grant execute on function public.cloud_fail_reservation(uuid) to service_role;
+grant execute on function public.cloud_fail_reservation_by_media(uuid) to service_role;
+grant execute on function public.cloud_mark_deletion(uuid) to service_role;
+grant execute on function public.cloud_confirm_deletion(uuid) to service_role;
+grant execute on function public.cloud_list_abandoned_staging() to service_role;
+grant execute on function public.cloud_confirm_abandon(uuid) to service_role;
+
+-- PERMISSION VERIFICATION (run after applying; NOT verified until executed on a
+-- real database). Every cloud_* function must show service_role and NOT PUBLIC:
+--   select p.proname, p.proacl
+--   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--   where n.nspname = 'public' and p.proname like 'cloud_%';
+-- Expected: proacl = {service_role=X/postgres,=X/postgres revoked} — i.e. no
+-- plain '=X' grant for PUBLIC and no authenticated/anon entries.

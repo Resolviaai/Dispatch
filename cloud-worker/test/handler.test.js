@@ -165,3 +165,61 @@ test("cross-user media-url request is forbidden", async () => {
   const res = await post("/media-url", { media_object_id: MEDIA }, pcHeaders(USER_B));
   assert.equal(res.status, 403);
 });
+
+// --- batch 4: cleanup, replay byte_count, token reuse after completion ---
+function cleanupEnv(e = env()) { return e; }
+
+test("cleanup deletes abandoned staging, confirms, and is repeatable", async () => {
+  const abandoned = [{ media_object_id: MEDIA, staging_key: "staging/old", reservation_id: RES }];
+  let confirmCount = 0;
+  bucket.objects.set("staging/old", { size: 10 });
+  let calls = 0;
+  supabase.set("/rpc/cloud_list_abandoned_staging", { method: "POST", fn: () => { calls += 1; return { body: calls === 1 ? abandoned : [] }; } });
+  supabase.set("/rpc/cloud_confirm_abandon", { method: "POST", fn: () => { confirmCount += 1; return { body: null }; } });
+  const e = cleanupEnv();
+  const first = await worker.fetch(new Request("https://w.test/cleanup", { method: "POST", headers: { Authorization: "Bearer pc-token" } }), e);
+  assert.equal(first.status, 200);
+  const body1 = await first.json();
+  assert.equal(body1.processed, 1);
+  assert.equal(body1.results[0].status, "abandoned");
+  assert.equal(confirmCount, 1);
+  assert.ok(bucket.deleted.includes("staging/old"));
+  const second = await worker.fetch(new Request("https://w.test/cleanup", { method: "POST", headers: { Authorization: "Bearer pc-token" } }), e);
+  assert.equal((await second.json()).processed, 0); // idempotent second pass
+});
+
+test("cleanup keeps row and does NOT confirm when R2 delete fails", async () => {
+  const abandoned = [{ media_object_id: MEDIA, staging_key: "staging/bad", reservation_id: RES }];
+  let confirmed = false;
+  supabase.set("/rpc/cloud_list_abandoned_staging", { method: "POST", fn: () => ({ body: abandoned }) });
+  supabase.set("/rpc/cloud_confirm_abandon", { method: "POST", fn: () => { confirmed = true; return { body: null }; } });
+  const e = env();
+  e.BUCKET.delete = async () => { throw new Error("r2 down"); };
+  const res = await worker.fetch(new Request("https://w.test/cleanup", { method: "POST", headers: { Authorization: "Bearer pc-token" } }), e);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.match(body.results[0].status, /delete_failed_retry_later/);
+  assert.equal(confirmed, false); // accounting NOT released while object may exist
+});
+
+test("cleanup rejects non-PC-token callers", async () => {
+  const res = await worker.fetch(new Request("https://w.test/cleanup", { method: "POST", headers: { Authorization: "Bearer wrong" } }), env());
+  assert.equal(res.status, 401);
+});
+
+test("completed-upload replay returns the REAL stored byte count", async () => {
+  supabase.set("/rpc/cloud_reserve_lookup", { method: "POST", fn: () => ({ body: [{ media_object_id: MEDIA, user_id: USER_A, status: "completed" }] }) });
+  supabase.set("media_objects?id=", { fn: () => ({ body: [{ id: MEDIA, user_id: USER_A, status: "active", kind: "clip_video", mime_type: "video/mp4", staging_key: null, final_key: `final/${USER_A}/${MEDIA}`, byte_count: 74123 }] }) });
+  const res = await post("/complete", { reservation_id: RES });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.byte_count, 74123);
+  assert.equal(body.idempotent, true);
+});
+
+test("reserve with a completed client_token returns 409 with clear error", async () => {
+  supabase.set("/rpc/cloud_reserve_upload", { method: "POST", fn: () => ({ status: 400, body: { message: "RESERVE: client_token already completed; use a new client_token" } }) });
+  const res = await post("/reserve", { kind: "clip_video", mime_type: "video/mp4", expected_bytes: 1000, client_token: "used" });
+  assert.equal(res.status, 409);
+  assert.match((await res.json()).error, /already completed/);
+});

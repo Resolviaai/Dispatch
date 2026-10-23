@@ -114,7 +114,7 @@ async function readJson<T>(request: Request): Promise<T | null> {
 
 interface MediaObj {
   id: string; user_id: string; status: string; kind: Kind; mime_type: string;
-  staging_key: string | null; final_key: string | null; expected_bytes?: number;
+  staging_key: string | null; final_key: string | null; expected_bytes?: number; byte_count?: number;
 }
 
 // ---------- routes ----------
@@ -122,7 +122,34 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return json(200, { ok: true });
-    const actor = await authenticate(env, request);
+      if (request.method === "POST" && url.pathname === "/cleanup") {
+        // Trusted-PC maintenance only: the raw worker token, no user impersonation.
+        const token = (request.headers.get("Authorization") ?? "").slice(7);
+        if (!env.DISPATCH_WORKER_TOKEN || token !== env.DISPATCH_WORKER_TOKEN) {
+          return json(401, { error: "unauthorized" });
+        }
+        const list = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_abandoned_staging`, {
+          method: "POST",
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+          body: "{}",
+        });
+        if (!list.ok) return json(502, { error: `list abandoned failed: ${list.status}` });
+        const rows = (await list.json()) as Array<{ media_object_id: string; staging_key: string; reservation_id: string }>;
+        const results: Array<{ media_object_id: string; status: string }> = [];
+        for (const row of rows ?? []) {
+          try {
+            await env.BUCKET.delete(row.staging_key); // throws on R2 failure
+          } catch (e) {
+            results.push({ media_object_id: row.media_object_id, status: `delete_failed_retry_later:${e instanceof Error ? e.message : e}` });
+            continue; // nothing released; the row stays listed for the next run
+          }
+          await rpc(env, "cloud_confirm_abandon", { p_media_object_id: row.media_object_id });
+          results.push({ media_object_id: row.media_object_id, status: "abandoned" });
+        }
+        return json(200, { processed: results.length, results });
+      }
+
+        const actor = await authenticate(env, request);
     if (!actor) return json(401, { error: "unauthorized" });
     const userId = actor.userId;
 
@@ -148,7 +175,7 @@ export default {
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           const status = msg.includes("quota") || msg.includes("cap") || msg.includes("outstanding") ? 413
-            : msg.includes("different parameters") ? 409 : 502;
+            : msg.includes("different parameters") || msg.includes("already ") ? 409 : 502;
           return json(status, { error: msg });
         }
       }
@@ -158,10 +185,10 @@ export default {
         if (!body?.reservation_id) return json(400, { error: "reservation_id required" });
         const lookup = await rpc<{ media_object_id: string; user_id: string; status: string }>(env, "cloud_reserve_lookup", { p_reservation_id: body.reservation_id });
         if (!lookup?.media_object_id) return json(404, { error: "reservation not found" });
-        const obj = await selectOne<MediaObj>(env, "media_objects", lookup.media_object_id, "id,user_id,status,kind,mime_type,staging_key,final_key");
+        const obj = await selectOne<MediaObj>(env, "media_objects", lookup.media_object_id, "id,user_id,status,kind,mime_type,staging_key,final_key,byte_count");
         if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
         if (lookup.status === "completed" && obj.final_key) {
-          return json(200, { object_id: obj.id, final_key: obj.final_key, byte_count: 0, idempotent: true });
+          return json(200, { object_id: obj.id, final_key: obj.final_key, byte_count: obj.byte_count, idempotent: true });
         }
         if (!obj.staging_key) return json(409, { error: "no staging object; re-reserve" });
         // REAL object size from the R2 binding — client claims never govern usage.
