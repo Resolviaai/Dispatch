@@ -33,12 +33,12 @@ class TestCloudConfigEnv(unittest.TestCase):
             env={
                 "DISPATCH_WORKER_URL": "https://worker.example.com",
                 "DISPATCH_WORKER_TOKEN": "secret-token",
-                "DISPATCH_CLOUD_DEFAULT_USER_QUOTA_BYTES": str(2 * GIB),
+                "DISPATCH_CLOUD_DEFAULT_USER_QUOTA_BYTES": "1500000000",
                 "DISPATCH_CLOUD_MAX_OUTSTANDING_UPLOADS": "5",
             }
         )
         self.assertTrue(cfg.worker_ready)
-        self.assertEqual(cfg.default_user_quota_bytes, 2147483648)
+        self.assertEqual(cfg.default_user_quota_bytes, 1500000000)
         self.assertEqual(cfg.max_outstanding_uploads_per_user, 5)
 
     def test_invalid_integer_limit_raises(self):

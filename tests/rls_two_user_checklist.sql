@@ -281,13 +281,13 @@ select pg_temp.rls_expect_reject(
   '42501', 'A cannot delete extraction_requests');
 
 select pg_temp.rls_expect_reject(
-  'insert into public.profiles (user_id, storage_quota_bytes) values (''@USER_A_UUID@'', 2147483648)',
+  'insert into public.profiles (user_id, storage_quota_bytes) values (''@USER_A_UUID@'', 3000000000)',
   '42501', 'A cannot insert profile rows (creation is trigger/service-owned)');
 select pg_temp.rls_expect_reject(
   'delete from public.profiles where user_id = ''@USER_A_UUID@''',
   '42501', 'A cannot delete own profile (account removal is service-only)');
 select pg_temp.rls_expect_reject(
-  'update public.profiles set storage_quota_bytes = 2147483648 where user_id = ''@USER_A_UUID@''',
+  'update public.profiles set storage_quota_bytes = 3000000000 where user_id = ''@USER_A_UUID@''',
   '42501', 'A cannot raise own storage quota (column not granted)');
 
 -- The one allowed client write: display_name self-service.
@@ -326,15 +326,15 @@ grant update (display_name, storage_quota_bytes) on public.profiles to authentic
 set local role authenticated;
 
 select pg_temp.rls_expect_reject(
-  'update public.profiles set display_name = ''ok'', storage_quota_bytes = 2147483648 where user_id = ''@USER_A_UUID@''',
+  'update public.profiles set display_name = ''ok'', storage_quota_bytes = 3000000000 where user_id = ''@USER_A_UUID@''',
   'P0001', 'simulated grant leak: quota guard trigger blocks client quota change even with the column granted');
 
 reset role;
 revoke update (storage_quota_bytes) on public.profiles from authenticated;
 
 select pg_temp.rls_expect_reject(
-  'update public.profiles set storage_quota_bytes = 3221225472 where user_id = ''@USER_A_UUID@''',
-  '23514', 'service-side quota set beyond the hard cap (2 GiB) hits the table CHECK');
+  'update public.profiles set storage_quota_bytes = 11000000000 where user_id = ''@USER_A_UUID@''',
+  '23514', 'service-side quota set beyond the hard cap (10 GB) hits the table CHECK');
 update public.profiles set storage_quota_bytes = 536870912 where user_id = '@USER_A_UUID@';
 select pg_temp.rls_assert(
   (select storage_quota_bytes from public.profiles where user_id = '@USER_A_UUID@') = 536870912,
