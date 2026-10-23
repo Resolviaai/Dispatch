@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -27,6 +29,23 @@ android {
             enableV1Signing = true
             enableV2Signing = true
         }
+        // Release signing from a git-ignored keystore.properties (see OWNER setup);
+        // if absent, assembleRelease produces an unsigned APK and the CI/release
+        // pipeline must not publish it.
+        val keystoreProps = rootProject.file("keystore.properties")
+        if (keystoreProps.exists()) {
+            create("release") {
+                val props = Properties().apply {
+                    keystoreProps.inputStream().use { load(it) }
+                }
+                storeFile = rootProject.file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
     }
 
     buildTypes {
@@ -34,6 +53,9 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
+            if (signingConfigs.findByName("release") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

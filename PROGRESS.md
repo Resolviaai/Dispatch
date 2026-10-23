@@ -555,3 +555,6 @@ No progress, architecture, decision, TODO, recording, database, YouTube, Gemini,
    - Obsolete test artifacts purged and focused unit test suites passing (100% OK).
 
 
+
+## Audit + release checkpoint (2026-10-24)
+Full-repo audit completed: docs/AUDIT_2026-10-24.md. Critical dashboard auth bypass (forgeable Origin) removed and live-verified (403); private-video ingestion gate added with tests; staging-URL replay hole closed with live migration 0004 + cleanup sweep; requirements synced; signed release v1.0.2-alpha published with stable download URL; public landing page live at https://resolviaai.github.io/Dispatch/. Full suite 416 tests: 413 pass, 1 pre-existing failure (e2e p03, bisect-proven), 1 standalone-passing flake. See AGENT_HANDOFF.md §25.

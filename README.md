@@ -57,7 +57,7 @@ The system is built so the user only touches 5 high-value, tactile actions:
 - The phone records and uploads directly to YouTube. It does not discover, pair with, or transfer video to the PC.
 - The PC polls the authenticated YouTube account, downloads each Dispatch upload, processes it, and serves the review dashboard locally.
 - If phone credentials are missing, the upload stays queued; there is no PC/LAN fallback.
-- Private uploads are still the intended phone setting. Confirm that the PC can download a private upload before declaring the end-to-end milestone complete.
+- The phone uploads sessions to the owner's own channel as **unlisted**. NOTE (alpha policy): URL/manual ingestion accepts **public and unlisted** videos only; private videos are rejected by an explicit visibility gate before download (see `dispatch/youtube_inbox/catcher.py`). The owner's own poller flow is unaffected because phone sessions upload as unlisted.
 
 ---
 
@@ -156,7 +156,7 @@ Open **http://localhost:8000** in your browser.
 ## 6. Phone Recording Setup (POCO C65)
 
 ### Option A: Native Android App (Recommended)
-1. Download `Dispatch-POCO-C65-v1.apk` from the dashboard at `http://<your-pc-ip>:8000/download/dispatch.apk`.
+1. Download the signed alpha APK from the public GitHub release: https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk (landing page: https://resolviaai.github.io/Dispatch/). The old dashboard route `/download/dispatch.apk` serves the same APK on your local network only and is not the public distribution path.
 2. Install on your phone.
 3. Features:
    - CameraX FHD 1080p video recording.

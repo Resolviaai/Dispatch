@@ -111,3 +111,5 @@ wrangler.toml
 .dev.vars.*
 .wrangler/
 supabase/.temp/
+android/keystore/
+android/keystore.properties
