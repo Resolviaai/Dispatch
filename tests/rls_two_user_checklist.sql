@@ -1,5 +1,6 @@
 -- =====================================================================================
 -- Dispatch - two-user RLS & write-privilege verification.  MANUAL PROCEDURE (live DB).
+-- STATUS: statically reviewed only; NEVER executed against any database (owner authorization pending). Do not treat as passed.
 -- =====================================================================================
 -- MANDATORY READING:
 --
