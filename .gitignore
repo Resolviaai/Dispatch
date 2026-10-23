@@ -104,3 +104,10 @@ download_drive_video.py
 .dispatch-test-tmp/
 android/.kotlin/
 .zcode/
+
+# real wrangler.toml and dev vars are local-only
+wrangler.toml
+.dev.vars
+.dev.vars.*
+.wrangler/
+supabase/.temp/
