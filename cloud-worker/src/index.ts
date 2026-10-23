@@ -121,6 +121,64 @@ interface MediaObj {
 }
 
 // ---------- routes ----------
+async function runCleanup(env: Env): Promise<Response> {
+      const list = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_abandoned_staging`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      if (!list.ok) return json(502, { error: `list abandoned failed: ${list.status}` });
+      const listBody = await list.json();
+      const rows: Array<{ media_object_id: string; staging_key: string; reservation_id: string }> = Array.isArray(listBody) ? listBody : [];
+      const results: Array<{ media_object_id: string; status: string }> = [];
+      for (const row of rows ?? []) {
+        try {
+          await env.BUCKET.delete(row.staging_key); // throws on R2 failure
+        } catch (e) {
+          results.push({ media_object_id: row.media_object_id, status: `delete_failed_retry_later:${e instanceof Error ? e.message : e}` });
+          continue; // nothing released; the row stays listed for the next run
+        }
+        await rpc(env, "cloud_confirm_abandon", { p_media_object_id: row.media_object_id });
+        results.push({ media_object_id: row.media_object_id, status: "abandoned" });
+      }
+      const leftovers = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_promotion_leftovers`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      const leftoverBody = leftovers.ok ? await leftovers.json() : null;
+      const leftoverRows: Array<{ media_object_id: string; staging_key: string }> = Array.isArray(leftoverBody) ? leftoverBody : [];
+      for (const row of leftoverRows) {
+        try {
+          await env.BUCKET.delete(row.staging_key);
+          await rpc(env, "cloud_confirm_staging_removed", { p_media_id: row.media_object_id });
+          results.push({ media_object_id: row.media_object_id, status: "promotion_leftover_reaped" });
+        } catch (e) {
+          results.push({ media_object_id: row.media_object_id, status: `leftover_retry_later:${e instanceof Error ? e.message : e}` });
+        }
+      }
+      // Phase 3: staging-watch sweep. Presigned PUT URLs can be replayed until
+      // they expire, recreating staging objects after completion/abandonment.
+      // Re-delete every watched key (idempotent) throughout the watch window.
+      const watched = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_watched_staging`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      const watchedBody = watched.ok ? await watched.json() : null;
+      const watchedKeys: Array<string> = Array.isArray(watchedBody) ? watchedBody.map((r: { staging_key: string }) => r.staging_key) : [];
+      for (const key of watchedKeys) {
+        try {
+          await env.BUCKET.delete(key);
+        } catch {
+          // retried on the next run; watch rows are pruned only after expiry
+        }
+      }
+      await rpc(env, "cloud_prune_staging_watch", {}).catch(() => {});
+      return json(200, { processed: results.length, swept_staging_keys: watchedKeys.length, results });
+}
+
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -131,63 +189,10 @@ export default {
         if (!env.DISPATCH_WORKER_TOKEN || token !== env.DISPATCH_WORKER_TOKEN) {
           return json(401, { error: "unauthorized" });
         }
-        const list = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_abandoned_staging`, {
-          method: "POST",
-          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-          body: "{}",
-        });
-        if (!list.ok) return json(502, { error: `list abandoned failed: ${list.status}` });
-        const listBody = await list.json();
-        const rows: Array<{ media_object_id: string; staging_key: string; reservation_id: string }> = Array.isArray(listBody) ? listBody : [];
-        const results: Array<{ media_object_id: string; status: string }> = [];
-        for (const row of rows ?? []) {
-          try {
-            await env.BUCKET.delete(row.staging_key); // throws on R2 failure
-          } catch (e) {
-            results.push({ media_object_id: row.media_object_id, status: `delete_failed_retry_later:${e instanceof Error ? e.message : e}` });
-            continue; // nothing released; the row stays listed for the next run
-          }
-          await rpc(env, "cloud_confirm_abandon", { p_media_object_id: row.media_object_id });
-          results.push({ media_object_id: row.media_object_id, status: "abandoned" });
-        }
-        const leftovers = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_promotion_leftovers`, {
-          method: "POST",
-          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-          body: "{}",
-        });
-        const leftoverBody = leftovers.ok ? await leftovers.json() : null;
-        const leftoverRows: Array<{ media_object_id: string; staging_key: string }> = Array.isArray(leftoverBody) ? leftoverBody : [];
-        for (const row of leftoverRows) {
-          try {
-            await env.BUCKET.delete(row.staging_key);
-            await rpc(env, "cloud_confirm_staging_removed", { p_media_id: row.media_object_id });
-            results.push({ media_object_id: row.media_object_id, status: "promotion_leftover_reaped" });
-          } catch (e) {
-            results.push({ media_object_id: row.media_object_id, status: `leftover_retry_later:${e instanceof Error ? e.message : e}` });
-          }
-        }
-        // Phase 3: staging-watch sweep. Presigned PUT URLs can be replayed until
-        // they expire, recreating staging objects after completion/abandonment.
-        // Re-delete every watched key (idempotent) throughout the watch window.
-        const watched = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_watched_staging`, {
-          method: "POST",
-          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-          body: "{}",
-        });
-        const watchedBody = watched.ok ? await watched.json() : null;
-        const watchedKeys: Array<string> = Array.isArray(watchedBody) ? watchedBody.map((r: { staging_key: string }) => r.staging_key) : [];
-        for (const key of watchedKeys) {
-          try {
-            await env.BUCKET.delete(key);
-          } catch {
-            // retried on the next run; watch rows are pruned only after expiry
-          }
-        }
-        await rpc(env, "cloud_prune_staging_watch", {}).catch(() => {});
-        return json(200, { processed: results.length, swept_staging_keys: watchedKeys.length, results });
+        return runCleanup(env);
       }
 
-        const actor = await authenticate(env, request);
+    const actor = await authenticate(env, request);
     if (!actor) return json(401, { error: "unauthorized" });
     const userId = actor.userId;
 
@@ -304,5 +309,11 @@ export default {
     } catch (e) {
       return json(500, { error: `worker error: ${e instanceof Error ? e.message : String(e)}` });
     }
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // Scheduled cleanup (see [triggers] in wrangler.toml): abandoned staging,
+    // promotion leftovers, and the staging-watch sweep run unattended.
+    ctx.waitUntil(runCleanup(env).then((r) => console.log(`scheduled cleanup: ${r.status}`)));
   },
 };

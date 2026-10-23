@@ -78,7 +78,7 @@ begin
   exception
     when others then
       v_got_sqlstate := SQLSTATE;
-      v_got_message  := MESSAGE_TEXT;
+      v_got_message  := SQLERRM; -- plpgsql exposes the message as SQLERRM (MESSAGE_TEXT is not assignable here)
   end;
 
   if v_got_sqlstate is null then
