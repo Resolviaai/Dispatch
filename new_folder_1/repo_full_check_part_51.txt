@@ -1,0 +1,1466 @@
+﻿
+============================================================
+FILE: scratch_prompt.txt
+============================================================
+<USER_REQUEST>
+DISPATCH — MOBILE TEXT EDITOR, TIMELINE, CAPTION RENDERING & PERFORMANCE REPAIR
+Act as a Staff Frontend Engineer, Video Editor Systems Engineer, Android WebView Engineer, and Performance Engineer.
+Work inside the existing Dispatch workspace using Antigravity. Diagnose the confirmed defects, implement the fixes, and verify the actual application.
+Repository: https://github.com/Resolviaai/Dispatch
+Branch: main
+Frontend: React, TypeScript, Vite, Tailwind CSS
+Android: Kotlin, WebView, bundled React assets
+Backend and rendering: Python, FastAPI, FFmpeg, ASS subtitles
+Target mobile device: POCO C65, Android 13/14, 4 GB RAM
+Target PC: Windows 11, Ryzen 5 5600H, 16 GB RAM
+PRIMARY OBJECTIVE
+Make Dispatch's mobile text editor, subtitle timeline, background rendering, selection controls, and playback experience reliable.
+The reported problems are not just visual. The application has exhibited stuttering, unexpected pauses, clipping, incorrect background effects, cramped timeline cards, and style controls that appear active without a valid selected text layer.
+Fix the actual state, layout, rendering, and performance causes. Do not merely redesign the controls.
+PHASE 1 — INSPECT THE REAL WORKSPACE
+Before editing anything:
+Run git status, inspect the active branch, recent commits, staged changes, unstaged changes, and untracked files.
+Inspect the actual local workspace before relying on public GitHub.
+The connected public main previously showed commit b2b2d0f, dated October 17, 2026. It may not contain the more recent changes reflected in the supplied screenshots and recordings.
+Review all supplied screenshots and both recordings in the available task context. Use their interactions and visible transitions as the behavioral reference.
+Reproduce the issues in the current implementation wherever the environment allows.
+Trace relevant state and data through selection, input editing, the canvas, timeline interactions, playback, persistence, and exported video.
+Record the confirmed defects, their causes, and the verification method for each.
+Preserve all unrelated changes and existing functionality.
+Inspect these paths and locate any equivalent components in the newer local workspace:
+frontend/src/screens/ClipsScreen.tsx
+frontend/src/captions/CaptionStudio.tsx
+frontend/src/captions/CaptionTimeline.tsx
+frontend/src/captions/DispatchCaptionRenderer.tsx
+frontend/src/captions/types.ts
+frontend/src/captions/useCaptionHistory.ts
+dispatch/captions/model.py
+dispatch/captions/exporter.py
+dispatch/web/app.py
+frontend/vite.config.ts
+android/app/src/main/java/com/resolvia/dispatch/MainActivity.kt
+android/app/build.gradle.kts
+Use the supplied CapCut references for intended behavior, but preserve Dispatch's own existing design system and architecture.
+PHASE 2 — REPAIR TEXT ENTRY AND MOBILE KEYBOARD LAYOUT
+The supplied screenshots show a text editing overlay that covers the video, a blue selection outline that becomes clipped, text extending outside the visible area, and a floating Done button that obstructs the preview.
+2.1 Separate text entry from canvas manipulation
+Implement a clear text-entry state.
+Keep the text input separate from the actual video canvas.
+When the user is editing text content, provide a dedicated input field with a clear confirmation action near the keyboard.
+Keep live preview updates synchronized with the text being typed.
+Do not place a large text-editing input box or floating Done button directly over the video.
+Retain a separate application-level Done action only if it has a distinct exit or save purpose.
+Avoid duplicated confirmation controls that perform indistinguishable actions.
+Maintain the cursor position and text selection during typing, correction, and normal viewport resizing.
+Do not steal focus, dismiss the keyboard, recreate the input, or reset the text when React state changes.
+The text content editor and the direct canvas manipulation mode are distinct interactions. They must remain coordinated without sharing an incorrectly positioned input overlay.
+2.2 Fix text clipping and wrapping
+Fix the observed behavior where:
+Enter caption text extends outside its visible container.
+Entered text such as it's a new video is clipped.
+The selected text bounding box extends beyond the preview.
+The keyboard reduces the available preview area but the selection geometry does not adapt.
+Text layout changes produce unexpected character spacing or incorrect selection handles.
+Requirements:
+Wrap text according to the actual content width, configured font, weight, size, and letter spacing.
+Use the same font metrics and coordinate system when calculating the visible text and its selection bounds.
+Keep selection handles attached to the rendered text.
+Recalculate geometry after legitimate layout changes without resetting the user's chosen caption position.
+Provide internal scrolling for longer input where necessary rather than clipping the entered value.
+Handle empty strings, long words, spaces, newlines, and multiline text correctly.
+Keep the active text visible and editable throughout keyboard interactions.
+Do not silently reduce font size or change a user's style merely to force text into the viewport.
+2.3 Handle Android WebView keyboard resizing correctly
+Research reference: Android's [WebView window-insets documentation](https://developer.android.com/develop/ui/views/layout/webapps/understand-window-insets).
+Inspect the actual WebView and Android window configuration.
+Use appropriate viewport resizing, visualViewport measurements where supported, and element/container resize observation.
+Recalculate the preview viewport and text selection geometry when the keyboard appears or disappears.
+Avoid duplicate, conflicting keyboard padding calculations.
+Make sure viewport-resize handlers do not blur the active input or dismiss the keyboard.
+Preserve the intended aspect ratio and normalized caption position when the available preview dimensions change.
+Make dismissal and confirmation return to a stable editor layout.
+Modify Android window-inset configuration only when required by a verified issue. Do not introduce arbitrary delays or repeated keyboard focus calls as a workaround.
+Acceptance test: type a multiline sentence, correct text in the middle, select all text, enter a long phrase, hide the keyboard, reopen it, and confirm the preview and selection geometry remain correct.
+PHASE 3 — ENFORCE VALID TEXT-LAYER SELECTION
+The user reported that Fonts and Styles appear active when no text layer is selected. Changing these controls then produces no visible change in the active editing view.
+Public CaptionStudio.tsx also contains a state fallback that permits the text category to remain active without a selected caption, while the styling patch function falls back to track.groups[0]. Verify whether equivalent logic remains in the local implementation.
+Implement selection-aware actions.
+Required behavior
+When no editable text/caption layer is selected:
+Fonts must be visibly disabled.
+Styles must be visibly disabled.
+Position and other per-layer editing controls must follow their existing disabled-state rules.
+Do not highlight an inactive per-layer editing control merely because the Text category was opened.
+Disabled controls must not open a panel, mutate data, or claim that an edit has been applied.
+Do not silently apply changes to the first caption group.
+Do not modify default caption styling as an unintended side effect of clicking a disabled control.
+Keep legitimate creation/navigation operations available, including Add Text and other actions explicitly intended to create or browse layers without an existing selection.
+When a valid text layer is selected:
+Enable the applicable editing controls.
+Highlight the correct active category and selected layer.
+Apply edits to that selected layer by default.
+Update the preview immediately.
+Preserve intended Apply to All behavior as a separate explicit action.
+Use a single, consistent definition of a valid text-editing selection across the toolbar, styles panel, font panel, canvas, and timeline.
+Do not solve this by adding CSS opacity alone. Enforce the rule in event handlers, action functions, and state transitions.
+Test selection and deselection through tapping text, selecting a timeline block, tapping empty canvas space, switching categories, deleting a layer, and returning from a subpanel.
+PHASE 4 — FIX COLOR SWATCH SELECTION INDICATORS
+The text style panel includes separate controls for:
+Text Fill Color
+Active Word Spoken Highlight
+The current color is difficult to identify because the user cannot clearly see which swatch is selected.
+Implement a CapCut-inspired selected-color treatment.
+Required behavior
+Every color row independently reflects the value currently stored for that property.
+The selected color receives a clearly visible outer ring or double-ring indicator.
+Add enough spacing between the ring and the color fill for the indicator to remain visible on both light and dark colors.
+Preserve a clear distinction between selected, hovered, focused, and unselected states.
+Selecting a color updates the actual caption preview immediately.
+Switching between the primary text color and active-word highlight color must not incorrectly transfer the selection indicator to the wrong row.
+The custom-color control must accurately reflect the custom value when the selected color is not represented by a built-in swatch.
+Existing keyboard, pointer, and touch accessibility must continue to work.
+Apply the same selected-state logic to applicable background, stroke, glow, and shadow color rows.
+Do not hardcode a ring onto the yellow swatch or any other fixed option. Derive the selected state from the actual saved property value.
+Acceptance test:
+Select yellow as the primary text color.
+Verify yellow shows the selected ring in Text Fill Color.
+Change Active Word Spoken Highlight to white.
+Verify white is selected in that row while yellow remains selected in the primary-color row.
+Save, reload, and confirm both settings and indicators remain correct.
+PHASE 5 — REBUILD PER-LINE BACKGROUNDS CORRECTLY
+This is a critical rendering defect.
+The supplied screenshot shows Per-Line selected, but the caption renders separate dark shapes and a blurred/glass-like appearance despite the user not enabling a blur option.
+The public code contains a direct lead: the caption renderer and interactive canvas apply backdrop-filter: blur(8px) when background_enabled is true. The implementation must not use this implicit blur.
+Research reference: [MDN — backdrop-filter](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/backdrop-filter).
+5.1 Background modes must have distinct semantics
+None
+No text background.
+Text, stroke, shadow, and explicitly enabled glow remain independent.
+Per-Line
+One continuous background rectangle for each actual rendered visual line.
+The background must span the line's complete text content with consistent, configurable padding.
+Do not put an independent rounded rectangle behind every word.
+Do not generate one rounded box for every word or every active-word highlight.
+Do not approximate this mode by placing a background around the entire multiline group.
+Apply line spacing, padding, corner treatment, background color, and background opacity consistently.
+The background must track the actual wrapped text lines rather than assuming every caption is a single line.
+Active-word scaling and highlighting must not break the continuity of the background or create gaps between words.
+When wrapping changes, update the line backgrounds without leaving stale shapes behind.
+Full Box
+Render one continuous background surrounding the complete caption text block.
+The background should follow the entire multiline block rather than forming separate boxes behind each line or word.
+Respect configured dimensions, padding, alignment, position, and corner radius.
+5.2 Use real rendered line geometry
+Inspect how text is currently laid out and wrapped in:
+The direct-editing canvas.
+Caption previews.
+The playback caption renderer.
+The text selection/bounding-box implementation.
+The Python ASS exporter and final video-rendering path.
+Implement a deterministic way of identifying the actual visual lines using the correct font resources, effective text style, available width, and layout configuration.
+Use that line layout to position background shapes and to produce an equivalent result in video export.
+Do not make the three modes differ only by changing a CSS class. They must produce visibly different and semantically correct output.
+5.3 Remove implicit blur
+Remove unconditional backdrop-filter: blur(8px) from caption backgrounds.
+Do not activate blur merely because a background is enabled.
+Do not confuse caption background rendering with the separate video Fit + Blur layout.
+If an explicit background-blur control exists in the local workspace, render its setting only when that setting is enabled and persisted.
+If no such control exists, do not invent one to justify the unwanted effect.
+Keep background color and opacity independent of text-fill opacity.
+Do not let changing background color or text opacity unintentionally alter shadow, glow, or the underlying video.
+If the existing schema lacks a background mode, update the shared frontend and Python models and their serialization/deserialization paths. Use a backward-compatible migration/default that preserves existing saved projects as closely as possible.
+Do not introduce a migration that silently disables existing backgrounds.
+5.4 Preview and export must agree
+Implement the same visible background semantics in:
+The style preview.
+The direct-editing canvas.
+Playback.
+Saved caption data.
+Exported ASS and final video.
+If native ASS styles cannot faithfully represent a required background mode, research and implement a supported rendering approach rather than leaving the UI setting cosmetic. Preserve word timing, active-word highlighting, and animation timing.
+Acceptance test using the exact phrase HEY IT'S A NEW VIDEO:
+Turn background off and confirm no background appears.
+Select Per-Line and verify one continuous shape per actual visual line.
+Change the text width until the phrase wraps into a different number of lines.
+Confirm the backgrounds follow those lines.
+Select Full Box and verify one surrounding block.
+Confirm no blur appears unless separately and explicitly enabled.
+Compare the editor preview with a real exported video.
+PHASE 6 — REPAIR SUBTITLE/TEXT TIMELINE CARDS
+The supplied videos show numerous compact subtitle/text cards across the timeline. The cards appear cramped, overlapped, inconsistent, and difficult to read or manipulate. The user also reports glitches and unreliable interactions.
+Inspect CaptionTimeline.tsx and the actual local rendering of subtitle groups and text layers.
+Current public-code issues to investigate
+The public implementation calculates each block's visual width using a minimum width of 32 pixels and places both trim handles, an icon, a label, and selected-duration metadata inside that width. When actual caption durations are short, the contents do not fit.
+The timeline's visual representation must be rebuilt around accurate media timing and usable touch interactions.
+Required behavior
+Accurate dimensions
+Derive a card's horizontal position and visual width from its actual start time, end time, timeline zoom, and scroll offset.
+Do not extend the visible duration just to fit its label.
+Do not let a minimum-width styling rule create false temporal overlap between adjacent subtitles.
+Preserve correct time mapping during zoom, scroll, trim, move, seek, and scrubbing.
+Any enlarged touch target must not interfere with selecting adjacent caption cards.
+Compact card design
+Keep card height and corner radius consistent within each track.
+Keep selected, active, hovered, and inactive states visually distinct.
+Remove forced content that cannot fit inside narrow cards.
+Show a title only when the available width supports it.
+Truncate safely where needed.
+Show duration metadata only when it fits.
+Hide or collapse nonessential labels and icons on short blocks instead of clipping them.
+Display trim handles only when practical, such as for a selected block or when sufficient width is available.
+Keep touch targets usable on mobile even when the visible card is narrow.
+Do not fill the timeline with excessive borders, labels, or decorative elements.
+Preserve the existing track hierarchy and the intended visual relationship between Main, L1, L2, and other tracks.
+Handle overlapping intervals correctly
+Distinguish a true time overlap from false overlap caused by minimum-width styling.
+Ensure adjacent short caption blocks remain individually selectable.
+If actual intervals overlap, represent that situation deliberately rather than letting invisible hit areas select the wrong card.
+Preserve intentional subtitle timing and text grouping.
+Drag, trim, and selection correctness
+Tapping a card selects the correct caption group.
+Dragging moves only the selected group.
+Start and end handles modify only their corresponding boundaries.
+Pointer cancellation and touch interruption cannot leave a drag operation stuck.
+The playhead remains aligned with the correct timestamp.
+A timeline scroll must not accidentally seek the video repeatedly during automatic playhead-following.
+Undo/redo and persistence must retain the correct caption timing.
+Do not change caption segmentation or merge word groups merely to improve appearance. Preserve the actual transcript/timing model unless a demonstrated data defect requires a separate change.
+Acceptance test with many short subtitle groups, adjacent groups, overlapping groups, long text labels, zoomed-out view, zoomed-in view, and selected/unselected cards.
+PHASE 7 — INVESTIGATE AND FIX PLAYBACK STUTTER, LAG, AND PAUSES
+Treat this as a real performance investigation. The reported behavior includes stuttering, lag, and occasions where playback appears to pause.
+Do not assume a single cause. Reproduce and instrument the media stage before selecting the fix.
+7.1 Establish the baseline
+Using the same representative clip, record what the current build does.
+Where the environment permits, measure:
+Time from clip selection to visible poster/preview.
+Time until the first decoded video frame can be displayed.
+Unexpected pauses, buffering, and stalls.
+Video current-time progression and caption synchronization.
+Dropped-frame metrics where supported.
+Timeline playhead movement during uninterrupted playback.
+Excessive React rerenders and long main-thread tasks.
+Network or media requests that compete with selected-video playback.
+Memory and CPU pressure, particularly on the POCO C65.
+Use media events such as playing, waiting, stalled, seeking, seeked, pause, ended, and error to distinguish intentional pauses from buffering or broken playback.
+Do not infer a dropped frame from an arbitrary repeated screen-recording frame. Collect evidence from the real application.
+7.2 Remove competing video work
+Inspect FramedVideoStage and both foreground/background video elements.
+Do not render or decode an unnecessary blurred-background video in layouts that do not use Fit + Blur.
+Do not play a hidden background video when its layout mode is inactive.
+Mount or activate the separate background video only when needed.
+When Fit + Blur is active, keep the foreground and background layers synchronized during play, pause, seek, clip start, and clip end.
+Do not repeatedly reset media time in response to small synchronization differences.
+Investigate play() failures and buffering instead of silently swallowing every rejected promise.
+Avoid unnecessary decoding and network work for unselected clips.
+Do not preload every video.
+Keep the selected video's loading path fast while retaining the intended appearance of every layout mode.
+7.3 Fix the timeline animation loop
+The public CaptionTimeline.tsx has a playhead-following requestAnimationFrame effect whose dependencies include currentTime. That is a confirmed candidate for repeated loop restart during playback.
+Keep the animation loop stable while the media plays.
+Use refs for frequently changing media time where appropriate.
+Avoid restarting the loop on every time update.
+Use requestVideoFrameCallback when supported and use a reliable animation-frame fallback otherwise.
+Clean up scheduled callbacks on pause, unmount, clip change, and relevant interaction changes.
+Prevent multiple overlapping loops.
+Stop automatic follow behavior while the user is dragging or intentionally scrubbing.
+Resume normal follow behavior after the interaction ends.
+Reference: [MDN — HTMLVideoElement.requestVideoFrameCallback](https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback).
+7.4 Reduce playback-driven React work
+Inspect all state changes triggered by onTimeUpdate.
+Do not force the entire editor and timeline to rerender on every video frame when only the playhead or spoken word state needs to change.
+Use narrowly scoped updates for high-frequency media state.
+Keep the active-word color/animation synchronized with actual playback timestamps.
+Avoid expensive line layout, font measurement, filmstrip generation, and background calculations on every time update.
+Cache or reuse deterministic layouts where safe; invalidate them when text, font, width, or style genuinely changes.
+Keep performance optimizations subordinate to correctness.
+7.5 Investigate the reported unexpected pauses
+Trace the playback state machine and clip timebase mapping.
+Identify all intentional pause() calls.
+Verify clip-start and clip-end bounds.
+Check source-time versus pre-rendered-clip time mapping.
+Ensure a seek does not set the application state to an inconsistent time.
+Verify the foreground and optional background videos do not trigger competing state changes.
+Handle failed play() promises and media errors explicitly.
+Ensure loading or waiting events are not treated as user-requested pauses.
+Check that a previous clip's event handlers cannot update the state of a newly selected clip.
+Do not remove legitimate end-of-clip behavior. Playback should stop at the intended end and should resume correctly when the user presses Play again.
+7.6 Measure the result
+Repeat the baseline test with the same media and comparable device conditions.
+Target:
+No unexplained pauses or repeated play/pause transitions.
+No visible caption updates ahead of the corresponding video frame.
+Stable playhead movement during uninterrupted playback.
+No unnecessary background-video decoding outside Fit + Blur.
+No excessive full-editor rerendering attributable to the timeline.
+No regression in seeking, scrubbing, looping, or selected-caption styling.
+Report numeric metrics where available. Do not promise a particular frame rate on an unsupported device/browser configuration; report the measured behavior and the exact environment.
+PHASE 8 — PRESERVE AND VERIFY THE EXISTING CAPTION EDITOR REQUIREMENTS
+These requirements remain part of this repair where the corresponding defects still exist locally.
+Styles and Effects cards
+Keep inline style previews in the existing Styles tab. Do not merge them with caption templates.
+Render actual sample text using the preset's real supported properties.
+Fix malformed, clipped, inconsistent, or incomplete card rendering.
+Keep cards compact and horizontally scrollable with neat style names.
+Make the selected preset visibly distinct.
+Apply the selected appearance to the real caption immediately.
+Repair effect samples such as Cyber Cyan, Sunset Flame, Purple Neon, and Golden Pop if present.
+Fonts
+Remove the Recently Used section.
+Remove the Live Preview heading.
+Use Fonts instead of Available Typefaces.
+Remove debug-style metadata and technical labels from the normal picker.
+Keep search usable.
+Persist favorite fonts and put favorites first.
+Render font names using their actual loaded fonts in the picker, WebView, and export.
+Do not add a duplicate Change Font control inside Styles → Text.
+Font-size consistency
+Use one documented font-size coordinate system.
+Verify the existing 20–80 slider range.
+Remove inconsistent scaling and arbitrary clamps across the direct-editing canvas, preview, and export.
+Ensure meaningful changes to the slider result in measurable visual changes.
+Preserve valid saved font-size values when reopening a project.
+Animation panel
+Remove the redundant Preview button.
+Rename Karaoke to Captions.
+Keep the intended In | Out | Loop | Captions navigation.
+Preserve functional animation modes and their actual effects.
+Remove the redundant Tools header only in the specified expanded panels.
+Blank workspace beside the video should dismiss the expanded panel.
+Clicking the actual video, caption, selection handle, overlay, slider, menu, or panel control must not accidentally dismiss it.
+Apply to All and visibility
+Default edits affect only the selected caption.
+Apply to All is an explicit action affecting eligible existing captions.
+Future edits must not become global by default.
+Separate selected-caption bounding boxes from playback visibility.
+A caption outside its actual timeline interval must not appear in normal playback merely because it is selected.
+Keep selection handles visible while editing only when appropriate for the editing state.
+Preserve existing functionality
+Do not remove genuine animation effects just because an effect name contains Jump.
+Remove the separately unwanted timeline Jump button if it still exists.
+Preserve video layout modes and working playback.
+Keep audio and overlay tools functioning.
+Avoid unrelated redesigns or architectural refactors.
+PHASE 9 — SHARED MODELS, PERSISTENCE, AND VIDEO EXPORT
+Trace all supported text settings through the entire application:
+TypeScript UI → canonical frontend state → saved project/API payload → Python deserialization/model → renderer/exporter → FFmpeg output.
+Update frontend and Python schemas together when required.
+Preserve backwards compatibility for saved captions without new optional fields.
+Apply safe defaults rather than dropping settings.
+Preserve group-level overrides.
+Keep font loading, wrapping, alignment, size, stroke, shadow, glow, background mode, opacity, and supported animations consistent.
+Ensure active-word timing corresponds to the intended word timestamps.
+Ensure selected styles remain saved after switching tabs or reopening the clip.
+Do not expose controls that have no real implementation in preview or export.
+Do not patch minified generated JavaScript.
+For each supported styling feature, test at least one actual rendered/exported output. A successful TypeScript build does not prove styling or animation parity.
+PHASE 10 — ANDROID PACKAGING AND DEVICE VERIFICATION
+Dispatch loads a bundled React app inside Android WebView.
+Verify the current Vite configuration and Android entry point before making assumptions:
+Frontend build output: android/app/src/main/assets/web
+WebView entry: http://appassets.androidplatform.net/assets/web/index.html
+After source changes:
+Build the frontend into the configured asset directory.
+Verify the output includes the latest source changes.
+Build a fresh debug APK with the existing Gradle setup.
+If ADB and the POCO C65 are available, install/update the APK and exercise the real text editor, keyboard, timeline, playback, and style panel.
+Independently verify the hosted Studio and installed Android app where access permits.
+Check the final working-tree diff and protect unrelated user modifications.
+Never manually patch the bundled minified JavaScript as the permanent fix. Rebuild it from source.
+If physical-device access is unavailable, report that limitation explicitly.
+PHASE 11 — REGRESSION TESTS AND ACCEPTANCE CRITERIA
+Run existing tests and add focused regression coverage.
+Text editor
+Keyboard open/close preserves focus and selected text.
+Text is not clipped at common mobile widths.
+Long phrases wrap and remain editable.
+Selection bounds track the actual text.
+Confirmation does not obscure the video.
+Selection and toolbar
+Fonts and Styles are disabled without a selected editable text layer.
+Clicking disabled controls does not modify the first caption or default styles.
+Add Text still works.
+Selecting a text layer enables the appropriate controls.
+Deselecting it restores the correct disabled state.
+Color/style changes affect only the intended layer.
+Colors and backgrounds
+Primary and highlight color swatches show independent selected rings.
+Custom colors are represented correctly.
+None, Per-Line, and Full Box behave differently.
+Per-Line creates one background per rendered visual line, not one box per word.
+Background enabling does not implicitly enable blur.
+No stale line backgrounds remain after resizing, wrapping, or changing text.
+Saved projects and exported videos preserve the intended appearance.
+Timeline
+Short blocks are readable and selectable.
+Adjacent subtitle cards do not overlap because of fake minimum widths.
+Long captions display sensible labels.
+Trim, move, zoom, scroll, and seek preserve exact timestamps.
+Selection, active playback, and drag states remain visually distinct.
+Touch targets cannot accidentally modify neighboring captions.
+Playback
+A representative clip plays without unexplained pauses.
+Captions stay synchronized to the foreground video's media time.
+Play, pause, seeking, scrubbing, and clip-boundary handling remain correct.
+The timeline animation loop does not restart for every media-time update.
+The blurred background is not decoded when its mode is inactive.
+Compare actual before/after metrics and device behavior.
+Build and deployment
+Relevant frontend tests pass.
+Python rendering/export tests pass.
+The frontend build succeeds.
+The Android debug APK builds.
+Physical-device verification is reported separately from build verification.
+FINAL REPORT
+When finished, provide:
+Each confirmed issue and its root cause.
+The implementation changes and affected files.
+What was measured before and after, particularly playback stutter and timeline behavior.
+Results of relevant automated tests and actual build commands.
+Whether the bundled frontend assets and APK were rebuilt.
+Whether the hosted Studio and installed phone app were independently tested.
+Remaining failures or anything that could not be verified.
+Do not mark anything fixed simply because its button looks correct or its browser preview loads.
+Implement the confirmed fixes, verify the acceptance criteria, and stop. Do not start another broad audit or unrelated refactor.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-20T01:15:39+05:30.
+</ADDITIONAL_METADATA>
+
+============================================================
+FILE: scripts\auth_youtube.py
+============================================================
+"""Run the desktop YouTube OAuth flow and report safe status updates to Dispatch."""
+import json
+import os
+import socket
+import sys
+import tempfile
+import urllib.error
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+CLIENT_SECRETS_FILE = ROOT_DIR / "client_secrets.json"
+TOKEN_FILE = ROOT_DIR / "youtube_token.json"
+STATE_PREFIX = "DISPATCH_OAUTH_STATE="
+
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
+
+
+def emit_state(status: str, message: str, **details: Any) -> None:
+    """Emit one machine-readable, non-secret state line for the parent process."""
+    payload: Dict[str, Any] = {"status": status, "message": message}
+    payload.update(details)
+    print(STATE_PREFIX + json.dumps(payload, separators=(",", ":")), flush=True)
+
+
+def _is_network_error(error: BaseException) -> bool:
+    pending = [error]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, (socket.gaierror, TimeoutError, ConnectionError, urllib.error.URLError)):
+            return True
+        reason = getattr(current, "reason", None)
+        if isinstance(reason, BaseException):
+            pending.append(reason)
+        for nested in (current.__cause__, current.__context__):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+    return False
+
+
+def _save_token_atomically(token_json: str) -> None:
+    """Write a completed token without replacing an existing token on partial failure."""
+    fd, temp_name = tempfile.mkstemp(prefix="youtube_token_", suffix=".tmp", dir=ROOT_DIR)
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+            token_file.write(token_json)
+            token_file.flush()
+            os.fsync(token_file.fileno())
+        os.replace(temp_path, TOKEN_FILE)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def run_authentication() -> Optional[Dict[str, str]]:
+    """Complete OAuth, verify the resulting token against YouTube, then save it."""
+    if not CLIENT_SECRETS_FILE.exists():
+        raise FileNotFoundError("client_secrets.json is missing from the Dispatch folder.")
+
+    try:
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from googleapiclient.discovery import build
+    except ImportError as error:
+        raise RuntimeError(
+            "The active Dispatch Python environment is missing Google OAuth packages. "
+            "Run python -m pip install -r requirements.txt with the same Python executable."
+        ) from error
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS_FILE), scopes=SCOPES)
+    emit_state("awaiting_authorization", "Complete Google sign-in in the browser opened by Dispatch.")
+    credentials = flow.run_local_server(
+        port=0,
+        open_browser=True,
+        access_type="offline",
+        prompt="consent",
+    )
+
+    if not credentials.refresh_token:
+        raise RuntimeError("Google did not return a refresh token. Revoke Dispatch access and try again.")
+
+    service = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+    response = service.channels().list(part="snippet", mine=True, maxResults=1).execute()
+    channels = response.get("items", [])
+    if not channels:
+        raise RuntimeError("Google authorization succeeded, but no YouTube channel was returned.")
+
+    _save_token_atomically(credentials.to_json())
+    channel = channels[0]
+    return {
+        "channel_title": str(channel.get("snippet", {}).get("title", "")),
+        "channel_id": str(channel.get("id", "")),
+    }
+
+
+def main() -> int:
+    emit_state("starting", "Starting Google authorization.")
+    try:
+        channel = run_authentication()
+        emit_state("authenticated", "YouTube account connected and verified.", **(channel or {}))
+        print("YouTube OAuth completed and verified.", flush=True)
+        return 0
+    except Exception as error:
+        if _is_network_error(error):
+            message = "Google could not be reached due to a DNS or network error. Check the PC connection and retry."
+        elif isinstance(error, FileNotFoundError):
+            message = str(error)
+        elif isinstance(error, RuntimeError):
+            message = str(error)
+        else:
+            message = "Google authorization failed. Check the OAuth client setup and retry."
+        emit_state("failed", message)
+        print("YouTube OAuth failed: " + message, file=sys.stderr, flush=True)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+============================================================
+FILE: scripts\get_code.py
+============================================================
+"""Fetch and display a fresh 5-minute Dispatch phone pairing code."""
+import json
+import urllib.request
+import urllib.error
+import sys
+
+def main():
+    url = "http://127.0.0.1:8000/api/integrations/youtube/pairing-code"
+    data = json.dumps({"understands_http_risk": True}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Host": "127.0.0.1:8000", "Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            code = result.get("code")
+            print("=" * 45)
+            print(f"  DISPATCH PAIRING CODE:  {code}")
+            print(f"  Valid for: 5 minutes")
+            print("=" * 45)
+    except urllib.error.HTTPError as e:
+        print(f"Error ({e.code}): {e.read().decode('utf-8')}", file=sys.stderr)
+    except Exception as e:
+        print(f"Failed to connect to Dispatch server: {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()
+
+
+============================================================
+FILE: scripts\install_windows_startup.bat
+============================================================
+@echo off
+REM ============================================================================
+REM Dispatch: Windows Automatic Background Startup Installer
+REM Registers Dispatch in Windows Task Scheduler to start silently on boot/logon.
+REM Runs with low priority so it never lags games, browser, or foreground apps.
+REM ============================================================================
+
+set SCRIPT_DIR=%~dp0
+set VBS_PATH=%SCRIPT_DIR%run_background.vbs
+
+echo [*] Registering Dispatch Background Service with Windows Task Scheduler...
+schtasks /create /tn "DispatchAutonomousEngine" /tr "wscript.exe \"%VBS_PATH%\"" /sc onlogon /rl limited /f
+
+if %ERRORLEVEL% equ 0 (
+    echo [SUCCESS] Dispatch will now automatically start silently whenever you log in!
+    echo [INFO] Resource governor enforces below-normal CPU priority and battery preservation.
+) else (
+    echo [ERROR] Failed to register task with error code %ERRORLEVEL%.
+)
+pause
+
+
+============================================================
+FILE: scripts\restore_dhcp.bat
+============================================================
+@echo off
+echo ========================================================
+echo Restoring Wi-Fi IPv4 to Automatic DHCP
+echo ========================================================
+netsh interface ipv4 set address name="Wi-Fi" source=dhcp
+netsh interface ipv4 set dns name="Wi-Fi" source=dhcp
+
+echo.
+echo IP Configuration Restored to DHCP:
+netsh interface ipv4 show addresses "Wi-Fi"
+echo ========================================================
+pause
+
+
+============================================================
+FILE: scripts\run_background.vbs
+============================================================
+' Dispatch Background Silent Launcher (Zero Terminal Popups)
+Set WshShell = CreateObject("WScript.Shell")
+Set FSO = CreateObject("Scripting.FileSystemObject")
+
+' Current directory resolution
+strScriptPath = FSO.GetParentFolderName(WScript.ScriptFullName)
+strProjectRoot = FSO.GetParentFolderName(strScriptPath)
+
+' Check for virtual environment python
+strVenvPython = strProjectRoot & "\.venv\Scripts\python.exe"
+If FSO.FileExists(strVenvPython) Then
+    strPyExe = """" & strVenvPython & """"
+Else
+    strPyExe = "python"
+End If
+
+' Ensure storage directory exists for logs
+strStorageDir = strProjectRoot & "\storage"
+If Not FSO.FolderExists(strStorageDir) Then
+    FSO.CreateFolder(strStorageDir)
+End If
+
+strLogFile = strStorageDir & "\dispatch_daemon.log"
+WshShell.CurrentDirectory = strProjectRoot
+
+' Launch Python dispatch master daemon silently with stderr/stdout redirection
+strCommand = "cmd.exe /c " & strPyExe & " -m dispatch.main >> """ & strLogFile & """ 2>&1"
+WshShell.Run strCommand, 0, False
+
+
+============================================================
+FILE: scripts\set_static_ip_200.bat
+============================================================
+@echo off
+:: Ensure admin privileges
+echo ========================================================
+echo Setting Wi-Fi IPv4 to Permanent Static: 192.168.0.200
+echo Gateway: 192.168.0.1  DNS: 192.168.0.1
+echo ========================================================
+netsh interface ipv4 set address name="Wi-Fi" static 192.168.0.200 255.255.255.0 192.168.0.1
+netsh interface ipv4 set dns name="Wi-Fi" static 192.168.0.1 validate=no
+
+echo.
+echo IP Configuration Updated Successfully:
+netsh interface ipv4 show addresses "Wi-Fi"
+echo.
+echo Your permanent Dispatch URL is now:
+echo http://192.168.0.200:8000/download/dispatch.apk
+echo ========================================================
+pause
+
+
+============================================================
+FILE: scripts\test_clip_preview.py
+============================================================
+"""Interactive test script to preview clip quality and active-word subtitle rendering.
+Takes an existing video (or default speech sample), transcribes with Whisper,
+detects highlights, and renders a vertical 9:16 video with karaoke subtitles.
+"""
+import sys
+import os
+from pathlib import Path
+
+# Add project root to path
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
+from dispatch.transcription.transcriber import transcribe_video
+from dispatch.ai_clips.highlight_finder import extract_clips_gemini, extract_clips_local_heuristic
+from dispatch.video_engine.renderer import render_clip
+from dispatch.config import CLIPS_DIR, PROCESSING_DIR, GEMINI_API_KEY
+
+
+def run_preview(video_path: Path):
+    print("=" * 65)
+    print("DISPATCH CLIP & SUBTITLE QUALITY PREVIEW")
+    print("=" * 65)
+    print(f"Input Video : {video_path}")
+    print(f"Video Size  : {video_path.stat().st_size / (1024*1024):.2f} MB")
+    
+    # 1. Transcription
+    print("\n[Step 1/3] Running Whisper Speech-to-Text (local int8 CPU multithreaded)...")
+    trans_res = transcribe_video(video_path)
+    segments = trans_res.get("segments", [])
+    full_text = trans_res.get("full_text", "")
+    print(f"   Detected Language : {trans_res.get('language')}")
+    print(f"   Total Segments    : {len(segments)}")
+    print(f"   Transcript Preview: \"{full_text[:120]}...\"")
+
+    if not segments:
+        print("[ERROR] No speech segments detected.")
+        return
+
+    # Total duration from last segment
+    total_duration = segments[-1]["end"]
+
+    # 2. Highlight Detection
+    print("\n[Step 2/3] Evaluating Quality & Highlight Detection...")
+    gemini_clips = None
+    if GEMINI_API_KEY:
+        print("   Attempting Gemini Cloud Analysis...")
+        gemini_clips = extract_clips_gemini(full_text, segments)
+
+    if gemini_clips:
+        print("   [INFO] Highlight selected by Gemini Cloud AI")
+        clips = gemini_clips
+    else:
+        print("   [INFO] Gemini API Key not active/set. Using Local Heuristic Engine...")
+        clips = extract_clips_local_heuristic(segments, total_duration)
+
+    if not clips:
+        # Fallback to entire clip
+        clips = [{
+            "start_time": 0.0,
+            "end_time": total_duration,
+            "title": "Dispatch Preview Highlight",
+            "virality_score": 85,
+            "layout_recommendation": "fit_blur"
+        }]
+
+    clip = clips[0]
+    start_t = clip["start_time"]
+    end_t = clip["end_time"]
+    title = clip.get("title", "Dispatch Preview Clip")
+    virality = clip.get("virality_score", 80)
+    layout = clip.get("layout_recommendation", "fit_blur")
+
+    print(f"   Selected Clip : \"{title}\"")
+    print(f"   Time Window   : {start_t:.1f}s -> {end_t:.1f}s (Duration: {end_t - start_t:.1f}s)")
+    print(f"   Virality Score: {virality}/100")
+    print(f"   Framing Mode  : {layout}")
+
+    # 3. Video Rendering with Subtitles
+    print("\n[Step 3/3] Rendering 9:16 Vertical Video with Karaoke Subtitles via FFmpeg...")
+    clip_id = "test_render_preview"
+    output = render_clip(
+        source_video=video_path,
+        clip_id=clip_id,
+        start_time=start_t,
+        end_time=end_t,
+        aspect_ratio="16:9",
+        layout_mode=layout,
+        segments=segments
+    )
+
+    rendered_path = output["video_path"]
+    thumb_path = output["thumbnail_path"]
+
+    print("\n" + "=" * 65)
+    print("PREVIEW RENDER COMPLETE!")
+    print("=" * 65)
+    print(f"Rendered Video : {rendered_path.resolve()}")
+    if thumb_path:
+        print(f"Thumbnail      : {thumb_path.resolve()}")
+    print("\nTo view it immediately, open PowerShell and run:")
+    print(f"   start \"{rendered_path.resolve()}\"")
+    print("=" * 65)
+
+
+if __name__ == "__main__":
+    target = None
+    if len(sys.argv) > 1:
+        target = Path(sys.argv[1])
+    else:
+        default_video = ROOT_DIR / "storage" / "processing" / "phone_sync_chunk_speech.mp4"
+        if default_video.exists():
+            target = default_video
+
+    if not target or not target.exists():
+        print("Please provide a video file path: python scripts/test_clip_preview.py <path_to_video.mp4>")
+        sys.exit(1)
+
+    run_preview(target)
+
+
+============================================================
+FILE: scripts\uninstall_windows_startup.bat
+============================================================
+@echo off
+REM ============================================================================
+REM Dispatch: Windows Background Startup Uninstaller
+REM Removes DispatchAutonomousEngine from Windows Task Scheduler.
+REM ============================================================================
+
+echo [*] Removing Dispatch Background Service from Windows Task Scheduler...
+schtasks /delete /tn "DispatchAutonomousEngine" /f
+
+if %ERRORLEVEL% equ 0 (
+    echo [SUCCESS] Dispatch background auto-start has been removed.
+) else (
+    echo [INFO] Task was not found or already removed.
+)
+pause
+
+
+============================================================
+FILE: site\index.html
+============================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dispatch — Record once. Get ready-to-post clips.</title>
+<meta name="description" content="Dispatch records long talking sessions on your phone, processes them on your Windows PC with AI, and hands back short, captioned vertical clips ready to publish. Invite-only alpha.">
+<meta property="og:title" content="Dispatch — Record once. Get ready-to-post clips.">
+<meta property="og:description" content="Phone recording + PC AI processing = ready-to-post short clips. Android alpha now available.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#161616">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root{--bg:#161616;--surface:#1C1C1C;--border:#2E2E2E;--well:#232323;--well2:#282828;--primary:#2563EB;--primary-h:#3B82F6;--text:#F5F5F5;--muted:#A3A3A3;--ok:#22C55E;--warn:#F59E0B}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{border-bottom:1px solid var(--border);padding:18px 0}
+.nav{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px}
+.logo{width:32px;height:32px;border-radius:8px;background:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+main{padding:56px 0 0}
+.hero{text-align:center;max-width:720px;margin:0 auto 48px}
+.hero h1{font-size:clamp(30px,6vw,52px);line-height:1.15;font-weight:700;letter-spacing:-.02em;margin-bottom:16px}
+.hero h1 span{color:var(--primary-h)}
+.hero p{font-size:clamp(15px,2.5vw,18px);color:var(--muted);max-width:560px;margin:0 auto 28px}
+.cta{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:0 28px;background:var(--primary);color:#fff;font-size:16px;font-weight:600;border-radius:12px;text-decoration:none;box-shadow:0 0 40px rgba(37,99,235,.25);transition:all .15s}
+.cta:hover{background:var(--primary-h)}
+.cta:active{transform:scale(.98)}
+.cta-sub{display:block;margin-top:12px;font-size:12px;color:var(--muted)}
+.badge{display:inline-block;font-size:12px;font-weight:600;color:var(--warn);border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.08);border-radius:999px;padding:4px 12px;margin-bottom:18px}
+section{padding:48px 0;border-top:1px solid var(--border)}
+h2{font-size:clamp(22px,4vw,30px);font-weight:600;margin-bottom:8px;text-align:center}
+.sub{color:var(--muted);text-align:center;max-width:560px;margin:0 auto 36px;font-size:15px}
+.steps{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.steps{grid-template-columns:repeat(3,1fr)}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px}
+.card .num{font-size:12px;font-weight:600;color:var(--primary-h);margin-bottom:10px;display:block}
+.card h3{font-size:17px;font-weight:600;margin-bottom:8px}
+.card p{font-size:14px;color:var(--muted)}
+.card ul{list-style:none;margin-top:10px}
+.card li{font-size:13px;color:var(--muted);padding:5px 0 5px 22px;position:relative}
+.card li::before{content:"";position:absolute;left:0;top:11px;width:8px;height:8px;border-radius:50%;background:var(--primary)}
+.card li.no::before{background:var(--warn)}
+.requirements{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.requirements{grid-template-columns:1fr 1fr}}
+.note{background:var(--well);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13.5px;color:var(--muted)}
+.note strong{color:var(--text)}
+.link{color:var(--primary-h);text-decoration:none;font-weight:500}
+.link:hover{text-decoration:underline}
+.faq{max-width:720px;margin:0 auto}
+.faq .q{font-size:15px;font-weight:600;margin-bottom:6px}
+.faq .a{font-size:14px;color:var(--muted);margin-bottom:22px}
+.download-cta{text-align:center;padding:64px 0}
+footer{border-top:1px solid var(--border);padding:32px 0 40px;font-size:12.5px;color:var(--muted)}
+footer .cols{display:grid;grid-template-columns:1fr;gap:20px}
+@media(min-width:760px){footer .cols{grid-template-columns:2fr 1fr 1fr}}
+footer h4{color:var(--text);font-size:13px;margin-bottom:8px}
+footer a{color:var(--muted);text-decoration:none;display:block;padding:3px 0}
+footer a:hover{color:var(--primary-h)}
+.skip{position:absolute;left:-9999px}
+.skip:focus{left:0;top:0;background:var(--primary);color:#fff;padding:10px 16px;z-index:99;border-radius:0 0 8px 0}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <div class="wrap nav">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
+      Dispatch
+    </div>
+    <a class="link" href="#how-it-works">How it works</a>
+  </div>
+</header>
+<main id="main" class="wrap">
+  <div class="hero">
+    <span class="badge">Invite-only alpha</span>
+    <h1>Record once.<br>Get <span>ready-to-post</span> clips.</h1>
+    <p>Dispatch records your long talking sessions on your phone, edits them into short captioned vertical clips on your own Windows PC, and hands them back for review — nothing to edit manually.</p>
+    <a class="cta" href="https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk" download>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download the Android app
+    </a>
+    <span class="cta-sub">Alpha 1.1.0 &middot; ~11&nbsp;MB &middot; Android 8.0+ &middot; <a class="link" href="#install">install help</a></span>
+  </div>
+
+  <section id="how-it-works">
+    <h2>How it works</h2>
+    <p class="sub">Your phone records. Your PC does the heavy lifting. You just review and approve.</p>
+    <div class="steps">
+      <div class="card">
+        <span class="num">STEP 1 — PHONE</span>
+        <h3>Record your session</h3>
+        <p>Open Dispatch and talk as long as you like. Recording survives screen-off and interruptions; finished sessions upload to your own YouTube channel as private-to-you unlisted footage.</p>
+      </div>
+      <div class="card">
+        <span class="num">STEP 2 — WINDOWS PC</span>
+        <h3>AI processes locally</h3>
+        <p>The Dispatch companion on your Windows PC fetches the session, transcribes it, and its AI picks the strongest moments. Your PC renders finished vertical clips with burned-in captions — no video leaves your machine unprocessed.</p>
+      </div>
+      <div class="card">
+        <span class="num">STEP 3 — REVIEW</span>
+        <h3>Approve &amp; publish</h3>
+        <p>Check each suggested clip, fine-tune the selected range if you want, then approve. Approved clips render exactly as previewed and upload to YouTube from your PC.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="requirements">
+    <h2>What you need</h2>
+    <p class="sub">Dispatch is a two-part system: the phone app plus a companion app on your own Windows PC.</p>
+    <div class="requirements">
+      <div class="card">
+        <h3>Android phone</h3>
+        <ul>
+          <li>Android 8.0 (Oreo) or newer</li>
+          <li>Camera and microphone permission</li>
+          <li>A Google/YouTube account for session uploads</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Windows PC companion</h3>
+        <ul>
+          <li>Windows 10/11 PC on the same Wi-Fi</li>
+          <li>Python 3.11 installed from <a class="link" href="https://github.com/Resolviaai/Dispatch" target="_blank" rel="noopener">the Dispatch repository</a></li>
+          <li>FFmpeg (the setup guide walks you through it)</li>
+          <li>Your own Gemini API key for AI clip selection</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="alpha">
+    <h2>Alpha limitations — the honest list</h2>
+    <p class="sub">This is an early invite-only alpha. Here is exactly what works and what does not yet.</p>
+    <div class="requirements">
+      <div class="card">
+        <h3>Working today</h3>
+        <ul>
+          <li>Phone recording with rolling segments and crash recovery</li>
+          <li>Session upload to your own YouTube channel</li>
+          <li>PC download, transcription, and AI highlight selection</li>
+          <li>Clip review with range editing, then render and YouTube publish</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Not finished yet</h3>
+        <ul>
+          <li class="no">Cloud review from anywhere — currently review happens on your PC</li>
+          <li class="no">Publishing targets beyond YouTube (Instagram, LinkedIn, X are planned)</li>
+          <li class="no">Processing of other people's private videos — only your own uploads and public/unlisted URLs</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Installing the app</h2>
+    <div class="faq">
+      <p class="q">Android blocked the install with "unknown sources"</p>
+      <p class="a">That is expected for any app outside the Play Store. Tap <strong>Settings → Allow from this source</strong> in the dialog (it only trusts this one download), then tap Install again. If it says <em>"App not installed"</em> and you previously installed an early test build of Dispatch, first uninstall the old app (long-press its icon → Uninstall) and install this download again — the first public build uses a new secure signature, and Android never updates across different signatures. Uninstalling clears the old app’s local data, so re-pair it with your PC afterwards.</p>
+      <p class="q">Where is the Windows companion?</p>
+      <p class="a">Clone or download <a class="link" href="https://github.com/Resolviaai/Dispatch" target="_blank" rel="noopener">the Dispatch repository</a> on your PC and follow the README setup steps. The phone app needs the PC companion running on your Wi-Fi to process sessions.</p>
+      <p class="q">Something broke — who do I ask?</p>
+      <p class="a">Open an issue on <a class="link" href="https://github.com/Resolviaai/Dispatch/issues" target="_blank" rel="noopener">the GitHub issue tracker</a> and include what you were doing plus any error text.</p>
+    </div>
+  </section>
+
+  <section class="download-cta">
+    <h2>Ready to try it?</h2>
+    <p class="sub">Alpha 1.1.0 — adds in-app sign-in and connect-YouTube-from-phone. Signed; installs over previous alphas.</p>
+    <a class="cta" href="https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk" download>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download Dispatch.apk
+    </a>
+  </section>
+</main>
+<footer>
+  <div class="wrap cols">
+    <div>
+      <h4>Dispatch</h4>
+      <p>Record once, publish clips. Personal video processing that stays on your own hardware: your phone records, your PC renders, your accounts publish. We never sell or train on your content.</p>
+    </div>
+    <div>
+      <h4>Product</h4>
+      <a href="#how-it-works">How it works</a>
+      <a href="#requirements">Requirements</a>
+      <a href="https://github.com/Resolviaai/Dispatch/releases">Releases</a>
+    </div>
+    <div>
+      <h4>Help</h4>
+      <a href="https://github.com/Resolviaai/Dispatch/issues">Report an issue</a>
+      <a href="https://github.com/Resolviaai/Dispatch#readme">Setup guide</a>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top:24px">&copy; 2026 Resolviaai &middot; Dispatch is invite-only alpha software.</div>
+</footer>
+</body>
+</html>
+
+
+============================================================
+FILE: supabase\.temp\linked-project.json
+============================================================
+{"ref":"aldzlbdxplqkcnyjhzmm","name":"Dispatch","organization_id":"amphkadbahkjklrrdjzd","organization_slug":"amphkadbahkjklrrdjzd"}
+
+============================================================
+FILE: supabase\config.toml
+============================================================
+# For detailed configuration reference documentation, visit:
+# https://supabase.com/docs/guides/local-development/cli/config
+# A string used to distinguish different Supabase projects on the same host. Defaults to the
+# working directory name when running `supabase init`.
+project_id = "supabase"
+
+[api]
+enabled = true
+# Port to use for the API URL.
+port = 54321
+# Schemas to expose in your API. Tables, views and stored procedures in this schema will get API
+# endpoints. `public` and `graphql_public` schemas are included by default.
+schemas = ["public", "graphql_public"]
+# Extra schemas to add to the search_path of every request.
+extra_search_path = ["public", "extensions"]
+# The maximum number of rows returns from a view, table, or stored procedure. Limits payload size
+# for accidental or malicious requests.
+max_rows = 1000
+# Controls whether new tables, views, sequences and functions created in the `public` schema by
+# `postgres` are reachable through the Data API roles (`anon`, `authenticated`, `service_role`)
+# without explicit GRANTs, matching the cloud default. Set to `false` to require explicit GRANTs
+# instead. Left unset, a fresh project falls back to `true`.
+# auto_expose_new_tables = true
+
+[api.tls]
+# Enable HTTPS endpoints locally using a self-signed certificate.
+enabled = false
+# Paths to self-signed certificate pair.
+# cert_path = "../certs/my-cert.pem"
+# key_path = "../certs/my-key.pem"
+
+[db]
+# Port to use for the local database URL.
+port = 54322
+# Port used by db diff command to initialize the shadow database.
+shadow_port = 54320
+# Maximum amount of time to wait for health check when starting the local database.
+health_timeout = "2m"
+# The database major version to use. This has to be the same as your remote database's. Run `SHOW
+# server_version;` on the remote database to check.
+major_version = 17
+# OrioleDB version to use as the Postgres storage engine. Leave empty to use the default engine.
+orioledb_version = ""
+
+[db.pooler]
+enabled = false
+# Port to use for the local connection pooler.
+port = 54329
+# Specifies when a server connection can be reused by other clients.
+# Configure one of the supported pooler modes: `transaction`, `session`.
+pool_mode = "transaction"
+# How many server connections to allow per user/database pair.
+default_pool_size = 20
+# Maximum number of client connections allowed.
+max_client_conn = 100
+
+# [db.vault]
+# secret_key = "env(SECRET_VALUE)"
+
+[db.migrations]
+# If disabled, migrations will be skipped during a db push or reset.
+enabled = true
+# Specifies an ordered list of schema files, directories, or glob patterns that describe your database.
+# Supports paths relative to supabase directory: "./schemas/*.sql", "./database".
+schema_paths = []
+
+[db.seed]
+# If enabled, seeds the database after migrations during a db reset.
+enabled = true
+# Specifies an ordered list of seed files to load during db reset.
+# Supports glob patterns relative to supabase directory: "./seeds/*.sql"
+sql_paths = ["./seed.sql"]
+
+[db.network_restrictions]
+# Enable management of network restrictions.
+enabled = false
+# List of IPv4 CIDR blocks allowed to connect to the database.
+# Defaults to allow all IPv4 connections. Set empty array to block all IPs.
+allowed_cidrs = ["0.0.0.0/0"]
+# List of IPv6 CIDR blocks allowed to connect to the database.
+# Defaults to allow all IPv6 connections. Set empty array to block all IPs.
+allowed_cidrs_v6 = ["::/0"]
+
+# Uncomment to reject non-secure connections to the database.
+# [db.ssl_enforcement]
+# enabled = true
+
+[realtime]
+enabled = true
+# Bind realtime via either IPv4 or IPv6. (default: IPv4)
+# ip_version = "IPv6"
+# The maximum length in bytes of HTTP request headers. (default: 4096)
+# max_header_length = 4096
+
+[studio]
+enabled = true
+# Port to use for Supabase Studio.
+port = 54323
+# External URL of the API server that frontend connects to.
+api_url = "http://127.0.0.1"
+# OpenAI API Key to use for Supabase AI in the Supabase Studio.
+openai_api_key = "env(OPENAI_API_KEY)"
+
+# Email testing server. Emails sent with the local dev setup are not actually sent - rather, they
+# are monitored, and you can view the emails that would have been sent from the web interface.
+[local_smtp]
+enabled = true
+# Port to use for the email testing server web interface.
+port = 54324
+# Uncomment to expose additional ports for testing user applications that send emails.
+# smtp_port = 54325
+# pop3_port = 54326
+# admin_email = "admin@email.com"
+# sender_name = "Admin"
+
+[storage]
+enabled = true
+# The maximum file size allowed (e.g. "5MB", "500KB").
+file_size_limit = "50MiB"
+
+# Uncomment to configure local storage buckets
+# [storage.buckets.images]
+# public = false
+# file_size_limit = "50MiB"
+# allowed_mime_types = ["image/png", "image/jpeg"]
+# objects_path = "./images"
+
+# Allow connections via S3 compatible clients
+[storage.s3_protocol]
+enabled = true
+
+# Image transformation API is available to Supabase Pro plan.
+# [storage.image_transformation]
+# enabled = true
+
+# Store analytical data in S3 for running ETL jobs over Iceberg Catalog
+# This feature is only available on the hosted platform.
+[storage.analytics]
+enabled = false
+max_namespaces = 5
+max_tables = 10
+max_catalogs = 2
+
+# Analytics Buckets is available to Supabase Pro plan.
+# [storage.analytics.buckets.my-warehouse]
+
+# Store vector embeddings in S3 for large and durable datasets
+[storage.vector]
+enabled = true
+max_buckets = 10
+max_indexes = 5
+
+# Vector Buckets is available to Supabase Pro plan.
+# [storage.vector.buckets.documents-openai]
+
+[auth]
+enabled = true
+# The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
+# in emails.
+site_url = "http://127.0.0.1:3000"
+# The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
+# external_url = ""
+# A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
+additional_redirect_urls = ["https://127.0.0.1:3000"]
+# How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
+jwt_expiry = 3600
+# JWT issuer URL. If not set, defaults to auth.external_url.
+# jwt_issuer = ""
+# Path to JWT signing key. DO NOT commit your signing keys file to git.
+# signing_keys_path = "./signing_keys.json"
+# If disabled, the refresh token will never expire.
+enable_refresh_token_rotation = true
+# Allows refresh tokens to be reused after expiry, up to the specified interval in seconds.
+# Requires enable_refresh_token_rotation = true.
+refresh_token_reuse_interval = 10
+# Allow/disallow new user signups to your project.
+enable_signup = true
+# Allow/disallow anonymous sign-ins to your project.
+enable_anonymous_sign_ins = false
+# Allow/disallow testing manual linking of accounts
+enable_manual_linking = false
+# Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
+minimum_password_length = 6
+# Passwords that do not meet the following requirements will be rejected as weak. Supported values
+# are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
+password_requirements = ""
+
+# Configure passkey sign-ins.
+# [auth.passkey]
+# enabled = false
+
+# Configure WebAuthn relying party settings (required when passkey is enabled).
+# [auth.webauthn]
+# rp_display_name = "Supabase"
+# rp_id = "localhost"
+# rp_origins = ["http://127.0.0.1:3000"]
+
+[auth.rate_limit]
+# Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
+email_sent = 2
+# Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
+sms_sent = 30
+# Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
+anonymous_users = 30
+# Number of sessions that can be refreshed in a 5 minute interval per IP address.
+token_refresh = 150
+# Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
+sign_in_sign_ups = 30
+# Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
+token_verifications = 30
+# Number of Web3 logins that can be made in a 5 minute interval per IP address.
+web3 = 30
+
+# Configure one of the supported captcha providers: `hcaptcha`, `turnstile`.
+# [auth.captcha]
+# enabled = true
+# provider = "hcaptcha"
+# secret = ""
+
+[auth.email]
+# Allow/disallow new user signups via email to your project.
+enable_signup = true
+# If enabled, a user will be required to confirm any email change on both the old, and new email
+# addresses. If disabled, only the new email is required to confirm.
+double_confirm_changes = true
+# If enabled, users need to confirm their email address before signing in.
+enable_confirmations = false
+# If enabled, users will need to reauthenticate or have logged in recently to change their password.
+secure_password_change = false
+# Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
+max_frequency = "1s"
+# Number of characters used in the email OTP.
+otp_length = 6
+# Number of seconds before the email OTP expires (defaults to 1 hour).
+otp_expiry = 3600
+
+# Use a production-ready SMTP server
+# [auth.email.smtp]
+# enabled = true
+# host = "smtp.sendgrid.net"
+# port = 587
+# user = "apikey"
+# pass = "env(SENDGRID_API_KEY)"
+# admin_email = "admin@email.com"
+# sender_name = "Admin"
+
+# Uncomment to customize email template
+# [auth.email.template.invite]
+# subject = "You have been invited"
+# content_path = "./supabase/templates/invite.html"
+
+# Uncomment to customize notification email template
+# [auth.email.notification.password_changed]
+# enabled = true
+# subject = "Your password has been changed"
+# content_path = "./supabase/templates/password_changed_notification.html"
+
+[auth.sms]
+# Allow/disallow new user signups via SMS to your project.
+enable_signup = false
+# If enabled, users need to confirm their phone number before signing in.
+enable_confirmations = false
+# Template for sending OTP to users
+template = "Your code is {{ .Code }}"
+# Controls the minimum amount of time that must pass before sending another sms otp.
+max_frequency = "5s"
+
+# Use pre-defined map of phone number to OTP for testing.
+# Keys are the phone number with country code and without the + prefix.
+# [auth.sms.test_otp]
+# 14152127777 = "123456"
+
+# Configure logged in session timeouts.
+# [auth.sessions]
+# Force log out after the specified duration.
+# timebox = "24h"
+# Force log out if the user has been inactive longer than the specified duration.
+# inactivity_timeout = "8h"
+
+# This hook runs before a new user is created and allows developers to reject the request based on the incoming user object.
+# [auth.hook.before_user_created]
+# enabled = true
+# uri = "pg-functions://postgres/auth/before-user-created-hook"
+
+# This hook runs before a token is issued and allows you to add additional claims based on the authentication method used.
+# [auth.hook.custom_access_token]
+# enabled = true
+# uri = "pg-functions://<database>/<schema>/<hook_name>"
+
+# Configure one of the supported SMS providers: `twilio`, `twilio_verify`, `messagebird`, `textlocal`, `vonage`.
+[auth.sms.twilio]
+enabled = false
+account_sid = ""
+message_service_sid = ""
+# DO NOT commit your Twilio auth token to git. Use environment variable substitution instead:
+auth_token = "env(SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN)"
+
+# Multi-factor-authentication is available to Supabase Pro plan.
+[auth.mfa]
+# Control how many MFA factors can be enrolled at once per user.
+max_enrolled_factors = 10
+
+# Control MFA via App Authenticator (TOTP)
+[auth.mfa.totp]
+enroll_enabled = false
+verify_enabled = false
+
+# Configure MFA via Phone Messaging
+[auth.mfa.phone]
+enroll_enabled = false
+verify_enabled = false
+otp_length = 6
+template = "Your code is {{ .Code }}"
+max_frequency = "5s"
+
+# Configure MFA via WebAuthn
+# [auth.mfa.web_authn]
+# enroll_enabled = true
+# verify_enabled = true
+
+# Use an external OAuth provider. The full list of providers are: `apple`, `azure`, `bitbucket`,
+# `discord`, `facebook`, `github`, `gitlab`, `google`, `keycloak`, `linkedin_oidc`, `notion`, `twitch`,
+# `twitter`, `x`, `slack`, `spotify`, `workos`, `zoom`.
+[auth.external.apple]
+enabled = false
+client_id = ""
+# DO NOT commit your OAuth provider secret to git. Use environment variable substitution instead:
+secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
+# Overrides the default auth callback URL derived from auth.external_url.
+redirect_uri = ""
+# Overrides the default auth provider URL. Used to support self-hosted gitlab, single-tenant Azure,
+# or any other third-party OIDC providers.
+url = ""
+# If enabled, the nonce check will be skipped. Required for local sign in with Google auth.
+skip_nonce_check = false
+# If enabled, it will allow the user to successfully authenticate when the provider does not return an email address.
+email_optional = false
+
+# Allow Solana wallet holders to sign in to your project via the Sign in with Solana (SIWS, EIP-4361) standard.
+# You can configure "web3" rate limit in the [auth.rate_limit] section and set up [auth.captcha] if self-hosting.
+[auth.web3.solana]
+enabled = false
+
+# Use Firebase Auth as a third-party provider alongside Supabase Auth.
+[auth.third_party.firebase]
+enabled = false
+# project_id = "my-firebase-project"
+
+# Use Auth0 as a third-party provider alongside Supabase Auth.
+[auth.third_party.auth0]
+enabled = false
+# tenant = "my-auth0-tenant"
+# tenant_region = "us"
+
+# Use AWS Cognito (Amplify) as a third-party provider alongside Supabase Auth.
+[auth.third_party.aws_cognito]
+enabled = false
+# user_pool_id = "my-user-pool-id"
+# user_pool_region = "us-east-1"
+
+# Use Clerk as a third-party provider alongside Supabase Auth.
+[auth.third_party.clerk]
+enabled = false
+# Obtain from https://clerk.com/setup/supabase
+# domain = "example.clerk.accounts.dev"
+
+# OAuth server configuration
+[auth.oauth_server]
+# Enable OAuth server functionality
+enabled = false
+# Path for OAuth consent flow UI
+authorization_url_path = "/oauth/consent"
+# Allow dynamic client registration
+allow_dynamic_registration = false
+
+[edge_runtime]
+enabled = true
+# Supported request policies: `oneshot`, `per_worker`.
+# `per_worker` (default) — enables hot reload during local development.
+# `oneshot` — fallback mode if hot reload causes issues (e.g. in large repos or with symlinks).
+policy = "per_worker"
+# Port to attach the Chrome inspector for debugging edge functions.
+inspector_port = 8083
+# The Deno major version to use.
+deno_version = 2
+
+# [edge_runtime.secrets]
+# secret_key = "env(SECRET_VALUE)"
+
+[analytics]
+enabled = true
+port = 54327
+# Configure one of the supported backends: `postgres`, `bigquery`.
+backend = "postgres"
+
+# Experimental features may be deprecated any time
+[experimental]
+# Configures S3 bucket URL, eg. <bucket_name>.s3-<region>.amazonaws.com
+s3_host = "env(S3_HOST)"
+# Configures S3 bucket region, eg. us-east-1
+s3_region = "env(S3_REGION)"
+# Configures AWS_ACCESS_KEY_ID for S3 bucket
+s3_access_key = "env(S3_ACCESS_KEY)"
+# Configures AWS_SECRET_ACCESS_KEY for S3 bucket
+s3_secret_key = "env(S3_SECRET_KEY)"
+
+# pg-delta is the schema diff engine for db diff / db pull / db remote commit.
+# Set enabled = false to fall back to the legacy migra engine.
+[experimental.pgdelta]
+enabled = true
+# Directory under `supabase/` where declarative files are written.
+# declarative_schema_path = "./schemas"
+# JSON string passed through to pg-delta SQL formatting. When omitted, SQL is
+# formatted with uppercase keywords, indent 2, max width 180, trailing commas,
+# and column/key alignment. Set to "null" to emit raw, unformatted SQL.
+# format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
+

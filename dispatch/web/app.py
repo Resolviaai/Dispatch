@@ -2237,7 +2237,9 @@ async def update_gemini_key(payload: GeminiKeyRequest, request: Request):
     if not gemini_key_regex.match(new_key):
         raise HTTPException(status_code=400, detail="Invalid Gemini API key format")
 
-    env_path = ROOT_DIR / ".env"
+    # P0 fix (audit 2026-10-24): the env path MUST be overridable so the test suite
+    # cannot write the real .env. Tests set DISPATCH_ENV_PATH to an isolated file.
+    env_path = Path(os.getenv("DISPATCH_ENV_PATH", str(ROOT_DIR / ".env")))
     env_content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     if "GEMINI_API_KEY=" in env_content:
         env_content = re.sub(r"GEMINI_API_KEY=.*", f"GEMINI_API_KEY={new_key}", env_content)

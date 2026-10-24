@@ -335,7 +335,7 @@ class SegmenterEngine(
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "DispatchYouTubeUploadWorker",
+            "dispatch_youtube_uploads",
             ExistingWorkPolicy.KEEP,
             ytSyncWork
         )

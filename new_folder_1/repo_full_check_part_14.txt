@@ -1,0 +1,2616 @@
+﻿
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseApiConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApi`(dependencyNotation: Any): Dependency? =
+    add("releaseApi", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApi`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseApi", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApi`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseApi", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApi`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseApi", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseApi' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApi`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseApi", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseApi' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseApi`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseApi", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseApi' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseApi`(constraintNotation: Any): DependencyConstraint =
+    add("releaseApi", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseApi' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseApi`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseApi", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseApi' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseApi`(artifactNotation: Any): PublishArtifact =
+    add("releaseApi", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseApi' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseApi`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseApi", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseApiDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApiDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("releaseApiDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApiDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApiDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApiDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseApiDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseApiDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseApiDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseApiDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseApiDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("releaseApiDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseApiDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseApiDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseApiDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("releaseApiDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseApiDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseApiDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseCompileOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnly`(dependencyNotation: Any): Dependency? =
+    add("releaseCompileOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseCompileOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseCompileOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseCompileOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseCompileOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseCompileOnly`(constraintNotation: Any): DependencyConstraint =
+    add("releaseCompileOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseCompileOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseCompileOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseCompileOnly`(artifactNotation: Any): PublishArtifact =
+    add("releaseCompileOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseCompileOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseCompileOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseCompileOnlyDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnlyDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("releaseCompileOnlyDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnlyDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnlyDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnlyDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseCompileOnlyDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseCompileOnlyDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseCompileOnlyDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseCompileOnlyDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseCompileOnlyDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("releaseCompileOnlyDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseCompileOnlyDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseCompileOnlyDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseCompileOnlyDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("releaseCompileOnlyDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseCompileOnlyDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseCompileOnlyDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseImplementationConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementation`(dependencyNotation: Any): Dependency? =
+    add("releaseImplementation", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementation`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseImplementation", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementation`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementation`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseImplementation' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementation`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseImplementation", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseImplementation' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseImplementation`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseImplementation", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseImplementation`(constraintNotation: Any): DependencyConstraint =
+    add("releaseImplementation", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseImplementation`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseImplementation", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseImplementation`(artifactNotation: Any): PublishArtifact =
+    add("releaseImplementation", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseImplementation`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseImplementation", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseImplementationDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementationDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("releaseImplementationDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementationDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementationDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementationDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseImplementationDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseImplementationDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseImplementationDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseImplementationDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseImplementationDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("releaseImplementationDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseImplementationDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseImplementationDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseImplementationDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("releaseImplementationDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseImplementationDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseImplementationDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseIntransitiveDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseIntransitiveDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("releaseIntransitiveDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseIntransitiveDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseIntransitiveDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseIntransitiveDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseIntransitiveDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseIntransitiveDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseIntransitiveDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseIntransitiveDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseIntransitiveDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("releaseIntransitiveDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseIntransitiveDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseIntransitiveDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseIntransitiveDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("releaseIntransitiveDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseIntransitiveDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseIntransitiveDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseRuntimeOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseRuntimeOnly`(dependencyNotation: Any): Dependency? =
+    add("releaseRuntimeOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseRuntimeOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseRuntimeOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseRuntimeOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseRuntimeOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseRuntimeOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseRuntimeOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseRuntimeOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseRuntimeOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseRuntimeOnly`(constraintNotation: Any): DependencyConstraint =
+    add("releaseRuntimeOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseRuntimeOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseRuntimeOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseRuntimeOnly`(artifactNotation: Any): PublishArtifact =
+    add("releaseRuntimeOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseRuntimeOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseRuntimeOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\ReleaseWearAppConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'releaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseWearApp`(dependencyNotation: Any): Dependency? =
+    add("releaseWearApp", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'releaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseWearApp`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "releaseWearApp", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'releaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseWearApp`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseWearApp`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "releaseWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseWearApp' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`releaseWearApp`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "releaseWearApp", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'releaseWearApp' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`releaseWearApp`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("releaseWearApp", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'releaseWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseWearApp`(constraintNotation: Any): DependencyConstraint =
+    add("releaseWearApp", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'releaseWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`releaseWearApp`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("releaseWearApp", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'releaseWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseWearApp`(artifactNotation: Any): PublishArtifact =
+    add("releaseWearApp", artifactNotation)
+
+/**
+ * Adds an artifact to the 'releaseWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`releaseWearApp`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("releaseWearApp", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\RuntimeOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'runtimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`runtimeOnly`(dependencyNotation: Any): Dependency? =
+    add("runtimeOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'runtimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`runtimeOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "runtimeOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'runtimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`runtimeOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "runtimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'runtimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`runtimeOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "runtimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'runtimeOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`runtimeOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "runtimeOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'runtimeOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`runtimeOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("runtimeOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'runtimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`runtimeOnly`(constraintNotation: Any): DependencyConstraint =
+    add("runtimeOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'runtimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`runtimeOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("runtimeOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'runtimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`runtimeOnly`(artifactNotation: Any): PublishArtifact =
+    add("runtimeOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'runtimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`runtimeOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("runtimeOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestAnnotationProcessorConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testAnnotationProcessor`(dependencyNotation: Any): Dependency? =
+    add("testAnnotationProcessor", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testAnnotationProcessor`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testAnnotationProcessor", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testAnnotationProcessor`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testAnnotationProcessor", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testAnnotationProcessor`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testAnnotationProcessor", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testAnnotationProcessor' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testAnnotationProcessor`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testAnnotationProcessor", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testAnnotationProcessor' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testAnnotationProcessor`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testAnnotationProcessor", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testAnnotationProcessor' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testAnnotationProcessor`(constraintNotation: Any): DependencyConstraint =
+    add("testAnnotationProcessor", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testAnnotationProcessor' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testAnnotationProcessor`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testAnnotationProcessor", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testAnnotationProcessor' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testAnnotationProcessor`(artifactNotation: Any): PublishArtifact =
+    add("testAnnotationProcessor", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testAnnotationProcessor' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testAnnotationProcessor`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testAnnotationProcessor", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestApiConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testApi`(dependencyNotation: Any): Dependency? =
+    add("testApi", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testApi`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testApi", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testApi`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testApi", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testApi`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testApi", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testApi' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testApi`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testApi", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testApi' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testApi`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testApi", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testApi' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testApi`(constraintNotation: Any): DependencyConstraint =
+    add("testApi", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testApi' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testApi`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testApi", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testApi' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testApi`(artifactNotation: Any): PublishArtifact =
+    add("testApi", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testApi' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testApi`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testApi", artifactNotation, configureAction)
+
+
+
+

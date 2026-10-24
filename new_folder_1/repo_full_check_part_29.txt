@@ -1,0 +1,2333 @@
+﻿
+============================================================
+FILE: dispatch\db.py
+============================================================
+"""Database layer for Dispatch.
+Provides thread-safe SQLite connection with WAL mode and schema management.
+"""
+import os
+import sys
+import sqlite3
+import json
+import uuid
+import contextlib
+import logging
+import math
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+from pathlib import Path
+from dispatch.config import (
+    DB_PATH, DATABASE_DIR, DEFAULT_PUBLISH_MODE,
+    MAX_CLIP_DURATION, MIN_CLIP_DURATION,
+)
+
+logger = logging.getLogger("dispatch.db")
+
+CURRENT_SCHEMA_VERSION = 2
+
+
+def verify_db_integrity() -> bool:
+    """Run PRAGMA integrity_check to verify SQLite database health."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA integrity_check;")
+        res = cursor.fetchone()
+        return res[0] == "ok" if res else False
+
+
+def backup_database(backup_dir: Optional[Path] = None) -> Path:
+    """Create a non-blocking hot SQLite snapshot backup using sqlite3.Connection.backup().
+    Preserves rolling 5 latest snapshots.
+    """
+    target_dir = backup_dir or (DATABASE_DIR / "backups")
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = target_dir / f"dispatch_backup_{timestamp}.db"
+
+    source_conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+    dest_conn = sqlite3.connect(str(backup_file))
+    try:
+        source_conn.backup(dest_conn)
+    finally:
+        dest_conn.close()
+        source_conn.close()
+
+    # Retention: keep latest 5 backups
+    existing_backups = sorted(target_dir.glob("dispatch_backup_*.db"), key=lambda p: p.stat().st_mtime)
+    while len(existing_backups) > 5:
+        oldest = existing_backups.pop(0)
+        try:
+            oldest.unlink()
+        except Exception:
+            pass
+
+    return backup_file
+
+
+_default_db_path = DB_PATH
+_test_db_initialized = False
+
+def _ensure_test_schema(db_file: str):
+    global _test_db_initialized
+    if _test_db_initialized:
+        return
+    is_test = "unittest" in sys.modules or "pytest" in sys.modules or bool(os.getenv("DISPATCH_STORAGE_DIR"))
+    if not is_test:
+        return
+    try:
+        raw_conn = sqlite3.connect(str(db_file), timeout=10.0)
+        try:
+            cur = raw_conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions';")
+            if not cur.fetchone():
+                init_db()
+            _test_db_initialized = True
+        finally:
+            raw_conn.close()
+    except Exception:
+        pass
+
+@contextlib.contextmanager
+def get_db_connection():
+    """Context manager yielding a thread-safe SQLite connection with auto-commit and guaranteed close."""
+    import os
+    if DB_PATH != _default_db_path:
+        db_file = str(DB_PATH)
+    else:
+        db_file = os.getenv("DISPATCH_DB_PATH") or str(DB_PATH)
+    _ensure_test_schema(db_file)
+    conn = sqlite3.connect(str(db_file), timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
+    conn.execute("PRAGMA foreign_keys = ON;")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db():
+    """Initialize database tables, migrations, and initial settings."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # Check and update schema version
+        cursor.execute("PRAGMA user_version;")
+        user_ver_row = cursor.fetchone()
+        user_ver = user_ver_row[0] if user_ver_row else 0
+
+        # Sessions Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT NOT NULL DEFAULT 'recording', -- recording, processing, completed, failed
+                total_chunks INTEGER DEFAULT 0,
+                notes TEXT
+            );
+        """)
+
+        # Video Chunks Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunks (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                filename TEXT NOT NULL,
+                filepath TEXT NOT NULL,
+                file_hash TEXT,
+                duration REAL DEFAULT 0.0,
+                width INTEGER DEFAULT 0,
+                height INTEGER DEFAULT 0,
+                aspect_ratio TEXT DEFAULT 'unknown', -- '16:9', '9:16', 'unknown'
+                status TEXT NOT NULL DEFAULT 'incoming', -- incoming, verified, transcribing, transcribed, processed, purged
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE SET NULL
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_filename ON chunks (filename);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks (session_id);")
+
+        # Transcripts Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS transcripts (
+                id TEXT PRIMARY KEY,
+                chunk_id TEXT NOT NULL,
+                session_id TEXT,
+                full_text TEXT NOT NULL,
+                segments_json TEXT NOT NULL, -- JSON array of timestamped words/segments
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
+            );
+        """)
+
+        # Extracted Candidate Clips Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS clips (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                chunk_id TEXT,
+                start_time REAL NOT NULL,
+                end_time REAL NOT NULL,
+                ai_suggested_start_time REAL,
+                ai_suggested_end_time REAL,
+                duration REAL NOT NULL,
+                range_revision INTEGER NOT NULL DEFAULT 0,
+                caption_range_revision INTEGER,
+                caption_range_start REAL,
+                caption_range_end REAL,
+                caption_timing_warning TEXT,
+                title TEXT NOT NULL,
+                hook TEXT,
+                description TEXT,
+                hashtags TEXT,
+                virality_score INTEGER DEFAULT 0,
+                layout_mode TEXT DEFAULT 'fit_blur', -- crop_follow, fit_blur, native_portrait
+                rendered_layout_mode TEXT,           -- records the framing mode used for current video_path
+                render_stale INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'ready_review', -- ready_review, approved, rejected, published
+                publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
+                platform_targets TEXT DEFAULT 'youtube,instagram',
+                video_path TEXT,
+                thumbnail_path TEXT,
+                padded_start REAL,
+                padded_end REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                approved_at TIMESTAMP,
+                published_at TIMESTAMP,
+                FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE SET NULL
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_chunk ON clips (chunk_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_status ON clips (status);")
+
+        # User Rejections Table (for negative feedback learning)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rejections (
+                id TEXT PRIMARY KEY,
+                clip_id TEXT,
+                title TEXT,
+                transcript_snippet TEXT,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # Publishing Outbox (idempotent multi-platform publishing)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS publishing_outbox (
+                id TEXT PRIMARY KEY,
+                clip_id TEXT NOT NULL,
+                platform TEXT NOT NULL, -- youtube, instagram, linkedin, x
+                status TEXT NOT NULL DEFAULT 'queued', -- queued, uploading, published, failed, blocked_needs_auth, reconciliation_required
+                publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
+                attempt_count INTEGER DEFAULT 0,
+                last_error TEXT,
+                idempotency_key TEXT UNIQUE NOT NULL,
+                remote_id TEXT,
+                remote_url TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                attempt_started_at TIMESTAMP,
+                next_retry_at TIMESTAMP,
+                published_at TIMESTAMP,
+                FOREIGN KEY (clip_id) REFERENCES clips (id) ON DELETE CASCADE
+            );
+        """)
+
+        # Global Key-Value Settings
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        """)
+
+        # Checkpointed Pipeline Jobs (Durable State Machine, Leases, Heartbeats)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_jobs (
+                job_id TEXT PRIMARY KEY,
+                chunk_id TEXT NOT NULL,
+                session_id TEXT,
+                current_stage TEXT NOT NULL DEFAULT 'VERIFY', -- VERIFY, TRANSCRIBE, ANALYZE, RENDER, FINALIZE, COMPLETED
+                status TEXT NOT NULL DEFAULT 'QUEUED',        -- QUEUED, PROCESSING, WAITING_FOR_AI, WAITING_FOR_RESOURCES, RETRY_PENDING, COMPLETED, FAILED_PERMANENT
+                worker_id TEXT,
+                lease_expires_at TIMESTAMP,
+                heartbeat_at TIMESTAMP,
+                attempt_count INTEGER DEFAULT 0,
+                max_attempts INTEGER DEFAULT 5,
+                last_error TEXT,
+                next_retry_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
+            );
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_claim 
+            ON pipeline_jobs (status, next_retry_at, lease_expires_at);
+        """)
+
+        # YouTube Transport / Inbox Table (Idempotent cloud queue)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS youtube_inbox (
+                video_id TEXT PRIMARY KEY,
+                dispatch_id TEXT,
+                session_id TEXT,
+                sequence_number INTEGER,
+                title TEXT NOT NULL,
+                channel_id TEXT,
+                upload_time TIMESTAMP,
+                duration REAL DEFAULT 0.0,
+                status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, DOWNLOADING, VALIDATING, DOWNLOADED, WAITING_FOR_TRANSCRIPT, TRANSCRIBED, CLIPS_CREATED, COMPLETED, FAILED
+                local_video_path TEXT,
+                transcript_source TEXT,                    -- 'youtube' or 'whisper'
+                segments_json TEXT,                        -- JSON array of timestamped segments
+                last_error TEXT,
+                retry_count INTEGER DEFAULT 0,
+                discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                transcript_wait_started_at TIMESTAMP,
+                transcript_wait_deadline TIMESTAMP,
+                next_caption_probe_at TIMESTAMP,
+                ai_attempt_count INTEGER DEFAULT 0,
+                next_ai_attempt_at TIMESTAMP,
+                last_ai_error TEXT,
+                source_sha256 TEXT,
+                source_file_size INTEGER
+            );
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_youtube_status 
+            ON youtube_inbox (status, updated_at);
+        """)
+
+        # Migration: Ensure dispatch_id, session_id, sequence_number, transcript wait, and AI retry columns exist if table was created in older schema
+        cursor.execute("PRAGMA table_info(youtube_inbox);")
+        yt_cols = [col[1] for col in cursor.fetchall()]
+        if "dispatch_id" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN dispatch_id TEXT;")
+        if "session_id" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN session_id TEXT;")
+        if "sequence_number" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN sequence_number INTEGER;")
+        if "transcript_wait_started_at" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_started_at TIMESTAMP;")
+        if "transcript_wait_deadline" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_deadline TIMESTAMP;")
+        if "next_caption_probe_at" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_caption_probe_at TIMESTAMP;")
+        if "ai_attempt_count" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN ai_attempt_count INTEGER DEFAULT 0;")
+        if "next_ai_attempt_at" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_ai_attempt_at TIMESTAMP;")
+        if "last_ai_error" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN last_ai_error TEXT;")
+        if "source_sha256" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_sha256 TEXT;")
+        if "source_file_size" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_file_size INTEGER;")
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
+            ON youtube_inbox (dispatch_id);
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_youtube_session_id 
+            ON youtube_inbox (session_id);
+        """)
+
+        # Migration: Ensure caption_data and rendered_layout_mode columns exist on clips table
+        cursor.execute("PRAGMA table_info(clips);")
+        clip_cols = [col[1] for col in cursor.fetchall()]
+        if "caption_data" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_data TEXT;")
+        if "rendered_layout_mode" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN rendered_layout_mode TEXT;")
+            cursor.execute("UPDATE clips SET rendered_layout_mode = layout_mode WHERE rendered_layout_mode IS NULL AND video_path IS NOT NULL;")
+        if "render_stale" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN render_stale INTEGER NOT NULL DEFAULT 0;")
+        if "padded_start" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN padded_start REAL;")
+        if "padded_end" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN padded_end REAL;")
+        if "ai_suggested_start_time" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_start_time REAL;")
+        if "ai_suggested_end_time" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_end_time REAL;")
+        if "range_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN range_revision INTEGER NOT NULL DEFAULT 0;")
+        if "caption_range_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_revision INTEGER;")
+        if "caption_range_start" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_start REAL;")
+        if "caption_range_end" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_end REAL;")
+        if "caption_timing_warning" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_timing_warning TEXT;")
+
+        # Suggestions are immutable candidate metadata. Legacy selected ranges
+        # are the only safe backfill source; never rewrite their active bounds.
+        cursor.execute("""
+            UPDATE clips
+            SET ai_suggested_start_time = COALESCE(ai_suggested_start_time, start_time),
+                ai_suggested_end_time = COALESCE(ai_suggested_end_time, end_time)
+            WHERE ai_suggested_start_time IS NULL OR ai_suggested_end_time IS NULL
+        """)
+        # Legacy caption tracks used the active clip's relative timebase. Record
+        # that anchor once so later trims can rebase saved words safely.
+        cursor.execute("""
+            UPDATE clips
+            SET caption_range_revision = COALESCE(caption_range_revision, range_revision, 0),
+                caption_range_start = COALESCE(caption_range_start, start_time),
+                caption_range_end = COALESCE(caption_range_end, end_time)
+            WHERE caption_data IS NOT NULL AND caption_range_revision IS NULL
+        """)
+
+        # Migration: Ensure outbox columns exist if created with older schema
+        cursor.execute("PRAGMA table_info(publishing_outbox);")
+        outbox_cols = [col[1] for col in cursor.fetchall()]
+        if "updated_at" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN updated_at TIMESTAMP;")
+        if "attempt_started_at" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN attempt_started_at TIMESTAMP;")
+        if "next_retry_at" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN next_retry_at TIMESTAMP;")
+
+        # Default settings if not already present
+        cursor.execute("""
+            INSERT OR IGNORE INTO settings (key, value) VALUES
+            ('publish_mode', ?),
+            ('auto_process', 'true'),
+            ('youtube_enabled', 'true'),
+            ('instagram_enabled', 'true'),
+            ('youtube_inbox_enabled', 'true'),
+            ('youtube_inbox_marker', '[DISPATCH]');
+        """, (DEFAULT_PUBLISH_MODE,))
+
+        conn.commit()
+
+
+# --- Database Helper Functions ---
+
+def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
+
+
+def create_session(notes: str = "", session_id: Optional[str] = None) -> str:
+    if not session_id:
+        session_id = f"sess_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO sessions (id, status, notes) VALUES (?, 'recording', ?)",
+            (session_id, notes)
+        )
+        conn.commit()
+    return session_id
+
+
+def register_chunk(session_id: Optional[str], filename: str, filepath: str, file_hash: str) -> str:
+    chunk_id = f"chk_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if session_id:
+            cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
+        cursor.execute("""
+            INSERT INTO chunks (id, session_id, filename, filepath, file_hash, status)
+            VALUES (?, ?, ?, ?, ?, 'incoming')
+        """, (chunk_id, session_id, filename, filepath, file_hash))
+        conn.commit()
+    return chunk_id
+
+
+def get_chunk_by_id(chunk_id: str) -> Optional[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_chunk_by_file_hash(file_hash: str) -> Optional[Dict[str, Any]]:
+    """Retrieve chunk by its file_hash identifier."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM chunks WHERE file_hash = ?", (file_hash,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_chunk_metadata(chunk_id: str, duration: float, width: int, height: int, aspect_ratio: str, status: str = 'verified'):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE chunks 
+            SET duration = ?, width = ?, height = ?, aspect_ratio = ?, status = ?
+            WHERE id = ?
+        """, (duration, width, height, aspect_ratio, status, chunk_id))
+        conn.commit()
+
+
+def save_transcript(chunk_id: str, session_id: Optional[str], full_text: str, segments: List[Dict[str, Any]]) -> str:
+    transcript_id = f"tx_{uuid.uuid4().hex[:8]}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Enforce idempotency: one authoritative transcript per chunk_id
+        cursor.execute("DELETE FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+        cursor.execute("""
+            INSERT INTO transcripts (id, chunk_id, session_id, full_text, segments_json)
+            VALUES (?, ?, ?, ?, ?)
+        """, (transcript_id, chunk_id, session_id, full_text, json.dumps(segments, ensure_ascii=False)))
+        cursor.execute("UPDATE chunks SET status = 'transcribed' WHERE id = ?", (chunk_id,))
+        conn.commit()
+    return transcript_id
+
+
+def save_clip(
+    session_id: Optional[str],
+    chunk_id: Optional[str],
+    start_time: float,
+    end_time: float,
+    title: str,
+    hook: str,
+    description: str,
+    hashtags: str,
+    virality_score: int,
+    layout_mode: str,
+    publish_mode: str = "private",
+    platform_targets: str = "youtube",
+    rendered_layout_mode: Optional[str] = None,
+    duration: Optional[float] = None,
+    padded_start: Optional[float] = None,
+    padded_end: Optional[float] = None
+) -> str:
+    clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    final_duration = round(float(duration), 2) if duration is not None else round(end_time - start_time, 2)
+    p_start = padded_start if padded_start is not None else max(0.0, start_time - 4.0)
+    p_end = padded_end if padded_end is not None else end_time + 4.0
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO clips (
+                id, session_id, chunk_id, start_time, end_time,
+                ai_suggested_start_time, ai_suggested_end_time, range_revision, duration,
+                title, hook, description, hashtags, virality_score,
+                layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
+                padded_start, padded_end
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?)
+        """, (
+            clip_id, session_id, chunk_id, start_time, end_time,
+            start_time, end_time, final_duration,
+            title, hook, description, hashtags, virality_score,
+            layout_mode, rendered_layout_mode, publish_mode, platform_targets,
+            p_start, p_end
+        ))
+        conn.commit()
+    return clip_id
+
+
+def update_clip_trim(
+    clip_id: str,
+    start_time: float,
+    end_time: float,
+    source_duration: Optional[float] = None,
+    expected_range_revision: Optional[int] = None,
+) -> bool:
+    """Persist a source-relative range within source and product duration limits."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT cl.video_path, cl.start_time, cl.end_time, cl.range_revision,
+                   ch.duration AS source_duration
+            FROM clips cl LEFT JOIN chunks ch ON ch.id = cl.chunk_id
+            WHERE cl.id = ?
+        """, (clip_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        if expected_range_revision is not None and int(row["range_revision"] or 0) != expected_range_revision:
+            return False
+
+        known_source_duration = source_duration
+        if known_source_duration is None and row["source_duration"] is not None:
+            known_source_duration = float(row["source_duration"])
+        if (
+            known_source_duration is None
+            or not math.isfinite(float(known_source_duration))
+            or known_source_duration <= 0
+            or not math.isfinite(float(start_time))
+            or not math.isfinite(float(end_time))
+        ):
+            return False
+
+        clamped_start = round(float(start_time), 3)
+        clamped_end = round(float(end_time), 3)
+        new_duration = clamped_end - clamped_start
+        if (
+            clamped_start < 0
+            or clamped_end > known_source_duration
+            or new_duration < MIN_CLIP_DURATION
+            or new_duration > MAX_CLIP_DURATION
+        ):
+            return False
+
+        new_duration = round(new_duration, 2)
+        changed = (
+            abs(clamped_start - float(row["start_time"])) > 0.001
+            or abs(clamped_end - float(row["end_time"])) > 0.001
+        )
+        cursor.execute("""
+            UPDATE clips 
+            SET start_time = ?, end_time = ?, duration = ?,
+                range_revision = range_revision + ?,
+                render_stale = CASE WHEN ? = 1 AND video_path IS NOT NULL THEN 1 ELSE render_stale END,
+                caption_timing_warning = CASE WHEN ? = 1 THEN NULL ELSE caption_timing_warning END
+            WHERE id = ? AND range_revision = ?
+        """, (
+            clamped_start, clamped_end, new_duration, int(changed), int(changed), int(changed),
+            clip_id, int(row["range_revision"] or 0),
+        ))
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def update_clip_media(
+    clip_id: str,
+    video_path: str,
+    thumbnail_path: Optional[str],
+    rendered_layout_mode: Optional[str] = None,
+    expected_range_revision: Optional[int] = None,
+) -> bool:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        revision_clause = " AND range_revision = ?" if expected_range_revision is not None else ""
+        if rendered_layout_mode:
+            cursor.execute("""
+                UPDATE clips 
+                SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = ?, render_stale = 0, status = 'ready_review'
+                WHERE id = ?""" + revision_clause,
+                (video_path, thumbnail_path, rendered_layout_mode, clip_id)
+                + ((expected_range_revision,) if expected_range_revision is not None else ()))
+        else:
+            cursor.execute("""
+                UPDATE clips 
+                SET video_path = ?, thumbnail_path = ?, status = 'ready_review'
+                WHERE id = ?""" + revision_clause,
+                (video_path, thumbnail_path, clip_id)
+                + ((expected_range_revision,) if expected_range_revision is not None else ()))
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def approve_clip(
+    clip_id: str,
+    custom_title: Optional[str] = None,
+    custom_tags: Optional[str] = None,
+    custom_mode: Optional[str] = None,
+    custom_platforms: Optional[str] = None,
+    custom_layout: Optional[str] = None
+):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        clip = cursor.fetchone()
+        if not clip:
+            return
+
+        title = custom_title if custom_title is not None else clip["title"]
+        hashtags = custom_tags if custom_tags is not None else clip["hashtags"]
+        publish_mode = custom_mode if custom_mode is not None else clip["publish_mode"]
+        target_platforms = custom_platforms if custom_platforms is not None else (clip["platform_targets"] or "youtube,instagram")
+        layout_mode = custom_layout if custom_layout is not None else (clip["layout_mode"] or "fit_blur")
+
+        cursor.execute("""
+            UPDATE clips 
+            SET status = 'approved', title = ?, hashtags = ?, publish_mode = ?, platform_targets = ?, layout_mode = ?, approved_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (title, hashtags, publish_mode, target_platforms, layout_mode, clip_id))
+
+        # Enqueue to publishing outbox for each selected platform
+        platforms = [p.strip() for p in target_platforms.split(",") if p.strip()]
+        for plat in platforms:
+            idempotency_key = f"{clip_id}_{plat}"
+            cursor.execute("""
+                INSERT OR IGNORE INTO publishing_outbox (
+                    id, clip_id, platform, status, publish_mode, idempotency_key
+                ) VALUES (?, ?, ?, 'queued', ?, ?)
+            """, (f"pub_{uuid.uuid4().hex[:8]}", clip_id, plat, publish_mode, idempotency_key))
+
+        conn.commit()
+
+
+def get_clip_caption_data(clip_id: str) -> Optional[str]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT caption_data FROM clips WHERE id = ?", (clip_id,))
+        row = cursor.fetchone()
+        return row["caption_data"] if row and row["caption_data"] else None
+
+
+def save_clip_caption_data(
+    clip_id: str,
+    caption_json: str,
+    expected_range_revision: Optional[int] = None,
+    source_range_start: Optional[float] = None,
+    source_range_end: Optional[float] = None,
+    timing_warning: Optional[str] = None,
+) -> bool:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if expected_range_revision is None or source_range_start is None or source_range_end is None:
+            cursor.execute(
+                "SELECT range_revision, start_time, end_time FROM clips WHERE id = ?", (clip_id,)
+            )
+            clip = cursor.fetchone()
+            if not clip:
+                return False
+            if expected_range_revision is None:
+                expected_range_revision = int(clip["range_revision"] or 0)
+            if source_range_start is None:
+                source_range_start = float(clip["start_time"] or 0.0)
+            if source_range_end is None:
+                source_range_end = float(clip["end_time"] or 0.0)
+        cursor.execute("""
+            UPDATE clips
+            SET caption_data = ?, caption_range_revision = ?, caption_range_start = ?, caption_range_end = ?,
+                caption_timing_warning = ?
+            WHERE id = ? AND range_revision = ?
+        """, (
+            caption_json, expected_range_revision, source_range_start, source_range_end,
+            timing_warning, clip_id, expected_range_revision,
+        ))
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def get_clip_by_id(clip_id: str) -> Optional[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
+    """Reject a clip: immediately unlinks physical MP4 & thumbnail files from disk,
+    records rejection in rejections table for negative preference learning,
+    and updates clip status to 'rejected'.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        clip = cursor.fetchone()
+        if not clip:
+            return False
+
+        # 1. Immediately delete physical rendered media files (MP4 & thumbnail) from disk
+        for file_key in ("video_path", "thumbnail_path"):
+            val = clip[file_key]
+            if val:
+                try:
+                    p = Path(val)
+                    if p.exists() and p.is_file():
+                        p.unlink()
+                        logger.info("Deleted %s (%s) for rejected clip %s", file_key, p.name, clip_id)
+                except Exception as e:
+                    logger.warning("Failed to delete %s for rejected clip %s: %s", file_key, clip_id, e)
+
+        # 2. Record in rejections table for negative preference learning
+        cursor.execute("""
+            INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason))
+
+        # 3. Mark status as 'rejected' and clear file paths
+        cursor.execute("UPDATE clips SET status = 'rejected', video_path = NULL, thumbnail_path = NULL WHERE id = ?", (clip_id,))
+        conn.commit()
+        return True
+
+
+def cleanup_expired_published_clips(retention_days: int = 7) -> int:
+    """Purge heavy local rendered MP4 files for published clips older than retention_days.
+    Strictly PRESERVES thumbnail_path, remote_url, and clip metadata so creator still
+    has full thumbnail preview and redirection to the published live video.
+    """
+    purged_count = 0
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Find published clips with published_at older than retention_days that still have a local video_path
+        cursor.execute("""
+            SELECT id, video_path, thumbnail_path, published_at, created_at 
+            FROM clips 
+            WHERE status IN ('published', 'approved') 
+              AND video_path IS NOT NULL 
+              AND datetime(COALESCE(published_at, approved_at, created_at)) <= datetime('now', '-' || ? || ' days')
+        """, (retention_days,))
+        expired_clips = cursor.fetchall()
+
+        for c in expired_clips:
+            vpath = c["video_path"]
+            if vpath:
+                try:
+                    vp = Path(vpath)
+                    if vp.exists() and vp.is_file():
+                        vp.unlink()
+                        logger.info("Purged expired local video file %s (Published > %d days ago)", vp.name, retention_days)
+                except Exception as e:
+                    logger.warning("Failed to unlink video file %s: %s", vpath, e)
+            
+            # Clear video_path from DB while PRESERVING thumbnail_path and all clip records
+            cursor.execute("UPDATE clips SET video_path = NULL WHERE id = ?", (c["id"],))
+            purged_count += 1
+
+        if purged_count > 0:
+            conn.commit()
+
+    return purged_count
+
+
+def get_all_rejections(limit: int = 20) -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM rejections ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_clips_for_review() -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE status = 'ready_review' ORDER BY created_at DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_outbox_queue() -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT po.*, c.title, c.description, c.hashtags, c.video_path, c.thumbnail_path
+            FROM publishing_outbox po
+            JOIN clips c ON po.clip_id = c.id
+            WHERE po.status = 'queued'
+              AND (po.next_retry_at IS NULL OR po.next_retry_at <= CURRENT_TIMESTAMP)
+            ORDER BY po.created_at ASC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_active_pipeline_jobs() -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT j.*, c.filename, c.duration, c.aspect_ratio
+            FROM pipeline_jobs j
+            LEFT JOIN chunks c ON j.chunk_id = c.id
+            ORDER BY j.created_at DESC
+            LIMIT 50
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+# --- YouTube Inbox Helpers ---
+
+def register_youtube_video(
+    video_id: str,
+    title: str,
+    channel_id: Optional[str] = None,
+    upload_time: Optional[str] = None,
+    duration: float = 0.0,
+    dispatch_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    sequence_number: Optional[int] = None,
+    source_sha256: Optional[str] = None,
+    source_file_size: Optional[int] = None
+) -> bool:
+    """Register discovered YouTube video in inbox idempotently.
+    Returns True if newly inserted, False if already present.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT video_id FROM youtube_inbox WHERE video_id = ?", (video_id,))
+        if cursor.fetchone():
+            return False
+
+        if session_id:
+            cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
+
+        cursor.execute("""
+            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status, source_sha256, source_file_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED', ?, ?)
+        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, source_sha256, source_file_size))
+        conn.commit()
+        return True
+
+
+def get_youtube_video(video_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve YouTube inbox record by video ID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM youtube_inbox WHERE video_id = ?", (video_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_youtube_video_by_dispatch_id(dispatch_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve YouTube inbox record by unique phone dispatch_id."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM youtube_inbox WHERE dispatch_id = ?", (dispatch_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_youtube_video(
+    video_id: str,
+    status: str,
+    dispatch_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    sequence_number: Optional[int] = None,
+    local_video_path: Optional[str] = None,
+    transcript_source: Optional[str] = None,
+    segments_json: Optional[str] = None,
+    last_error: Optional[str] = None,
+    transcript_wait_started_at: Optional[str] = None,
+    transcript_wait_deadline: Optional[str] = None,
+    next_caption_probe_at: Optional[str] = None,
+    ai_attempt_count: Optional[int] = None,
+    next_ai_attempt_at: Optional[str] = None,
+    last_ai_error: Optional[str] = None,
+    source_sha256: Optional[str] = None,
+    source_file_size: Optional[int] = None
+):
+    """Update status, paths, errors, or retry schedule on YouTube inbox item."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        updates = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+        params: List[Any] = [status]
+
+        if dispatch_id is not None:
+            updates.append("dispatch_id = ?")
+            params.append(dispatch_id)
+
+        if session_id is not None:
+            updates.append("session_id = ?")
+            params.append(session_id)
+            cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
+
+        if sequence_number is not None:
+            updates.append("sequence_number = ?")
+            params.append(sequence_number)
+
+        if local_video_path is not None:
+            updates.append("local_video_path = ?")
+            params.append(local_video_path)
+
+        if transcript_source is not None:
+            updates.append("transcript_source = ?")
+            params.append(transcript_source)
+
+        if segments_json is not None:
+            updates.append("segments_json = ?")
+            params.append(segments_json)
+
+        if transcript_wait_started_at is not None:
+            updates.append("transcript_wait_started_at = ?")
+            params.append(transcript_wait_started_at)
+
+        if transcript_wait_deadline is not None:
+            updates.append("transcript_wait_deadline = ?")
+            params.append(transcript_wait_deadline)
+
+        if next_caption_probe_at is not None:
+            updates.append("next_caption_probe_at = ?")
+            params.append(next_caption_probe_at)
+
+        if ai_attempt_count is not None:
+            updates.append("ai_attempt_count = ?")
+            params.append(ai_attempt_count)
+
+        if next_ai_attempt_at is not None:
+            updates.append("next_ai_attempt_at = ?")
+            params.append(next_ai_attempt_at)
+
+        if last_ai_error is not None:
+            updates.append("last_ai_error = ?")
+            params.append(last_ai_error)
+
+        if source_sha256 is not None:
+            updates.append("source_sha256 = ?")
+            params.append(source_sha256)
+
+        if source_file_size is not None:
+            updates.append("source_file_size = ?")
+            params.append(source_file_size)
+
+        if last_error is not None:
+            updates.append("last_error = ?")
+            params.append(last_error)
+            if status == "FAILED":
+                updates.append("retry_count = retry_count + 1")
+
+        query = f"UPDATE youtube_inbox SET {', '.join(updates)} WHERE video_id = ?"
+        params.append(video_id)
+        cursor.execute(query, params)
+        conn.commit()
+
+
+def list_youtube_inbox(status: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """List YouTube inbox items with optional status filtering."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if status:
+            cursor.execute(
+                "SELECT * FROM youtube_inbox WHERE status = ? ORDER BY discovered_at DESC LIMIT ?",
+                (status, limit)
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM youtube_inbox ORDER BY discovered_at DESC LIMIT ?",
+                (limit,)
+            )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def is_youtube_video_processed(video_id: str) -> bool:
+    """Check if a video has already been ingested or completely processed."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT status, local_video_path FROM youtube_inbox WHERE video_id = ?",
+            (video_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        # If completed or analyzing downstream, return True directly
+        if row["status"] in ("ANALYZING", "CLIPS_DEFINED", "CLIPS_CREATED", "COMPLETED"):
+            return True
+        # If in progress with downloaded media, check if local file is intact
+        if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED", "TRANSCRIPT_FETCHED"):
+            from pathlib import Path
+            path = Path(row["local_video_path"]) if row["local_video_path"] else None
+            return bool(path and path.exists() and path.stat().st_size > 0)
+        return False
+
+
+def save_clip_definitions(
+    chunk_id: Optional[str],
+    session_id: Optional[str],
+    video_id: str,
+    clip_defs: List[Dict[str, Any]],
+    publish_mode: str = "private",
+    platform_targets: str = "youtube"
+) -> List[str]:
+    """Atomically persist validated clip definitions in a single transaction.
+    
+    1. Removes any prior unrendered/candidate clips for this chunk to prevent duplicate clips on retry.
+    2. Inserts all validated clip definitions into `clips` with video_path=None, thumbnail_path=None, status='ready_review'.
+    3. Updates youtube_inbox status to 'CLIPS_DEFINED'.
+    All performed in a single database transaction.
+    """
+    saved_clip_ids: List[str] = []
+    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # 1. Clean up prior candidate/unrendered clips for this chunk to ensure idempotency
+        if chunk_id:
+            cursor.execute("""
+                DELETE FROM clips 
+                WHERE chunk_id = ? AND (video_path IS NULL OR video_path = '') AND status = 'ready_review'
+            """, (chunk_id,))
+
+        # 2. Insert all validated clips
+        for idx, c in enumerate(clip_defs):
+            clip_id = f"clip_{now_str}_{uuid.uuid4().hex[:6]}"
+            start_t = float(c["start_time"])
+            end_t = float(c["end_time"])
+            duration = round(float(c.get("duration", end_t - start_t)), 2)
+            title = c.get("title", "Dispatch Highlight")
+            hook = c.get("hook", "")
+            description = c.get("description", "")
+            hashtags = c.get("hashtags", "#Shorts #Reels")
+            virality_score = int(c.get("virality_score", 70))
+            layout_mode = c.get("layout_recommendation", "fit_blur")
+
+            p_start = float(c.get("padded_start", max(0.0, start_t - 4.0)))
+            p_end = float(c.get("padded_end", end_t + 4.0))
+
+            cursor.execute("""
+                INSERT INTO clips (
+                    id, session_id, chunk_id, start_time, end_time, duration,
+                    ai_suggested_start_time, ai_suggested_end_time, range_revision,
+                    title, hook, description, hashtags, virality_score,
+                    layout_mode, status, publish_mode, platform_targets,
+                    video_path, thumbnail_path, padded_start, padded_end
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?)
+            """, (
+                clip_id, session_id, chunk_id, start_t, end_t, duration,
+                start_t, end_t,
+                title, hook, description, hashtags, virality_score,
+                layout_mode, publish_mode, platform_targets,
+                p_start, p_end
+            ))
+            saved_clip_ids.append(clip_id)
+
+        # 3. Atomically transition youtube_inbox to CLIPS_DEFINED
+        cursor.execute("""
+            UPDATE youtube_inbox 
+            SET status = 'CLIPS_DEFINED', updated_at = CURRENT_TIMESTAMP
+            WHERE video_id = ?
+        """, (video_id,))
+
+        conn.commit()
+
+    return saved_clip_ids
+
+
+def get_queued_transcription_clips(limit: int = 50) -> List[Dict[str, Any]]:
+    """Retrieve clips waiting in FIFO backlog for transcription quota reset."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM clips 
+            WHERE status = 'queued_transcription' 
+            ORDER BY created_at ASC 
+            LIMIT ?
+        """, (limit,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_transcription_queue_stats() -> Dict[str, Any]:
+    """Return ready count, backlog queue depth, and daily transcribe quota usage."""
+    from datetime import datetime, timezone
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    current_date = get_setting("transcribe_quota_date", "")
+    current_count = int(get_setting("transcribe_quota_count", "0") or 0) if current_date == today_utc else 0
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM clips WHERE status = 'queued_transcription'")
+        queued_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM clips WHERE status = 'ready_review'")
+        ready_count = cursor.fetchone()[0]
+
+    return {
+        "ready_count": ready_count,
+        "queued_count": queued_count,
+        "daily_quota_used": current_count,
+        "daily_quota_max": 25,
+        "quota_date": today_utc
+    }
+
+
+
+
+============================================================
+FILE: dispatch\governor\__init__.py
+============================================================
+"""Resource Governor Package for Dispatch."""
+from dispatch.governor.resource_governor import ResourceGovernor, GovernorPolicy
+
+__all__ = ["ResourceGovernor", "GovernorPolicy"]
+
+
+============================================================
+FILE: dispatch\governor\resource_governor.py
+============================================================
+"""Resource Governor & Laptop Performance Manager.
+
+Monitors system health, battery, CPU saturation, user idle/activity state,
+and disk safety thresholds. Enforces opportunistic worker policies to prevent
+laptop lag, battery depletion, or out-of-disk crashes.
+"""
+import os
+import sys
+import platform
+import logging
+from typing import Dict, Any, Tuple, Optional
+from dataclasses import dataclass
+import psutil
+
+from dispatch.config import STORAGE_DIR
+
+logger = logging.getLogger("dispatch.governor")
+
+
+@dataclass
+class GovernorPolicy:
+    min_free_disk_gb: float = 5.0         # Stop new rendering/processing if disk free < 5 GB
+    allow_on_battery: bool = False        # By default, avoid heavy rendering on battery
+    min_battery_percent: float = 30.0     # If battery allowed, must be at least 30%
+    max_cpu_percent: float = 88.0         # Pause/yield if background CPU exceeds 88%
+    pause_when_user_active: bool = False  # If True, defer heavy jobs when user is typing/working
+    idle_threshold_seconds: float = 90.0  # Seconds without keyboard/mouse to be considered idle
+    reserved_cpu_cores: int = 2           # Keep 2 cores free for foreground OS and user apps
+
+
+class ResourceGovernor:
+    """Evaluates laptop resource conditions against policy before dispatching heavy pipeline tasks."""
+
+    def __init__(self, policy: Optional[GovernorPolicy] = None):
+        self.policy = policy or GovernorPolicy()
+        self._is_windows = platform.system().lower() == "windows"
+
+    def get_user_idle_seconds(self) -> float:
+        """Returns the number of seconds since the last keyboard/mouse input on Windows."""
+        if not self._is_windows:
+            return 999.0  # Fallback for headless or non-Windows environments
+
+        try:
+            import ctypes
+            class LASTINPUTINFO(ctypes.Structure):
+                _fields_ = [('cbSize', ctypes.c_uint), ('dwTime', ctypes.c_uint)]
+
+            lii = LASTINPUTINFO()
+            lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+            if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+                millis_since_boot = ctypes.windll.kernel32.GetTickCount()
+                elapsed_ms = millis_since_boot - lii.dwTime
+                return max(0.0, elapsed_ms / 1000.0)
+        except Exception as e:
+            logger.debug(f"Could not query GetLastInputInfo: {e}")
+
+        return 999.0
+
+    def get_system_metrics(self) -> Dict[str, Any]:
+        """Collects live laptop hardware and OS metrics."""
+        # Disk usage for the drive holding the project storage
+        try:
+            disk_info = psutil.disk_usage(str(STORAGE_DIR))
+            free_gb = disk_info.free / (1024 ** 3)
+            total_gb = disk_info.total / (1024 ** 3)
+            disk_percent = disk_info.percent
+        except Exception:
+            free_gb = 50.0
+            total_gb = 100.0
+            disk_percent = 50.0
+
+        # Battery / Power
+        battery = psutil.sensors_battery()
+        if battery is not None:
+            on_ac = battery.power_plugged if battery.power_plugged is not None else True
+            bat_pct = battery.percent
+        else:
+            # Desktop or unavailable sensor -> assume plugged in
+            on_ac = True
+            bat_pct = 100.0
+
+        # CPU load
+        cpu_pct = psutil.cpu_percent(interval=None)
+
+        # Idle time
+        idle_secs = self.get_user_idle_seconds()
+        is_user_active = idle_secs < self.policy.idle_threshold_seconds
+
+        return {
+            "free_disk_gb": round(free_gb, 2),
+            "total_disk_gb": round(total_gb, 2),
+            "disk_percent": round(disk_percent, 1),
+            "on_ac_power": on_ac,
+            "battery_percent": bat_pct,
+            "cpu_percent": round(cpu_pct, 1),
+            "idle_seconds": round(idle_secs, 1),
+            "is_user_active": is_user_active
+        }
+
+    def can_process_heavy_task(self) -> Tuple[bool, str]:
+        """Determines whether heavy tasks (transcription, AI, FFmpeg rendering) are permitted right now.
+        
+        Returns:
+            (can_run: bool, reason: str)
+        """
+        metrics = self.get_system_metrics()
+
+        # 1. Disk Space Safety Check (Critical hard stop)
+        if metrics["free_disk_gb"] < self.policy.min_free_disk_gb:
+            return False, (
+                f"Disk space low ({metrics['free_disk_gb']} GB free). "
+                f"Minimum required is {self.policy.min_free_disk_gb} GB."
+            )
+
+        # 2. Battery / Power Check
+        if not metrics["on_ac_power"]:
+            if not self.policy.allow_on_battery:
+                return False, "Laptop running on battery. Waiting for AC power connection."
+            if metrics["battery_percent"] < self.policy.min_battery_percent:
+                return False, (
+                    f"Battery too low ({metrics['battery_percent']}%), "
+                    f"minimum threshold is {self.policy.min_battery_percent}%."
+                )
+
+        # 3. User Activity Check
+        if self.policy.pause_when_user_active and metrics["is_user_active"]:
+            return False, f"User is actively using laptop ({metrics['idle_seconds']}s idle). Deferring heavy jobs."
+
+        # 4. CPU Saturation Check
+        if metrics["cpu_percent"] > self.policy.max_cpu_percent:
+            return False, f"CPU saturation too high ({metrics['cpu_percent']}% > {self.policy.max_cpu_percent}%)."
+
+        return True, "All laptop resource conditions satisfied."
+
+    def get_optimal_worker_threads(self) -> int:
+        """Calculates thread count to assign to compute engines without starving the system."""
+        total_cores = os.cpu_count() or 4
+        # Keep reserved cores free
+        assigned = max(1, total_cores - self.policy.reserved_cpu_cores)
+        return assigned
+
+    def set_low_process_priority(self, pid: Optional[int] = None) -> bool:
+        """Sets the priority of this process or target PID to BELOW_NORMAL to keep UI responsive."""
+        try:
+            target_pid = pid or os.getpid()
+            proc = psutil.Process(target_pid)
+            if self._is_windows:
+                proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            else:
+                proc.nice(10)  # POSIX nice value (+10 is lower priority)
+            logger.info(f"Adjusted process priority for PID {target_pid} to low/background.")
+            return True
+        except Exception as e:
+            logger.debug(f"Unable to adjust process priority: {e}")
+            return False
+
+
+============================================================
+FILE: dispatch\ingestion\__init__.py
+============================================================
+"""Ingestion package for Dispatch."""
+from dispatch.ingestion.validator import probe_video, calculate_file_hash
+from dispatch.ingestion.watcher import process_incoming_file, scan_incoming, watch_incoming_loop
+
+__all__ = [
+    "probe_video",
+    "calculate_file_hash",
+    "process_incoming_file",
+    "scan_incoming",
+    "watch_incoming_loop",
+]
+
+
+============================================================
+FILE: dispatch\ingestion\validator.py
+============================================================
+"""Video validation, metadata extraction, and automatic orientation normalization using ffprobe and ffmpeg."""
+import json
+import hashlib
+import logging
+import subprocess
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple
+
+logger = logging.getLogger("dispatch.ingestion.validator")
+
+
+def calculate_file_hash(filepath: Path, block_size: int = 65536) -> str:
+    """Calculate MD5 checksum of a file for fast deduplication and integrity check."""
+    hasher = hashlib.md5()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(block_size), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def inspect_video_orientation(filepath: Path) -> Dict[str, Any]:
+    """Inspect raw video dimensions and container rotation metadata via ffprobe."""
+    if not filepath.exists() or filepath.stat().st_size == 0:
+        return {"valid": False, "error": "File does not exist or is empty"}
+
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
+        str(filepath)
+    ]
+
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        if result.returncode != 0:
+            return {"valid": False, "error": f"ffprobe error: {result.stderr.strip()}"}
+
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        format_info = data.get("format", {})
+
+        video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+        audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+        if not video_stream:
+            return {"valid": False, "error": "No video stream found in file"}
+
+        width = int(video_stream.get("width", 0))
+        height = int(video_stream.get("height", 0))
+
+        # Check for rotation in metadata (tags and side_data_list)
+        tags = video_stream.get("tags", {})
+        side_data = video_stream.get("side_data_list", [])
+        rotation = 0
+        if "rotate" in tags:
+            try:
+                rotation = int(tags["rotate"])
+            except ValueError:
+                pass
+        for sd in side_data:
+            if "rotation" in sd:
+                try:
+                    rotation = int(sd["rotation"])
+                except ValueError:
+                    pass
+
+        norm_rotation = rotation % 360
+        if norm_rotation < 0:
+            norm_rotation += 360
+
+        if norm_rotation in (90, 270):
+            effective_width = height
+            effective_height = width
+        else:
+            effective_width = width
+            effective_height = height
+
+        orientation = "portrait" if effective_height >= effective_width else "landscape"
+        duration = float(format_info.get("duration") or video_stream.get("duration") or 0.0)
+
+        return {
+            "valid": True,
+            "width": width,
+            "height": height,
+            "rotation": rotation,
+            "norm_rotation": norm_rotation,
+            "effective_width": effective_width,
+            "effective_height": effective_height,
+            "orientation": orientation,
+            "duration": duration,
+            "has_audio": audio_stream is not None,
+            "video_codec": video_stream.get("codec_name"),
+            "audio_codec": audio_stream.get("codec_name") if audio_stream else None,
+            "size_bytes": filepath.stat().st_size
+        }
+
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+def normalize_video_orientation(
+    filepath: Path,
+    chunk_id: Optional[str] = None
+) -> Tuple[bool, Path, Dict[str, Any]]:
+    """Deterministically normalize physical pixel orientation.
+    If the video contains rotation metadata (e.g. 90, 180, 270 degrees from mobile recording),
+    transcodes once to physically upright orientation with rotate=0 metadata, so all downstream
+    processors (Whisper, highlight finder, ffmpeg filter complex, web video players) receive
+    physically upright frames without orientation drift.
+
+    Logs:
+        MEDIA_ORIENTATION_DETECTED
+        MEDIA_ORIENTATION_NORMALIZED
+    """
+    cid = chunk_id or filepath.stem
+    info = inspect_video_orientation(filepath)
+    if not info.get("valid"):
+        logger.warning("Cannot normalize orientation for %s: %s", cid, info.get("error"))
+        return False, filepath, info
+
+    width = info["width"]
+    height = info["height"]
+    rotation = info["rotation"]
+    norm_rotation = info["norm_rotation"]
+    orientation = info["orientation"]
+
+    logger.info(
+        "MEDIA_ORIENTATION_DETECTED: chunk_id=%s, encoded=%dx%d, rotation=%d, orientation=%s",
+        cid, width, height, rotation, orientation
+    )
+
+    norm_rotation = info.get("norm_rotation", 0)
+    video_codec = (info.get("video_codec") or "").lower()
+    needs_codec_norm = bool(video_codec and video_codec not in ("h264", "avc1"))
+
+    if norm_rotation == 0 and not needs_codec_norm:
+        # Already physically upright and H.264 compatible, no transcode needed
+        logger.info(
+            "MEDIA_ORIENTATION_NORMALIZED: chunk_id=%s, input=%dx%d, output=%dx%d, codec=%s (already upright and compatible, skipped)",
+            cid, width, height, width, height, video_codec
+        )
+        return True, filepath, info
+
+    # Transcode to physically upright video with rotate=0
+    temp_norm_path = filepath.with_name(f"{filepath.stem}_norm_temp.mp4")
+    norm_cmd = [
+        "ffmpeg", "-y",
+        "-i", str(filepath),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-metadata:s:v:0", "rotate=0",
+        "-c:a", "copy",
+        str(temp_norm_path)
+    ]
+
+    try:
+        res = subprocess.run(norm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+        if res.returncode != 0 or not temp_norm_path.exists() or temp_norm_path.stat().st_size == 0:
+            logger.error("FFmpeg orientation normalization failed for %s: %s", cid, res.stderr.strip()[:300])
+            if temp_norm_path.exists():
+                temp_norm_path.unlink(missing_ok=True)
+            return False, filepath, info
+
+        # Replace original file atomically
+        temp_norm_path.replace(filepath)
+
+        # Re-inspect to confirm normalized dimensions
+        new_info = inspect_video_orientation(filepath)
+        new_width = new_info.get("width", info["effective_width"])
+        new_height = new_info.get("height", info["effective_height"])
+
+        logger.info(
+            "MEDIA_ORIENTATION_NORMALIZED: chunk_id=%s, input=%dx%d, output=%dx%d",
+            cid, width, height, new_width, new_height
+        )
+        return True, filepath, new_info
+
+    except Exception as e:
+        logger.error("Exception during orientation normalization for %s: %s", cid, e)
+        if temp_norm_path.exists():
+            temp_norm_path.unlink(missing_ok=True)
+        return False, filepath, info
+
+
+def probe_video(
+    filepath: Path,
+    auto_normalize: bool = True,
+    chunk_id: Optional[str] = None
+) -> Tuple[bool, Dict[str, Any], Optional[str]]:
+    """Probe video file using ffprobe and normalize physical orientation if needed.
+    Returns:
+        (is_valid, metadata_dict, error_message)
+    """
+    if not filepath.exists() or filepath.stat().st_size == 0:
+        return False, {}, "File does not exist or is empty"
+
+    # 1. Orientation normalization if video has non-zero rotation metadata
+    if auto_normalize:
+        norm_success, filepath, _ = normalize_video_orientation(filepath, chunk_id=chunk_id)
+
+    # 2. Extract final probed metadata
+    info = inspect_video_orientation(filepath)
+    if not info.get("valid"):
+        return False, {}, info.get("error", "Failed to probe video")
+
+    duration = info["duration"]
+    effective_width = info["effective_width"]
+    effective_height = info["effective_height"]
+
+    if duration <= 0.0:
+        return False, {}, f"Invalid video duration: {duration}s (must be > 0)"
+
+    if effective_width <= 0 or effective_height <= 0:
+        return False, {}, f"Invalid dimensions: {effective_width}x{effective_height}"
+
+    # 3. Real FFmpeg decode validation: verify decodable frames
+    decode_cmd = [
+        "ffmpeg",
+        "-v", "error",
+        "-i", str(filepath),
+        "-f", "null",
+        "-"
+    ]
+    try:
+        decode_res = subprocess.run(decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+        if decode_res.returncode != 0:
+            return False, {}, f"FFmpeg decode verification failed: {decode_res.stderr.strip()[:200]}"
+    except subprocess.TimeoutExpired:
+        return False, {}, "FFmpeg decode verification timed out"
+
+    # 4. Detect canonical aspect ratio
+    ratio_val = effective_width / effective_height
+    if 0.5 <= ratio_val <= 0.65:
+        aspect_ratio = "9:16"  # Portrait
+    elif 1.6 <= ratio_val <= 1.85:
+        aspect_ratio = "16:9"  # Landscape
+    elif ratio_val < 1.0:
+        aspect_ratio = "vertical_other"
+    else:
+        aspect_ratio = "horizontal_other"
+
+    metadata = {
+        "duration": duration,
+        "width": effective_width,
+        "height": effective_height,
+        "aspect_ratio": aspect_ratio,
+        "has_audio": info["has_audio"],
+        "video_codec": info["video_codec"],
+        "audio_codec": info["audio_codec"],
+        "size_bytes": filepath.stat().st_size
+    }
+
+    return True, metadata, None
+
+
+============================================================
+FILE: dispatch\ingestion\watcher.py
+============================================================
+"""[LEGACY / DEPRECATED] Incoming video watcher and stabilization manager.
+NOTE: This module was designed for the obsolete direct phone-to-PC sync architecture
+where files were written to storage/incoming/. In the active architecture, YouTube Cloud
+Inbox is the sole phone-to-PC ingestion path.
+This file is preserved ONLY for backward compatibility with legacy unit tests.
+DO NOT IMPORT OR START IN PRODUCTION CODE.
+"""
+import time
+import shutil
+import logging
+from pathlib import Path
+from typing import Callable, Optional, List, Dict, Any
+from dispatch.config import (
+    INCOMING_DIR,
+    PROCESSING_DIR,
+    QUARANTINE_DIR,
+    ALLOWED_VIDEO_EXTENSIONS,
+    FILE_STABILIZE_SECONDS,
+)
+from dispatch.ingestion.validator import probe_video, calculate_file_hash
+from dispatch import db
+
+logger = logging.getLogger("dispatch.ingestion")
+
+
+def is_file_stable(filepath: Path, wait_seconds: float = FILE_STABILIZE_SECONDS) -> bool:
+    """Check if file size remains constant over wait_seconds to avoid reading half-synced files."""
+    try:
+        initial_size = filepath.stat().st_size
+        if initial_size == 0:
+            return False
+        time.sleep(wait_seconds)
+        final_size = filepath.stat().st_size
+        return initial_size == final_size
+    except Exception as e:
+        logger.debug("File %s not accessible yet: %s", filepath.name, e)
+        return False
+
+
+def process_incoming_file(filepath: Path, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Validate and stage a single incoming file into processing directory."""
+    if not filepath.exists() or filepath.suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+        return None
+
+    logger.info("Checking incoming file: %s", filepath.name)
+
+    # 0. Check if already processed/registered in DB
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM chunks WHERE filename = ?", (filepath.name,))
+        if cursor.fetchone():
+            logger.debug("File %s already registered in chunks, skipping watcher staging.", filepath.name)
+            return None
+
+    # 1. Stabilization check
+    if not is_file_stable(filepath):
+        logger.info("File %s is still writing or empty, skipping for now.", filepath.name)
+        return None
+
+    # 2. Probe with ffprobe
+    is_valid, metadata, error = probe_video(filepath)
+    if not is_valid:
+        logger.error("Invalid video %s: %s. Quarantining file.", filepath.name, error)
+        try:
+            quarantine_path = QUARANTINE_DIR / filepath.name
+            shutil.move(str(filepath), str(quarantine_path))
+        except Exception as q_err:
+            logger.warning("Could not quarantine %s: %s", filepath.name, q_err)
+        return None
+
+    # 3. Calculate hash
+    file_hash = calculate_file_hash(filepath)
+
+    # 4. Atomically move to processing directory
+    target_path = PROCESSING_DIR / filepath.name
+    # Avoid collision if same name exists
+    if target_path.exists():
+        target_path = PROCESSING_DIR / f"{filepath.stem}_{int(time.time())}{filepath.suffix}"
+
+    try:
+        shutil.move(str(filepath), str(target_path))
+    except Exception as e:
+        logger.error("Failed to move %s to processing: %s", filepath.name, e)
+        return None
+
+    # 5. Register in DB
+    chunk_id = db.register_chunk(
+        session_id=session_id,
+        filename=target_path.name,
+        filepath=str(target_path),
+        file_hash=file_hash
+    )
+    db.update_chunk_metadata(
+        chunk_id=chunk_id,
+        duration=metadata["duration"],
+        width=metadata["width"],
+        height=metadata["height"],
+        aspect_ratio=metadata["aspect_ratio"],
+        status="verified"
+    )
+
+    logger.info("Chunk %s registered and verified at %s (Aspect Ratio: %s, Duration: %.1fs)",
+                chunk_id, target_path.name, metadata['aspect_ratio'], metadata['duration'])
+
+    return {
+        "chunk_id": chunk_id,
+        "filepath": target_path,
+        "metadata": metadata,
+        "file_hash": file_hash
+    }
+
+
+def scan_incoming(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Perform a one-shot scan of incoming folder."""
+    staged = []
+    for item in INCOMING_DIR.iterdir():
+        if item.is_file() and item.suffix.lower() in ALLOWED_VIDEO_EXTENSIONS:
+            result = process_incoming_file(item, session_id=session_id)
+            if result:
+                staged.append(result)
+    return staged
+
+
+def watch_incoming_loop(callback: Optional[Callable[[Dict[str, Any]], None]] = None, poll_interval: float = 5.0):
+    """Background polling loop for incoming video drops."""
+    logger.info("Starting incoming folder watcher on %s", INCOMING_DIR)
+    while True:
+        try:
+            staged = scan_incoming()
+            for item in staged:
+                if callback:
+                    callback(item)
+        except Exception as e:
+            logger.error("Error in watcher loop: %s", e)
+        time.sleep(poll_interval)
+
+
+============================================================
+FILE: dispatch\main.py
+============================================================
+import sys
+import shutil
+import logging
+import time
+import os
+import atexit
+from logging.handlers import RotatingFileHandler
+
+import uvicorn
+
+from dispatch.config import (
+    WEB_HOST,
+    WEB_PORT,
+    STORAGE_DIR,
+)
+from dispatch import db
+from dispatch.governor.resource_governor import ResourceGovernor
+from dispatch.youtube_inbox.poller import YouTubeInboxPoller
+from dispatch.orchestrator.recovery import recover_laptop_orchestrator
+from dispatch.web.app import app
+
+# Configure logging with both console and rotating file output
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+log_file = STORAGE_DIR / "dispatch_daemon.log"
+
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] [%(name)s] %(message)s", datefmt="%H:%M:%S")
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Console handler
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+root_logger.addHandler(console_handler)
+
+# Rotating file handler (10 MB per file, max 5 backups)
+file_handler = RotatingFileHandler(str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+file_handler.setFormatter(formatter)
+root_logger.addHandler(file_handler)
+
+logger = logging.getLogger("dispatch.master")
+governor = ResourceGovernor()
+
+LOCK_FILE = STORAGE_DIR / "dispatch.lock"
+
+
+def acquire_single_instance_lock() -> bool:
+    """Enforce single-instance execution via lock file and PID inspection."""
+    import psutil
+    if LOCK_FILE.exists():
+        try:
+            content = LOCK_FILE.read_text().strip()
+            if content.isdigit():
+                old_pid = int(content)
+                if old_pid != os.getpid() and psutil.pid_exists(old_pid):
+                    proc = psutil.Process(old_pid)
+                    if "python" in proc.name().lower():
+                        logger.warning("Another Dispatch instance is already active (PID %d). Halting launch.", old_pid)
+                        return False
+        except Exception as e:
+            logger.debug("Lock file read check exception: %s", e)
+
+    try:
+        LOCK_FILE.write_text(str(os.getpid()))
+        atexit.register(release_single_instance_lock)
+        return True
+    except Exception as e:
+        logger.warning("Could not write instance lock file %s: %s", LOCK_FILE, e)
+        return True
+
+
+def release_single_instance_lock():
+    """Remove lock file on clean shutdown."""
+    try:
+        if LOCK_FILE.exists():
+            content = LOCK_FILE.read_text().strip()
+            if content == str(os.getpid()):
+                LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def start_dispatch(run_web: bool = True):
+    """Start all Dispatch autonomous services with crash recovery and resource governance."""
+    if not acquire_single_instance_lock():
+        sys.exit(0)
+
+    logger.info("=" * 60)
+    logger.info("BOOTING DISPATCH: AUTONOMOUS PERSONAL CONTENT ENGINE")
+    logger.info("=" * 60)
+
+    # 1. Initialize SQLite database
+    db.init_db()
+    logger.info("Database initialized at %s", db.DB_PATH)
+
+    # 2. Crash & reboot recovery: reclaim stale leases and clean temporary files
+    try:
+        recovery_stats = recover_laptop_orchestrator()
+        logger.info("Boot recovery: %d stale job leases reclaimed, %d temp files cleaned",
+                    len(recovery_stats.get("reclaimed_jobs", [])),
+                    recovery_stats.get("cleaned_temp_files", 0))
+    except Exception as e:
+        logger.error("Boot crash recovery encountered error: %s", e)
+
+    # 3. Adjust process priority to low/background to prevent laptop freezing
+    governor.set_low_process_priority()
+
+    # 4. Verify FFmpeg
+    if not shutil.which("ffmpeg"):
+        logger.critical("FFmpeg executable not found in PATH! Exiting.")
+        sys.exit(1)
+    logger.info("FFmpeg verified in system PATH")
+
+    # 5. YouTube is the only automatic video ingest path on PC (Pillar 1).
+    youtube_poller = YouTubeInboxPoller()
+    youtube_poller.start()
+    logger.info("Autonomous YouTube Cloud Inbox poller active (Checks immediately on boot + every 10 min)")
+
+    # 6. Pillar 2: Autonomous Transcription Worker (YouTube captions with Whisper fallback)
+    from dispatch.transcription.worker import TranscriptionWorker
+    transcription_worker = TranscriptionWorker()
+    transcription_worker.start()
+    logger.info("Autonomous Transcription worker active (Consumes DOWNLOADED -> WAITING_FOR_TRANSCRIPT -> TRANSCRIBED)")
+
+    # 7. Pillar 3: Autonomous AI Highlight Selection Worker (Gemini Semantic Extraction)
+    from dispatch.ai_clips.worker import HighlightWorker
+    highlight_worker = HighlightWorker()
+    highlight_worker.start()
+    logger.info("Autonomous AI Highlight worker active (Consumes TRANSCRIBED -> ANALYZING -> CLIPS_DEFINED)")
+
+    # 8. Pillar 6: Autonomous Publishing Outbox Worker (YouTube Shorts publishing)
+    from dispatch.publisher.outbox import PublishingOutboxWorker
+    outbox_worker = PublishingOutboxWorker()
+    outbox_worker.start()
+    logger.info("Autonomous Publishing Outbox worker active (Consumes queued -> uploading -> published/failed)")
+
+    # 9b. Remote processing jobs (friends submit from anywhere; this PC claims them)
+    if os.getenv("DISPATCH_REMOTE_JOBS", "1") == "1":
+        try:
+            import threading
+            from dispatch.youtube_connections import RemoteJobPoller
+            from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
+            _catcher = YouTubeInboxCatcher()
+            _poller = RemoteJobPoller(ingest_video=_catcher.ingest_video)
+            threading.Thread(target=_poller.run_forever, daemon=True,
+                             name="dispatch-remote-jobs").start()
+            logger.info("Remote processing job poller active (claims queued jobs from the cloud)")
+        except Exception as e:
+            logger.warning("Remote job poller not started: %s", e)
+
+    # 9. Start Web Dashboard
+    if run_web:
+        # Optional TLS (strongly recommended when pairing phones over LAN: the
+        # credential endpoints refuse plaintext for non-loopback callers).
+        tls_files = _ensure_tls_certificates() if os.getenv("DISPATCH_WEB_TLS", "1") == "1" else None
+        scheme = "https" if tls_files else "http"
+        logger.info("Launching Web Dashboard on %s://%s:%d", scheme, WEB_HOST, WEB_PORT)
+        logger.info("Review clips on PC: %s://localhost:%d", scheme, WEB_PORT)
+        try:
+            uvicorn.run(app, host=WEB_HOST, port=WEB_PORT, log_level="warning",
+                        ssl_certfile=tls_files[0] if tls_files else None,
+                        ssl_keyfile=tls_files[1] if tls_files else None)
+        finally:
+            logger.info("Stopping Dispatch background workers...")
+            outbox_worker.stop()
+            highlight_worker.stop()
+            transcription_worker.stop()
+            youtube_poller.stop()
+            release_single_instance_lock()
+    else:
+        logger.info("Running in headless daemon mode. Press Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Dispatch daemon stopping workers...")
+            outbox_worker.stop()
+            highlight_worker.stop()
+            transcription_worker.stop()
+            youtube_poller.stop()
+            release_single_instance_lock()
+            logger.info("Dispatch daemon stopped.")
+
+
+def process_single_chunk(chunk_info: dict):
+    """End-to-end processing helper for a single staged video chunk using durable checkpoints."""
+    from dispatch.orchestrator.job_queue import enqueue_job, claim_job
+    from dispatch.orchestrator.pipeline_runner import PipelineStageRunner
+    from pathlib import Path
+    import time
+    governor_instance = ResourceGovernor()
+    stage_runner = PipelineStageRunner(governor=governor_instance)
+
+    chunk_id = chunk_info["chunk_id"]
+    session_id = chunk_info.get("session_id")
+    job_id = enqueue_job(chunk_id=chunk_id, session_id=session_id)
+    worker_id = "direct_runner"
+
+    for _ in range(10):
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+            j_status = cursor.fetchone()
+            if not j_status or j_status["status"] in ("COMPLETED", "FAILED_PERMANENT"):
+                break
+
+        job = claim_job(worker_id=worker_id, lease_duration_seconds=120)
+        if job and job["job_id"] == job_id:
+            stage_runner.process_job_step(job, worker_id)
+        else:
+            time.sleep(0.5)
+
+
+if __name__ == "__main__":
+    start_dispatch(run_web=True)
+
+
+def _ensure_tls_certificates() -> tuple[str, str] | None:
+    """Generate/reuse a per-install self-signed TLS cert (10y) under storage/tls/.
+    Returns (cert_path, key_path) or None if generation fails (server then runs
+    plain HTTP, and the fail-closed credential gates keep secrets off the wire)."""
+    try:
+        from pathlib import Path
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime
+        base = Path("storage/tls")
+        base.mkdir(parents=True, exist_ok=True)
+        cert_p, key_p = base / "dispatch.crt", base / "dispatch.key"
+        if cert_p.exists() and key_p.exists():
+            return str(cert_p), str(key_p)
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Dispatch-PC")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - datetime.timedelta(days=1))
+                .not_valid_after(now + datetime.timedelta(days=3650))
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName("Dispatch-PC")]), critical=False)
+                .sign(key, hashes.SHA256()))
+        key_p.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+        cert_p.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        logger.info("Generated self-signed TLS certificate for the dashboard: %s", cert_p)
+        return str(cert_p), str(key_p)
+    except Exception as e:
+        logger.warning("TLS certificate generation failed; dashboard runs without TLS: %s", e)
+        return None
+
+
+============================================================
+FILE: dispatch\orchestrator\__init__.py
+============================================================
+"""Dispatch Orchestrator Package.
+Provides persistent job queue, discrete stage machine, lease heartbeats, and crash recovery.
+"""
+from dispatch.orchestrator.state_machine import PipelineStage, JobStatus, get_next_stage
+from dispatch.orchestrator.job_queue import (
+    enqueue_job,
+    claim_job,
+    renew_heartbeat,
+    complete_stage_checkpoint,
+    fail_stage_job,
+    init_job_queue_schema
+)
+from dispatch.orchestrator.recovery import recover_laptop_orchestrator
+
+__all__ = [
+    "PipelineStage",
+    "JobStatus",
+    "get_next_stage",
+    "enqueue_job",
+    "claim_job",
+    "renew_heartbeat",
+    "complete_stage_checkpoint",
+    "fail_stage_job",
+    "init_job_queue_schema",
+    "recover_laptop_orchestrator"
+]
+
+
+============================================================
+FILE: dispatch\orchestrator\heartbeat.py
+============================================================
+"""Heartbeat Thread and Context Manager for Long-Running Pipeline Stages.
+Periodically renews worker leases in the database during stages like TRANSCRIBE and RENDER
+so that the watchdog does not reclaim the job while work is actively progressing.
+"""
+import time
+import threading
+import logging
+from typing import Optional
+from dispatch.orchestrator.job_queue import renew_heartbeat, LeaseLostError
+
+logger = logging.getLogger("dispatch.orchestrator.heartbeat")
+
+
+class HeartbeatThread:
+    """Background thread that periodically pings the job queue to extend the worker lease."""
+
+    def __init__(
+        self,
+        job_id: str,
+        worker_id: str,
+        interval_seconds: float = 15.0,
+        lease_seconds: int = 300
+    ):
+        self.job_id = job_id
+        self.worker_id = worker_id
+        self.interval_seconds = interval_seconds
+        self.lease_seconds = lease_seconds
+        self.stop_event = threading.Event()
+        self.lease_lost = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        """Start the background heartbeat thread."""
+        self.stop_event.clear()
+        self.lease_lost = False
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name=f"heartbeat_{self.job_id}",
+            daemon=True
+        )
+        self._thread.start()
+        logger.debug("Started heartbeat thread for job %s (worker: %s, interval: %.1fs, lease: %ds)",
+                     self.job_id, self.worker_id, self.interval_seconds, self.lease_seconds)
+
+    def stop(self):
+        """Stop the heartbeat thread and wait for it to join."""
+        if self._thread and self._thread.is_alive():
+            self.stop_event.set()
+            self._thread.join(timeout=2.0)
+            logger.debug("Stopped heartbeat thread for job %s", self.job_id)
+
+    def _run_loop(self):
+        """Loop running in background, periodically renewing the lease."""
+        while not self.stop_event.wait(self.interval_seconds):
+            try:
+                renewed = renew_heartbeat(
+                    job_id=self.job_id,
+                    worker_id=self.worker_id,
+                    extend_seconds=self.lease_seconds
+                )
+                if not renewed:
+                    logger.warning("Heartbeat renewal failed for job %s (worker: %s): lease lost or reclaimed!",
+                                   self.job_id, self.worker_id)
+                    self.lease_lost = True
+                    break
+                else:
+                    logger.debug("Heartbeat extended lease for job %s (+%ds)", self.job_id, self.lease_seconds)
+            except Exception as e:
+                logger.error("Exception in heartbeat renewal for job %s: %s", self.job_id, e)
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+        if self.lease_lost and exc_type is None:
+            raise LeaseLostError(f"Lease was lost during stage execution for job {self.job_id}")
+        return False
+
+
+============================================================
+FILE: dispatch\orchestrator\job_queue.py
+============================================================
+"""Persistent Job Queue with Heartbeat Leases and Stage Checkpointing.
+Every media processing stage is persisted to SQLite with lease expiration to ensure
+automatic crash recovery and prevent zombie processing jobs.
+"""
+import uuid
+import logging
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List
+
+from dispatch.db import get_db_connection
+from dispatch.orchestrator.state_machine import PipelineStage, JobStatus, get_next_stage
+
+logger = logging.getLogger("dispatch.orchestrator.queue")
+
+
+def init_job_queue_schema():
+    """Ensure pipeline_jobs table and indexes exist in SQLite database."""
+    with get_db_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_jobs (
+                job_id TEXT PRIMARY KEY,
+                chunk_id TEXT NOT NULL,
+                session_id TEXT,
+                current_stage TEXT NOT NULL DEFAULT 'VERIFY',
+                status TEXT NOT NULL DEFAULT 'QUEUED',
+                worker_id TEXT,
+                lease_expires_at TIMESTAMP,
+                heartbeat_at TIMESTAMP,
+                attempt_count INTEGER DEFAULT 0,
+                max_attempts INTEGER DEFAULT 5,
+                last_error TEXT,
+                next_retry_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
+            );
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_claim 
+            ON pipeline_jobs (status, next_retry_at, lease_expires_at);
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_chunk 
+            ON pipeline_jobs (chunk_id, status);
+        """)
+
+
+def enqueue_job(chunk_id: str, session_id: Optional[str] = None) -> str:
+    """Enqueue a new chunk processing job starting at VERIFY stage.
+    Deduplicates active jobs: if an active job already exists for chunk_id, returns it.
+    """
+    init_job_queue_schema()
+    now_str = datetime.now().isoformat()
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT job_id FROM pipeline_jobs
+            WHERE chunk_id = ? AND status NOT IN ('COMPLETED', 'FAILED_PERMANENT')
+            LIMIT 1
+        """, (chunk_id,))
+        existing = cursor.fetchone()
+        if existing:
+            logger.info("Active pipeline job %s already exists for chunk %s, reusing.", existing["job_id"], chunk_id)
+            return existing["job_id"]
+
+        job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        conn.execute("""
+            INSERT OR IGNORE INTO pipeline_jobs (
+                job_id, chunk_id, session_id, current_stage, status, next_retry_at, created_at, updated_at
+            ) VALUES (?, ?, ?, 'VERIFY', 'QUEUED', ?, ?, ?)
+        """, (job_id, chunk_id, session_id, now_str, now_str, now_str))
+
+    logger.info("Enqueued pipeline job %s for chunk %s", job_id, chunk_id)
+    return job_id
+
+
+class LeaseLostError(RuntimeError):
+    """Raised when a worker attempts to complete a job whose lease expired or was reclaimed."""
+    pass
+
+
+def claim_job(worker_id: str, lease_duration_seconds: int = 300) -> Optional[Dict[str, Any]]:
+    """Atomically claim the next eligible job and grant a timed lease.
+    Uses atomic UPDATE ... RETURNING * to eliminate any race condition.
+    """
+    init_job_queue_schema()
+    now_dt = datetime.now()
+    now_str = now_dt.isoformat()
+    lease_until = (now_dt + timedelta(seconds=lease_duration_seconds)).isoformat()
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE pipeline_jobs
+            SET status = 'PROCESSING',
+                worker_id = ?,
+                lease_expires_at = ?,
+                heartbeat_at = ?,
+                attempt_count = attempt_count + 1,
+                updated_at = ?
+            WHERE job_id = (
+                SELECT job_id FROM pipeline_jobs
+                WHERE status IN ('QUEUED', 'RETRY_PENDING', 'WAITING_FOR_AI', 'WAITING_FOR_RESOURCES')
+                  AND datetime(next_retry_at) <= datetime(?)
+                  AND (attempt_count < max_attempts OR status IN ('WAITING_FOR_AI', 'WAITING_FOR_RESOURCES'))
+                ORDER BY created_at ASC
+                LIMIT 1
+            )
+            RETURNING *;
+        """, (worker_id, lease_until, now_str, now_str, now_str))
+        claimed = cursor.fetchone()
+
+        if not claimed:
+            return None
+
+        claimed_dict = dict(claimed)
+        logger.info("Worker %s claimed job %s at stage %s (Lease: %ds)",
+                    worker_id, claimed_dict["job_id"], claimed_dict["current_stage"], lease_duration_seconds)
+        return claimed_dict
+
+
+def renew_heartbeat(job_id: str, worker_id: str, extend_seconds: int = 300) -> bool:
+    """Worker renews lease on active job to signal it is alive."""
+    now_dt = datetime.now()
+    now_str = now_dt.isoformat()
+    lease_until = (now_dt + timedelta(seconds=extend_seconds)).isoformat()
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE pipeline_jobs
+            SET lease_expires_at = ?,
+                heartbeat_at = ?,
+                updated_at = ?
+            WHERE job_id = ? AND worker_id = ? AND status = 'PROCESSING'
+        """, (lease_until, now_str, now_str, job_id, worker_id))
+        return cursor.rowcount > 0
+
+
+def complete_stage_checkpoint(
+    job_id: str,
+    current_stage: PipelineStage,
+    worker_id: Optional[str] = None
+) -> PipelineStage:
+    """Record completed stage checkpoint and transition job to the next stage.
+    Fencing token verification: if worker_id is provided, strictly enforces that the
+    worker still owns an unexpired active lease, preventing split-brain zombie workers.
+    """
+    next_stage = get_next_stage(current_stage)
+    next_status = JobStatus.COMPLETED.value if next_stage == PipelineStage.COMPLETED else JobStatus.QUEUED.value
+    now_str = datetime.now().isoformat()
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if worker_id:
+            cursor.execute("""
+                UPDATE pipeline_jobs
+                SET current_stage = ?,
+                    status = ?,
+                    worker_id = NULL,
+                    lease_expires_at = NULL,
+                    attempt_count = 0,
+                    updated_at = ?
+                WHERE job_id = ? 
+                  AND worker_id = ? 
+                  AND current_stage = ?
+                  AND status = 'PROCESSING'
+                  AND datetime(lease_expires_at) >= datetime(?)
+            """, (next_stage.value, next_status, now_str, job_id, worker_id, current_stage.value, now_str))
+
+            if cursor.rowcount == 0:
+                raise LeaseLostError(
+                    f"Fencing check failed for job {job_id}: worker {worker_id} lost lease for stage {current_stage.value}."
+                )
+        else:
+            conn.execute("""
+                UPDATE pipeline_jobs
+                SET current_stage = ?,
+                    status = ?,
+                    worker_id = NULL,
+                    lease_expires_at = NULL,
+                    attempt_count = 0,
+                    updated_at = ?
+                WHERE job_id = ?
+            """, (next_stage.value, next_status, now_str, job_id))
+
+    logger.info("Job %s passed checkpoint: %s -> %s (Status: %s)",
+                job_id, current_stage.value, next_stage.value, next_status)
+    return next_stage
+
+
+def fail_stage_job(
+    job_id: str,
+    error_message: str,
+    wait_state: Optional[JobStatus] = None,
+    delay_seconds: int = 30
+):
+    """Mark job as failed or waiting (e.g. WAITING_FOR_AI, WAITING_FOR_RESOURCES) with retry delay."""
+    now_dt = datetime.now()
+    now_str = now_dt.isoformat()
+    retry_time = (now_dt + timedelta(seconds=delay_seconds)).isoformat()
+    status_to_set = wait_state.value if wait_state else JobStatus.RETRY_PENDING.value
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT attempt_count, max_attempts FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+        job = cursor.fetchone()
+        attempts = job["attempt_count"] if job else 1
+        max_att = job["max_attempts"] if job else 5
+
+        if attempts >= max_att and wait_state not in (JobStatus.WAITING_FOR_AI, JobStatus.WAITING_FOR_RESOURCES):
+            status_to_set = JobStatus.FAILED_PERMANENT.value
+        elif attempts >= (max_att * 2):
+            status_to_set = JobStatus.FAILED_PERMANENT.value
+
+        cursor.execute("""
+            UPDATE pipeline_jobs
+            SET status = ?,
+                last_error = ?,
+                worker_id = NULL,
+                lease_expires_at = NULL,
+                next_retry_at = ?,
+                updated_at = ?
+            WHERE job_id = ?
+        """, (status_to_set, error_message, retry_time, now_str, job_id))
+
+    logger.warning("Job %s transitioned to %s (Next retry in %ds): %s",
+                   job_id, status_to_set, delay_seconds, error_message)
+

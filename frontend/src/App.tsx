@@ -75,31 +75,6 @@ export const App: React.FC = () => {
       if (!isCancelled) setIsPcOnline(false);
 
       // 2. If running on mobile/native WebView and current host failed, probe static LAN anchor
-      const isMobileOrNative = typeof window !== 'undefined' && (
-        !!(window as any).DispatchBridge ||
-        window.location.hostname === 'appassets.androidplatform.net' ||
-        window.location.protocol === 'file:'
-      );
-
-      const staticAnchor = '192.168.0.200:8000';
-      if (isMobileOrNative && pcHost !== staticAnchor) {
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 2500);
-          const res = await fetch(`http://${staticAnchor}/api/status`, { signal: controller.signal });
-          clearTimeout(timeoutId);
-          if (res.ok) {
-            console.info(`[Dispatch] Auto-healed connection from offline host (${pcHost}) to static anchor (${staticAnchor})`);
-            Bridge.setPcHost(staticAnchor);
-            if (!isCancelled) {
-              setPcHost(staticAnchor);
-              setIsPcOnline(true);
-            }
-          }
-        } catch {
-          // Static anchor also unreachable
-        }
-      }
     };
 
     probeConnection();
@@ -160,8 +135,13 @@ export const App: React.FC = () => {
     if (Bridge.isAvailable()) {
       const loadBridgeRecordings = () => {
         const items = Bridge.getRecordings();
-        if (items && items.length > 0) {
-          setRecordings(items);
+        if (items) {
+          // Truthful states: empty result CLEARS the stale list; in-flight uploads
+          // (status UPLOADING) are preserved until they appear in the native list.
+          setRecordings(prev => {
+            const inFlight = prev.filter(p => p.status === 'UPLOADING' && !items.some(d => d.segmentId === p.segmentId));
+            return [...inFlight, ...items];
+          });
         }
       };
       loadBridgeRecordings();

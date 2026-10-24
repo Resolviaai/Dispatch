@@ -32,19 +32,51 @@ class TestPhase1Security(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_gemini_key_injection_prevention(self):
-        """Assert POST /api/integrations/gemini rejects newline injection, null bytes, and invalid formats."""
-        # Newline injection attempt
-        resp = self.client.post("/api/integrations/gemini", json={"api_key": "AIzaSyFakeKey\nMALICIOUS_ENV=1"})
-        self.assertEqual(resp.status_code, 400)
+        """Assert POST /api/integrations/gemini rejects injection and writes ONLY
+        to an isolated env file - restoring process env and Gemini module globals
+        afterwards (advisor requirement: full test isolation)."""
+        import tempfile
+        from pathlib import Path as _P
+        from unittest.mock import patch as _patch
+        import os as _os
+        import dispatch.config as _cfg
+        import dispatch.ai_clips.highlight_finder as _hf
+        saved_env = _os.environ.get("GEMINI_API_KEY")
+        saved_cfg = _cfg.GEMINI_API_KEY
+        saved_hf = _hf.GEMINI_API_KEY
+        isolated = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="gemini_env_") as tmp:
+                isolated = _P(tmp) / ".env"
+                isolated.write_text("GEMINI_API_KEY=AIzaSyOriginalKey00000000000000000000", encoding="utf-8")
+                with _patch.dict(_os.environ, {"DISPATCH_ENV_PATH": str(isolated)}):
+                    resp = self.client.post("/api/integrations/gemini",
+                                            json={"api_key": "AIzaSyFakeKey\nMALICIOUS_ENV=1"})
+                    self.assertEqual(resp.status_code, 400)
 
-        # Invalid prefix / format
-        resp = self.client.post("/api/integrations/gemini", json={"api_key": "not_a_valid_gemini_key"})
-        self.assertEqual(resp.status_code, 400)
+                    resp = self.client.post("/api/integrations/gemini",
+                                            json={"api_key": "not_a_valid_gemini_key"})
+                    self.assertEqual(resp.status_code, 400)
 
-        # Valid format
-        valid_key = "AIzaSyDas-UU7agAjyQeHDag1yOMU6qyXuxIWBE"
-        resp = self.client.post("/api/integrations/gemini", json={"api_key": valid_key})
-        self.assertEqual(resp.status_code, 200)
+                    valid_key = "AIzaSyTestKeyWithValidFormat0000000000000"
+                    resp = self.client.post("/api/integrations/gemini", json={"api_key": valid_key})
+                    self.assertEqual(resp.status_code, 200)
+
+                content = isolated.read_text(encoding="utf-8")
+                self.assertIn(valid_key, content)
+        finally:
+            if saved_env is None:
+                _os.environ.pop("GEMINI_API_KEY", None)
+            else:
+                _os.environ["GEMINI_API_KEY"] = saved_env
+            _cfg.GEMINI_API_KEY = saved_cfg
+            _hf.GEMINI_API_KEY = saved_hf
+        real_env = _P(".env")
+        if real_env.exists():
+            self.assertNotIn("AIzaSyTestKeyWithValidFormat0000000000000",
+                             real_env.read_text(encoding="utf-8"),
+                             "REGRESSION: test wrote the real .env")
+
 
     def test_dns_rebinding_untrusted_host_blocked(self):
         """Assert requests with untrusted Host header are rejected with 403."""
@@ -87,7 +119,8 @@ class TestPhase1Security(unittest.TestCase):
             json={"understands_http_risk": True},
             headers={"host": "attacker-rebinding.com"}
         )
-        self.assertEqual(resp.status_code, 403)
+        # endpoint removed (410 Gone) - fails closed for ALL inputs
+        self.assertEqual(resp.status_code, 410)
 
     def test_credentials_post_rejects_untrusted_host_and_origin(self):
         """Assert POST /api/youtube/credentials rejects untrusted Host and Origin headers."""
@@ -96,14 +129,16 @@ class TestPhase1Security(unittest.TestCase):
             json={"pairing_code": "123456"},
             headers={"host": "attacker-rebinding.com"}
         )
-        self.assertEqual(resp.status_code, 403)
+        # endpoint removed (410 Gone) - fails closed for ALL inputs
+        self.assertEqual(resp.status_code, 410)
 
         resp = self.client.post(
             "/api/youtube/credentials",
             json={"pairing_code": "123456"},
             headers={"origin": "http://evil-attacker.com"}
         )
-        self.assertEqual(resp.status_code, 403)
+        # endpoint removed (410 Gone) - fails closed for ALL inputs
+        self.assertEqual(resp.status_code, 410)
 
     def test_studio_endpoint_serves_html_and_assets(self):
         """Assert GET /studio redirects to /studio/ and GET /studio/ serves 200 HTML with valid assets."""

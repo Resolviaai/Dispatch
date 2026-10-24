@@ -1,0 +1,2562 @@
+﻿
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsc9dwy9b8fpiolelh5qbk9n1mn.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testFixturesDebugApiDependenciesMetadata][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testFixturesDebugApiDependenciesMetadata`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testFixturesDebugApiDependenciesMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsceahahdd2iycilt5p8hnrag27.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [sourceSets][com.android.build.gradle.internal.tasks.SourceSetsTask] task.
+ */
+val TaskContainer.`sourceSets`: TaskProvider<com.android.build.gradle.internal.tasks.SourceSetsTask>
+    get() = named<com.android.build.gradle.internal.tasks.SourceSetsTask>("sourceSets")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorscj8cnlwdt7k507876yfc4m1xz.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [outgoingVariants][org.gradle.api.tasks.diagnostics.OutgoingVariantsReportTask] task.
+ */
+val TaskContainer.`outgoingVariants`: TaskProvider<org.gradle.api.tasks.diagnostics.OutgoingVariantsReportTask>
+    get() = named<org.gradle.api.tasks.diagnostics.OutgoingVariantsReportTask>("outgoingVariants")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorscnrzh0ih2o8bkzq79ju7ql1qe.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testFixturesReleaseCompileOnlyDependenciesMetadata][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testFixturesReleaseCompileOnlyDependenciesMetadata`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testFixturesReleaseCompileOnlyDependenciesMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorscqzxb3a3trwt68hal8al3663i.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [lintFix][com.android.build.gradle.internal.lint.AndroidLintGlobalTask] task.
+ */
+val TaskContainer.`lintFix`: TaskProvider<com.android.build.gradle.internal.lint.AndroidLintGlobalTask>
+    get() = named<com.android.build.gradle.internal.lint.AndroidLintGlobalTask>("lintFix")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorscrp3h5qpnpiiy5zpztvf8juc7.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [kspTestDebug][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`kspTestDebug`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("kspTestDebug")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorscu1ogvnpcrf6gv0dfmj7hx1lt.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testFixturesRuntimeOnly][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testFixturesRuntimeOnly`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testFixturesRuntimeOnly")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsd0sr4srxcz2z2dbnry06nxm6d.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Retrieves the [peerNpm][org.jetbrains.kotlin.gradle.targets.js.npm.PeerNpmDependencyExtension] extension.
+ */
+val org.gradle.api.artifacts.dsl.DependencyHandler.`peerNpm`: org.jetbrains.kotlin.gradle.targets.js.npm.PeerNpmDependencyExtension get() =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.getByName("peerNpm") as org.jetbrains.kotlin.gradle.targets.js.npm.PeerNpmDependencyExtension
+
+/**
+ * Configures the [peerNpm][org.jetbrains.kotlin.gradle.targets.js.npm.PeerNpmDependencyExtension] extension.
+ */
+fun org.gradle.api.artifacts.dsl.DependencyHandler.`peerNpm`(configure: Action<org.jetbrains.kotlin.gradle.targets.js.npm.PeerNpmDependencyExtension>): Unit =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.configure("peerNpm", configure)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsd4827nxjyj1om56ogcf08jqlx.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [androidTestReleaseIntransitiveDependenciesMetadata][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`androidTestReleaseIntransitiveDependenciesMetadata`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("androidTestReleaseIntransitiveDependenciesMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsd6ez5xjielu1wukui4cu58310.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [releaseWearApp][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`releaseWearApp`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("releaseWearApp")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsd7e4odubtwwdqpjhh6pvdtm35.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [properties][org.gradle.api.tasks.diagnostics.PropertyReportTask] task.
+ */
+val TaskContainer.`properties`: TaskProvider<org.gradle.api.tasks.diagnostics.PropertyReportTask>
+    get() = named<org.gradle.api.tasks.diagnostics.PropertyReportTask>("properties")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsd977e391xzjsyx13wseo6zmbh.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [connectedCheck][com.android.build.gradle.internal.tasks.DeviceSerialTestTask] task.
+ */
+val TaskContainer.`connectedCheck`: TaskProvider<com.android.build.gradle.internal.tasks.DeviceSerialTestTask>
+    get() = named<com.android.build.gradle.internal.tasks.DeviceSerialTestTask>("connectedCheck")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdbdh4zrzrhmewwnquzrk3ig5x.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [kotlinBuildToolsApiClasspath][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`kotlinBuildToolsApiClasspath`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("kotlinBuildToolsApiClasspath")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdbrmeler1qtgiafhyof5tcm5y.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [debugIntransitiveDependenciesMetadata][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`debugIntransitiveDependenciesMetadata`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("debugIntransitiveDependenciesMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdbsxdiburo0fnqzew185uq319.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [kotlinDslAccessorsReport][org.gradle.kotlin.dsl.accessors.tasks.PrintAccessors] task.
+ */
+val TaskContainer.`kotlinDslAccessorsReport`: TaskProvider<org.gradle.kotlin.dsl.accessors.tasks.PrintAccessors>
+    get() = named<org.gradle.kotlin.dsl.accessors.tasks.PrintAccessors>("kotlinDslAccessorsReport")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdemns0nrfvv4tm1e985ahms6r.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [runtimeOnly][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`runtimeOnly`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("runtimeOnly")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdhblu8rt4vbwuf4rib4cwj9lu.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [api][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`api`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("api")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdjndpeyafmkvjrxu9kp0ma1gn.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Retrieves the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+val org.gradle.jvm.toolchain.JavaToolchainService.`ext`: org.gradle.api.plugins.ExtraPropertiesExtension get() =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.getByName("ext") as org.gradle.api.plugins.ExtraPropertiesExtension
+
+/**
+ * Configures the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+fun org.gradle.jvm.toolchain.JavaToolchainService.`ext`(configure: Action<org.gradle.api.plugins.ExtraPropertiesExtension>): Unit =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.configure("ext", configure)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdk92as9mnl5rbo4au19uhik81.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Retrieves the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+val com.google.devtools.ksp.gradle.KspExtension.`ext`: org.gradle.api.plugins.ExtraPropertiesExtension get() =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.getByName("ext") as org.gradle.api.plugins.ExtraPropertiesExtension
+
+/**
+ * Configures the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+fun com.google.devtools.ksp.gradle.KspExtension.`ext`(configure: Action<org.gradle.api.plugins.ExtraPropertiesExtension>): Unit =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.configure("ext", configure)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdkw3feodrotgq6qz1iozrse9p.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [lint][com.android.build.gradle.internal.lint.AndroidLintGlobalTask] task.
+ */
+val TaskContainer.`lint`: TaskProvider<com.android.build.gradle.internal.lint.AndroidLintGlobalTask>
+    get() = named<com.android.build.gradle.internal.lint.AndroidLintGlobalTask>("lint")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdn3cxth4pwxdn4tudvdi44y9w.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [androidTestDebugImplementationDependenciesMetadata][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`androidTestDebugImplementationDependenciesMetadata`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("androidTestDebugImplementationDependenciesMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdpdhkzdraoik8rvspl94k4sqt.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [buildKotlinToolingMetadata][org.jetbrains.kotlin.gradle.tooling.BuildKotlinToolingMetadataTask.FromKotlinExtension] task.
+ */
+val TaskContainer.`buildKotlinToolingMetadata`: TaskProvider<org.jetbrains.kotlin.gradle.tooling.BuildKotlinToolingMetadataTask.FromKotlinExtension>
+    get() = named<org.jetbrains.kotlin.gradle.tooling.BuildKotlinToolingMetadataTask.FromKotlinExtension>("buildKotlinToolingMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdpj8xz3zkymtne0z5yiyh2nkh.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testDebugApiDependenciesMetadata][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testDebugApiDependenciesMetadata`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testDebugApiDependenciesMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdsd01x022smecaiowfk4ic4cr.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testDebugAnnotationProcessor][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testDebugAnnotationProcessor`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testDebugAnnotationProcessor")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdu8x1giecu94yrbdkyr7x1tt9.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testReleaseApi][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testReleaseApi`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testReleaseApi")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdvhfka4zbo2v5pnxtm9xbwbqk.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testFixturesDebugRuntimeOnly][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testFixturesDebugRuntimeOnly`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testFixturesDebugRuntimeOnly")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdxf2ycnta2f2sezdnwlz4w3uq.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [debugApiDependenciesMetadata][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`debugApiDependenciesMetadata`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("debugApiDependenciesMetadata")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdys75vnlexdi7h9ckj6ofzc1c.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [testFixturesReleaseApi][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`testFixturesReleaseApi`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("testFixturesReleaseApi")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsdzuf6j7454qh6vkirdekoyoeu.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [androidTestDebugImplementation][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`androidTestDebugImplementation`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("androidTestDebugImplementation")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorse3bcayds3ygcyd5zodeo0v3sh.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Retrieves the [versionCatalogs][org.gradle.api.artifacts.VersionCatalogsExtension] extension.
+ */
+val org.gradle.api.Project.`versionCatalogs`: org.gradle.api.artifacts.VersionCatalogsExtension get() =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.getByName("versionCatalogs") as org.gradle.api.artifacts.VersionCatalogsExtension
+
+/**
+ * Configures the [versionCatalogs][org.gradle.api.artifacts.VersionCatalogsExtension] extension.
+ */
+fun org.gradle.api.Project.`versionCatalogs`(configure: Action<org.gradle.api.artifacts.VersionCatalogsExtension>): Unit =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.configure("versionCatalogs", configure)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorse4g34vhchhjlqy8cax2exywi4.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [uninstallAll][org.gradle.api.Task] task.
+ */
+val TaskContainer.`uninstallAll`: TaskProvider<org.gradle.api.Task>
+    get() = named<org.gradle.api.Task>("uninstallAll")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorse6ex1mefr8h1znr2ivlnwcx4n.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Retrieves the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+val org.gradle.api.artifacts.VersionCatalogsExtension.`ext`: org.gradle.api.plugins.ExtraPropertiesExtension get() =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.getByName("ext") as org.gradle.api.plugins.ExtraPropertiesExtension
+
+/**
+ * Configures the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+fun org.gradle.api.artifacts.VersionCatalogsExtension.`ext`(configure: Action<org.gradle.api.plugins.ExtraPropertiesExtension>): Unit =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.configure("ext", configure)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorse8yzkgyr2zhx9ujba0zqeejwb.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [deviceCheck][org.gradle.api.Task] task.
+ */
+val TaskContainer.`deviceCheck`: TaskProvider<org.gradle.api.Task>
+    get() = named<org.gradle.api.Task>("deviceCheck")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorsee3nx26f9ihnxap1fa5p47vbp.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Provides the existing [kspAndroidTestDebug][org.gradle.api.artifacts.Configuration] element.
+ */
+val org.gradle.api.NamedDomainObjectContainer<org.gradle.api.artifacts.Configuration>.`kspAndroidTestDebug`: NamedDomainObjectProvider<org.gradle.api.artifacts.Configuration>
+    get() = named<org.gradle.api.artifacts.Configuration>("kspAndroidTestDebug")
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\Accessorseessl0al0otcsbyqqruvoncpd.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Retrieves the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+val org.gradle.api.reporting.ReportingExtension.`ext`: org.gradle.api.plugins.ExtraPropertiesExtension get() =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.getByName("ext") as org.gradle.api.plugins.ExtraPropertiesExtension
+
+/**
+ * Configures the [ext][org.gradle.api.plugins.ExtraPropertiesExtension] extension.
+ */
+fun org.gradle.api.reporting.ReportingExtension.`ext`(configure: Action<org.gradle.api.plugins.ExtraPropertiesExtension>): Unit =
+    (this as org.gradle.api.plugins.ExtensionAware).extensions.configure("ext", configure)
+
+
+
+

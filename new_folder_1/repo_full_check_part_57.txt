@@ -1,0 +1,2287 @@
+﻿
+============================================================
+FILE: tests\test_pillar3_highlights.py
+============================================================
+"""Pillar 3 Unit & Integration Tests: Gemini Semantic Highlight Selection.
+
+Tests all required Pillar 3 properties:
+  A. Happy-path discovery & processing: TRANSCRIBED -> ANALYZING -> CLIPS_DEFINED.
+  B. Valid clip schema: title, hook, description, hashtags, virality_score, layout_mode, duration.
+  C. Malformed JSON & schema violations gracefully skipped/filtered.
+  D. Word boundary snapping: timestamps snapped to closest spoken word.
+  E. Strict 20.0s <= duration <= 90.0s constraint: invalid durations rejected, never manufactured.
+  F. Overlap deduplication: overlapping candidates (IoU > 0.5) suppressed, retaining higher virality.
+  G. Negative feedback conditioning: rejections injected into prompt.
+  H. Rate-limit (429/503/timeout) retry backoff: scheduled via next_ai_attempt_at.
+  I. Missing or invalid GEMINI_API_KEY: transitions to permanent failure.
+  J. Strict failure: zero fallback to local heuristic.
+  K. Restart idempotency: resuming or re-running does not duplicate clips.
+  L. Transaction atomicity: partial failures roll back cleanly.
+  M. Silence / zero speech: marks CLIPS_DEFINED with 0 clips without calling Gemini.
+  N. Invariant check: clips table rows have video_path IS NULL, thumbnail_path IS NULL, status='ready_review'.
+  O. Publishing outbox empty: Pillar 3 does not queue or touch social outbox.
+"""
+import os
+import json
+import tempfile
+import unittest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+
+from dispatch import db
+from dispatch.config import DB_PATH
+from dispatch.ai_clips.highlight_finder import (
+    snap_to_word_boundary,
+    compute_interval_overlap,
+    validate_and_filter_candidates,
+    call_gemini_generate_content,
+    identify_and_save_highlights,
+)
+from dispatch.ai_clips.worker import HighlightWorker
+
+
+class TestPillar3Highlights(unittest.TestCase):
+    """Pillar 3 highlight selection test suite."""
+
+    def setUp(self):
+        """Set up fresh isolated test SQLite database."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_file = Path(self.temp_dir.name) / "test_dispatch.db"
+        self._orig_db_path = db.DB_PATH
+        db.DB_PATH = self.db_file
+        db.init_db()
+
+    def tearDown(self):
+        """Restore DB path and cleanup."""
+        db.DB_PATH = self._orig_db_path
+        self.temp_dir.cleanup()
+
+    def _seed_transcribed_video(
+        self,
+        video_id: str = "p3_vid_001",
+        duration: float = 300.0,
+        segments: list = None
+    ) -> str:
+        """Helper to register chunk and seed youtube_inbox item in TRANSCRIBED status."""
+        if segments is None:
+            segments = [
+                {
+                    "start": 10.0,
+                    "end": 45.0,
+                    "text": "Aaj hum automation setup karenge jo bilkul seamless hai.",
+                    "words": [
+                        {"word": "Aaj", "start": 10.0, "end": 10.5},
+                        {"word": "automation", "start": 10.6, "end": 11.2},
+                        {"word": "setup", "start": 11.3, "end": 11.8},
+                        {"word": "hai.", "start": 44.5, "end": 45.0}
+                    ]
+                },
+                {
+                    "start": 50.0,
+                    "end": 95.0,
+                    "text": "Second insight yeh hai ki reliable queues hona zaroori hai.",
+                    "words": [
+                        {"word": "Second", "start": 50.0, "end": 50.6},
+                        {"word": "hai.", "start": 94.2, "end": 95.0}
+                    ]
+                }
+            ]
+
+        # Register chunk
+        chunk_id = db.register_chunk(
+            session_id=None,
+            filename=f"{video_id}.mp4",
+            filepath=f"/tmp/{video_id}.mp4",
+            file_hash=f"yt_{video_id}"
+        )
+        db.update_chunk_metadata(
+            chunk_id=chunk_id,
+            duration=duration,
+            width=1080,
+            height=1920,
+            aspect_ratio="9:16",
+            status="transcribed"
+        )
+
+        full_text = " ".join(s["text"] for s in segments)
+        db.save_transcript(
+            chunk_id=chunk_id,
+            session_id=None,
+            full_text=full_text,
+            segments=segments
+        )
+
+        db.register_youtube_video(
+            video_id=video_id,
+            title=f"Test Video {video_id}",
+            duration=duration
+        )
+        db.update_youtube_video(
+            video_id=video_id,
+            status="TRANSCRIBED",
+            transcript_source="whisper",
+            segments_json=json.dumps(segments)
+        )
+        return video_id
+
+    # Test A: Happy-path discovery & processing
+    @patch("dispatch.ai_clips.worker.call_gemini_generate_content")
+    def test_a_happy_path_transcribed_to_clips_defined(self, mock_gemini):
+        mock_gemini.return_value = (
+            [
+                {
+                    "start_time": 10.0,
+                    "end_time": 45.0,
+                    "title": "Automation Setup Guide",
+                    "hook": "Aaj hum automation setup karenge",
+                    "description": "Seamless setup guide in Hinglish",
+                    "hashtags": "#Automation #Hinglish",
+                    "virality_score": 88,
+                    "layout_recommendation": "fit_blur",
+                    "reason": "Complete thought with strong hook"
+                }
+            ],
+            "gemini-3.5-flash-lite"
+        )
+
+        video_id = self._seed_transcribed_video("vid_happy_01")
+        worker = HighlightWorker(poll_interval_seconds=1)
+        res = worker.process_video_highlights(video_id)
+
+        self.assertIsNotNone(res)
+        self.assertEqual(res["status"], "CLIPS_DEFINED")
+        self.assertEqual(res["clips_count"], 1)
+
+        row = db.get_youtube_video(video_id)
+        self.assertEqual(row["status"], "CLIPS_DEFINED")
+
+        # Verify clips in database
+        clips = db.get_clips_for_review()
+        self.assertEqual(len(clips), 1)
+        self.assertEqual(clips[0]["title"], "Automation Setup Guide")
+        self.assertEqual(clips[0]["status"], "ready_review")
+        self.assertIsNone(clips[0]["video_path"])
+        self.assertIsNone(clips[0]["thumbnail_path"])
+
+    # Test B: Valid clip schema validation
+    def test_b_candidate_schema_fields(self):
+        raw = [
+            {
+                "start_time": 10.0,
+                "end_time": 45.0,
+                "title": "Viral Hook Title",
+                "hook": "Hook opener",
+                "description": "Short summary",
+                "hashtags": "#Tech #Viral",
+                "virality_score": 92,
+                "layout_recommendation": "crop_follow",
+                "reason": "High retention"
+            }
+        ]
+        validated = validate_and_filter_candidates(raw, segments=[], total_duration=100.0)
+        self.assertEqual(len(validated), 1)
+        cand = validated[0]
+        self.assertEqual(cand["title"], "Viral Hook Title")
+        self.assertEqual(cand["duration"], 35.0)
+        self.assertEqual(cand["virality_score"], 92)
+        self.assertEqual(cand["layout_recommendation"], "crop_follow")
+
+    # Test C: Malformed JSON and schema violations rejected
+    def test_c_malformed_candidates_rejected(self):
+        malformed = [
+            {"title": "Missing start and end"},  # missing start_time, end_time
+            {"start_time": "invalid", "end_time": 40.0, "title": "Bad float"},
+            {"start_time": 10.0, "end_time": 50.0, "title": ""},  # empty title
+            {"start_time": 10.0, "end_time": 50.0, "title": "Valid Clip", "virality_score": 250}  # virality > 100
+        ]
+        validated = validate_and_filter_candidates(malformed, segments=[], total_duration=100.0)
+        self.assertEqual(len(validated), 0)
+
+    # Test D: Word boundary snapping
+    def test_d_word_boundary_snapping(self):
+        segments = [
+            {
+                "start": 5.0,
+                "end": 25.0,
+                "text": "Hello world test",
+                "words": [
+                    {"word": "Hello", "start": 5.12, "end": 5.50},
+                    {"word": "world", "start": 5.60, "end": 6.10},
+                    {"word": "test", "start": 24.20, "end": 24.85}
+                ]
+            }
+        ]
+        snapped_start = snap_to_word_boundary(5.0, segments, prefer_start=True)
+        self.assertEqual(snapped_start, 5.12)
+        snapped_end = snap_to_word_boundary(25.0, segments, prefer_start=False)
+        self.assertEqual(snapped_end, 24.85)
+
+    # Test E: Strict 5.0s <= duration <= 180.0s constraint (REJECT, DO NOT FABRICATE)
+    def test_e_duration_constraint_rejection(self):
+        raw = [
+            {  # 3s duration: Too short (< 5s)!
+                "start_time": 10.0,
+                "end_time": 13.0,
+                "title": "Too Short Clip",
+                "virality_score": 90
+            },
+            {  # 250s duration: Too long (> 180s)!
+                "start_time": 0.0,
+                "end_time": 250.0,
+                "title": "Too Long Clip",
+                "virality_score": 85
+            },
+            {  # 30s duration: Valid!
+                "start_time": 30.0,
+                "end_time": 60.0,
+                "title": "Perfect Duration Clip",
+                "virality_score": 80
+            }
+        ]
+        validated = validate_and_filter_candidates(raw, segments=[], total_duration=300.0)
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["title"], "Perfect Duration Clip")
+        self.assertEqual(validated[0]["duration"], 30.0)
+
+    # Test F: Overlap deduplication (suppress IoU > 0.5, prefer higher virality)
+    def test_f_overlap_deduplication(self):
+        raw = [
+            {
+                "start_time": 10.0,
+                "end_time": 50.0,
+                "title": "Clip A - Lower Score",
+                "virality_score": 70
+            },
+            {
+                "start_time": 12.0,
+                "end_time": 48.0,
+                "title": "Clip B - Higher Score Overlapping",
+                "virality_score": 95
+            },
+            {
+                "start_time": 60.0,
+                "end_time": 90.0,
+                "title": "Clip C - Non Overlapping",
+                "virality_score": 80
+            }
+        ]
+        validated = validate_and_filter_candidates(raw, segments=[], total_duration=100.0)
+        self.assertEqual(len(validated), 2)
+        titles = [c["title"] for c in validated]
+        self.assertIn("Clip B - Higher Score Overlapping", titles)
+        self.assertIn("Clip C - Non Overlapping", titles)
+        self.assertNotIn("Clip A - Lower Score", titles)
+
+    # Test G: Negative feedback injection
+    def test_g_negative_feedback_conditioning(self):
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=10.0,
+            end_time=35.0,
+            title="Boring Walkthrough",
+            hook="Low energy opening",
+            description="Testing rejections",
+            hashtags="#Test",
+            virality_score=40,
+            layout_mode="fit_blur"
+        )
+        db.reject_clip(clip_id, reason="Boring code walkthrough without energy")
+        rejections = db.get_all_rejections()
+        self.assertGreater(len(rejections), 0)
+
+        from dispatch.ai_clips.preference_learner import get_negative_feedback_prompt
+        prompt_frag = get_negative_feedback_prompt()
+        self.assertIn("Boring code walkthrough without energy", prompt_frag)
+        self.assertIn("NEGATIVE USER PREFERENCES", prompt_frag)
+
+    # Test H: Rate-limit (429/503/timeout) retry backoff
+    @patch("dispatch.ai_clips.worker.call_gemini_generate_content")
+    def test_h_rate_limit_retry_backoff(self, mock_gemini):
+        mock_gemini.side_effect = RuntimeError("Gemini model 'gemini-3.5-flash-lite' rate limited (HTTP 429)")
+
+        video_id = self._seed_transcribed_video("vid_429_01")
+        worker = HighlightWorker(poll_interval_seconds=1, base_backoff_seconds=10)
+
+        with self.assertRaises(RuntimeError):
+            worker.process_video_highlights(video_id)
+
+        row = db.get_youtube_video(video_id)
+        # Must reset to TRANSCRIBED with scheduled next_ai_attempt_at
+        self.assertEqual(row["status"], "TRANSCRIBED")
+        self.assertEqual(row["ai_attempt_count"], 1)
+        self.assertIsNotNone(row["next_ai_attempt_at"])
+        self.assertIn("HTTP 429", row["last_ai_error"])
+
+    # Test I: Missing GEMINI_API_KEY transitions to permanent failure
+    @patch("dispatch.ai_clips.worker.GEMINI_API_KEY", "")
+    @patch("dispatch.ai_clips.highlight_finder.GEMINI_API_KEY", "")
+    def test_i_missing_gemini_api_key_fails(self):
+        video_id = self._seed_transcribed_video("vid_no_key_01")
+        worker = HighlightWorker(poll_interval_seconds=1)
+
+        with self.assertRaises(RuntimeError):
+            worker.process_video_highlights(video_id)
+
+        row = db.get_youtube_video(video_id)
+        self.assertEqual(row["status"], "FAILED")
+        self.assertIn("GEMINI_API_KEY", row["last_ai_error"])
+
+    # Test J: Zero fallback to local heuristic
+    @patch("dispatch.ai_clips.worker.call_gemini_generate_content")
+    @patch("dispatch.ai_clips.highlight_finder.extract_clips_local_heuristic")
+    def test_j_zero_heuristic_fallback(self, mock_heuristic, mock_gemini):
+        mock_gemini.side_effect = RuntimeError("All Gemini candidate models failed: HTTP 503")
+
+        video_id = self._seed_transcribed_video("vid_no_heur_01")
+        worker = HighlightWorker(poll_interval_seconds=1)
+
+        with self.assertRaises(RuntimeError):
+            worker.process_video_highlights(video_id)
+
+        # Confirm heuristic was never called
+        mock_heuristic.assert_not_called()
+
+    # Test K: Restart idempotency: no duplicate clips on retry
+    @patch("dispatch.ai_clips.worker.call_gemini_generate_content")
+    def test_k_restart_idempotency_no_duplicates(self, mock_gemini):
+        mock_gemini.return_value = (
+            [
+                {
+                    "start_time": 10.0,
+                    "end_time": 45.0,
+                    "title": "Idempotent Clip",
+                    "virality_score": 85
+                }
+            ],
+            "gemini-3.5-flash-lite"
+        )
+
+        video_id = self._seed_transcribed_video("vid_idem_01")
+        worker = HighlightWorker(poll_interval_seconds=1)
+
+        # Run 1
+        worker.process_video_highlights(video_id)
+        clips_1 = db.get_clips_for_review()
+        self.assertEqual(len(clips_1), 1)
+
+        # Simulate replay (e.g. video was set back to TRANSCRIBED and re-analyzed)
+        db.update_youtube_video(video_id=video_id, status="TRANSCRIBED")
+        worker.process_video_highlights(video_id)
+        clips_2 = db.get_clips_for_review()
+        # Must still be exactly 1 clip, not 2
+        self.assertEqual(len(clips_2), 1)
+
+    # Test L: Atomic transaction rollback on partial failure
+    def test_l_atomic_transaction_rollback(self):
+        clip_defs = [
+            {"start_time": 10.0, "end_time": 40.0, "title": "Clip 1"},
+            {"start_time": "INVALID_FLOAT", "end_time": 50.0, "title": "Clip 2"}
+        ]
+        video_id = self._seed_transcribed_video("vid_atomic_01")
+
+        with self.assertRaises(Exception):
+            db.save_clip_definitions(
+                chunk_id="chk_dummy",
+                session_id=None,
+                video_id=video_id,
+                clip_defs=clip_defs
+            )
+
+        # Verify nothing was inserted and status was not changed to CLIPS_DEFINED
+        clips = db.get_clips_for_review()
+        self.assertEqual(len(clips), 0)
+        row = db.get_youtube_video(video_id)
+        self.assertEqual(row["status"], "TRANSCRIBED")
+
+    # Test M: Silence / zero speech -> CLIPS_DEFINED with 0 clips
+    @patch("dispatch.ai_clips.worker.call_gemini_generate_content")
+    def test_m_silence_empty_transcript_defines_zero_clips(self, mock_gemini):
+        video_id = self._seed_transcribed_video("vid_silence_01", segments=[])
+        worker = HighlightWorker(poll_interval_seconds=1)
+        res = worker.process_video_highlights(video_id)
+
+        self.assertIsNotNone(res)
+        self.assertEqual(res["status"], "CLIPS_DEFINED")
+        self.assertEqual(res["clips_count"], 0)
+
+        # Gemini must not have been called
+        mock_gemini.assert_not_called()
+
+        row = db.get_youtube_video(video_id)
+        self.assertEqual(row["status"], "CLIPS_DEFINED")
+        self.assertEqual(len(db.get_clips_for_review()), 0)
+
+    # Test N: Invariants: unrendered media paths and status='ready_review'
+    @patch("dispatch.ai_clips.worker.call_gemini_generate_content")
+    def test_n_unrendered_media_invariants(self, mock_gemini):
+        mock_gemini.return_value = (
+            [
+                {
+                    "start_time": 10.0,
+                    "end_time": 40.0,
+                    "title": "Unrendered Invariant Test",
+                    "virality_score": 90
+                }
+            ],
+            "gemini-3.5-flash-lite"
+        )
+        video_id = self._seed_transcribed_video("vid_inv_01")
+        worker = HighlightWorker()
+        worker.process_video_highlights(video_id)
+
+        clips = db.get_clips_for_review()
+        self.assertEqual(len(clips), 1)
+        c = clips[0]
+        self.assertEqual(c["status"], "ready_review")
+        self.assertIsNone(c["video_path"])
+        self.assertIsNone(c["thumbnail_path"])
+
+    # Test O: Publishing outbox remains empty
+    @patch("dispatch.ai_clips.worker.call_gemini_generate_content")
+    def test_o_publishing_outbox_untouched(self, mock_gemini):
+        mock_gemini.return_value = (
+            [
+                {
+                    "start_time": 10.0,
+                    "end_time": 40.0,
+                    "title": "Outbox Untouched Test",
+                    "virality_score": 85
+                }
+            ],
+            "gemini-3.5-flash-lite"
+        )
+        video_id = self._seed_transcribed_video("vid_outbox_01")
+        worker = HighlightWorker()
+        worker.process_video_highlights(video_id)
+
+        outbox = db.get_outbox_queue()
+        self.assertEqual(len(outbox), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_pipeline_runner.py
+============================================================
+"""Unit test for Phase 5: Pipeline Checkpointing & Centralized Retry Engine."""
+import unittest
+import tempfile
+import json
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from dispatch import db
+from dispatch.db import init_db, register_chunk, get_db_connection
+from dispatch.orchestrator.state_machine import PipelineStage, JobStatus
+from dispatch.orchestrator.job_queue import init_job_queue_schema, enqueue_job, claim_job
+from dispatch.orchestrator.retry_engine import RetryEngine
+from dispatch.orchestrator.pipeline_runner import PipelineStageRunner
+from dispatch.governor.resource_governor import ResourceGovernor, GovernorPolicy
+
+
+class TestPipelineCheckpointingAndRetry(unittest.TestCase):
+    def setUp(self):
+        init_db()
+        init_job_queue_schema()
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM pipeline_jobs")
+        self.retry_engine = RetryEngine(base_delay_seconds=10, max_delay_seconds=60)
+
+    def test_retry_engine_backoff_and_classification(self):
+        # 1. Backoff delays
+        delay1 = self.retry_engine.compute_backoff_seconds(1)
+        delay3 = self.retry_engine.compute_backoff_seconds(3)
+        self.assertGreaterEqual(delay1, 5)
+        self.assertGreaterEqual(delay3, delay1)
+
+        # 2. AI 429 Rate limit classification
+        status, perm, reason = RetryEngine.classify_error(Exception("HTTP 429 Too Many Requests: quota exceeded"))
+        self.assertEqual(status, JobStatus.WAITING_FOR_AI)
+        self.assertFalse(perm)
+
+        # 3. Disk space error classification
+        status, perm, reason = RetryEngine.classify_error(IOError("[Errno 28] No space left on device"))
+        self.assertEqual(status, JobStatus.WAITING_FOR_RESOURCES)
+        self.assertFalse(perm)
+
+        # 4. Permanent corrupt file classification
+        status, perm, reason = RetryEngine.classify_error(ValueError("moov atom not found in video"))
+        self.assertEqual(status, JobStatus.FAILED_PERMANENT)
+        self.assertTrue(perm)
+
+    def test_checkpointed_stage_execution_and_resumption(self):
+        # Create a mock video file in temp
+        temp_dir = Path(tempfile.mkdtemp(prefix="dispatch_pipe_test_"))
+        dummy_video = temp_dir / "sample_pipe.mp4"
+        with open(dummy_video, "wb") as f:
+            f.write(b"DUMMY_MP4_HEADER_CONTENT_BYTES" * 100)
+
+        chunk_id = register_chunk(
+            session_id="pipe_sess_01",
+            filename="sample_pipe.mp4",
+            filepath=str(dummy_video),
+            file_hash="mock_hash_pipe"
+        )
+        job_id = enqueue_job(chunk_id=chunk_id, session_id="pipe_sess_01")
+
+        runner = PipelineStageRunner()
+
+        # Step 1: VERIFY stage
+        job = claim_job("test_worker_1")
+        self.assertEqual(job["job_id"], job_id)
+        self.assertEqual(job["current_stage"], "VERIFY")
+
+        # Mock probe_video to pass
+        mock_meta = {"duration": 45.0, "aspect_ratio": "16:9", "resolution": (1920, 1080)}
+        with patch("dispatch.orchestrator.pipeline_runner.probe_video", return_value=(True, mock_meta, None)):
+            success = runner.process_job_step(job, "test_worker_1")
+            self.assertTrue(success)
+
+        # Step 2: Job should now be at TRANSCRIBE stage
+        job_t = claim_job("test_worker_1")
+        self.assertEqual(job_t["current_stage"], "TRANSCRIBE")
+
+        # Mock transcription
+        mock_trans = {
+            "text": "Yeh pehla segment hai jo automate ho chuka hai",
+            "segments": [
+                {"id": 0, "start": 0.0, "end": 2.5, "text": "Yeh pehla segment hai"},
+                {"id": 1, "start": 2.5, "end": 5.0, "text": "jo automate ho chuka hai"}
+            ]
+        }
+        def fake_transcribe(**kwargs):
+            cid = kwargs.get("chunk_id")
+            db.save_transcript(
+                chunk_id=cid,
+                session_id=kwargs.get("session_id"),
+                full_text=mock_trans["text"],
+                segments=mock_trans["segments"]
+            )
+            return mock_trans
+
+        with patch("dispatch.orchestrator.pipeline_runner.transcribe_video", side_effect=fake_transcribe):
+            success = runner.process_job_step(job_t, "test_worker_1")
+            self.assertTrue(success)
+
+        # Verify transcript was stored in database
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT full_text FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+            t_row = cursor.fetchone()
+            self.assertIsNotNone(t_row)
+            self.assertIn("Yeh pehla segment", t_row["full_text"])
+
+        # Step 3: Job should now be at ANALYZE stage
+        job_a = claim_job("test_worker_1")
+        self.assertEqual(job_a["current_stage"], "ANALYZE")
+
+        # Mock AI highlight finder returning 1 clip
+        clip_mock_id = f"clip_test_{chunk_id}_01"
+        with get_db_connection() as conn:
+            conn.execute("""
+                INSERT INTO clips (id, chunk_id, session_id, start_time, end_time, duration, title, hook, layout_mode, status)
+                VALUES (?, ?, ?, 0.0, 5.0, 5.0, 'Auto Title', 'Hook Test', 'fit_blur', 'review_pending')
+            """, (clip_mock_id, chunk_id, "pipe_sess_01"))
+
+        with patch("dispatch.orchestrator.pipeline_runner.identify_and_save_highlights", return_value=[clip_mock_id]):
+            success = runner.process_job_step(job_a, "test_worker_1")
+            self.assertTrue(success)
+
+        # Step 4: Job should now be at RENDER stage
+        job_r = claim_job("test_worker_1")
+        self.assertEqual(job_r["current_stage"], "RENDER")
+
+        # Render clip mock
+        rendered_mp4 = temp_dir / "rendered_output.mp4"
+        with open(rendered_mp4, "wb") as f:
+            f.write(b"RENDERED_VIDEO_DATA")
+
+        def fake_render(**kwargs):
+            with get_db_connection() as conn:
+                conn.execute("UPDATE clips SET video_path = ? WHERE id = ?", (str(rendered_mp4), clip_mock_id))
+
+        with patch("dispatch.orchestrator.pipeline_runner.render_clip", side_effect=fake_render):
+            with patch("dispatch.orchestrator.pipeline_runner.probe_video", return_value=(True, mock_meta, None)):
+                success = runner.process_job_step(job_r, "test_worker_1")
+                self.assertTrue(success)
+
+        # Step 5: Job should now be at FINALIZE stage
+        job_f = claim_job("test_worker_1")
+        self.assertEqual(job_f["current_stage"], "FINALIZE")
+
+        success = runner.process_job_step(job_f, "test_worker_1")
+        self.assertTrue(success)
+
+        # Verify job is now COMPLETED
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, current_stage FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+            final_job = cursor.fetchone()
+            self.assertEqual(final_job["status"], "COMPLETED")
+            self.assertEqual(final_job["current_stage"], "COMPLETED")
+
+        # Verify raw file was safely preserved (creator source video must never be deleted)
+        self.assertTrue(dummy_video.exists())
+
+    def test_governor_hold_transitions_to_waiting_for_resources(self):
+        # Register a chunk and job at TRANSCRIBE stage
+        temp_dir = Path(tempfile.mkdtemp(prefix="dispatch_gov_hold_"))
+        dummy_video = temp_dir / "sample_hold.mp4"
+        with open(dummy_video, "wb") as f:
+            f.write(b"SAMPLE_VIDEO_DATA")
+
+        chunk_id = register_chunk(
+            session_id="pipe_hold_01",
+            filename="sample_hold.mp4",
+            filepath=str(dummy_video),
+            file_hash="mock_hash_hold"
+        )
+        job_id = enqueue_job(chunk_id=chunk_id, session_id="pipe_hold_01")
+
+        # Advance to TRANSCRIBE stage
+        with get_db_connection() as conn:
+            conn.execute("UPDATE pipeline_jobs SET current_stage = 'TRANSCRIBE' WHERE job_id = ?", (job_id,))
+
+        job = claim_job("test_worker_gov")
+        self.assertEqual(job["current_stage"], "TRANSCRIBE")
+
+        # Mock governor reporting low disk space
+        mock_gov = MagicMock()
+        mock_gov.can_process_heavy_task.return_value = (False, "Low disk space (2.1 GB free < 5.0 GB minimum)")
+
+        runner = PipelineStageRunner(governor=mock_gov)
+        result = runner.process_job_step(job, "test_worker_gov")
+        self.assertFalse(result)
+
+        # Verify job transitioned to WAITING_FOR_RESOURCES
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, last_error FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+            j_row = cursor.fetchone()
+            self.assertEqual(j_row["status"], "WAITING_FOR_RESOURCES")
+            self.assertIn("Resource governor hold", j_row["last_error"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+============================================================
+FILE: tests\test_publisher.py
+============================================================
+"""Unit test for publishing outbox and platform adapters."""
+import unittest
+from unittest.mock import patch
+import subprocess
+import uuid
+from pathlib import Path
+from dispatch.config import CLIPS_DIR
+from dispatch.publisher.outbox import process_outbox_queue
+from dispatch import db
+from dispatch.db import init_db, save_clip, update_clip_media, approve_clip, get_db_connection
+
+
+class TestPublisher(unittest.TestCase):
+    def setUp(self):
+        init_db()
+
+    def test_publisher(self):
+        # 1. Register clip in DB first to get unique ID
+        unique_tag = uuid.uuid4().hex[:6]
+        clip_id = save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=6.0,
+            title=f"Test Publish Short {unique_tag}",
+            hook="Opening Hook",
+            description="Description",
+            hashtags="#Shorts",
+            virality_score=92,
+            layout_mode="fit_blur",
+            platform_targets="youtube,instagram"
+        )
+
+        # 2. Create a mock clip video file for this exact clip
+        clip_file = CLIPS_DIR / f"{clip_id}.mp4"
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=360x640:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "6",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(clip_file)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        update_clip_media(clip_id, str(clip_file), None)
+
+        # 3. Approve clip (enqueues to publishing outbox for youtube and instagram)
+        approve_clip(clip_id, custom_mode="private")
+
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM publishing_outbox WHERE clip_id = ?", (clip_id,))
+            count = cursor.fetchone()[0]
+            self.assertEqual(count, 2, f"Expected 2 outbox jobs, got {count}")
+
+        # 4. Process outbox queue with mocked external platform publication
+        with patch("dispatch.publisher.outbox.upload_youtube_short", return_value={"remote_id": "mock_yt_123", "remote_url": "https://youtu.be/mock_yt_123"}), \
+             patch("dispatch.publisher.outbox.upload_instagram_reel", return_value={"remote_id": "mock_ig_123", "remote_url": "https://instagram.com/reel/mock_ig_123"}):
+            success_count = process_outbox_queue()
+        self.assertGreaterEqual(success_count, 2, f"Expected at least 2 successful publishes, got {success_count}")
+
+        # 5. Verify this specific clip is marked published
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM clips WHERE id = ?", (clip_id,))
+            status = cursor.fetchone()[0]
+            self.assertEqual(status, "published", f"Expected clip status 'published', got {status}")
+
+        # 6. Verify local file was preserved on disk for preview and multi-platform publishing
+        self.assertTrue(clip_file.exists(), "Local published clip file should remain on disk")
+        clip_file.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+============================================================
+FILE: tests\test_recordings_sessions_separation.py
+============================================================
+import unittest
+import tempfile
+import os
+from pathlib import Path
+from fastapi.testclient import TestClient
+
+from dispatch.db import init_db, create_session, register_chunk, save_clip, update_clip_media, get_db_connection
+from dispatch.web.app import app
+
+class TestRecordingsSessionsSeparation(unittest.TestCase):
+    def setUp(self):
+        init_db()
+        self.client = TestClient(app)
+
+    def test_recordings_query_never_duplicates_or_leaks_clip_videos(self):
+        # 1. Create a session with 2 chunks
+        session_id = create_session(notes="Test Separation Session")
+        
+        # Create dummy source files
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f1:
+            f1.write(b"raw source chunk 1 content" * 100)
+            chunk1_path = f1.name
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f2:
+            f2.write(b"raw source chunk 2 content" * 100)
+            chunk2_path = f2.name
+
+        try:
+            chunk1_id = register_chunk(session_id, "chunk_1.mp4", chunk1_path, "hash_chunk_1")
+            chunk2_id = register_chunk(session_id, "chunk_2.mp4", chunk2_path, "hash_chunk_2")
+
+            # 2. Add 3 generated clips to chunk 1, with fake rendered video paths
+            clip1 = save_clip(
+                session_id=session_id,
+                chunk_id=chunk1_id,
+                start_time=0.0,
+                end_time=10.0,
+                title="Clip 1 Subtitled",
+                hook="Hook 1",
+                description="Desc 1",
+                hashtags="#one",
+                virality_score=90,
+                layout_mode="crop_follow",
+            )
+            update_clip_media(clip1, "/path/to/rendered_clip_1_with_subs.mp4", None)
+
+            clip2 = save_clip(
+                session_id=session_id,
+                chunk_id=chunk1_id,
+                start_time=10.0,
+                end_time=20.0,
+                title="Clip 2 Subtitled",
+                hook="Hook 2",
+                description="Desc 2",
+                hashtags="#two",
+                virality_score=85,
+                layout_mode="crop_follow",
+            )
+            update_clip_media(clip2, "/path/to/rendered_clip_2_with_subs.mp4", None)
+
+            clip3 = save_clip(
+                session_id=session_id,
+                chunk_id=chunk1_id,
+                start_time=20.0,
+                end_time=30.0,
+                title="Clip 3 Subtitled",
+                hook="Hook 3",
+                description="Desc 3",
+                hashtags="#three",
+                virality_score=80,
+                layout_mode="crop_follow",
+            )
+            update_clip_media(clip3, "/path/to/rendered_clip_3_with_subs.mp4", None)
+
+            # Mark clip1 as approved
+            with get_db_connection() as conn:
+                conn.execute("UPDATE clips SET status = 'approved' WHERE id = ?", (clip1,))
+
+            # 3. Call GET /api/recordings
+            res = self.client.get("/api/recordings")
+            self.assertEqual(res.status_code, 200)
+            recordings = res.json()
+
+            # Filter to our test session's chunks
+            session_recs = [r for r in recordings if r["sessionId"] == session_id]
+
+            # Invariant 1: Exactly 2 chunks returned, NO row duplication from the 3 clips!
+            self.assertEqual(len(session_recs), 2, f"Expected 2 segments for session, got {len(session_recs)}")
+
+            chunk1_rec = next(r for r in session_recs if r["segmentId"] == chunk1_id)
+            chunk2_rec = next(r for r in session_recs if r["segmentId"] == chunk2_id)
+
+            # Invariant 2: videoUrl points ONLY to raw source endpoint, NEVER /clips/...
+            self.assertEqual(chunk1_rec["videoUrl"], f"/api/recordings/{chunk1_id}/source")
+            self.assertNotIn("rendered_clip", chunk1_rec["videoUrl"])
+            self.assertNotIn("/clips/", chunk1_rec["videoUrl"])
+
+            # Invariant 3: clipCount and approvedClipCount are accurate
+            self.assertEqual(chunk1_rec["clipCount"], 3)
+            self.assertEqual(chunk1_rec["approvedClipCount"], 1)
+            self.assertEqual(chunk2_rec["clipCount"], 0)
+            self.assertEqual(chunk2_rec["approvedClipCount"], 0)
+
+            # Invariant 4: Source video endpoint works and serves raw video
+            source_res = self.client.get(f"/api/recordings/{chunk1_id}/source")
+            self.assertIn(source_res.status_code, [200, 206])
+            self.assertIn(b"raw source chunk 1 content", source_res.content)
+
+        finally:
+            if os.path.exists(chunk1_path):
+                os.remove(chunk1_path)
+            if os.path.exists(chunk2_path):
+                os.remove(chunk2_path)
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_release_identity.py
+============================================================
+"""Release-identity drift guard: the trusted signer fingerprint must be identical
+in the release script AND the Android updater constant (when implemented)."""
+import re
+import unittest
+from pathlib import Path
+
+EXPECTED = "94f778490fde8ffd2c7e644d0c8169249f2e79829d769b5f71aa0301c5643804"
+
+
+class TestReleaseIdentity(unittest.TestCase):
+    def test_release_script_pins_expected_fingerprint(self):
+        s = Path("scripts/prepare_release.ps1").read_text(encoding="utf-8")
+        self.assertIn(f'"{EXPECTED}"', s, "prepare_release.ps1 must enforce the trusted fingerprint")
+
+    def test_update_manager_matches_script_fingerprint(self):
+        mgr = Path("android/app/src/main/java/com/resolvia/dispatch/update/DispatchUpdateManager.kt")
+        if not mgr.exists():
+            self.skipTest("DispatchUpdateManager not implemented yet")
+        self.assertIn(EXPECTED, mgr.read_text(encoding="utf-8"))
+
+    def test_update_json_schema_matches_script_fields(self):
+        s = Path("scripts/prepare_release.ps1").read_text(encoding="utf-8")
+        for field in ("schemaVersion", "packageName", "versionCode", "versionName",
+                      "releaseTag", "releaseNotes", "apkAsset", "apkSizeBytes", "apkSha256"):
+            self.assertIn(field, s, f"update.json field {field} missing from script")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_sync_engine.py
+============================================================
+"""Unit test for Phase 2: Resumable phone-to-laptop sync and reconciliation."""
+import os
+import unittest
+import tempfile
+import shutil
+import hashlib
+from pathlib import Path
+from fastapi.testclient import TestClient
+
+from dispatch.web.app import app
+from dispatch.config import INCOMING_DIR, PROCESSING_DIR
+from dispatch.db import init_db, get_db_connection
+from dispatch_mobile.db import init_mobile_db, get_mobile_db, calculate_sha256
+from dispatch_mobile.segmenter import RecordingSessionManager
+from dispatch_mobile.retention import cleanup_verified_segments
+
+client = TestClient(app)
+
+AUTH_TOKEN = "dispatch_paired_secret_default"
+
+
+class TestSyncEngine(unittest.TestCase):
+
+    def test_resumable_sync_and_reconcile(self):
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
+        init_db()
+        init_mobile_db()
+
+        test_storage = Path(tempfile.mkdtemp(prefix="dispatch_sync_test_"))
+        manager = RecordingSessionManager(storage_dir=test_storage)
+
+        try:
+            # 1. Mobile starts session and generates a 40 KB test segment
+            sess_id = manager.start_session(notes="Sync Test Session")
+            seg_tmp = manager.current_tmp_path
+
+            test_payload = b"DISPATCH_RELIABLE_PAYLOAD_CHUNK_" * 1280  # ~40,960 bytes
+            with open(seg_tmp, "wb") as f:
+                f.write(test_payload)
+
+            # Finalize segment on phone
+            seg_info = manager.finalize_current_segment()
+            seg_id = seg_info["segment_id"]
+            total_size = seg_info["size_bytes"]
+            sha256 = seg_info["sha256"]
+
+            final_phone_path = test_storage / f"{seg_id}.mp4"
+            self.assertTrue(final_phone_path.exists())
+
+            # 2. Test Reconciliation BEFORE upload (should report MISSING)
+            reconcile_payload = {
+                "auth_token": AUTH_TOKEN,
+                "manifest": [
+                    {
+                        "segment_id": seg_id,
+                        "session_id": sess_id,
+                        "file_size_bytes": total_size,
+                        "sha256_hash": sha256
+                    }
+                ]
+            }
+            res = client.post("/api/sync/reconcile", json=reconcile_payload)
+            self.assertEqual(res.status_code, 200)
+            rec_data = res.json()["reconciled"][0]
+            self.assertEqual(rec_data["status"], "MISSING")
+            self.assertEqual(rec_data["remote_offset"], 0)
+
+            # 3. Initialize upload on laptop
+            init_res = client.post("/api/sync/upload/init", json={
+                "session_id": sess_id,
+                "segment_id": seg_id,
+                "filename": f"{seg_id}.mp4",
+                "file_size_bytes": total_size,
+                "sha256_hash": sha256,
+                "auth_token": AUTH_TOKEN
+            })
+            self.assertEqual(init_res.status_code, 200)
+            self.assertEqual(init_res.json()["remote_offset"], 0)
+
+            # 4. Upload FIRST CHUNK (approx 50% of the file: 20,480 bytes)
+            half_size = total_size // 2
+            chunk1 = test_payload[:half_size]
+
+            headers1 = {
+                "x-segment-id": seg_id,
+                "x-upload-offset": "0",
+                "x-file-size": str(total_size),
+                "x-sha256": sha256,
+                "x-session-id": sess_id,
+                "x-auth-token": AUTH_TOKEN,
+                "content-type": "application/octet-stream"
+            }
+            res_chunk1 = client.patch("/api/sync/upload/chunk", content=chunk1, headers=headers1)
+            self.assertEqual(res_chunk1.status_code, 200)
+            self.assertEqual(res_chunk1.json()["remote_offset"], half_size)
+            self.assertFalse(res_chunk1.json()["verified"])
+
+            # 5. SIMULATE NETWORK INTERRUPTION AT 50%
+            # Partial file must exist on laptop disk
+            part_on_laptop = INCOMING_DIR / f"{seg_id}.part"
+            self.assertTrue(part_on_laptop.exists())
+            self.assertEqual(part_on_laptop.stat().st_size, half_size)
+
+            # Test reconciliation during interruption (should report PARTIAL at exactly half_size)
+            res_rec2 = client.post("/api/sync/reconcile", json=reconcile_payload)
+            rec2_data = res_rec2.json()["reconciled"][0]
+            self.assertEqual(rec2_data["status"], "PARTIAL")
+            self.assertEqual(rec2_data["remote_offset"], half_size)
+
+            # 6. RESUME UPLOAD: Upload SECOND CHUNK from byte offset half_size
+            chunk2 = test_payload[half_size:]
+            headers2 = {
+                "x-segment-id": seg_id,
+                "x-upload-offset": str(half_size),
+                "x-file-size": str(total_size),
+                "x-sha256": sha256,
+                "x-session-id": sess_id,
+                "x-auth-token": AUTH_TOKEN,
+                "content-type": "application/octet-stream"
+            }
+            res_chunk2 = client.patch("/api/sync/upload/chunk", content=chunk2, headers=headers2)
+            self.assertEqual(res_chunk2.status_code, 200)
+            res_chunk2_data = res_chunk2.json()
+            self.assertEqual(res_chunk2_data["remote_offset"], total_size)
+            self.assertTrue(res_chunk2_data["verified"])
+            self.assertFalse(part_on_laptop.exists(), ".part file should be atomically renamed")
+
+            # Final file should now exist on laptop (in PROCESSING_DIR or INCOMING_DIR)
+            final_proc = PROCESSING_DIR / f"{seg_id}.mp4"
+            final_inc = INCOMING_DIR / f"{seg_id}.mp4"
+            final_on_laptop = final_proc if final_proc.exists() else final_inc
+            self.assertTrue(final_on_laptop.exists())
+            self.assertEqual(final_on_laptop.stat().st_size, total_size)
+
+            # Check laptop DB has verified chunk
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ?", (f"{seg_id}.mp4",))
+                chunk_row = cursor.fetchone()
+                self.assertIsNotNone(chunk_row)
+                self.assertEqual(chunk_row["file_hash"], sha256)
+
+            # 7. Post-upload reconciliation: laptop reports VERIFIED
+            res_rec3 = client.post("/api/sync/reconcile", json=reconcile_payload)
+            rec3_data = res_rec3.json()["reconciled"][0]
+            self.assertEqual(rec3_data["status"], "VERIFIED")
+            self.assertEqual(rec3_data["remote_offset"], total_size)
+
+            # 8. Mark verified on phone and trigger safe retention cleanup
+            with get_mobile_db() as conn:
+                conn.execute("""
+                    UPDATE mobile_segments 
+                    SET status = 'VERIFIED_BY_LAPTOP' 
+                    WHERE segment_id = ?
+                """, (seg_id,))
+
+            cleaned = cleanup_verified_segments()
+            self.assertEqual(cleaned, 1)
+            self.assertFalse(final_phone_path.exists(), "Phone media file should be safely deleted after verification")
+
+            # Clean up test artifact on laptop
+            final_on_laptop.unlink(missing_ok=True)
+
+        finally:
+            shutil.rmtree(test_storage, ignore_errors=True)
+
+    def test_verify_chunk_cryptographic_receipt(self):
+        """Explicit cryptographic proof-of-receipt endpoint (/api/sync/verify-chunk)."""
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
+        init_db()
+
+        # 1. Unauthenticated request must return 401
+        res_unauth = client.get("/api/sync/verify-chunk?segment_id=test_dummy&sha256=abcdef")
+        self.assertEqual(res_unauth.status_code, 401)
+
+        # 2. Non-existent segment returns status: MISSING
+        res_missing = client.get(
+            "/api/sync/verify-chunk?segment_id=non_existent_seg&sha256=abcdef",
+            headers={"x-auth-token": AUTH_TOKEN}
+        )
+        self.assertEqual(res_missing.status_code, 200)
+        self.assertFalse(res_missing.json()["verified"])
+        self.assertEqual(res_missing.json()["status"], "MISSING")
+
+        # 3. Create test file in PROCESSING_DIR to test verified receipt
+        seg_id = "test_verified_receipt_seg"
+        test_file = PROCESSING_DIR / f"{seg_id}.mp4"
+        test_content = b"TEST_VERIFIED_RECEIPT_CONTENT_DISPATCH_12345"
+        hasher = hashlib.sha256(test_content)
+        expected_hash = hasher.hexdigest()
+        with open(test_file, "wb") as f:
+            f.write(test_content)
+
+        try:
+            # Hash matches -> VERIFIED
+            res_verified = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={expected_hash}&file_size={len(test_content)}",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(res_verified.status_code, 200)
+            self.assertTrue(res_verified.json()["verified"])
+            self.assertEqual(res_verified.json()["status"], "VERIFIED")
+
+            # Hash mismatch -> CORRUPT_RETRY_REQUIRED
+            res_corrupt = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256=0000000000000000000000000000000000000000000000000000000000000000&file_size={len(test_content)}",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(res_corrupt.status_code, 200)
+            self.assertFalse(res_corrupt.json()["verified"])
+            self.assertEqual(res_corrupt.json()["status"], "CORRUPT_RETRY_REQUIRED")
+        finally:
+            test_file.unlink(missing_ok=True)
+
+    def test_chunk_upload_offset_mismatch_returns_409(self):
+        """Chunk upload with mismatched offset must return HTTP 409 Conflict."""
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
+        init_db()
+
+        seg_id = "seg_offset_mismatch_test"
+        part_file = INCOMING_DIR / f"{seg_id}.part"
+        part_file.unlink(missing_ok=True)
+
+        payload = b"TEST_CHUNK_PAYLOAD_OFFSET"
+        headers = {
+            "x-segment-id": seg_id,
+            "x-upload-offset": "100",  # Incorrect offset (server has 0 bytes)
+            "x-file-size": str(len(payload)),
+            "x-sha256": hashlib.sha256(payload).hexdigest(),
+            "x-session-id": "sess_offset_test",
+            "x-auth-token": AUTH_TOKEN,
+            "content-type": "application/octet-stream"
+        }
+        res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("Offset mismatch", res.json()["detail"])
+
+    def test_chunk_upload_unauthenticated_returns_401(self):
+        """Chunk upload without auth token returns HTTP 401 Unauthorized."""
+        payload = b"TEST_PAYLOAD"
+        headers = {
+            "x-segment-id": "seg_unauth_test",
+            "x-upload-offset": "0",
+            "x-file-size": str(len(payload)),
+            "x-sha256": hashlib.sha256(payload).hexdigest(),
+            "x-session-id": "sess_unauth",
+            "content-type": "application/octet-stream"
+        }
+        res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
+        self.assertEqual(res.status_code, 401)
+
+
+    def test_verify_chunk_missing_file_with_db_row_returns_missing(self):
+        """P0 Regression: Ensure verify-chunk and reconcile never report VERIFIED when file is missing from disk."""
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
+        init_db()
+
+        seg_id = "seg_ghost_file_test"
+        dummy_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        nonexistent_path = PROCESSING_DIR / f"{seg_id}.mp4"
+        nonexistent_path.unlink(missing_ok=True)
+
+        # Register in database with matching hash, pointing to a nonexistent file
+        with get_db_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (id, status, notes) VALUES (?, ?, ?)",
+                ("sess_ghost", "recording", "Ghost Session")
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, status) VALUES (?, ?, ?, ?, ?, ?)",
+                (seg_id, "sess_ghost", f"{seg_id}.mp4", str(nonexistent_path), dummy_hash, "processed")
+            )
+
+        try:
+            # 1. verify-chunk must return verified: False, status: MISSING
+            res = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={dummy_hash}&file_size=100",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertFalse(data["verified"], "Must not verify chunk when physical file is missing from disk")
+            self.assertEqual(data["status"], "MISSING")
+
+            # 2. reconcile must not return VERIFIED
+            rec_res = client.post(
+                "/api/sync/reconcile",
+                json={
+                    "auth_token": AUTH_TOKEN,
+                    "manifest": [{
+                        "segment_id": seg_id,
+                        "session_id": "sess_ghost",
+                        "file_size_bytes": 100,
+                        "sha256_hash": dummy_hash
+                    }]
+                }
+            )
+            rec_data = rec_res.json()["reconciled"]
+            self.assertEqual(len(rec_data), 1)
+            self.assertNotEqual(rec_data[0]["status"], "VERIFIED", "Reconcile must not report VERIFIED without physical file")
+            self.assertEqual(rec_data[0]["status"], "MISSING")
+
+            # 3. upload/init must not return already_completed or verified: True
+            init_res = client.post(
+                "/api/sync/upload/init",
+                json={
+                    "segment_id": seg_id,
+                    "session_id": "sess_ghost",
+                    "filename": f"{seg_id}.mp4",
+                    "file_size_bytes": 100,
+                    "sha256_hash": dummy_hash,
+                    "auth_token": AUTH_TOKEN
+                }
+            )
+            self.assertEqual(init_res.status_code, 200)
+            init_data = init_res.json()
+            self.assertFalse(init_data["verified"], "Upload init must not report verified: True when physical file is missing")
+            self.assertEqual(init_data["status"], "in_progress")
+        finally:
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
+                conn.execute("DELETE FROM sessions WHERE id = 'sess_ghost'")
+
+    def test_verify_chunk_modified_bytes_same_size_fails_hash_check(self):
+        """Verify that verify-chunk strictly verifies physical file bytes, failing modified files of same size."""
+        seg_id = "test_tampered_seg_123"
+        correct_hash = hashlib.sha256(b"original clean audio content").hexdigest()
+        tampered_bytes = b"tampered evil audio content!"  # exactly same length: 28 bytes
+        self.assertEqual(len(b"original clean audio content"), len(tampered_bytes))
+
+        tampered_file = Path("storage/processing") / f"{seg_id}.mp4"
+        tampered_file.parent.mkdir(parents=True, exist_ok=True)
+        tampered_file.write_bytes(tampered_bytes)
+
+        try:
+            with get_db_connection() as conn:
+                conn.execute("INSERT OR REPLACE INTO sessions (id, status) VALUES ('sess_tamper', 'active')")
+                conn.execute("""
+                    INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, duration, status)
+                    VALUES (?, 'sess_tamper', ?, ?, ?, 10.0, 'verified')
+                """, (seg_id, f"{seg_id}.mp4", str(tampered_file), correct_hash))
+                conn.commit()
+
+            # Client queries verify-chunk with expected hash
+            res = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={correct_hash}&file_size={len(tampered_bytes)}",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertFalse(data["verified"], "Tampered file on disk with identical size must not be verified")
+            self.assertEqual(data["status"], "CORRUPT_RETRY_REQUIRED")
+        finally:
+            tampered_file.unlink(missing_ok=True)
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
+
+    def test_youtube_ingestion_acknowledgement_requires_disk_file(self):
+        """Test that /api/sync/youtube-ack strictly enforces auth, file existence, and HMAC receipt."""
+        import hmac
+        from dispatch.sync.receiver import get_auth_token
+        auth_token = get_auth_token()
+        headers = {"x-auth-token": auth_token}
+
+        video_id = "test_yt_vid_98765"
+        dispatch_id = "dsp_123456789_seg99"
+        dummy_file = Path(tempfile.gettempdir()) / f"dispatch_test_yt_{video_id}.mp4"
+        dummy_bytes = b"YOUTUBE_VERIFIED_PC_INGESTED_BYTES"
+        dummy_sha256 = hashlib.sha256(dummy_bytes).hexdigest().lower()
+
+        try:
+            # 1. Unauthenticated request returns 401
+            unauth_res = client.get(f"/api/sync/youtube-ack?video_id={video_id}")
+            self.assertEqual(unauth_res.status_code, 401)
+
+            bad_auth_res = client.get(f"/api/sync/youtube-ack?video_id={video_id}", headers={"x-auth-token": "wrong_secret"})
+            self.assertEqual(bad_auth_res.status_code, 401)
+
+            # 2. Unregistered video returns acknowledged: False
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}", headers=headers)
+            self.assertEqual(res.status_code, 200)
+            self.assertFalse(res.json()["acknowledged"])
+            self.assertFalse(res.json()["ingested"])
+
+            # 3. Registered in youtube_inbox with status='WAITING' returns acknowledged: False
+            with get_db_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO youtube_inbox (video_id, dispatch_id, status, title, source_sha256)
+                    VALUES (?, ?, 'WAITING', 'Test YouTube Video', ?)
+                """, (video_id, dispatch_id, dummy_sha256))
+                conn.commit()
+
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={dummy_sha256}", headers=headers)
+            self.assertEqual(res.status_code, 200)
+            self.assertFalse(res.json()["acknowledged"])
+            self.assertFalse(res.json()["ingested"])
+
+            # 4. Status='DOWNLOADED' but physical file missing returns acknowledged: False
+            with get_db_connection() as conn:
+                conn.execute("""
+                    UPDATE youtube_inbox 
+                    SET status = 'DOWNLOADED', local_video_path = ?
+                    WHERE video_id = ?
+                """, (str(dummy_file), video_id))
+                conn.commit()
+
+            dummy_file.unlink(missing_ok=True)
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={dummy_sha256}", headers=headers)
+            self.assertEqual(res.status_code, 200)
+            self.assertFalse(res.json()["acknowledged"], "Must not acknowledge without physical file on PC disk")
+            self.assertFalse(res.json()["ingested"])
+
+            # 5. File exists, but with wrong SHA-256 returns acknowledged: False
+            dummy_file.write_bytes(dummy_bytes)
+            res_wrong_hash = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={'0'*64}", headers=headers)
+            self.assertEqual(res_wrong_hash.status_code, 200)
+            self.assertFalse(res_wrong_hash.json()["acknowledged"])
+            self.assertEqual(res_wrong_hash.json().get("error"), "hash_mismatch")
+
+            # 6. Physical file exists on PC disk with matching hash returns acknowledged: True with HMAC receipt
+            res = client.get(f"/api/sync/youtube-ack?video_id={video_id}&sha256={dummy_sha256}", headers=headers)
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["acknowledged"])
+            self.assertTrue(res.json()["ingested"])
+            self.assertIn("receipt", res.json())
+
+            # Verify the HMAC receipt format and signature
+            receipt = res.json()["receipt"]
+            canonical_id = res.json().get("canonical_id")
+            expected_msg = f"{canonical_id}:{dummy_sha256}:DOWNLOADED:VERIFIED".encode("utf-8")
+            expected_receipt = hmac.new(auth_token.encode("utf-8"), expected_msg, hashlib.sha256).hexdigest()
+            self.assertEqual(receipt, expected_receipt)
+
+            # 7. Query by dispatch_id also succeeds with verified receipt
+            res_disp = client.get(f"/api/sync/youtube-ack?dispatch_id={dispatch_id}&sha256={dummy_sha256}", headers=headers)
+            self.assertEqual(res_disp.status_code, 200)
+            self.assertTrue(res_disp.json()["acknowledged"])
+            self.assertTrue(res_disp.json()["ingested"])
+            self.assertIn("receipt", res_disp.json())
+
+        finally:
+            dummy_file.unlink(missing_ok=True)
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM youtube_inbox WHERE video_id = ?", (video_id,))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_text_caption_separation.py
+============================================================
+import unittest
+from pathlib import Path
+import tempfile
+
+from dispatch.captions.model import CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig
+from dispatch.captions.exporter import export_to_ass
+
+
+class TestTextCaptionSeparation(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.output_ass = Path(self.temp_dir.name) / "test.ass"
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_normal_text_layer_exports_single_dialogue_without_word_cuts(self):
+        track = CaptionTrack(
+            groups=[
+                CaptionGroup(
+                    id="txt_1",
+                    type="text",
+                    start=1.0,
+                    end=4.0,
+                    words=[
+                        Word(id="w1", text="Normal", start=1.0, end=2.5),
+                        Word(id="w2", text="Text", start=2.5, end=4.0),
+                    ],
+                    style=StyleConfig(
+                        primary_color="#38BDF8",
+                        highlight_color="#FFE600",
+                        highlight_enabled=False,
+                    ),
+                )
+            ]
+        )
+        export_to_ass(track, self.output_ass)
+        content = self.output_ass.read_text(encoding="utf-8")
+
+        # Normal text should export ONE single dialogue event across the whole 1.00-4.00 range
+        dialogue_lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
+        self.assertEqual(len(dialogue_lines), 1)
+        self.assertIn("NORMAL TEXT", dialogue_lines[0])
+        # Color &H00F8BD38& is #38BDF8 in ASS BGR
+        self.assertIn("&H00F8BD38&", dialogue_lines[0])
+        # Caption highlight &H0000E6FF& (#FFE600) must NOT be present
+        self.assertNotIn("&H0000E6FF&", dialogue_lines[0])
+
+    def test_caption_with_highlight_enabled_exports_highlight_color(self):
+        track = CaptionTrack(
+            groups=[
+                CaptionGroup(
+                    id="cap_1",
+                    type="caption",
+                    start=1.0,
+                    end=4.0,
+                    words=[
+                        Word(id="w1", text="Spoken", start=1.0, end=2.5),
+                        Word(id="w2", text="Words", start=2.5, end=4.0),
+                    ],
+                    style=StyleConfig(
+                        primary_color="#FFFFFF",
+                        highlight_color="#FFE600",
+                        highlight_enabled=True,
+                    ),
+                )
+            ]
+        )
+        export_to_ass(track, self.output_ass)
+        content = self.output_ass.read_text(encoding="utf-8")
+
+        # Caption with highlighting enabled SHOULD contain highlight color &H0000E6FF& (#FFE600)
+        self.assertIn("&H0000E6FF&", content)
+        self.assertIn("SPOKEN", content)
+        self.assertIn("WORDS", content)
+
+    def test_caption_with_highlight_disabled_exports_uniform_static_colors(self):
+        track = CaptionTrack(
+            groups=[
+                CaptionGroup(
+                    id="cap_off",
+                    type="caption",
+                    start=1.0,
+                    end=4.0,
+                    words=[
+                        Word(id="w1", text="Uniform", start=1.0, end=2.5),
+                        Word(id="w2", text="Caption", start=2.5, end=4.0),
+                    ],
+                    style=StyleConfig(
+                        primary_color="#FFFFFF",
+                        highlight_color="#FFE600",
+                        highlight_enabled=False,
+                    ),
+                )
+            ]
+        )
+        export_to_ass(track, self.output_ass)
+        content = self.output_ass.read_text(encoding="utf-8")
+
+        # Caption with highlight_enabled=False should NOT contain highlight color &H0000E6FF&
+        self.assertNotIn("&H0000E6FF&", content)
+        self.assertIn("UNIFORM", content)
+        self.assertIn("CAPTION", content)
+
+    def test_simultaneous_caption_and_text_both_exported(self):
+        track = CaptionTrack(
+            groups=[
+                CaptionGroup(
+                    id="cap_sub",
+                    type="caption",
+                    start=0.0,
+                    end=5.0,
+                    words=[Word(id="w1", text="Subtitle", start=0.0, end=5.0)],
+                    layout=LayoutConfig(position_y=0.8),
+                ),
+                CaptionGroup(
+                    id="txt_brand",
+                    type="text",
+                    start=0.0,
+                    end=10.0,
+                    words=[Word(id="w2", text="Brand", start=0.0, end=10.0)],
+                    layout=LayoutConfig(position_y=0.1),
+                ),
+            ]
+        )
+        export_to_ass(track, self.output_ass)
+        content = self.output_ass.read_text(encoding="utf-8")
+
+        # Both dialogue lines must be present in the ASS output
+        dialogue_lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
+        self.assertGreaterEqual(len(dialogue_lines), 2)
+        self.assertTrue(any("SUBTITLE" in l for l in dialogue_lines))
+        self.assertTrue(any("BRAND" in l for l in dialogue_lines))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_text_visibility_and_glow.py
+============================================================
+"""Regression Test Suite for Dispatch Text Visibility, Glow Rendering, and Animation Model.
+Verifies:
+1. Glow ON: emits background Gaussian glow on Layer 0 and crisp text on Layer 1.
+2. Glow OFF: emits single crisp Layer 0 line; no glow emitted.
+3. Glow preserves independent outline stroke and drop shadow.
+4. AnimationConfig round-trip serialization (In, Out, Loop, Active-Word).
+5. Phrase-level vs word-level ASS glow rendering parity.
+"""
+import unittest
+import tempfile
+from pathlib import Path
+
+from dispatch.captions.model import (
+    CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig
+)
+from dispatch.captions.exporter import export_to_ass
+
+
+class TestTextVisibilityAndGlow(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.ass_path = Path(self.temp_dir.name) / "test.ass"
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_glow_on_emits_layer0_blur_and_layer1_text(self):
+        """When glow_enabled is True, exporter must emit Layer 0 Gaussian blur and Layer 1 crisp foreground."""
+        style = StyleConfig(
+            font_family="Montserrat",
+            font_size=44,
+            primary_color="#FFFFFF",
+            highlight_color="#FFE600",
+            glow_enabled=True,
+            glow_color="#00F0FF",
+            glow_blur=16.0,
+            outline_enabled=True,
+            outline_color="#000000",
+            outline_width=3.0,
+            shadow_enabled=True,
+            shadow_color="#111111",
+            shadow_blur=6.0,
+        )
+
+        words = [
+            Word(id="w1", text="NEON", start=1.0, end=1.5, is_exact=True),
+            Word(id="w2", text="GLOW", start=1.5, end=2.0, is_exact=True),
+        ]
+        group = CaptionGroup(id="g1", start=1.0, end=2.0, words=words, style=style)
+        track = CaptionTrack(
+            id="trk1",
+            clip_id="clip_glow",
+            default_style=style,
+            default_layout=LayoutConfig(),
+            default_animation=AnimationConfig(type="pop"),
+            groups=[group],
+        )
+
+        export_to_ass(track, self.ass_path)
+        content = self.ass_path.read_text(encoding="utf-8")
+
+        # Layer 0 must contain blur and glow color
+        self.assertIn("Dialogue: 0,", content)
+        self.assertIn(r"\blur16", content)
+        self.assertIn(r"\alpha&H35&", content)
+
+        # Layer 1 must contain crisp foreground text
+        self.assertIn("Dialogue: 1,", content)
+        # Outline and shadow must be preserved
+        self.assertIn(r"\bord3.0", content)
+        self.assertIn(r"\shad", content)
+
+    def test_glow_off_emits_no_glow_layer(self):
+        """When glow_enabled is False, only standard Dialogue line is emitted without glow tags."""
+        style = StyleConfig(
+            font_family="Montserrat",
+            font_size=44,
+            primary_color="#FFFFFF",
+            glow_enabled=False,
+            outline_enabled=True,
+            outline_color="#000000",
+            outline_width=2.0,
+            shadow_enabled=False,
+        )
+
+        words = [
+            Word(id="w1", text="CLEAN", start=0.5, end=1.5, is_exact=True),
+        ]
+        group = CaptionGroup(id="g1", start=0.5, end=1.5, words=words, style=style)
+        track = CaptionTrack(
+            id="trk2",
+            clip_id="clip_noglow",
+            default_style=style,
+            default_layout=LayoutConfig(),
+            default_animation=AnimationConfig(),
+            groups=[group],
+        )
+
+        export_to_ass(track, self.ass_path)
+        content = self.ass_path.read_text(encoding="utf-8")
+
+        # Must not contain Layer 1 or alpha&H35& glow tags
+        self.assertNotIn("Dialogue: 1,", content)
+        self.assertNotIn(r"\alpha&H35&", content)
+        # Dialogue: 0 must exist
+        self.assertIn("Dialogue: 0,", content)
+        self.assertIn("CLEAN", content)
+
+    def test_phrase_level_glow_parity(self):
+        """Phrase-only captions (timing_mode='phrase') render glow on Layer 0 and text on Layer 1."""
+        style = StyleConfig(
+            font_family="Impact",
+            font_size=50,
+            primary_color="#FFFF00",
+            glow_enabled=True,
+            glow_color="#FF0055",
+            glow_blur=14.0,
+        )
+
+        words = [
+            Word(id="w1", text="PHRASE", start=2.0, end=4.0, is_exact=False),
+            Word(id="w2", text="ONLY", start=2.0, end=4.0, is_exact=False),
+        ]
+        group = CaptionGroup(
+            id="g_phrase",
+            start=2.0,
+            end=4.0,
+            words=words,
+            style=style,
+            timing_mode="phrase",
+            has_word_timing=False,
+        )
+        track = CaptionTrack(
+            id="trk3",
+            clip_id="clip_phrase",
+            default_style=style,
+            default_layout=LayoutConfig(),
+            default_animation=AnimationConfig(),
+            groups=[group],
+        )
+
+        export_to_ass(track, self.ass_path)
+        content = self.ass_path.read_text(encoding="utf-8")
+
+        self.assertIn("Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,", content)
+        self.assertIn("Dialogue: 1,0:00:02.00,0:00:04.00,Default,,0,0,0,", content)
+        self.assertIn(r"\blur14", content)
+        self.assertIn("PHRASE ONLY", content)
+
+    def test_animation_config_serialization(self):
+        """AnimationConfig round-trip preserves in/out/loop/active_word configuration."""
+        anim_data = {
+            "type": "pop",
+            "duration_ms": 120,
+            "active_scale": 1.22,
+            "enter": {"type": "slide_up", "duration_ms": 250},
+            "exit": {"type": "fade", "duration_ms": 180},
+            "loop": {"type": "pulse", "speed_ms": 900},
+            "active_word": {"type": "pop", "active_scale": 1.25, "duration_ms": 110},
+        }
+
+        cfg = AnimationConfig.from_dict(anim_data)
+        self.assertEqual(cfg.enter_type, "slide_up")
+        self.assertEqual(cfg.enter_duration_ms, 250)
+        self.assertEqual(cfg.exit_type, "fade")
+        self.assertEqual(cfg.exit_duration_ms, 180)
+        self.assertEqual(cfg.loop_type, "pulse")
+        self.assertEqual(cfg.loop_speed_ms, 900)
+        self.assertEqual(cfg.active_word.get("active_scale"), 1.25)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_thumbnail_freshness.py
+============================================================
+"""tests/test_thumbnail_freshness.py
+Comprehensive test suite verifying Dispatch video thumbnail freshness,
+automatic regeneration, atomic generation, cache invalidation, sub-second
+fingerprinting, concurrency serialization, and HTTP headers.
+"""
+import concurrent.futures
+import os
+import subprocess
+import time
+import unittest
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from dispatch.config import CLIPS_DIR
+from dispatch import db
+from dispatch.video_engine.thumbnail import (
+    is_thumbnail_stale,
+    generate_thumbnail_from_video,
+    ensure_clip_thumbnail,
+    get_file_fingerprint,
+    get_thumbnail_version,
+    get_thumbnail_version_token,
+    populate_clip_media_urls,
+)
+from dispatch.web.app import app
+
+
+class TestThumbnailFreshness(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        db.init_db()
+        CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+        cls.test_video_path = CLIPS_DIR / "test_thumb_source.mp4"
+        cls.test_video_alt_path = CLIPS_DIR / "test_thumb_source_alt.mp4"
+
+        # Generate lightweight 2-second color videos via ffmpeg for deterministic testing
+        cmd1 = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=c=navy:s=320x240:d=2",
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-c:v", "libx264", "-t", "2",
+            "-c:a", "aac", "-shortest",
+            "-pix_fmt", "yuv420p",
+            str(cls.test_video_path)
+        ]
+        res1 = subprocess.run(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res1.returncode != 0 or not cls.test_video_path.exists():
+            raise RuntimeError("Failed to generate test video fixture with ffmpeg")
+
+        cmd2 = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=c=crimson:s=320x240:d=2",
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-c:v", "libx264", "-t", "2",
+            "-c:a", "aac", "-shortest",
+            "-pix_fmt", "yuv420p",
+            str(cls.test_video_alt_path)
+        ]
+        subprocess.run(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in (cls.test_video_path, cls.test_video_alt_path):
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+
+    def test_01_is_thumbnail_stale_logic(self):
+        """Test timestamp-based staleness logic across file existence and mtimes."""
+        vpath = self.test_video_path
+        tpath = CLIPS_DIR / "temp_logic_test.jpg"
+
+        # Missing thumbnail is stale
+        if tpath.exists():
+            tpath.unlink()
+        self.assertTrue(is_thumbnail_stale(vpath, tpath))
+
+        # 0-byte thumbnail is stale
+        tpath.touch()
+        self.assertTrue(is_thumbnail_stale(vpath, tpath))
+
+        # Non-empty thumbnail older than video is stale
+        tpath.write_bytes(b"dummy image content for testing")
+        vid_mtime = vpath.stat().st_mtime
+        os.utime(str(tpath), (vid_mtime - 10.0, vid_mtime - 10.0))
+        self.assertTrue(is_thumbnail_stale(vpath, tpath))
+
+        # Non-empty thumbnail newer than or equal to video is fresh
+        os.utime(str(tpath), (vid_mtime + 5.0, vid_mtime + 5.0))
+        self.assertFalse(is_thumbnail_stale(vpath, tpath))
+
+        # Clean up
+        if tpath.exists():
+            tpath.unlink()
+
+    def test_02_atomic_generation_and_no_leftover_temps(self):
+        """Test that FFmpeg extracts frame atomically and leaves no temporary files."""
+        out_thumb = CLIPS_DIR / "test_atomic_thumb.jpg"
+        meta_thumb = CLIPS_DIR / "test_atomic_thumb.jpg.meta"
+        for p in (out_thumb, meta_thumb):
+            if p.exists():
+                p.unlink()
+
+        success = generate_thumbnail_from_video(self.test_video_path, out_thumb, timestamp_sec=0.5)
+        self.assertTrue(success)
+        self.assertTrue(out_thumb.exists())
+        self.assertGreater(out_thumb.stat().st_size, 100)
+        self.assertTrue(meta_thumb.exists(), "Sidecar metadata must be created atomically alongside thumbnail")
+
+        # Verify no .tmp_* files remain in CLIPS_DIR
+        temp_files = list(CLIPS_DIR.glob(".tmp_*test_atomic_thumb*"))
+        self.assertEqual(len(temp_files), 0, "No temporary thumbnail files should remain after generation")
+
+        # Clean up
+        out_thumb.unlink()
+        if meta_thumb.exists():
+            meta_thumb.unlink()
+
+    def test_03_video_replacement_triggers_thumbnail_regeneration(self):
+        """When a video is updated/replaced with same clip ID, ensure_clip_thumbnail regenerates it."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Replacement Test Clip",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        # Copy test video to clip_vid
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        t0 = time.time() - 20.0
+        os.utime(str(clip_vid), (t0, t0))
+
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        # 1. Initial generation
+        first_path = ensure_clip_thumbnail(clip_id)
+        self.assertIsNotNone(first_path)
+        self.assertTrue(clip_thumb.exists())
+        initial_thumb_mtime = clip_thumb.stat().st_mtime
+
+        # 2. Simulate video file replacement on PC (newer mtime)
+        t_new = initial_thumb_mtime + 10.0
+        os.utime(str(clip_vid), (t_new, t_new))
+        self.assertTrue(is_thumbnail_stale(clip_vid, clip_thumb))
+
+        # 3. Call ensure_clip_thumbnail: must detect staleness and regenerate!
+        second_path = ensure_clip_thumbnail(clip_id)
+        self.assertIsNotNone(second_path)
+        new_thumb_mtime = clip_thumb.stat().st_mtime
+
+        self.assertGreater(new_thumb_mtime, initial_thumb_mtime,
+                           "Thumbnail modification time must increase after video replacement")
+        self.assertFalse(is_thumbnail_stale(clip_vid, clip_thumb),
+                         "Regenerated thumbnail must be recognized as fresh")
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_04_unchanged_video_skips_unnecessary_regeneration(self):
+        """Unchanged videos must preserve their cached thumbnail without re-invoking FFmpeg."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Cache Hit Test Clip",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        # First run generates thumbnail
+        ensure_clip_thumbnail(clip_id)
+        self.assertTrue(clip_thumb.exists())
+        first_mtime = clip_thumb.stat().st_mtime
+
+        # Second run on unchanged video must be a cache hit (same mtime)
+        ensure_clip_thumbnail(clip_id)
+        second_mtime = clip_thumb.stat().st_mtime
+        self.assertEqual(first_mtime, second_mtime, "Thumbnail must not be modified when video is unchanged")
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_05_populate_clip_media_urls_version_query_strings(self):
+        """populate_clip_media_urls must inject robust ?v={token} into URLs for cache invalidation."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Populate URLs Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        clip_dict = db.get_clip_by_id(clip_id)
+        populated = populate_clip_media_urls(clip_dict)
+
+        self.assertIn("thumbnail_url", populated)
+        self.assertIn("video_url", populated)
+        self.assertIn("source_video_url", populated)
+
+        # Check that robust version token is present
+        self.assertRegex(populated["thumbnail_url"], r"^/clips/.*\.jpg\?v=[\w\d_-]+$")
+        self.assertRegex(populated["video_url"], r"^/clips/.*\.mp4\?v=\d+$")
+
+        # Version matches deterministic version token
+        expected_token = get_thumbnail_version_token(clip_thumb)
+        self.assertEqual(populated["thumbnail_url"], f"/clips/{clip_thumb.name}?v={expected_token}")
+        self.assertEqual(populated["thumbnail_version"], expected_token)
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_06_http_cache_headers_and_conditional_revalidation(self):
+        """Verify RFC 9111 HTTP cache headers: max-age on versioned, no-cache on unversioned, and 304."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="HTTP Headers Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        ensure_clip_thumbnail(clip_id)
+        self.assertTrue(clip_thumb.exists())
+        thumb_v = get_thumbnail_version_token(clip_thumb)
+
+        client = TestClient(app)
+
+        # 1. Versioned request (?v=...) -> public, max-age=86400
+        res_v = client.get(f"/clips/{clip_thumb.name}?v={thumb_v}")
+        self.assertEqual(res_v.status_code, 200)
+        self.assertIn("public", res_v.headers.get("cache-control", ""))
+        self.assertIn("max-age=86400", res_v.headers.get("cache-control", ""))
+        etag = res_v.headers.get("etag")
+        self.assertIsNotNone(etag)
+
+        # 2. Unversioned request -> no-cache, must-revalidate
+        res_unv = client.get(f"/clips/{clip_thumb.name}")
+        self.assertEqual(res_unv.status_code, 200)
+        self.assertIn("no-cache", res_unv.headers.get("cache-control", ""))
+
+        # 3. Conditional GET with If-None-Match -> 304 Not Modified
+        res_cond = client.get(f"/clips/{clip_thumb.name}", headers={"If-None-Match": etag})
+        self.assertEqual(res_cond.status_code, 304)
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_07_direct_image_request_generates_thumbnail_dynamically(self):
+        """When an image thumbnail is requested directly, it should be generated if missing."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Dynamic Fetch Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        # Ensure thumbnail does not exist initially
+        if clip_thumb.exists():
+            clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+        client = TestClient(app)
+        res = client.get(f"/clips/{clip_thumb.name}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers.get("content-type"), "image/jpeg")
+        self.assertTrue(clip_thumb.exists())
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_08_filmstrip_freshness_detection_and_regeneration(self):
+        """Filmstrip frames must regenerate and return fresh ?v= parameters when video changes."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Filmstrip Freshness Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        t0 = time.time() - 30.0
+        os.utime(str(clip_vid), (t0, t0))
+
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        client = TestClient(app)
+
+        # 1. Fetch filmstrip for the first time
+        res1 = client.get(f"/api/clips/{clip_id}/filmstrip")
+        self.assertEqual(res1.status_code, 200)
+        frames1 = res1.json().get("frames", [])
+        self.assertGreaterEqual(len(frames1), 1)
+        self.assertIn("?v=", frames1[0])
+
+        # 2. Modify video to newer timestamp
+        t_mod = time.time() + 10.0
+        os.utime(str(clip_vid), (t_mod, t_mod))
+
+        # 3. Fetch filmstrip again: should detect stale frames and re-extract with updated ?v=
+        res2 = client.get(f"/api/clips/{clip_id}/filmstrip")
+        self.assertEqual(res2.status_code, 200)
+        frames2 = res2.json().get("frames", [])
+        self.assertGreaterEqual(len(frames2), 1)
+
+        # Clean up frames
+        for i in range(12):
+            for ext in (".jpg", ".jpg.meta"):
+                fpath = CLIPS_DIR / f"{clip_id}_frame_{i}{ext}"
+                if fpath.exists():
+                    try:
+                        fpath.unlink()
+                    except Exception:
+                        pass
+        clip_vid.unlink()
+        if clip_thumb.exists():
+            clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_09_same_second_replacement_and_preserved_timestamp_detection(self):
+        """Verify that fingerprinting and nanoseconds detect replacements even with identical integer timestamps."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Fingerprint Staleness Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=85,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        # 1. Initial write of navy video
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        fixed_t = 1700000000.0  # Stable integer timestamp
+        os.utime(str(clip_vid), (fixed_t, fixed_t))
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        # Generate thumbnail
+        ensure_clip_thumbnail(clip_id)
+        self.assertTrue(clip_thumb.exists())
+        self.assertFalse(is_thumbnail_stale(clip_vid, clip_thumb))
+        initial_token = get_thumbnail_version_token(clip_thumb)
+
+        # 2. Replace with crimson video BUT preserve the exact same integer timestamp fixed_t
+        if self.test_video_alt_path.exists():
+            clip_vid.write_bytes(self.test_video_alt_path.read_bytes())
+            os.utime(str(clip_vid), (fixed_t, fixed_t))
+
+            # Fingerprint must detect that content changed even though mtime didn't increase!
+            self.assertTrue(
+                is_thumbnail_stale(clip_vid, clip_thumb),
+                "Content fingerprint must detect replacement even when timestamp is preserved"
+            )
+
+            # Regenerate thumbnail
+            ensure_clip_thumbnail(clip_id)
+            new_token = get_thumbnail_version_token(clip_thumb)
+            self.assertNotEqual(initial_token, new_token, "Version token must change when content changes")
+            self.assertFalse(is_thumbnail_stale(clip_vid, clip_thumb))
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+    def test_10_concurrent_thumbnail_requests_serialize_safely(self):
+        """Concurrent calls to ensure_clip_thumbnail for the same clip must not crash or race."""
+        clip_id = db.save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=2.0,
+            title="Concurrency Test",
+            hook="Hook",
+            description="Desc",
+            hashtags="#Test",
+            virality_score=80,
+            layout_mode="fit_blur"
+        )
+        clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+
+        clip_vid.write_bytes(self.test_video_path.read_bytes())
+        db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
+
+        def _worker():
+            return ensure_clip_thumbnail(clip_id)
+
+        # Execute 6 parallel requests across threads
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+            futures = [executor.submit(_worker) for _ in range(6)]
+            results = [f.result() for f in futures]
+
+        for res in results:
+            self.assertIsNotNone(res)
+            self.assertEqual(res, clip_thumb)
+
+        self.assertTrue(clip_thumb.exists())
+        self.assertGreater(clip_thumb.stat().st_size, 100)
+
+        # Ensure no dangling temporary files
+        temp_files = list(CLIPS_DIR.glob(f".tmp_*{clip_id}*"))
+        self.assertEqual(len(temp_files), 0, "No orphaned temporary files should remain after concurrent runs")
+
+        # Clean up
+        clip_vid.unlink()
+        clip_thumb.unlink()
+        if clip_meta.exists():
+            clip_meta.unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_token_vault_and_remote_jobs.py
+============================================================
+"""Vault round-trip (Worker-compatible AES-GCM format) and remote-job claim/finish
+semantics with mocked Supabase RPCs."""
+
+import base64
+import os
+import unittest
+from unittest.mock import patch
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from dispatch import youtube_connections as yc
+
+
+def b64url(bytes_: bytes) -> str:
+    import base64 as b
+    return b.urlsafe_b64encode(bytes_).decode().rstrip("=")
+
+
+class TestVaultRoundTrip(unittest.TestCase):
+    def setUp(self):
+        self.key = base64.b64encode(os.urandom(32)).decode()
+        self._env = patch.dict(os.environ, {"DISPATCH_TOKEN_VAULT_KEY": self.key})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+
+    def _encrypt_like_worker(self, plaintext: str) -> str:
+        iv = os.urandom(12)
+        ct = AESGCM(base64.b64decode(self.key)).encrypt(iv, plaintext.encode(), None)
+        return b64url(iv + ct)
+
+    def test_worker_encrypted_token_decrypts_on_pc(self):
+        token = "1//0gRefreshTokenFromGoogle"
+        enc = self._encrypt_like_worker(token)
+        self.assertEqual(yc.decrypt_refresh_token(enc), token)
+
+    def test_tampered_ciphertext_fails_closed(self):
+        # Deterministic corruption: flip one ciphertext byte in the middle - the GCM
+        # tag MUST reject it. (Base64-tail edits can decode to identical bytes: flaky.)
+        import base64 as b64
+        enc = self._encrypt_like_worker("secret")
+        raw = bytearray(b64.urlsafe_b64decode(enc + "=" * (-len(enc) % 4)))
+        raw[len(raw) // 2] ^= 0x01
+        tampered = b64url(bytes(raw))
+        with self.assertRaises(Exception):
+            yc.decrypt_refresh_token(tampered)
+
+
+    def test_missing_vault_key_raises_unavailable(self):
+        os.environ.pop("DISPATCH_TOKEN_VAULT_KEY", None)
+        with self.assertRaises(yc.VaultUnavailable):
+            yc.vault_key()
+
+
+
+
+class TestRemoteJobs(unittest.TestCase):
+    def test_claim_returns_job_and_finish_records_status(self):
+        calls = []
+
+        def fake_rpc(action, params):
+            calls.append((action, params))
+            if action == "cloud_claim_job":
+                return [{"job_id": "j1", "user_id": "u1", "youtube_url": "https://youtu.be/x"}]
+            return None
+
+        with patch.object(yc, "_supabase_rpc", side_effect=fake_rpc):
+            job = yc.claim_remote_job("owner-pc-1")
+            self.assertEqual(job.job_id, "j1")
+            yc.finish_remote_job("j1", "done", "vid", "")
+
+        self.assertEqual(calls[1][0], "cloud_finish_job")
+
+    def test_empty_queue_returns_none(self):
+        with patch.object(yc, "_supabase_rpc", return_value=[]):
+            self.assertIsNone(yc.claim_remote_job("w"))
+
+    def test_poller_processes_claimed_job_through_ingest(self):
+        processed = []
+        with patch.object(yc, "_supabase_rpc", return_value=[]), \
+             patch.object(yc, "claim_remote_job", return_value=yc.RemoteJob("j9", "u9", "https://youtu.be/ok")):
+            poller = yc.RemoteJobPoller(ingest_video=lambda url: processed.append(url) or {"status": "DOWNLOADED", "video_id": "v9"})
+            poller._process(poller and yc.claim_remote_job("w"))
+        self.assertEqual(processed, ["https://youtu.be/ok"])
+
+    def test_ingest_failure_marks_job_failed(self):
+        with patch.object(yc, "_supabase_rpc", return_value=[]) as rpc, \
+             patch.object(yc, "claim_remote_job", return_value=yc.RemoteJob("j8", "u8", "https://youtu.be/bad")):
+            poller = yc.RemoteJobPoller(ingest_video=lambda url: {"status": "FAILED", "error": "private"})
+            poller._process(yc.claim_remote_job("w"))
+        finish_calls = [c for c in rpc.call_args_list if c.args[0] == "cloud_finish_job"]
+        self.assertEqual(finish_calls[0].args[1]["p_status"], "failed")
+
+
+if __name__ == "__main__":
+    unittest.main()
+

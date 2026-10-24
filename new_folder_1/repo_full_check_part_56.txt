@@ -1,0 +1,1688 @@
+﻿
+============================================================
+FILE: tests\test_layout_framing_architecture.py
+============================================================
+"""Unit and integration tests for the Layout Framing Architecture.
+Tests source media resolution, streaming, stale render detection, and automatic
+re-rendering across dynamic framing modes for BOTH Portrait (9:16) and Landscape (16:9) inputs.
+"""
+import unittest
+import subprocess
+from pathlib import Path
+from fastapi.testclient import TestClient
+
+from dispatch.config import PROCESSING_DIR, CLIPS_DIR
+from dispatch import db
+from dispatch.video_engine.renderer import render_clip
+from dispatch.ingestion.validator import inspect_video_orientation
+from dispatch.web.app import app
+
+
+class TestLayoutFramingArchitecture(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        db.init_db()
+        cls.client = TestClient(app)
+        
+        # 1. Create a 3-second 16:9 landscape test video (1280x720) with audio
+        cls.source_video = PROCESSING_DIR / "test_framing_source_16x9.mp4"
+        cmd_land = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "6",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-c:a", "aac",
+            str(cls.source_video)
+        ]
+        subprocess.run(cmd_land, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        # 2. Create a 6-second 9:16 portrait test video (720x1280) with audio
+        cls.source_video_portrait = PROCESSING_DIR / "test_framing_source_9x16.mp4"
+        cmd_port = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=520",
+            "-t", "6",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-c:a", "aac",
+            str(cls.source_video_portrait)
+        ]
+        subprocess.run(cmd_port, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.source_video.exists():
+            cls.source_video.unlink()
+        if cls.source_video_portrait.exists():
+            cls.source_video_portrait.unlink()
+
+    def setUp(self):
+        self.session_id = f"sess_test_frame_{Path(self.source_video).stem}"
+        self.chunk_id = f"chk_test_frame_{Path(self.source_video).stem}"
+        self.clip_id = f"clip_test_frame_{Path(self.source_video).stem}"
+
+        self.chunk_id_port = f"chk_test_port_{Path(self.source_video_portrait).stem}"
+        self.clip_id_port = f"clip_test_port_{Path(self.source_video_portrait).stem}"
+        
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO sessions (id, status)
+                VALUES (?, 'completed')
+            """, (self.session_id,))
+
+            # 1. Register Landscape Chunk & Clip
+            conn.execute("""
+                INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, status, duration, width, height, aspect_ratio)
+                VALUES (?, ?, ?, ?, 'hash_test_frame', 'processed', 6.0, 1280, 720, '16:9')
+            """, (self.chunk_id, self.session_id, self.source_video.name, str(self.source_video)))
+            
+            conn.execute("""
+                INSERT OR REPLACE INTO clips (
+                    id, session_id, chunk_id, start_time, end_time, duration,
+                    title, hook, description, hashtags, virality_score,
+                    layout_mode, rendered_layout_mode, status, publish_mode, platform_targets
+                ) VALUES (?, ?, ?, 0.5, 5.5, 5.0,
+                    'Testing Layout Architecture', 'Hook text', 'Desc', '#test', 90,
+                    'fit_blur', NULL, 'ready_review', 'private', 'youtube,instagram'
+                )
+            """, (self.clip_id, self.session_id, self.chunk_id))
+
+            # 2. Register Portrait Chunk & Clip
+            conn.execute("""
+                INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, status, duration, width, height, aspect_ratio)
+                VALUES (?, ?, ?, ?, 'hash_test_port', 'processed', 6.0, 720, 1280, '9:16')
+            """, (self.chunk_id_port, self.session_id, self.source_video_portrait.name, str(self.source_video_portrait)))
+
+            conn.execute("""
+                INSERT OR REPLACE INTO clips (
+                    id, session_id, chunk_id, start_time, end_time, duration,
+                    title, hook, description, hashtags, virality_score,
+                    layout_mode, rendered_layout_mode, status, publish_mode, platform_targets
+                ) VALUES (?, ?, ?, 0.5, 5.5, 5.0,
+                    'Testing Portrait Layout Architecture', 'Hook text port', 'Desc', '#port', 88,
+                    'native_916', NULL, 'ready_review', 'private', 'youtube,instagram'
+                )
+            """, (self.clip_id_port, self.session_id, self.chunk_id_port))
+            conn.commit()
+
+    def tearDown(self):
+        with db.get_db_connection() as conn:
+            conn.execute("DELETE FROM clips WHERE id IN (?, ?)", (self.clip_id, self.clip_id_port))
+            conn.execute("DELETE FROM chunks WHERE id IN (?, ?)", (self.chunk_id, self.chunk_id_port))
+            conn.execute("DELETE FROM sessions WHERE id = ?", (self.session_id,))
+            conn.commit()
+        for f in CLIPS_DIR.glob(f"{self.clip_id}*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        for f in CLIPS_DIR.glob(f"{self.clip_id_port}*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
+    def test_01_source_media_endpoint_streams_raw_chunk(self):
+        """GET /api/clips/{id}/source streams the raw source media with clip headers."""
+        res = self.client.get(f"/api/clips/{self.clip_id}/source")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers.get("content-type"), "video/mp4")
+        self.assertEqual(res.headers.get("x-clip-start"), "0.5")
+        self.assertEqual(res.headers.get("x-clip-end"), "5.5")
+        self.assertEqual(res.headers.get("x-clip-duration"), "5.0")
+        self.assertGreater(len(res.content), 1000)
+
+    def test_02_layout_change_persists_and_marks_stale(self):
+        """POST /api/clips/{id}/layout updates layout_mode and flags is_render_stale."""
+        # 1. Initial render with fit_blur
+        render_clip(
+            source_video=self.source_video,
+            clip_id=self.clip_id,
+            start_time=0.5,
+            end_time=5.5,
+            aspect_ratio="16:9",
+            layout_mode="fit_blur"
+        )
+        clip = db.get_clip_by_id(self.clip_id)
+        self.assertEqual(clip["rendered_layout_mode"], "fit_blur")
+        self.assertEqual(clip["layout_mode"], "fit_blur")
+
+        # 2. Check detail endpoint
+        res = self.client.get(f"/api/clips/{self.clip_id}")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(data["is_render_stale"])
+
+        # 3. User switches to fit_black
+        res = self.client.post(f"/api/clips/{self.clip_id}/layout", json={"layout_mode": "fit_black"})
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["layout_mode"], "fit_black")
+        self.assertEqual(data["rendered_layout_mode"], "fit_blur")
+        self.assertTrue(data["is_render_stale"])
+
+        # 4. Detail endpoint reflects stale state
+        res = self.client.get(f"/api/clips/{self.clip_id}")
+        data = res.json()
+        self.assertTrue(data["is_render_stale"])
+        self.assertEqual(data["layout_mode"], "fit_black")
+
+    def test_03_approve_detects_stale_and_rerenders_from_source(self):
+        """Approve automatically re-renders from source when rendered_layout_mode != layout_mode."""
+        # Initial render as fit_blur
+        render_clip(
+            source_video=self.source_video,
+            clip_id=self.clip_id,
+            start_time=0.5,
+            end_time=5.5,
+            aspect_ratio="16:9",
+            layout_mode="fit_blur"
+        )
+        
+        # User changes framing to fit_black
+        self.client.post(f"/api/clips/{self.clip_id}/layout", json={"layout_mode": "fit_black"})
+        
+        # User approves clip
+        res = self.client.post(f"/api/clips/{self.clip_id}/approve", json={
+            "title": "Approved Title",
+            "layout_mode": "fit_black"
+        })
+        self.assertEqual(res.status_code, 200)
+
+        # Verify DB updated and rendered_layout_mode is now fit_black
+        clip = db.get_clip_by_id(self.clip_id)
+        self.assertEqual(clip["status"], "approved")
+        self.assertEqual(clip["layout_mode"], "fit_black")
+        self.assertEqual(clip["rendered_layout_mode"], "fit_black")
+        self.assertTrue(Path(clip["video_path"]).exists())
+        self.assertGreater(Path(clip["video_path"]).stat().st_size, 1000)
+
+    def test_04_explicit_render_all_four_landscape_modes(self):
+        """POST /api/clips/{id}/render re-renders successfully for all 4 landscape modes."""
+        modes = ["crop_916", "fit_blur", "fit_black", "native_169"]
+        for mode in modes:
+            res = self.client.post(f"/api/clips/{self.clip_id}/render", json={"layout_mode": mode})
+            self.assertEqual(res.status_code, 200, f"Render failed for {mode}")
+            data = res.json()
+            self.assertEqual(data["layout_mode"], mode)
+            self.assertEqual(data["rendered_layout_mode"], mode)
+            self.assertFalse(data["is_render_stale"])
+
+            clip = db.get_clip_by_id(self.clip_id)
+            self.assertEqual(clip["rendered_layout_mode"], mode)
+            out_path = Path(clip["video_path"])
+            self.assertTrue(out_path.exists())
+            self.assertGreater(out_path.stat().st_size, 1000)
+
+            # Probe geometry
+            info = inspect_video_orientation(out_path)
+            self.assertTrue(info["valid"])
+            if mode == "native_169":
+                self.assertEqual(info["width"], 1920)
+                self.assertEqual(info["height"], 1080)
+            else:
+                self.assertEqual(info["width"], 1080)
+                self.assertEqual(info["height"], 1920)
+
+    def test_05_portrait_input_validates_dynamic_three_options(self):
+        """Portrait 9:16 source yields EXACTLY 3 valid options and rejects crop options."""
+        res = self.client.get(f"/api/clips/{self.clip_id_port}")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["source_orientation"], "portrait")
+        modes = data["available_layout_modes"]
+        self.assertEqual(len(modes), 3)
+        mode_ids = [m["id"] for m in modes]
+        self.assertEqual(mode_ids, ["fit_black", "fit_blur", "native_916"])
+        
+        # Verify target aspect ratios
+        aspect_by_id = {m["id"]: m["target_aspect"] for m in modes}
+        self.assertEqual(aspect_by_id["fit_black"], "16:9")
+        self.assertEqual(aspect_by_id["fit_blur"], "16:9")
+        self.assertEqual(aspect_by_id["native_916"], "9:16")
+
+    def test_06_portrait_input_rejects_invalid_modes(self):
+        """Portrait 9:16 source rejects crop_916 and landscape modes."""
+        for invalid_mode in ("crop_916", "crop_follow", "landscape", "native_169"):
+            res = self.client.post(f"/api/clips/{self.clip_id_port}/layout", json={"layout_mode": invalid_mode})
+            self.assertEqual(res.status_code, 400, f"Mode {invalid_mode} should have been rejected for portrait source")
+
+    def test_07_portrait_input_renders_all_three_modes_with_exact_geometry(self):
+        """Portrait 9:16 source renders fit_black (16:9), fit_blur (16:9), and native_916 (9:16)."""
+        for mode in ("fit_black", "fit_blur", "native_916"):
+            res = self.client.post(f"/api/clips/{self.clip_id_port}/render", json={"layout_mode": mode})
+            self.assertEqual(res.status_code, 200, f"Render failed for portrait {mode}")
+            clip = db.get_clip_by_id(self.clip_id_port)
+            out_path = Path(clip["video_path"])
+            self.assertTrue(out_path.exists())
+            
+            info = inspect_video_orientation(out_path)
+            self.assertTrue(info["valid"])
+            if mode in ("fit_black", "fit_blur"):
+                # Output must be 16:9 widescreen (1920x1080)
+                self.assertEqual(info["width"], 1920, f"{mode} width should be 1920")
+                self.assertEqual(info["height"], 1080, f"{mode} height should be 1080")
+                self.assertEqual(info["orientation"], "landscape")
+            else:
+                # Output must be 9:16 vertical (1080x1920)
+                self.assertEqual(info["width"], 1080, f"{mode} width should be 1080")
+                self.assertEqual(info["height"], 1920, f"{mode} height should be 1920")
+                self.assertEqual(info["orientation"], "portrait")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_migration_grant_hygiene.py
+============================================================
+"""Migration hygiene guard (audit 2026-10-24): every table created in the public
+schema must be accompanied by explicit REVOKEs for anon/authenticated (or an
+explicit grant-only-select), because Postgres grants ALL to PUBLIC by default on
+new tables and TRUNCATE bypasses RLS. Catches the 0004/0006/0007 defect class at
+authoring time instead of in a live audit."""
+
+import re
+import unittest
+from pathlib import Path
+
+MIGRATIONS = sorted(Path("supabase/migrations").glob("*.sql"))
+
+
+class TestMigrationGrantHygiene(unittest.TestCase):
+    def test_migrations_exist(self):
+        self.assertGreaterEqual(len(MIGRATIONS), 8)
+
+    def test_every_created_table_has_anonymous_revokes(self):
+        problems = []
+        for path in MIGRATIONS:
+            sql = path.read_text(encoding="utf-8")
+            created = re.findall(
+                r"create\s+table\s+(?:if\s+not\s+exists\s+)?public\.(\w+)", sql, re.I)
+            for table in created:
+                # each table must appear in a revoke targeting anon/authenticated
+                # somewhere in the migration set (this or any later file)
+                later = "\n".join(p.read_text(encoding="utf-8") for p in MIGRATIONS)
+                per_table = re.compile(
+                    r"revoke\s+all\s+on\s+public\." + re.escape(table) +
+                    r"\s+from\s+[^;]*anon", re.I)
+                schema_wide = re.compile(
+                    r"revoke\s+all\s+on\s+all\s+tables\s+in\s+schema\s+public\s+from\s+[^;]*anon", re.I)
+                if not (per_table.search(later) or schema_wide.search(later)):
+                    problems.append(f"{path.name}: public.{table} has no REVOKE ... from anon")
+        self.assertEqual(problems, [], "Tables missing explicit client revokes: " + "; ".join(problems))
+
+    def test_no_table_grants_writes_to_anon_or_authenticated(self):
+        for path in MIGRATIONS:
+            sql = path.read_text(encoding="utf-8")
+            for m in re.finditer(
+                r"grant\s+([\w,\s]+?)\s+on\s+(?:table\s+)?public\.(\w+)\s+to\s+([^;]+)", sql, re.I):
+                privs, table, roles = m.groups()
+                roles_l = roles.lower()
+                if ("anon" in roles_l or "authenticated" in roles_l) and "select" != privs.strip().lower():
+                    self.fail(f"{path.name}: grants '{privs.strip()}' on public.{table} to {roles.strip()}")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_mobile_engine.py
+============================================================
+"""Unit test for Phase 1: Mobile recording, segmentation, crash recovery, and retention."""
+import unittest
+import tempfile
+import shutil
+from pathlib import Path
+
+from dispatch_mobile.db import init_mobile_db, get_mobile_db, calculate_sha256
+from dispatch_mobile.segmenter import RecordingSessionManager
+from dispatch_mobile.recovery import recover_mobile_state
+from dispatch_mobile.retention import cleanup_verified_segments
+
+
+class TestMobileEngine(unittest.TestCase):
+    def setUp(self):
+        init_mobile_db()
+
+    def test_mobile_engine(self):
+        test_storage = Path(tempfile.mkdtemp(prefix="dispatch_mob_test_"))
+        manager = RecordingSessionManager(storage_dir=test_storage)
+
+        try:
+            # 2. Start session and record segment 1
+            sess_id = manager.start_session(notes="Test work session")
+            self.assertEqual(manager.current_session_id, sess_id)
+
+            # Write simulated bytes to segment 1 .tmp
+            seg1_tmp = manager.current_tmp_path
+            with open(seg1_tmp, "wb") as f:
+                f.write(b"SIMULATED_VIDEO_DATA_SEGMENT_1_AABBCCDD")
+
+            # 3. Roll to segment 2 (atomically finalizes segment 1)
+            seg2_info = manager.start_next_segment()
+            seg1_final = test_storage / f"{sess_id}_seg_0001.mp4"
+
+            self.assertTrue(seg1_final.exists(), "Segment 1 was not finalized to .mp4")
+            self.assertFalse(seg1_tmp.exists(), "Segment 1 .tmp should have been renamed")
+            self.assertGreater(seg1_final.stat().st_size, 0)
+
+            # Check DB state for segment 1
+            with get_mobile_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT status, sha256_hash FROM mobile_segments WHERE segment_id = ?",
+                               (f"{sess_id}_seg_0001",))
+                row = cursor.fetchone()
+                self.assertEqual(row["status"], "QUEUED_FOR_UPLOAD")
+                self.assertIsNotNone(row["sha256_hash"])
+
+            # Write simulated bytes to segment 2 .tmp
+            seg2_tmp = manager.current_tmp_path
+            with open(seg2_tmp, "wb") as f:
+                f.write(b"SIMULATED_VIDEO_DATA_SEGMENT_2_EEFFGGHH")
+
+            # 4. SIMULATE PHONE BATTERY DEATH / CRASH:
+            # Instead of calling manager.stop_session(), simulate the process dying mid-recording of segment 2!
+            del manager
+
+            # 5. TEST CRASH RECOVERY ON BOOT
+            recovery_report = recover_mobile_state(storage_dir=test_storage)
+            self.assertIn(f"{sess_id}_seg_0002", recovery_report["recovered_segments"])
+            self.assertIn(sess_id, recovery_report["sealed_sessions"])
+
+            seg2_final = test_storage / f"{sess_id}_seg_0002.mp4"
+            self.assertTrue(seg2_final.exists(), "Interrupted segment 2 was not recovered on boot")
+            self.assertFalse(seg2_tmp.exists(), "Interrupted segment 2 .tmp should be finalized to .mp4")
+
+            # Check outbox has both segments
+            with get_mobile_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT segment_id FROM mobile_outbox WHERE session_id = ?", (sess_id,))
+                outbox_segs = [r["segment_id"] for r in cursor.fetchall()]
+                self.assertIn(f"{sess_id}_seg_0001", outbox_segs)
+                self.assertIn(f"{sess_id}_seg_0002", outbox_segs)
+
+            # 6. TEST RETENTION CLEANUP
+            # Segment 1 is not verified yet -> must NOT be deleted
+            deleted = cleanup_verified_segments()
+            self.assertEqual(deleted, 0)
+            self.assertTrue(seg1_final.exists(), "Unverified segment was prematurely deleted!")
+
+            # Mark Segment 1 as VERIFIED_BY_LAPTOP
+            with get_mobile_db() as conn:
+                conn.execute("""
+                    UPDATE mobile_segments 
+                    SET status = 'VERIFIED_BY_LAPTOP' 
+                    WHERE segment_id = ?
+                """, (f"{sess_id}_seg_0001",))
+
+            # Now cleanup should safely delete only Segment 1
+            deleted = cleanup_verified_segments()
+            self.assertEqual(deleted, 1)
+            self.assertFalse(seg1_final.exists(), "Verified segment was not cleaned up")
+            self.assertTrue(seg2_final.exists(), "Unverified segment 2 must still exist!")
+
+        finally:
+            shutil.rmtree(test_storage, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+============================================================
+FILE: tests\test_orientation.py
+============================================================
+"""Unit tests for automatic video orientation normalization and structured logging."""
+import unittest
+import subprocess
+import logging
+from pathlib import Path
+from dispatch.config import PROCESSING_DIR
+from dispatch.ingestion.validator import inspect_video_orientation, normalize_video_orientation, probe_video
+
+
+class TestOrientationNormalization(unittest.TestCase):
+    def setUp(self):
+        PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
+        self.test_upright = PROCESSING_DIR / "test_upright.mp4"
+        self.test_rotated = PROCESSING_DIR / "test_rotated_90.mp4"
+
+        # 1. Generate 1.0s 1920x1080 video with rotate=0
+        cmd_upright = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=1000",
+            "-t", "1.0",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            str(self.test_upright)
+        ]
+        subprocess.run(cmd_upright, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        # 2. Generate 1.0s video with display matrix rotation=90 (simulating phone recording)
+        cmd_rotated = [
+            "ffmpeg", "-y",
+            "-display_rotation", "90",
+            "-i", str(self.test_upright),
+            "-c", "copy",
+            str(self.test_rotated)
+        ]
+        subprocess.run(cmd_rotated, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    def tearDown(self):
+        if self.test_upright.exists():
+            self.test_upright.unlink(missing_ok=True)
+        if self.test_rotated.exists():
+            self.test_rotated.unlink(missing_ok=True)
+
+    def test_inspect_upright_video(self):
+        info = inspect_video_orientation(self.test_upright)
+        self.assertTrue(info["valid"])
+        self.assertEqual(info["width"], 1920)
+        self.assertEqual(info["height"], 1080)
+        self.assertEqual(info["norm_rotation"], 0)
+        self.assertEqual(info["orientation"], "landscape")
+
+    def test_inspect_rotated_video(self):
+        info = inspect_video_orientation(self.test_rotated)
+        self.assertTrue(info["valid"])
+        self.assertEqual(info["width"], 1920)
+        self.assertEqual(info["height"], 1080)
+        self.assertEqual(info["norm_rotation"], 90)
+        # In a 90-degree rotated video, effective width/height are swapped -> portrait
+        self.assertEqual(info["effective_width"], 1080)
+        self.assertEqual(info["effective_height"], 1920)
+        self.assertEqual(info["orientation"], "portrait")
+
+    def test_normalize_rotated_video_transforms_to_physically_upright(self):
+        with self.assertLogs("dispatch.ingestion.validator", level=logging.INFO) as log_ctx:
+            success, norm_path, info = normalize_video_orientation(self.test_rotated, chunk_id="chk_orient_test")
+            self.assertTrue(success)
+            self.assertTrue(norm_path.exists())
+
+            # Check that structured logs were emitted
+            log_output = "\n".join(log_ctx.output)
+            self.assertIn("MEDIA_ORIENTATION_DETECTED", log_output)
+            self.assertIn("MEDIA_ORIENTATION_NORMALIZED", log_output)
+            self.assertIn("chk_orient_test", log_output)
+
+            # Check that resulting video is physically 1080x1920 with 0 rotation
+            final_info = inspect_video_orientation(norm_path)
+            self.assertEqual(final_info["width"], 1080)
+            self.assertEqual(final_info["height"], 1920)
+            self.assertEqual(final_info["norm_rotation"], 0)
+            self.assertEqual(final_info["orientation"], "portrait")
+
+    def test_probe_video_auto_normalizes(self):
+        is_valid, meta, err = probe_video(self.test_rotated, auto_normalize=True, chunk_id="chk_probe_test")
+        self.assertTrue(is_valid, f"Probe error: {err}")
+        self.assertEqual(meta["width"], 1080)
+        self.assertEqual(meta["height"], 1920)
+        self.assertEqual(meta["aspect_ratio"], "9:16")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_phase1_security.py
+============================================================
+"""Regression test suite for Phase 1 Security Lockdown and Sanitization."""
+import os
+import unittest
+from pathlib import Path
+from fastapi.testclient import TestClient
+from dispatch.web.app import app
+from dispatch.config import WEB_HOST, ROOT_DIR, CLIPS_DIR
+from dispatch import db
+
+
+class TestPhase1Security(unittest.TestCase):
+    def setUp(self):
+        db.init_db()
+        self.client = TestClient(app)
+
+    def test_default_web_host_is_localhost(self):
+        """Assert WEB_HOST defaults to 127.0.0.1, not 0.0.0.0."""
+        self.assertEqual(WEB_HOST, "127.0.0.1")
+
+    def test_clips_path_traversal_blocked(self):
+        """Assert path traversal in /clips/{filename} returns 403 or 404, never serving arbitrary files."""
+        # Relative traversal attempt
+        resp = self.client.get("/clips/../../dispatch/config.py")
+        self.assertIn(resp.status_code, (403, 404))
+
+        resp = self.client.get("/clips/..%2F..%2Fdispatch%2Fconfig.py")
+        self.assertIn(resp.status_code, (403, 404))
+
+    def test_reject_nonexistent_clip_returns_404(self):
+        """Assert POST /api/clips/{id}/reject returns 404 for nonexistent clips instead of poisoning rejections."""
+        resp = self.client.post("/api/clips/nonexistent_clip_999999/reject", json={"reason": "test"})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_gemini_key_injection_prevention(self):
+        """Assert POST /api/integrations/gemini rejects newline injection, null bytes, and invalid formats."""
+        # Newline injection attempt
+        resp = self.client.post("/api/integrations/gemini", json={"api_key": "AIzaSyFakeKey\nMALICIOUS_ENV=1"})
+        self.assertEqual(resp.status_code, 400)
+
+        # Invalid prefix / format
+        resp = self.client.post("/api/integrations/gemini", json={"api_key": "not_a_valid_gemini_key"})
+        self.assertEqual(resp.status_code, 400)
+
+        # Valid format
+        valid_key = "AIzaSyDas-UU7agAjyQeHDag1yOMU6qyXuxIWBE"
+        resp = self.client.post("/api/integrations/gemini", json={"api_key": valid_key})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_dns_rebinding_untrusted_host_blocked(self):
+        """Assert requests with untrusted Host header are rejected with 403."""
+        resp = self.client.post(
+            "/api/settings",
+            json={"publish_mode": "private"},
+            headers={"host": "attacker-controlled-site.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_untrusted_origin_blocked(self):
+        """Assert requests with untrusted Origin header are rejected with 403."""
+        resp = self.client.post(
+            "/api/settings",
+            json={"publish_mode": "private"},
+            headers={"origin": "http://evil-site.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_hostile_prefix_origin_rejected(self):
+        """Assert requests with origins like http://localhost.evil.com or http://localhost:9999 are rejected."""
+        resp = self.client.post(
+            "/api/settings",
+            json={"publish_mode": "private"},
+            headers={"origin": "http://localhost.evil.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+        resp = self.client.post(
+            "/api/settings",
+            json={"publish_mode": "private"},
+            headers={"origin": "http://localhost:9999"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pairing_code_requires_trusted_host_and_origin(self):
+        """Assert pairing-code endpoint rejects untrusted Host header even from loopback client."""
+        resp = self.client.post(
+            "/api/integrations/youtube/pairing-code",
+            json={"understands_http_risk": True},
+            headers={"host": "attacker-rebinding.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_credentials_post_rejects_untrusted_host_and_origin(self):
+        """Assert POST /api/youtube/credentials rejects untrusted Host and Origin headers."""
+        resp = self.client.post(
+            "/api/youtube/credentials",
+            json={"pairing_code": "123456"},
+            headers={"host": "attacker-rebinding.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+        resp = self.client.post(
+            "/api/youtube/credentials",
+            json={"pairing_code": "123456"},
+            headers={"origin": "http://evil-attacker.com"}
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_studio_endpoint_serves_html_and_assets(self):
+        """Assert GET /studio redirects to /studio/ and GET /studio/ serves 200 HTML with valid assets."""
+        resp = self.client.get("/studio", follow_redirects=False)
+        self.assertEqual(resp.status_code, 307)
+        self.assertEqual(resp.headers.get("location"), "/studio/")
+
+        resp = self.client.get("/studio/", follow_redirects=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+
+        # Check that assets referenced by index.html actually return HTTP 200
+        import re
+        css_matches = re.findall(r'href="(?:\./)?assets/([^"]+\.css)"', resp.text)
+        js_matches = re.findall(r'src="(?:\./)?assets/([^"]+\.js)"', resp.text)
+        if css_matches:
+            css_resp = self.client.get(f"/studio/assets/{css_matches[0]}")
+            self.assertEqual(css_resp.status_code, 200)
+        if js_matches:
+            js_resp = self.client.get(f"/studio/assets/{js_matches[0]}")
+            self.assertEqual(js_resp.status_code, 200)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_phase2_youtube.py
+============================================================
+"""Tests for Phase 2: YouTube Inbox, OAuth, VTT Parser & Poller Hardening."""
+import os
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from dispatch.config import ROOT_DIR, YOUTUBE_TOKEN_PATH
+from dispatch.youtube_inbox.poller import parse_iso_datetime
+from dispatch.youtube_inbox.vtt_parser import parse_vtt_content
+from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher, _apply_auth_opts
+
+
+class TestPhase2YouTube(unittest.TestCase):
+
+    def test_parse_iso_datetime_variants(self):
+        """Verify parse_iso_datetime parses fractional seconds, Z, and offsets correctly."""
+        # Standard with Z
+        dt1 = parse_iso_datetime("2026-10-14T12:30:00Z")
+        self.assertIsNotNone(dt1)
+        self.assertEqual(dt1.tzinfo, timezone.utc)
+        self.assertEqual(dt1.hour, 12)
+
+        # Fractional seconds with Z
+        dt2 = parse_iso_datetime("2026-10-14T12:30:00.123456Z")
+        self.assertIsNotNone(dt2)
+        self.assertEqual(dt2.microsecond, 123456)
+
+        # Explicit offset
+        dt3 = parse_iso_datetime("2026-10-14T12:30:00.500+00:00")
+        self.assertIsNotNone(dt3)
+        self.assertEqual(dt3.microsecond, 500000)
+
+        # Space separated legacy format
+        dt4 = parse_iso_datetime("2026-10-14 12:30:00")
+        self.assertIsNotNone(dt4)
+        self.assertEqual(dt4.minute, 30)
+
+        # None / empty
+        self.assertIsNone(parse_iso_datetime(None))
+        self.assertIsNone(parse_iso_datetime(""))
+
+    def test_vtt_rolling_caption_prefix_slicing(self):
+        """Verify rolling caption inline words are properly sliced rather than matching repeated tokens."""
+        vtt_data = """WEBVTT
+Kind: captions
+Language: en
+
+00:00:01.000 --> 00:00:03.000
+<00:00:01.000><c> We</c><00:00:01.500><c> are</c><00:00:02.000><c> launching</c>
+
+00:00:02.000 --> 00:00:05.000
+<00:00:02.000><c> We</c><00:00:02.300><c> are</c><00:00:02.600><c> launching</c><00:00:03.200><c> the</c><00:00:04.000><c> rocket</c>
+"""
+        segments = parse_vtt_content(vtt_data)
+        self.assertTrue(len(segments) >= 1)
+        # The full merged text should contain "We are launching the rocket" without "We are launching" duplicated
+        full_text = " ".join(s["text"] for s in segments)
+        self.assertEqual(full_text.strip(), "We are launching the rocket")
+
+    def test_apply_auth_opts(self):
+        """Verify _apply_auth_opts sets cookiefile or cookiesfrombrowser correctly."""
+        ydl_opts = {}
+        with patch.dict(os.environ, {"DISPATCH_YTDLP_COOKIES_BROWSER": "chrome"}, clear=False):
+            _apply_auth_opts(ydl_opts)
+            self.assertEqual(ydl_opts.get("cookiesfrombrowser"), ("chrome",))
+
+    def test_canonical_token_path(self):
+        """Verify canonical token path points to root directory youtube_token.json."""
+        self.assertEqual(YOUTUBE_TOKEN_PATH, ROOT_DIR / "youtube_token.json")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_phase3_highlights.py
+============================================================
+"""Tests for Phase 3: AI Highlights, Subtitle Engine Unification & FFmpeg Renderer."""
+import json
+import unittest
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from dispatch.ai_clips.highlight_finder import (
+    phonetic_devanagari_to_roman,
+    transliterate_tokens_to_hinglish,
+    has_devanagari
+)
+from dispatch.captions.model import CaptionTrack, CaptionGroup, Word, StyleConfig
+from dispatch.captions.exporter import export_to_ass
+
+
+class TestPhase3HighlightsAndCaptions(unittest.TestCase):
+
+    def test_phonetic_devanagari_to_roman(self):
+        """Verify phonetic transliteration fallback for common Hindi words."""
+        self.assertTrue(has_devanagari("नमस्ते"))
+        res_namaste = phonetic_devanagari_to_roman("नमस्ते")
+        self.assertIn("namaste", res_namaste.lower())
+
+        self.assertTrue(has_devanagari("आप"))
+        res_aap = phonetic_devanagari_to_roman("आप")
+        self.assertEqual(res_aap.lower(), "aap")
+
+        self.assertTrue(has_devanagari("कैसे"))
+        res_kaise = phonetic_devanagari_to_roman("कैसे")
+        self.assertEqual(res_kaise.lower(), "kaise")
+
+        self.assertTrue(has_devanagari("हैं"))
+        res_hain = phonetic_devanagari_to_roman("हैं")
+        self.assertIn("hai", res_hain.lower())
+
+    def test_transliterate_tokens_fallback_1to1(self):
+        """Verify transliterate_tokens_to_hinglish preserves exact 1:1 list length and strips Devanagari."""
+        tokens = ["नमस्ते", "dosto", "आप", "सब", "कैसे", "हैं"]
+        # Mock Gemini to raise exception (offline mode)
+        with patch("dispatch.ai_clips.highlight_finder.call_gemini_generate_content", side_effect=RuntimeError("Offline")):
+            res = transliterate_tokens_to_hinglish(tokens)
+            self.assertEqual(len(res), len(tokens))
+            self.assertEqual(res[1], "dosto")  # English untouched
+            # All Devanagari should be converted to ASCII/Roman
+            for token in res:
+                self.assertFalse(has_devanagari(token), f"Token {token} still contains Devanagari!")
+
+    def test_caption_track_export_to_ass(self):
+        """Verify CaptionTrack correctly exports to ASS format with dialog events."""
+        track = CaptionTrack(
+            clip_id="test_clip_1",
+            default_style=StyleConfig(font_family="Impact", font_size=54),
+            groups=[
+                CaptionGroup(
+                    start=1.0,
+                    end=3.0,
+                    words=[
+                        Word(text="Hello", start=1.0, end=1.5),
+                        Word(text="World", start=1.5, end=2.5)
+                    ]
+                )
+            ]
+        )
+        test_ass = Path("storage/processing/test_track.ass")
+        test_ass.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            out_path = export_to_ass(track, test_ass)
+            self.assertTrue(out_path.exists())
+            content = out_path.read_text(encoding="utf-8")
+            self.assertIn("[Script Info]", content)
+            self.assertIn("Impact", content)
+            self.assertIn("Dialogue:", content)
+            self.assertIn("HELLO", content)
+            self.assertIn("WORLD", content)
+        finally:
+            if test_ass.exists():
+                test_ass.unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_phase4_publishing.py
+============================================================
+"""Tests for Phase 4: Publishing Outbox, FastAPI Unblocking & Studio UI."""
+import unittest
+import os
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from dispatch import db
+from dispatch.config import STORAGE_DIR
+from dispatch.main import acquire_single_instance_lock, release_single_instance_lock, LOCK_FILE
+
+
+class TestPhase4Publishing(unittest.TestCase):
+
+    def setUp(self):
+        db.init_db()
+
+    def test_single_instance_lock_lifecycle(self):
+        """Verify lock file creation and release."""
+        release_single_instance_lock()
+        self.assertFalse(LOCK_FILE.exists())
+
+        acquired = acquire_single_instance_lock()
+        self.assertTrue(acquired)
+        self.assertTrue(LOCK_FILE.exists())
+        self.assertEqual(LOCK_FILE.read_text().strip(), str(os.getpid()))
+
+        release_single_instance_lock()
+        self.assertFalse(LOCK_FILE.exists())
+
+    def test_unsupported_platform_marks_failed(self):
+        """Verify unsupported platforms transition to 'failed' rather than remaining in 'uploading'."""
+        clip_id = "test_clip_unsupported_plat"
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
+                VALUES (?, 'Sample Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+            """, (clip_id,))
+            conn.execute("""
+                INSERT OR REPLACE INTO publishing_outbox 
+                (id, clip_id, platform, status, idempotency_key)
+                VALUES ('job_unsupported_1', ?, 'tiktok', 'queued', 'idem_unsupported_1')
+            """, (clip_id,))
+            conn.commit()
+
+        # Mock probe_video to pass
+        with patch("dispatch.publisher.outbox.probe_video", return_value=(True, {"duration": 15.0}, None)):
+            with patch("pathlib.Path.exists", return_value=True):
+                from dispatch.publisher.outbox import process_outbox_queue
+                process_outbox_queue()
+
+        with db.get_db_connection() as conn:
+            row = conn.execute("SELECT status, last_error FROM publishing_outbox WHERE id = 'job_unsupported_1'").fetchone()
+            self.assertEqual(row["status"], "failed")
+            self.assertIn("Unsupported", row["last_error"])
+
+    def test_existing_remote_id_prevents_duplicate_publish(self):
+        """Verify that a job with an existing remote_id transitions to reconciliation_required and does not re-upload."""
+        clip_id = "test_clip_remote_id_dup"
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
+                VALUES (?, 'Remote Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+            """, (clip_id,))
+            conn.execute("""
+                INSERT OR REPLACE INTO publishing_outbox 
+                (id, clip_id, platform, status, idempotency_key, remote_id)
+                VALUES ('job_remote_dup', ?, 'youtube', 'queued', 'idem_remote_dup', 'yt_existing_video_123')
+            """, (clip_id,))
+            conn.commit()
+
+        with patch("dispatch.publisher.outbox.probe_video", return_value=(True, {"duration": 15.0}, None)):
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("dispatch.publisher.outbox.upload_youtube_short") as mock_upload:
+                    from dispatch.publisher.outbox import process_outbox_queue
+                    process_outbox_queue()
+                    mock_upload.assert_not_called()
+
+        with db.get_db_connection() as conn:
+            row = conn.execute("SELECT status, last_error FROM publishing_outbox WHERE id = 'job_remote_dup'").fetchone()
+            self.assertEqual(row["status"], "reconciliation_required")
+            self.assertIn("confirmed remote_id", row["last_error"])
+
+    def test_ambiguous_error_transitions_to_reconciliation_required(self):
+        """Verify that ambiguous timeouts even on the FIRST attempt transition to reconciliation_required."""
+        clip_id = "test_clip_timeout_recon"
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
+                VALUES (?, 'Timeout Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+            """, (clip_id,))
+            conn.execute("""
+                INSERT OR REPLACE INTO publishing_outbox 
+                (id, clip_id, platform, status, idempotency_key, attempt_count)
+                VALUES ('job_timeout_recon', ?, 'youtube', 'queued', 'idem_timeout_recon', 0)
+            """, (clip_id,))
+            conn.commit()
+
+        with patch("dispatch.publisher.outbox.probe_video", return_value=(True, {"duration": 15.0}, None)):
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=TimeoutError("Connection timed out waiting for remote response")):
+                    from dispatch.publisher.outbox import process_outbox_queue
+                    process_outbox_queue()
+
+        with db.get_db_connection() as conn:
+            row = conn.execute("SELECT status, last_error FROM publishing_outbox WHERE id = 'job_timeout_recon'").fetchone()
+            self.assertEqual(row["status"], "reconciliation_required")
+            self.assertIn("Ambiguous remote error", row["last_error"])
+
+    def test_is_ambiguous_network_error(self):
+        """Test classification of ambiguous vs deterministic errors in is_ambiguous_network_error."""
+        from dispatch.publisher.outbox import is_ambiguous_network_error
+        import socket
+
+        # 1. Native exception types
+        self.assertTrue(is_ambiguous_network_error(TimeoutError("timed out")))
+        self.assertTrue(is_ambiguous_network_error(ConnectionResetError("connection reset")))
+        self.assertTrue(is_ambiguous_network_error(ConnectionAbortedError("connection aborted")))
+        self.assertTrue(is_ambiguous_network_error(socket.timeout("timed out")))
+
+        # 2. Windows socket errnos
+        err10053 = OSError("An established connection was aborted by the software in your host machine")
+        err10053.winerror = 10053
+        self.assertTrue(is_ambiguous_network_error(err10053))
+
+        err10054 = OSError("An existing connection was forcibly closed by the remote host")
+        err10054.winerror = 10054
+        self.assertTrue(is_ambiguous_network_error(err10054))
+
+        err10060 = OSError("A connection attempt failed because the connected party did not properly respond")
+        err10060.winerror = 10060
+        self.assertTrue(is_ambiguous_network_error(err10060))
+
+        # Linux / POSIX errnos
+        err104 = OSError(104, "Connection reset by peer")
+        self.assertTrue(is_ambiguous_network_error(err104))
+
+        err32 = OSError(32, "Broken pipe")
+        self.assertTrue(is_ambiguous_network_error(err32))
+
+        # 3. Non-ambiguous errors must return False
+        self.assertFalse(is_ambiguous_network_error(ValueError("Invalid argument: duration too short")))
+        self.assertFalse(is_ambiguous_network_error(FileNotFoundError("Local video file missing")))
+        self.assertFalse(is_ambiguous_network_error(KeyError("missing_field")))
+
+    def test_first_attempt_winerror_10053_transitions_to_reconciliation_required(self):
+        """Verify that a WinError 10053 socket abortion transitions to reconciliation_required on the first attempt."""
+        clip_id = "test_clip_winerror_10053"
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
+                VALUES (?, 'WinError Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+            """, (clip_id,))
+            conn.execute("""
+                INSERT OR REPLACE INTO publishing_outbox 
+                (id, clip_id, platform, status, idempotency_key, attempt_count)
+                VALUES ('job_winerror_10053', ?, 'youtube', 'queued', 'idem_winerror_10053', 0)
+            """, (clip_id,))
+            conn.commit()
+
+        win_err = OSError("Connection aborted")
+        win_err.winerror = 10053
+
+        with patch("dispatch.publisher.outbox.probe_video", return_value=(True, {"duration": 15.0}, None)):
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=win_err):
+                    from dispatch.publisher.outbox import process_outbox_queue
+                    process_outbox_queue()
+
+        with db.get_db_connection() as conn:
+            row = conn.execute("SELECT status, last_error FROM publishing_outbox WHERE id = 'job_winerror_10053'").fetchone()
+            self.assertEqual(row["status"], "reconciliation_required")
+            self.assertIn("Ambiguous remote error", row["last_error"])
+
+    def test_reconciliation_endpoints_and_resolution(self):
+        """Test GET and POST reconciliation management APIs in web dashboard."""
+        from fastapi.testclient import TestClient
+        from dispatch.web.app import app
+        client = TestClient(app)
+
+        clip_id = "test_clip_recon_api"
+        job_id = "job_recon_api_123"
+
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
+                VALUES (?, 'Recon API Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+            """, (clip_id,))
+            conn.execute("""
+                INSERT OR REPLACE INTO publishing_outbox 
+                (id, clip_id, platform, status, idempotency_key, attempt_count)
+                VALUES (?, ?, 'youtube', 'reconciliation_required', 'idem_recon_api', 1)
+            """, (job_id, clip_id))
+            conn.commit()
+
+        # 1. GET /api/publisher/outbox
+        res_outbox = client.get("/api/publisher/outbox")
+        self.assertEqual(res_outbox.status_code, 200)
+        jobs = res_outbox.json()["jobs"]
+        self.assertTrue(any(j["id"] == job_id for j in jobs))
+
+        # 2. GET /api/publisher/reconcile
+        res_recon = client.get("/api/publisher/reconcile")
+        self.assertEqual(res_recon.status_code, 200)
+        recon_jobs = res_recon.json()["jobs"]
+        self.assertTrue(any(j["id"] == job_id for j in recon_jobs))
+
+        # 3. POST /api/publisher/reconcile/{job_id}/resolve - Action: retry
+        res_retry = client.post(
+            f"/api/publisher/reconcile/{job_id}/resolve",
+            json={"action": "retry", "note": "Verified not published on channel; safe to retry"},
+            headers={"host": "127.0.0.1:8000"}
+        )
+        self.assertEqual(res_retry.status_code, 200)
+        with db.get_db_connection() as conn:
+            row = conn.execute("SELECT status FROM publishing_outbox WHERE id = ?", (job_id,)).fetchone()
+            self.assertEqual(row["status"], "queued")
+
+        # 4. POST /api/publisher/reconcile/{job_id}/resolve - Action: mark_published
+        res_pub = client.post(
+            f"/api/publisher/reconcile/{job_id}/resolve",
+            json={"action": "mark_published", "remote_id": "yt_resolved_777", "remote_url": "https://youtube.com/watch?v=yt_resolved_777"},
+            headers={"host": "127.0.0.1:8000"}
+        )
+        self.assertEqual(res_pub.status_code, 200)
+        with db.get_db_connection() as conn:
+            row = conn.execute("SELECT status, remote_id FROM publishing_outbox WHERE id = ?", (job_id,)).fetchone()
+            self.assertEqual(row["status"], "published")
+            self.assertEqual(row["remote_id"], "yt_resolved_777")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_pillar1_ingestion.py
+============================================================
+"""Focused tests for Pillar 1 ? YouTube Ingestion & Media Validation.
+Verifies:
+  - Discovery pagination (pageToken support)
+  - Duplicate discovery handling (idempotent DB insert)
+  - Ingestion state transitions: DISCOVERED -> DOWNLOADING -> VALIDATING -> DOWNLOADED
+  - Zero-byte / missing / corrupted file rejection (VALIDATING -> FAILED)
+  - Invariant: status = DOWNLOADED guarantees local file exists and passes ffprobe
+  - Restart / duplicate ingest returns existing record without re-downloading
+"""
+import unittest
+import tempfile
+import shutil
+import subprocess
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from dispatch import db
+from dispatch.config import YOUTUBE_INBOX_DIR
+from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
+from dispatch.youtube_inbox.oauth import list_authenticated_user_uploads
+
+# Privacy-gate fixture: ingestion requires an allowed visibility verdict.
+patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
+
+class TestPillar1Ingestion(unittest.TestCase):
+
+    def setUp(self):
+        db.init_db()
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
+        self.test_video_id = "p1_test0001"
+        self.test_dispatch_id = "dsp_test_p1_001"
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        with db.get_db_connection() as conn:
+            conn.execute("DELETE FROM youtube_inbox WHERE video_id LIKE 'p1_%'")
+
+    def _create_valid_mp4(self, path: Path, duration_sec: int = 2):
+        cmd = [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=2",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", str(duration_sec),
+            "-c:v", "libx264", "-c:a", "aac", str(path)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    def test_01_discovery_duplicate_idempotency(self):
+        """Verify registering the same video 10 times yields exactly 1 DB record."""
+        vid_id = "p1_dup00001"
+        for _ in range(10):
+            db.register_youtube_video(
+                video_id=vid_id,
+                title="Test Video",
+                dispatch_id=self.test_dispatch_id
+            )
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM youtube_inbox WHERE video_id = ?", (vid_id,))
+            count = cursor.fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_02_discovery_pagination_support(self):
+        """Verify list_authenticated_user_uploads follows nextPageToken."""
+        mock_service = MagicMock()
+        mock_channels = MagicMock()
+        mock_channels.list.return_value.execute.return_value = {
+            "items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UU_test"}}}]
+        }
+        mock_service.channels.return_value = mock_channels
+
+        # Simulate 2 pages of playlist items
+        page1_resp = {
+            "items": [
+                {
+                    "snippet": {
+                        "resourceId": {"videoId": "p1_page1_01"},
+                        "title": "[DISPATCH] Page 1 Video",
+                        "description": "dispatch_id: dsp_page1",
+                        "tags": ["dispatch"],
+                        "publishedAt": "2026-10-07T00:00:00Z"
+                    },
+                    "status": {"privacyStatus": "unlisted"}
+                }
+            ],
+            "nextPageToken": "TOKEN_PAGE_2"
+        }
+        page2_resp = {
+            "items": [
+                {
+                    "snippet": {
+                        "resourceId": {"videoId": "p1_page2_02"},
+                        "title": "[DISPATCH] Page 2 Video",
+                        "description": "dispatch_id: dsp_page2",
+                        "tags": ["dispatch"],
+                        "publishedAt": "2026-10-07T00:01:00Z"
+                    },
+                    "status": {"privacyStatus": "unlisted"}
+                }
+            ]
+        }
+        mock_playlist_items = MagicMock()
+        mock_playlist_items.list.return_value.execute.side_effect = [page1_resp, page2_resp]
+        mock_service.playlistItems.return_value = mock_playlist_items
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_service", return_value=mock_service):
+            results = list_authenticated_user_uploads(max_results_per_page=50, stop_on_known_page=False)
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0]["video_id"], "p1_page1_01")
+            self.assertEqual(results[1]["video_id"], "p1_page2_02")
+
+    def test_03_ingest_successful_download_and_validation(self):
+        """Verify valid downloaded video transitions through DISCOVERED -> DOWNLOADING -> VALIDATING -> DOWNLOADED."""
+        vid_id = "p1_ok000001"
+        valid_file = self.temp_dir / f"{vid_id}.mp4"
+        self._create_valid_mp4(valid_file, duration_sec=2)
+
+        with patch.object(self.catcher, "download_video", return_value=valid_file):
+            result = self.catcher.ingest_video(vid_id, dispatch_id=self.test_dispatch_id)
+
+        self.assertEqual(result["status"], "DOWNLOADED")
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["local_video_path"], str(valid_file))
+
+        # Check DB state
+        record = db.get_youtube_video(vid_id)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["status"], "DOWNLOADED")
+        self.assertEqual(record["local_video_path"], str(valid_file))
+        self.assertGreater(record["duration"], 0.0)
+
+    def test_04_ingest_corrupt_file_rejected_to_failed(self):
+        """Verify zero-byte or corrupt file is rejected with status = FAILED and purged."""
+        vid_id = "p1_bad00001"
+        corrupt_file = self.temp_dir / f"{vid_id}.mp4"
+        corrupt_file.write_bytes(b"CORRUPTED_NON_VIDEO_DATA")
+
+        with patch.object(self.catcher, "download_video", return_value=corrupt_file):
+            with self.assertRaises(ValueError):
+                self.catcher.ingest_video(vid_id, dispatch_id=self.test_dispatch_id)
+
+        record = db.get_youtube_video(vid_id)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["status"], "FAILED")
+        self.assertIn("Media validation failed", record.get("last_error", ""))
+        # Verify corrupt file was deleted
+        self.assertFalse(corrupt_file.exists())
+
+    def test_05_ingest_zero_byte_file_rejected(self):
+        """Verify 0-byte file fails media probe and marks status = FAILED."""
+        vid_id = "p1_zero0001"
+        zero_file = self.temp_dir / f"{vid_id}.mp4"
+        zero_file.write_bytes(b"")
+
+        with patch.object(self.catcher, "download_video", return_value=zero_file):
+            with self.assertRaises(ValueError):
+                self.catcher.ingest_video(vid_id, dispatch_id=self.test_dispatch_id)
+
+        record = db.get_youtube_video(vid_id)
+        self.assertEqual(record["status"], "FAILED")
+
+    def test_06_ingest_idempotent_restart_skips_redownload(self):
+        """Verify running ingest on an already DOWNLOADED video with intact file returns immediately."""
+        vid_id = "p1_idem0001"
+        valid_file = self.temp_dir / f"{vid_id}.mp4"
+        self._create_valid_mp4(valid_file, duration_sec=2)
+
+        with patch.object(self.catcher, "download_video", return_value=valid_file):
+            first = self.catcher.ingest_video(vid_id, dispatch_id=self.test_dispatch_id)
+        self.assertEqual(first["status"], "DOWNLOADED")
+
+        # Second call should NOT call download_video
+        with patch.object(self.catcher, "download_video", side_effect=AssertionError("Should not re-download")):
+            second = self.catcher.ingest_video(vid_id, dispatch_id=self.test_dispatch_id)
+        self.assertIn(second["status"], ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT"))
+        self.assertTrue(second["verified"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_pillar2_transcription.py
+============================================================
+"""Unit tests for Pillar 2: Transcription Worker, VTT Parsing, and State Transitions.
+Tests:
+Case A: YouTube Captions available immediately.
+Case B: YouTube Captions unavailable, within wait window -> remains WAITING_FOR_TRANSCRIPT.
+Case C: Wait deadline expires -> triggers Whisper fallback -> TRANSCRIBED (source: 'whisper').
+Case D: Whisper engine fails -> status = 'FAILED', last_error populated, retry_count incremented.
+Case E: Word timestamp exactness flag (is_exact True vs False).
+Case F: Worker restart recovery.
+Case G: Zero speech / empty transcript handling.
+Case H: Database transcript idempotency per chunk_id.
+Case I: Strict ordering (transcript saved before TRANSCRIBED status, failure leaves status unchanged).
+Case J: Real source media dimensions preserved in chunk (no invented 1080x1920).
+Case K: Caption reprobe backoff rate limiting & next probe scheduling surviving restart.
+Case L: 4-hour (14400s) default caption wait window & environment variable override.
+Case M: Caption language restriction (subtitleslangs with en/hi preference).
+"""
+import unittest
+from unittest.mock import MagicMock, patch
+import tempfile
+import json
+import os
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+
+from dispatch import db
+from dispatch.transcription.worker import TranscriptionWorker
+from dispatch.youtube_inbox.vtt_parser import parse_vtt_content, parse_inline_words
+from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
+
+
+class TestPillar2Transcription(unittest.TestCase):
+
+    def setUp(self):
+        # Use an isolated temporary database for every test
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "test_dispatch.db"
+        self.old_db_path = db.DB_PATH
+        db.DB_PATH = self.db_path
+        db.init_db()
+
+        # Dummy video file
+        self.dummy_video = Path(self.temp_dir.name) / "test_video.mp4"
+        self.dummy_video.write_bytes(b"\x00" * 1024)
+
+    def tearDown(self):
+        db.DB_PATH = self.old_db_path
+        self.temp_dir.cleanup()
+
+    def test_case_a_youtube_captions_immediately_available(self):
+        """Case A: YouTube captions available immediately -> TRANSCRIBED (source='youtube')."""
+        video_id = "vid_test_a"
+        db.register_youtube_video(video_id=video_id, title="Test A", duration=60.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = [
+            {
+                "start": 0.0,
+                "end": 2.5,
+                "text": "Hello world from captions",
+                "words": [
+                    {"word": "Hello", "start": 0.0, "end": 1.0, "probability": 1.0, "is_exact": True},
+                    {"word": "world", "start": 1.0, "end": 1.8, "probability": 1.0, "is_exact": True},
+                    {"word": "from", "start": 1.8, "end": 2.1, "probability": 1.0, "is_exact": True},
+                    {"word": "captions", "start": 2.1, "end": 2.5, "probability": 1.0, "is_exact": True}
+                ]
+            }
+        ]
+
+        worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+        res = worker.process_pending()
+
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["status"], "TRANSCRIBED")
+        self.assertEqual(res[0]["source"], "youtube")
+        self.assertEqual(res[0]["segments_count"], 1)
+
+        # Verify DB state
+        yt_record = db.get_youtube_video(video_id)
+        self.assertEqual(yt_record["status"], "TRANSCRIBED")
+        self.assertEqual(yt_record["transcript_source"], "youtube")
+        self.assertIsNotNone(yt_record["transcript_wait_deadline"])
+
+        # Verify chunk and transcript table
+        chunk = db.get_chunk_by_file_hash(f"yt_{video_id}")
+        self.assertIsNotNone(chunk)
+        self.assertEqual(chunk["status"], "transcribed")
+
+    def test_case_b_captions_unavailable_within_wait_window(self):
+        """Case B: Captions unavailable, within wait window -> remains WAITING_FOR_TRANSCRIPT."""
+        video_id = "vid_test_b"
+        db.register_youtube_video(video_id=video_id, title="Test B", duration=60.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None  # Not yet ready
+
+        worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+        res = worker.process_pending()
+
+        # Should NOT be finalized yet
+        self.assertEqual(len(res), 0)
+
+        yt_record = db.get_youtube_video(video_id)
+        self.assertEqual(yt_record["status"], "WAITING_FOR_TRANSCRIPT")
+        self.assertIsNone(yt_record["transcript_source"])
+
+    def test_case_c_wait_deadline_expires_whisper_fallback(self):
+        """Case C: Wait deadline expires -> triggers Whisper fallback -> TRANSCRIBED (source='whisper')."""
+        video_id = "vid_test_c"
+        past_deadline = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+
+        db.register_youtube_video(video_id=video_id, title="Test C", duration=60.0)
+        db.update_youtube_video(
+            video_id=video_id,
+            status="WAITING_FOR_TRANSCRIPT",
+            local_video_path=str(self.dummy_video),
+            transcript_wait_deadline=past_deadline
+        )
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None  # Still unavailable
+
+        fake_whisper_res = {
+            "transcript_id": "tx_test_123",
+            "full_text": "This is local whisper speaking",
+            "segments": [
+                {
+                    "start": 0.0,
+                    "end": 3.0,
+                    "text": "This is local whisper speaking",
+                    "words": [{"word": "This", "start": 0.0, "end": 0.5, "probability": 0.95}]
+                }
+            ],
+            "language": "en",
+            "language_probability": 0.99
+        }
+
+        with patch("dispatch.transcription.worker.transcribe_video", return_value=fake_whisper_res) as mock_whisper:
+            worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+            res = worker.process_pending()
+
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["status"], "TRANSCRIBED")
+            self.assertEqual(res[0]["source"], "whisper")
+            mock_whisper.assert_called_once_with(video_path=self.dummy_video)
+
+        yt_record = db.get_youtube_video(video_id)
+        self.assertEqual(yt_record["status"], "TRANSCRIBED")
+        self.assertEqual(yt_record["transcript_source"], "whisper")
+
+    def test_case_d_whisper_engine_failure_marks_failed(self):
+        """Case D: Whisper engine fails -> status = 'FAILED', last_error recorded, retry_count incremented."""
+        video_id = "vid_test_d"
+        past_deadline = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+
+        db.register_youtube_video(video_id=video_id, title="Test D", duration=60.0)
+        db.update_youtube_video(
+            video_id=video_id,
+            status="WAITING_FOR_TRANSCRIPT",
+            local_video_path=str(self.dummy_video),
+            transcript_wait_deadline=past_deadline
+        )
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None
+
+        with patch("dispatch.transcription.worker.transcribe_video", side_effect=RuntimeError("Whisper OOM")):
+            worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+            try:
+                worker.process_pending()
+            except RuntimeError:
+                pass
+
+        yt_record = db.get_youtube_video(video_id)
+        self.assertEqual(yt_record["status"], "FAILED")
+        self.assertIn("Whisper OOM", yt_record["last_error"])
+        self.assertEqual(yt_record["retry_count"], 1)
+
+    def test_case_e_word_timestamp_exactness_flags(self):
+        """Case E: Word timestamp exactness flag (is_exact True for inline VTT, False for synthesized)."""
+        # 1. Exact inline VTT tags
+        vtt_exact = """WEBVTT
+
+00:00:00.000 --> 00:00:02.000
+First <00:00:01.000><c> second</c>
+"""
+        segs_exact = parse_vtt_content(vtt_exact)
+        self.assertEqual(len(segs_exact), 1)
+        words_exact = segs_exact[0]["words"]
+        self.assertEqual(len(words_exact), 2)
+        self.assertTrue(words_exact[0]["is_exact"])
+        self.assertTrue(words_exact[1]["is_exact"])
+
+        # 2. Plain VTT without inline tags (synthesized)
+        vtt_plain = """WEBVTT
+
+00:00:00.000 --> 00:00:02.000
+Plain words here
+"""
+        segs_plain = parse_vtt_content(vtt_plain)
+        self.assertEqual(len(segs_plain), 1)
+        words_plain = segs_plain[0]["words"]
+        self.assertEqual(len(words_plain), 3)
+        self.assertFalse(words_plain[0]["is_exact"])
+        self.assertFalse(words_plain[1]["is_exact"])
+        self.assertFalse(words_plain[2]["is_exact"])
+
+    def test_case_f_worker_restart_recovery(self):
+        """Case F: Worker restart picks up existing WAITING_FOR_TRANSCRIPT and DOWNLOADED records."""
+        # Record 1 in DOWNLOADED
+        db.register_youtube_video(video_id="vid_f1", title="F1", duration=30.0)
+        db.update_youtube_video(video_id="vid_f1", status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        # Record 2 in WAITING_FOR_TRANSCRIPT with deadline passed
+        past_deadline = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+        db.register_youtube_video(video_id="vid_f2", title="F2", duration=45.0)
+        db.update_youtube_video(
+            video_id="vid_f2",
+            status="WAITING_FOR_TRANSCRIPT",
+            local_video_path=str(self.dummy_video),
+            transcript_wait_deadline=past_deadline
+        )
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None
+
+        fake_whisper = {
+            "full_text": "whisper output",
+            "segments": [{"start": 0.0, "end": 2.0, "text": "whisper output", "words": []}]
+        }
+
+        with patch("dispatch.transcription.worker.transcribe_video", return_value=fake_whisper):
+            worker = TranscriptionWorker(caption_wait_seconds=600, catcher=mock_catcher)
+            res = worker.process_pending()
+
+            # f1 should have entered WAITING_FOR_TRANSCRIPT (not finished)
+            # f2 should have finished via Whisper fallback
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["video_id"], "vid_f2")
+            self.assertEqual(res[0]["source"], "whisper")
+
+        self.assertEqual(db.get_youtube_video("vid_f1")["status"], "WAITING_FOR_TRANSCRIPT")
+        self.assertEqual(db.get_youtube_video("vid_f2")["status"], "TRANSCRIBED")
+
+    def test_case_g_genuine_silence_zero_speech(self):
+        """Case G: Genuine silence produces TRANSCRIBED with 0 segments and does NOT fail."""
+        video_id = "vid_silence"
+        past_deadline = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+
+        db.register_youtube_video(video_id=video_id, title="Silence Video", duration=60.0)
+        db.update_youtube_video(
+            video_id=video_id,
+            status="WAITING_FOR_TRANSCRIPT",
+            local_video_path=str(self.dummy_video),
+            transcript_wait_deadline=past_deadline
+        )
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None
+
+        fake_whisper_empty = {
+            "transcript_id": "tx_empty",
+            "full_text": "",
+            "segments": [],
+            "language": "unknown",
+            "language_probability": 0.0
+        }
+
+        with patch("dispatch.transcription.worker.transcribe_video", return_value=fake_whisper_empty):
+            worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+            res = worker.process_pending()
+
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["status"], "TRANSCRIBED")
+            self.assertEqual(res[0]["segments_count"], 0)
+            self.assertEqual(res[0]["words_count"], 0)
+
+        yt_record = db.get_youtube_video(video_id)
+        self.assertEqual(yt_record["status"], "TRANSCRIBED")
+        self.assertEqual(yt_record["transcript_source"], "whisper")
+
+    def test_case_h_idempotent_save_transcript(self):
+        """Case H: save_transcript replaces existing records for chunk_id without duplicate rows."""
+        chunk_id = db.register_chunk(session_id=None, filename="dummy.mp4", filepath=str(self.dummy_video), file_hash="hash_h")
+        tx1 = db.save_transcript(chunk_id=chunk_id, session_id=None, full_text="First", segments=[])
+        tx2 = db.save_transcript(chunk_id=chunk_id, session_id=None, full_text="Second", segments=[])
+
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as cnt FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+            cnt = cursor.fetchone()["cnt"]
+            self.assertEqual(cnt, 1)
+
+            cursor.execute("SELECT full_text FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+            row = cursor.fetchone()
+            self.assertEqual(row["full_text"], "Second")
+
+    def test_case_i_strict_transcription_persistence_order(self):
+        """Case I: Transcript is persisted before status=TRANSCRIBED. If save fails, status MUST NOT be TRANSCRIBED."""
+        video_id = "vid_test_i"
+        db.register_youtube_video(video_id=video_id, title="Test I", duration=60.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = [
+            {"start": 0.0, "end": 2.0, "text": "Valid speech", "words": []}
+        ]
+
+        # Simulate database failure during save_transcript
+        with patch("dispatch.db.save_transcript", side_effect=RuntimeError("Disk full")):
+            worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+            try:
+                worker.process_pending()
+            except RuntimeError:
+                pass
+
+        # Video must NOT be TRANSCRIBED
+        yt_record = db.get_youtube_video(video_id)
+        self.assertEqual(yt_record["status"], "FAILED")
+        self.assertIn("Disk full", yt_record["last_error"])
+
+    def test_case_j_preserves_real_source_media_metadata(self):
+        """Case J: Pillar 2 preserves real source dimensions (e.g. 360x640) and never invents 1080x1920."""
+        video_id = "vid_test_j"
+        db.register_youtube_video(video_id=video_id, title="Test J", duration=600.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = [
+            {"start": 0.0, "end": 2.0, "text": "Valid speech", "words": []}
+        ]
+
+        # Mock probe_video returning real 360x640 mobile dimensions
+        real_meta = {
+            "duration": 600.05,
+            "width": 360,
+            "height": 640,
+            "aspect_ratio": "9:16",
+            "has_audio": True
+        }
+        with patch("dispatch.ingestion.validator.probe_video", return_value=(True, real_meta, None)):
+            worker = TranscriptionWorker(caption_wait_seconds=900, catcher=mock_catcher)
+            res = worker.process_pending()
+            self.assertEqual(len(res), 1)
+
+        chunk = db.get_chunk_by_file_hash(f"yt_{video_id}")
+        self.assertIsNotNone(chunk)
+        self.assertEqual(chunk["width"], 360)
+        self.assertEqual(chunk["height"], 640)
+        self.assertEqual(chunk["aspect_ratio"], "9:16")
+        self.assertEqual(chunk["status"], "transcribed")
+
+    def test_case_k_caption_reprobe_backoff_and_restart(self):
+        """Case K: 15s worker loop respects 300s reprobe backoff; persisted next_probe timestamp survives restart."""
+        video_id = "vid_test_k"
+        db.register_youtube_video(video_id=video_id, title="Test K", duration=60.0)
+        db.update_youtube_video(video_id=video_id, status="DOWNLOADED", local_video_path=str(self.dummy_video))
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None  # unavailable
+
+        # Cycle 1: Enters WAITING_FOR_TRANSCRIPT and probes once
+        worker = TranscriptionWorker(caption_wait_seconds=14400, caption_reprobe_seconds=300, catcher=mock_catcher)
+        worker.process_pending()
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 1)
+
+        rec = db.get_youtube_video(video_id)
+        self.assertEqual(rec["status"], "WAITING_FOR_TRANSCRIPT")
+        next_probe_1 = rec["next_caption_probe_at"]
+        self.assertIsNotNone(next_probe_1)
+
+        # Cycle 2: Immediate follow-up cycle within 300s backoff must NOT call fetch_youtube_captions again
+        worker.process_pending()
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 1)
+
+        # Simulate daemon restart by instantiating new worker instance
+        worker_restarted = TranscriptionWorker(caption_wait_seconds=14400, caption_reprobe_seconds=300, catcher=mock_catcher)
+        worker_restarted.process_pending()
+        # Still within 300s window -> no new YouTube probe
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 1)
+
+        # Fast forward next_caption_probe_at into the past
+        past_probe = (datetime.now(timezone.utc) - timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
+        db.update_youtube_video(video_id=video_id, status="WAITING_FOR_TRANSCRIPT", next_caption_probe_at=past_probe)
+
+        # Cycle 3: Now probe is due -> must call fetch_youtube_captions
+        worker_restarted.process_pending()
+        self.assertEqual(mock_catcher.fetch_youtube_captions.call_count, 2)
+
+    def test_case_l_caption_wait_defaults_and_env_override(self):
+        """Case L: Default wait window is 4 hours (14400s), overridable via DISPATCH_TRANSCRIPT_WAIT_SECONDS."""
+        w_default = TranscriptionWorker()
+        self.assertEqual(w_default.caption_wait_seconds, 14400)
+        self.assertEqual(w_default.caption_reprobe_seconds, 300)
+
+        with patch.dict(os.environ, {"DISPATCH_TRANSCRIPT_WAIT_SECONDS": "7200", "DISPATCH_CAPTION_REPROBE_SECONDS": "180"}):
+            w_env = TranscriptionWorker()
+            self.assertEqual(w_env.caption_wait_seconds, 7200)
+            self.assertEqual(w_env.caption_reprobe_seconds, 180)
+
+    def test_case_m_caption_language_restriction(self):
+        """Case M: fetch_youtube_captions restricts subtitleslangs to en/hi variants."""
+        catcher = YouTubeInboxCatcher()
+        captured_opts = {}
+
+        def mock_ydl_init(opts):
+            nonlocal captured_opts
+            captured_opts = opts
+            mock_inst = MagicMock()
+            mock_inst.__enter__.return_value = mock_inst
+            mock_inst.download.return_value = 0
+            return mock_inst
+
+        with patch("yt_dlp.YoutubeDL", side_effect=mock_ydl_init):
+            catcher.fetch_youtube_captions("mock_vid_123")
+
+        self.assertIn("subtitleslangs", captured_opts)
+        langs = captured_opts["subtitleslangs"]
+        self.assertTrue(any("en" in l for l in langs))
+        self.assertTrue(any("hi" in l for l in langs))
+
+
+if __name__ == "__main__":
+    unittest.main()
+

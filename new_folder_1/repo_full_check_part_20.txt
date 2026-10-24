@@ -1,0 +1,1334 @@
+﻿
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestReleaseWearAppConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testReleaseWearApp`(dependencyNotation: Any): Dependency? =
+    add("testReleaseWearApp", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testReleaseWearApp`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testReleaseWearApp", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testReleaseWearApp`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testReleaseWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testReleaseWearApp`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testReleaseWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testReleaseWearApp' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testReleaseWearApp`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testReleaseWearApp", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testReleaseWearApp' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testReleaseWearApp`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testReleaseWearApp", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testReleaseWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testReleaseWearApp`(constraintNotation: Any): DependencyConstraint =
+    add("testReleaseWearApp", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testReleaseWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testReleaseWearApp`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testReleaseWearApp", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testReleaseWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testReleaseWearApp`(artifactNotation: Any): PublishArtifact =
+    add("testReleaseWearApp", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testReleaseWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testReleaseWearApp`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testReleaseWearApp", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestRuntimeOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testRuntimeOnly`(dependencyNotation: Any): Dependency? =
+    add("testRuntimeOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testRuntimeOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testRuntimeOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testRuntimeOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testRuntimeOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testRuntimeOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testRuntimeOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testRuntimeOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testRuntimeOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testRuntimeOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testRuntimeOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testRuntimeOnly`(constraintNotation: Any): DependencyConstraint =
+    add("testRuntimeOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testRuntimeOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testRuntimeOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testRuntimeOnly`(artifactNotation: Any): PublishArtifact =
+    add("testRuntimeOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testRuntimeOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testRuntimeOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestWearAppConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testWearApp`(dependencyNotation: Any): Dependency? =
+    add("testWearApp", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testWearApp`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testWearApp", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testWearApp`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testWearApp`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testWearApp' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testWearApp`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testWearApp", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testWearApp' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testWearApp`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testWearApp", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testWearApp`(constraintNotation: Any): DependencyConstraint =
+    add("testWearApp", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testWearApp`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testWearApp", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testWearApp`(artifactNotation: Any): PublishArtifact =
+    add("testWearApp", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testWearApp`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testWearApp", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\WearAppConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'wearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`wearApp`(dependencyNotation: Any): Dependency? =
+    add("wearApp", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'wearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`wearApp`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "wearApp", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'wearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`wearApp`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "wearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'wearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`wearApp`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "wearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'wearApp' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`wearApp`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "wearApp", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'wearApp' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`wearApp`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("wearApp", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'wearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`wearApp`(constraintNotation: Any): DependencyConstraint =
+    add("wearApp", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'wearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`wearApp`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("wearApp", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'wearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`wearApp`(artifactNotation: Any): PublishArtifact =
+    add("wearApp", artifactNotation)
+
+/**
+ * Adds an artifact to the 'wearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`wearApp`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("wearApp", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\wrapper\dists\gradle-8.13-bin\5xuhj0ry160q40clulazy9h7d\gradle-8.13\bin\gradle.bat
+============================================================
+@rem
+@rem Copyright 2015 the original author or authors.
+@rem
+@rem Licensed under the Apache License, Version 2.0 (the "License");
+@rem you may not use this file except in compliance with the License.
+@rem You may obtain a copy of the License at
+@rem
+@rem      https://www.apache.org/licenses/LICENSE-2.0
+@rem
+@rem Unless required by applicable law or agreed to in writing, software
+@rem distributed under the License is distributed on an "AS IS" BASIS,
+@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+@rem See the License for the specific language governing permissions and
+@rem limitations under the License.
+@rem
+@rem SPDX-License-Identifier: Apache-2.0
+@rem
+
+@if "%DEBUG%"=="" @echo off
+@rem ##########################################################################
+@rem
+@rem  Gradle startup script for Windows
+@rem
+@rem ##########################################################################
+
+@rem Set local scope for the variables with windows NT shell
+if "%OS%"=="Windows_NT" setlocal
+
+set DIRNAME=%~dp0
+if "%DIRNAME%"=="" set DIRNAME=.
+@rem This is normally unused
+set APP_BASE_NAME=%~n0
+set APP_HOME=%DIRNAME%..
+
+@rem Resolve any "." and ".." in APP_HOME to make it shorter.
+for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
+
+@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m" "-javaagent:%APP_HOME%/lib/agents/gradle-instrumentation-agent-8.13.jar"
+
+@rem Find java.exe
+if defined JAVA_HOME goto findJavaFromJavaHome
+
+set JAVA_EXE=java.exe
+%JAVA_EXE% -version >NUL 2>&1
+if %ERRORLEVEL% equ 0 goto execute
+
+echo. 1>&2
+echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
+echo. 1>&2
+echo Please set the JAVA_HOME variable in your environment to match the 1>&2
+echo location of your Java installation. 1>&2
+
+goto fail
+
+:findJavaFromJavaHome
+set JAVA_HOME=%JAVA_HOME:"=%
+set JAVA_EXE=%JAVA_HOME%/bin/java.exe
+
+if exist "%JAVA_EXE%" goto execute
+
+echo. 1>&2
+echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
+echo. 1>&2
+echo Please set the JAVA_HOME variable in your environment to match the 1>&2
+echo location of your Java installation. 1>&2
+
+goto fail
+
+:execute
+@rem Setup the command line
+
+set CLASSPATH=%APP_HOME%\lib\gradle-gradle-cli-main-8.13.jar
+
+
+@rem Execute Gradle
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.launcher.GradleMain %*
+
+:end
+@rem End local scope for the variables with windows NT shell
+if %ERRORLEVEL% equ 0 goto mainEnd
+
+:fail
+rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
+rem the _cmd.exe /c_ return code!
+set EXIT_CODE=%ERRORLEVEL%
+if %EXIT_CODE% equ 0 set EXIT_CODE=1
+if not ""=="%GRADLE_EXIT_CONSOLE%" exit %EXIT_CODE%
+exit /b %EXIT_CODE%
+
+:mainEnd
+if "%OS%"=="Windows_NT" endlocal
+
+:omega
+
+
+============================================================
+FILE: .gradle\wrapper\dists\gradle-8.13-bin\5xuhj0ry160q40clulazy9h7d\gradle-8.13\init.d\readme.txt
+============================================================
+You can add .gradle (e.g. test.gradle) init scripts to this directory. Each one is executed at the start of the build.
+
+
+============================================================
+FILE: .pytest_cache\.gitignore
+============================================================
+# Created by pytest automatically.
+*
+
+
+============================================================
+FILE: .pytest_cache\README.md
+============================================================
+# pytest cache directory #
+
+This directory contains data from the pytest's cache plugin,
+which provides the `--lf` and `--ff` options, as well as the `cache` fixture.
+
+**Do not** commit this to version control.
+
+See [the docs](https://docs.pytest.org/en/stable/how-to/cache.html) for more information.
+
+
+============================================================
+FILE: .test-storage\fonts\fonts_manifest.json
+============================================================
+[
+  {
+    "family": "Impact",
+    "category": "Bold / Captions",
+    "weights": [
+      "400"
+    ],
+    "filename": "impact.ttf",
+    "license": "System / Core Web Font",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/impact.ttf"
+  },
+  {
+    "family": "Anton",
+    "category": "Bold / Captions",
+    "weights": [
+      "400"
+    ],
+    "filename": "Anton-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Anton-Regular.ttf"
+  },
+  {
+    "family": "Archivo Black",
+    "category": "Bold / Captions",
+    "weights": [
+      "400"
+    ],
+    "filename": "ArchivoBlack-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/ArchivoBlack-Regular.ttf"
+  },
+  {
+    "family": "Bebas Neue",
+    "category": "Decorative",
+    "weights": [
+      "400"
+    ],
+    "filename": "BebasNeue-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/BebasNeue-Regular.ttf"
+  },
+  {
+    "family": "Montserrat",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "Montserrat-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Montserrat-Variable.ttf"
+  },
+  {
+    "family": "Oswald",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700"
+    ],
+    "filename": "Oswald-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Oswald-Variable.ttf"
+  },
+  {
+    "family": "Barlow Condensed",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "BarlowCondensed-Bold.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/BarlowCondensed-Bold.ttf"
+  },
+  {
+    "family": "League Spartan",
+    "category": "Bold / Captions",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "LeagueSpartan-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/LeagueSpartan-Variable.ttf"
+  },
+  {
+    "family": "Poppins",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "Poppins-Bold.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Poppins-Bold.ttf"
+  },
+  {
+    "family": "Inter",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700",
+      "800",
+      "900"
+    ],
+    "filename": "Inter-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Inter-Variable.ttf"
+  },
+  {
+    "family": "Roboto",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "700",
+      "900"
+    ],
+    "filename": "Roboto-Variable.ttf",
+    "license": "Apache License 2.0",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Roboto-Variable.ttf"
+  },
+  {
+    "family": "Open Sans",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800"
+    ],
+    "filename": "OpenSans-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/OpenSans-Variable.ttf"
+  },
+  {
+    "family": "Noto Sans",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800"
+    ],
+    "filename": "NotoSans-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/NotoSans-Variable.ttf"
+  },
+  {
+    "family": "Space Grotesk",
+    "category": "Clean",
+    "weights": [
+      "400",
+      "500",
+      "600",
+      "700"
+    ],
+    "filename": "SpaceGrotesk-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/SpaceGrotesk-Variable.ttf"
+  },
+  {
+    "family": "Bangers",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "Bangers-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Bangers-Regular.ttf"
+  },
+  {
+    "family": "Luckiest Guy",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "LuckiestGuy-Regular.ttf",
+    "license": "Apache License 2.0",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/LuckiestGuy-Regular.ttf"
+  },
+  {
+    "family": "Russo One",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "RussoOne-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/RussoOne-Regular.ttf"
+  },
+  {
+    "family": "Titan One",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "TitanOne-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/TitanOne-Regular.ttf"
+  },
+  {
+    "family": "Bungee",
+    "category": "Gaming / Comedy",
+    "weights": [
+      "400"
+    ],
+    "filename": "Bungee-Regular.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/Bungee-Regular.ttf"
+  },
+  {
+    "family": "Permanent Marker",
+    "category": "Decorative",
+    "weights": [
+      "400"
+    ],
+    "filename": "PermanentMarker-Regular.ttf",
+    "license": "Apache License 2.0",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/PermanentMarker-Regular.ttf"
+  },
+  {
+    "family": "Noto Sans Devanagari",
+    "category": "Language Support",
+    "weights": [
+      "400",
+      "600",
+      "700",
+      "800"
+    ],
+    "filename": "NotoSansDevanagari-Variable.ttf",
+    "license": "SIL Open Font License 1.1",
+    "is_valid": true,
+    "is_custom": false,
+    "url": "/api/fonts/NotoSansDevanagari-Variable.ttf"
+  }
+]
+
+============================================================
+FILE: .vite\deps_temp_5e4242f6\package.json
+============================================================
+{
+  "type": "module"
+}
+
+
+============================================================
+FILE: .vite\deps_temp_bc4b1070\package.json
+============================================================
+{
+  "type": "module"
+}
+
+
+============================================================
+FILE: .wrangler\cache\wrangler-account.json
+============================================================
+{
+  "account": {
+    "id": "75d8978aa7345a0df28e89bff1e847ec",
+    "name": "Resolviaai@gmail.com's Account"
+  }
+}
+
+============================================================
+FILE: .zcode\config.json
+============================================================
+{
+  "plugins": {
+    "enabledPlugins": {
+      "android-emulator@zcode-plugins-official": true
+    }
+  }
+}
+

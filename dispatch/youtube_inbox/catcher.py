@@ -81,6 +81,7 @@ class YouTubeInboxCatcher:
         """Fetch video metadata without downloading video stream."""
         url = f"https://www.youtube.com/watch?v={video_id}"
         ydl_opts = {
+        "socket_timeout": 30,
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
@@ -104,6 +105,7 @@ class YouTubeInboxCatcher:
         temp_sub_prefix = self.storage_dir / f"sub_{video_id}"
         
         ydl_opts = {
+        "socket_timeout": 30,
             "skip_download": True,
             "writeautomaticsub": True,
             "writesubtitles": True,
@@ -194,6 +196,7 @@ class YouTubeInboxCatcher:
         outtmpl = str(self.storage_dir / f"{video_id}.%(ext)s")
 
         ydl_opts = {
+        "socket_timeout": 30,
             "format": "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
             "outtmpl": outtmpl,
             "merge_output_format": "mp4",
@@ -759,6 +762,7 @@ def scan_channel_for_dispatch_uploads(
 
     logger.debug("Scanning YouTube uploads playlist %s for marker '%s'", target_url, marker)
     ydl_opts = {
+        "socket_timeout": 30,
         "extract_flat": "in_playlist",
         "playlistend": limit,
         "quiet": True,

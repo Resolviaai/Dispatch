@@ -16,7 +16,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
 import dispatch.config
-from dispatch.config import DEFAULT_PUBLISH_MODE, PROCESSING_DIR, GEMINI_API_KEY
+from dispatch.config import DEFAULT_PUBLISH_MODE, PROCESSING_DIR
 from dispatch.video_engine.renderer import render_clip
 from dispatch.captions import group_words_into_captions, export_to_ass
 from dispatch.captions.presets import get_default_preset_id
@@ -478,7 +478,9 @@ class HighlightWorker:
 
         attempt_count = int(item.get("ai_attempt_count") or 0) + 1
 
-        if not GEMINI_API_KEY:
+        # Key-rotation fix: read the LIVE env value at call time. The module-level
+        # GEMINI_API_KEY import goes stale when the dashboard rotates the key.
+        if not os.getenv("GEMINI_API_KEY", ""):
             err_msg = "GEMINI_API_KEY is not configured or is empty. Cannot extract highlights."
             db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
             raise RuntimeError(err_msg)

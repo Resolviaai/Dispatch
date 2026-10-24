@@ -25,7 +25,7 @@ class BootReceiver : BroadcastReceiver() {
                 .build()
 
             WorkManager.getInstance(context).enqueueUniqueWork(
-                "dispatch_youtube_uploads_after_boot",
+                "dispatch_youtube_uploads",
                 ExistingWorkPolicy.REPLACE,
                 uploadReq
             )

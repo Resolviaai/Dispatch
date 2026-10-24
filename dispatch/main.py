@@ -79,6 +79,41 @@ def release_single_instance_lock():
         pass
 
 
+def _ensure_tls_certificates() -> tuple[str, str] | None:
+    """Generate/reuse a per-install self-signed TLS cert (10y) under storage/tls/.
+    Returns (cert_path, key_path) or None if generation fails (server then runs
+    plain HTTP, and the fail-closed credential gates keep secrets off the wire)."""
+    try:
+        from pathlib import Path
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime
+        base = Path("storage/tls")
+        base.mkdir(parents=True, exist_ok=True)
+        cert_p, key_p = base / "dispatch.crt", base / "dispatch.key"
+        if cert_p.exists() and key_p.exists():
+            return str(cert_p), str(key_p)
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Dispatch-PC")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - datetime.timedelta(days=1))
+                .not_valid_after(now + datetime.timedelta(days=3650))
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName("Dispatch-PC")]), critical=False)
+                .sign(key, hashes.SHA256()))
+        key_p.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+        cert_p.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        logger.info("Generated self-signed TLS certificate for the dashboard: %s", cert_p)
+        return str(cert_p), str(key_p)
+    except Exception as e:
+        logger.warning("TLS certificate generation failed; dashboard runs without TLS: %s", e)
+        return None
+
+
 def start_dispatch(run_web: bool = True):
     """Start all Dispatch autonomous services with crash recovery and resource governance."""
     if not acquire_single_instance_lock():
@@ -212,38 +247,3 @@ def process_single_chunk(chunk_info: dict):
 
 if __name__ == "__main__":
     start_dispatch(run_web=True)
-
-
-def _ensure_tls_certificates() -> tuple[str, str] | None:
-    """Generate/reuse a per-install self-signed TLS cert (10y) under storage/tls/.
-    Returns (cert_path, key_path) or None if generation fails (server then runs
-    plain HTTP, and the fail-closed credential gates keep secrets off the wire)."""
-    try:
-        from pathlib import Path
-        from cryptography import x509
-        from cryptography.x509.oid import NameOID
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-        import datetime
-        base = Path("storage/tls")
-        base.mkdir(parents=True, exist_ok=True)
-        cert_p, key_p = base / "dispatch.crt", base / "dispatch.key"
-        if cert_p.exists() and key_p.exists():
-            return str(cert_p), str(key_p)
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Dispatch-PC")])
-        now = datetime.datetime.now(datetime.timezone.utc)
-        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
-                .public_key(key.public_key()).serial_number(x509.random_serial_number())
-                .not_valid_before(now - datetime.timedelta(days=1))
-                .not_valid_after(now + datetime.timedelta(days=3650))
-                .add_extension(x509.SubjectAlternativeName([x509.DNSName("Dispatch-PC")]), critical=False)
-                .sign(key, hashes.SHA256()))
-        key_p.write_bytes(key.private_bytes(serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
-        cert_p.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-        logger.info("Generated self-signed TLS certificate for the dashboard: %s", cert_p)
-        return str(cert_p), str(key_p)
-    except Exception as e:
-        logger.warning("TLS certificate generation failed; dashboard runs without TLS: %s", e)
-        return None

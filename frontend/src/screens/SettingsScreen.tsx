@@ -205,7 +205,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         setFeedback(`Saved ${clean}. Ping: ${res.message}. Ensure PC server is running and on same Wi-Fi.`);
       }
     } catch {
-      setFeedback(`PC Studio Host updated to ${clean}`);
+      // Truthful state: the host WAS saved, but the connection test failed.
+      setFeedback(`Saved ${clean}. Connection test failed - check the PC server is running.`);
     } finally {
       setIsSavingHost(false);
     }

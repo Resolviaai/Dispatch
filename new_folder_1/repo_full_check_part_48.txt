@@ -1,0 +1,2254 @@
+﻿
+============================================================
+FILE: frontend\src\studio\CaptionDock.tsx
+============================================================
+import React, { useState, useRef, useMemo } from 'react';
+import {
+  ZoomIn,
+  ZoomOut,
+  Type,
+  Check,
+  Edit2,
+  Clock,
+  Sparkles,
+  Layers,
+  AlertCircle,
+  RotateCw,
+} from 'lucide-react';
+import { CaptionTrack, CaptionGroup, Word } from '../captions/types';
+
+interface CaptionDockProps {
+  track: CaptionTrack | null;
+  currentTime: number;
+  duration: number;
+  onSeek: (seconds: number) => void;
+  onUpdateTrack: (track: CaptionTrack) => void;
+  selectedGroupId: string | null;
+  onSelectGroup: (groupId: string | null) => void;
+  captionLoadState?: 'idle' | 'loading' | 'success' | 'empty' | 'error';
+  captionLoadError?: string | null;
+  onRetryCaptions?: () => void;
+}
+
+export const CaptionDock: React.FC<CaptionDockProps> = ({
+  track,
+  currentTime,
+  duration,
+  onSeek,
+  onUpdateTrack,
+  selectedGroupId,
+  onSelectGroup,
+  captionLoadState = 'idle',
+  captionLoadError,
+  onRetryCaptions,
+}) => {
+  const [zoom, setZoom] = useState<number>(65); // px per second
+  const [editingWordId, setEditingWordId] = useState<string | null>(null);
+  const [editText, setEditText] = useState<string>('');
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const safeDuration = Math.max(1, duration || 30);
+  const totalWidth = Math.max(800, Math.round(safeDuration * zoom));
+
+  // Time ruler ticks (every 5 seconds)
+  const ticks = useMemo(() => {
+    const list: number[] = [];
+    for (let t = 0; t <= safeDuration; t += 5) {
+      list.push(t);
+    }
+    return list;
+  }, [safeDuration]);
+
+  // Handle word text edit commit
+  const handleSaveWordText = (groupId: string, wordId: string) => {
+    if (!track) return;
+    const updatedGroups = track.groups.map(group => {
+      if (group.id !== groupId) return group;
+      const updatedWords = group.words.map(w => {
+        if (w.id === wordId) {
+          return { ...w, text: editText.trim() };
+        }
+        return w;
+      });
+      return { ...group, words: updatedWords };
+    });
+
+    onUpdateTrack({
+      ...track,
+      groups: updatedGroups,
+    });
+    setEditingWordId(null);
+  };
+
+  const handleStartEditWord = (word: Word, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingWordId(word.id);
+    setEditText(word.text);
+  };
+
+  const handleRulerClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const targetTime = Math.max(0, Math.min(safeDuration, clickX / zoom));
+    onSeek(targetTime);
+  };
+
+  return (
+    <div className="h-[175px] min-h-[175px] max-h-[175px] w-full bg-[#16181C] border-t border-[#2E3239] flex flex-col select-none shrink-0 z-30">
+      {/* TIMELINE TOOLBAR */}
+      <div className="h-8 px-4 bg-[#1C1F24] border-b border-[#2E3239] flex items-center justify-between text-xs text-[#A3AAB5] shrink-0">
+        <div className="flex items-center gap-2">
+          <Type size={13} className="text-[#2563EB]" />
+          <span className="text-[11px] font-bold uppercase tracking-wider text-[#F3F4F6]">
+            Caption Timeline (Whisper Timestamps)
+          </span>
+          <span className="text-[10px] font-mono text-[#747D8A]">
+            {track?.groups?.length || 0} phrase segments
+          </span>
+        </div>
+
+        {/* Zoom Controls */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setZoom(prev => Math.max(30, prev - 15))}
+            className="p-1 rounded text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+            title="Zoom Out Timeline"
+          >
+            <ZoomOut size={13} />
+          </button>
+          <span className="text-[10px] font-mono text-[#747D8A] w-8 text-center">
+            {zoom}px
+          </span>
+          <button
+            type="button"
+            onClick={() => setZoom(prev => Math.min(160, prev + 15))}
+            className="p-1 rounded text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+            title="Zoom In Timeline"
+          >
+            <ZoomIn size={13} />
+          </button>
+        </div>
+      </div>
+
+      {/* HORIZONTAL TIMELINE SCROLL AREA */}
+      {captionLoadState === 'loading' ? (
+        <div className="flex-1 min-h-0 flex items-center justify-center gap-2 bg-[#16181C] text-[#A3AAB5] text-xs">
+          <RotateCw size={14} className="animate-spin text-primary" />
+          <span>Loading captions…</span>
+        </div>
+      ) : captionLoadState === 'error' ? (
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 bg-[#16181C] text-center px-4">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-[#F3F4F6]">
+            <AlertCircle size={14} className="text-danger" />
+            <span>Captions could not be loaded</span>
+          </div>
+          <p className="max-w-md text-[10px] text-[#A3AAB5]">{captionLoadError || 'Check the connection and retry.'}</p>
+          <button
+            type="button"
+            onClick={onRetryCaptions}
+            className="min-h-11 px-4 rounded-lg bg-[#23262C] border border-[#2E3239] text-xs font-medium text-[#F3F4F6] hover:bg-[#2E3239] active:scale-[0.98] transition-all"
+          >
+            Retry captions
+          </button>
+        </div>
+      ) : (
+      <div
+        ref={containerRef}
+        className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden relative bg-[#16181C]"
+      >
+        <div style={{ width: `${totalWidth}px` }} className="h-full relative flex flex-col">
+          {/* TIME RULER */}
+          <div
+            onClick={handleRulerClick}
+            className="h-6 w-full border-b border-[#242830] bg-[#1C1F24]/50 relative cursor-pointer"
+          >
+            {ticks.map((t) => (
+              <div
+                key={t}
+                style={{ left: `${t * zoom}px` }}
+                className="absolute top-0 h-full flex flex-col justify-between border-l border-[#2E3239] pl-1"
+              >
+                <span className="text-[9px] font-mono tabular-nums text-[#747D8A]">
+                  {Math.floor(t / 60)}:{(t % 60).toString().padStart(2, '0')}
+                </span>
+                <div className="w-px h-1.5 bg-[#2E3239]" />
+              </div>
+            ))}
+          </div>
+
+          {/* WORD BLOCKS CANVAS */}
+          <div className="flex-1 relative p-2 overflow-hidden">
+            {track?.groups?.map((group) => {
+              const isGroupActive = currentTime >= group.start && currentTime <= group.end;
+              const isGroupSelected = selectedGroupId === group.id;
+
+              return (
+                <div
+                  key={group.id}
+                  style={{
+                    left: `${group.start * zoom}px`,
+                    width: `${Math.max(40, (group.end - group.start) * zoom)}px`,
+                  }}
+                  onClick={() => {
+                    onSelectGroup(group.id);
+                    onSeek(group.start);
+                  }}
+                  className={`absolute top-2 h-14 rounded-lg border p-1.5 flex flex-wrap items-center gap-1 cursor-pointer transition-all ${
+                    isGroupActive
+                      ? 'bg-[#2563EB]/20 border-[#2563EB] shadow-hero-sm z-10'
+                      : isGroupSelected
+                      ? 'bg-[#1C1F24] border-[#2563EB]/60 z-10'
+                      : 'bg-[#23262C] border-[#2E3239] hover:border-[#3E434D]'
+                  }`}
+                  title={`[${group.start.toFixed(1)}s - ${group.end.toFixed(1)}s] Click to seek`}
+                >
+                  {group.words.map((w) => {
+                    const isWordActive = currentTime >= w.start && currentTime <= w.end;
+                    const isEditing = editingWordId === w.id;
+
+                    if (isEditing) {
+                      return (
+                        <div
+                          key={w.id}
+                          className="flex items-center gap-0.5 bg-[#0D0F12] border border-[#2563EB] rounded px-1 py-0.5 z-20"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="text"
+                            autoFocus
+                            value={editText}
+                            onChange={(e) => setEditText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveWordText(group.id, w.id);
+                              if (e.key === 'Escape') setEditingWordId(null);
+                            }}
+                            className="bg-transparent text-xs text-[#F3F4F6] w-20 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSaveWordText(group.id, w.id)}
+                            className="text-[#10B981] hover:text-white"
+                          >
+                            <Check size={12} />
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <span
+                        key={w.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSeek(w.start);
+                        }}
+                        onDoubleClick={(e) => handleStartEditWord(w, e)}
+                        className={`text-[11px] font-medium px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                          isWordActive
+                            ? 'bg-[#FFE600] text-black font-bold shadow-sm scale-105'
+                            : 'text-[#F3F4F6] hover:bg-[#1C1F24] hover:text-[#60A5FA]'
+                        }`}
+                        title={`${w.text} (${w.start.toFixed(2)}s - ${w.end.toFixed(2)}s) · Double-click to edit text`}
+                      >
+                        {w.text}
+                      </span>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* PLAYHEAD INDICATOR */}
+          <div
+            style={{ left: `${currentTime * zoom}px` }}
+            className="absolute top-0 bottom-0 w-px bg-[#F43F5E] shadow-[0_0_8px_#F43F5E] pointer-events-none z-30"
+          >
+            <div className="w-2.5 h-2.5 -ml-1 rounded-full bg-[#F43F5E] shadow-sm" />
+          </div>
+        </div>
+      </div>
+      )}
+    </div>
+  );
+};
+
+
+============================================================
+FILE: frontend\src\studio\clipLibrary.ts
+============================================================
+import type { ClipItem } from './types';
+
+/** Parses only the response shapes supported by the clip-list API. */
+export function parseClipListResponse(data: unknown): ClipItem[] {
+  let clips: unknown[];
+  if (Array.isArray(data)) {
+    clips = data;
+  } else if (data && typeof data === 'object') {
+    const lists = data as Record<string, unknown>;
+    const supportedKeys = ['ready', 'recent_approved', 'ready_for_review'];
+    if (!supportedKeys.some((key) => Array.isArray(lists[key]))) {
+      throw new Error('The clip library returned an invalid response');
+    }
+    clips = supportedKeys.flatMap((key) => Array.isArray(lists[key]) ? lists[key] as unknown[] : []);
+  } else {
+    throw new Error('The clip library returned an invalid response');
+  }
+
+  if (!clips.every((clip) => Boolean(
+    clip && typeof clip === 'object' && typeof (clip as { id?: unknown }).id === 'string' && (clip as { id: string }).id.trim()
+  ))) {
+    throw new Error('The clip library returned an invalid clip entry');
+  }
+  return clips as ClipItem[];
+}
+
+
+============================================================
+FILE: frontend\src\studio\ClipLibraryNotice.tsx
+============================================================
+import React from 'react';
+import { RefreshCw } from 'lucide-react';
+
+export type ClipLibraryLoadState = 'loading' | 'loaded' | 'error';
+
+interface ClipLibraryNoticeProps {
+  state: ClipLibraryLoadState;
+  error?: string | null;
+  onRetry: () => void;
+}
+
+export const ClipLibraryNotice: React.FC<ClipLibraryNoticeProps> = ({ state, error, onRetry }) => {
+  if (state === 'loading') {
+    return <div className="p-6 text-center text-text-muted" role="status">Loading clips…</div>;
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="mx-auto max-w-md p-6 text-center" role="alert">
+        <h2 className="text-[14px] font-semibold text-text-main">Couldn’t load clips</h2>
+        <p className="mt-2 text-[12px] text-text-muted">{error || 'Check the PC connection and try again.'}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-4 inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border bg-surface-200 px-4 text-[12px] font-medium text-text-main hover:bg-surface-300 active:scale-[0.98]"
+        >
+          <RefreshCw size={14} />
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 text-center" role="status">
+      <h2 className="text-[14px] font-semibold text-text-main">No clips available</h2>
+      <p className="mt-2 text-[12px] text-text-muted">Clips will appear here when they are ready for review.</p>
+    </div>
+  );
+};
+
+
+============================================================
+FILE: frontend\src\studio\InspectorPane.tsx
+============================================================
+import React, { useState, useEffect } from 'react';
+import {
+  Sliders,
+  Type,
+  Share2,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  PanelRightClose,
+  PanelRightOpen,
+  Save,
+  Check,
+  Send,
+  Sparkles,
+  Info,
+  Clock,
+  Layers,
+  Palette
+} from 'lucide-react';
+import { ClipItem, IntegrationsStatus, LayoutMode } from './types';
+import { CaptionTrack, StyleConfig, LayoutConfig } from '../captions/types';
+import { StyleSection } from '../captions/applyToAll';
+import { ApplyToAllButton } from '../captions/ApplyToAllButton';
+
+interface InspectorPaneProps {
+  clip: ClipItem | null;
+  track: CaptionTrack | null;
+  integrations: IntegrationsStatus | null;
+  onUpdateClipMetadata: (patch: Partial<ClipItem>) => void;
+  onSaveCaptions: () => Promise<void>;
+  onUpdateTrackStyle: (stylePatch: Partial<StyleConfig>) => void;
+  onUpdateTrackLayout?: (layoutPatch: Partial<LayoutConfig>) => void;
+  onApplyStyleToAll?: (section: StyleSection) => number;
+  onApproveClip: () => Promise<void>;
+  onRejectClip: (reason?: string) => Promise<void>;
+  isApproving: boolean;
+  isRejecting: boolean;
+  isSavingCaptions: boolean;
+  publishMode: 'private' | 'public';
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+  width: number;
+}
+
+const CAPTION_PRESETS: Array<{
+  id: string;
+  name: string;
+  font: string;
+  color: string;
+  highlight: string;
+  outlineColor: string;
+  outlineWidth: number;
+}> = [
+  { id: 'impact', name: 'Impact Bold', font: 'Impact', color: '#FFFFFF', highlight: '#FFE600', outlineColor: '#000000', outlineWidth: 3 },
+  { id: 'montserrat', name: 'Montserrat Clean', font: 'Montserrat', color: '#FFFFFF', highlight: '#2563EB', outlineColor: '#000000', outlineWidth: 2 },
+  { id: 'glow', name: 'Neon Glow', font: 'Poppins', color: '#FFFFFF', highlight: '#22C55E', outlineColor: '#0A3B1F', outlineWidth: 3 },
+  { id: 'classic', name: 'Classic Sub', font: 'Inter', color: '#FFFFFF', highlight: '#FFD700', outlineColor: '#000000', outlineWidth: 2 },
+  { id: 'headline', name: 'Oswald Heavy', font: 'Oswald', color: '#FFFFFF', highlight: '#F43F5E', outlineColor: '#000000', outlineWidth: 2.5 }
+];
+
+export const InspectorPane: React.FC<InspectorPaneProps> = ({
+  clip,
+  track,
+  integrations,
+  onUpdateClipMetadata,
+  onSaveCaptions,
+  onUpdateTrackStyle,
+  onUpdateTrackLayout,
+  onApplyStyleToAll,
+  onApproveClip,
+  onRejectClip,
+  isApproving,
+  isRejecting,
+  isSavingCaptions,
+  publishMode,
+  isCollapsed,
+  onToggleCollapse,
+  width,
+}) => {
+  const [activeTab, setActiveTab] = useState<'metadata' | 'captions' | 'destinations'>('metadata');
+  const [title, setTitle] = useState('');
+  const [hook, setHook] = useState('');
+  const [hashtags, setHashtags] = useState('');
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['youtube']);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('Quality / Hook mismatch');
+  const [isSavedNotice, setIsSavedNotice] = useState(false);
+
+  // Sync internal form when selected clip changes
+  useEffect(() => {
+    if (clip) {
+      setTitle(clip.title || '');
+      setHook(clip.hook || '');
+      setHashtags(clip.hashtags || '#Shorts #Dispatch');
+      const platforms = (clip.platform_targets || 'youtube')
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean);
+      setSelectedPlatforms(platforms.length > 0 ? platforms : ['youtube']);
+      setRejectConfirmOpen(false);
+    }
+  }, [clip?.id]);
+
+  const togglePlatform = (p: string) => {
+    const next = selectedPlatforms.includes(p)
+      ? selectedPlatforms.filter(item => item !== p)
+      : [...selectedPlatforms, p];
+    setSelectedPlatforms(next);
+    onUpdateClipMetadata({ platform_targets: next.join(',') });
+  };
+
+  const handleApplyPreset = (preset: typeof CAPTION_PRESETS[0]) => {
+    onUpdateTrackStyle({
+      font_family: preset.font,
+      primary_color: preset.color,
+      highlight_color: preset.highlight,
+      outline_color: preset.outlineColor,
+      outline_width: preset.outlineWidth,
+      outline_enabled: true,
+    });
+  };
+
+  const handleSaveMetadataDraft = () => {
+    onUpdateClipMetadata({
+      title: title.trim(),
+      hook: hook.trim(),
+      hashtags: hashtags.trim(),
+      platform_targets: selectedPlatforms.join(','),
+    });
+    setIsSavedNotice(true);
+    setTimeout(() => setIsSavedNotice(false), 2000);
+  };
+
+  const currentStyle = track?.default_style || {
+    font_family: 'Impact',
+    font_size: 26,
+    primary_color: '#FFFFFF',
+    highlight_color: '#FFE600',
+    outline_width: 2.5,
+    outline_color: '#000000',
+  };
+
+  const currentLayout = track?.default_layout || {
+    position_x: 0.5,
+    position_y: 0.78,
+    scale: 1.0,
+  };
+
+  const isYouTubeConnected = Boolean(integrations?.youtube?.connected);
+  const ytChannel = integrations?.youtube?.channel_title || 'Not Connected';
+
+  // Character counters
+  const ytTitleLen = title.length;
+  const isYtTitleOver = ytTitleLen > 100;
+  const xTextLen = (title + ' ' + hashtags).length;
+  const isXTextOver = xTextLen > 280;
+
+  if (isCollapsed) {
+    return (
+      <aside className="w-10 min-w-[40px] h-full bg-[#16181C] border-l border-[#2E3239] flex flex-col items-center py-3 select-none shrink-0 transition-all">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="p-1.5 rounded-md text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+          title="Expand Inspector Pane"
+        >
+          <PanelRightOpen size={16} />
+        </button>
+        <div className="mt-8 [writing-mode:vertical-rl] text-[11px] font-mono uppercase tracking-wider text-[#747D8A]">
+          Inspector
+        </div>
+      </aside>
+    );
+  }
+
+  return (
+    <aside
+      style={{ width: `${width}px` }}
+      className="h-full bg-[#16181C] border-l border-[#2E3239] flex flex-col select-none shrink-0 overflow-hidden"
+    >
+      {/* INSPECTOR HEADER & TABS */}
+      <div className="p-3 border-b border-[#2E3239] bg-[#16181C] shrink-0 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sliders size={15} className="text-[#2563EB]" />
+            <h2 className="text-xs font-bold uppercase tracking-wider text-[#F3F4F6]">
+              Inspector & Publish
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="p-1 rounded text-[#747D8A] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+            title="Collapse Inspector"
+          >
+            <PanelRightClose size={15} />
+          </button>
+        </div>
+
+        {/* Tab Controls */}
+        <div className="flex items-center bg-[#23262C] p-0.5 rounded-lg border border-[#2E3239] text-xs">
+          <button
+            type="button"
+            onClick={() => setActiveTab('metadata')}
+            className={`flex-1 py-1 rounded-md text-[11px] font-medium transition-all ${
+              activeTab === 'metadata'
+                ? 'bg-[#16181C] text-[#F3F4F6] shadow-sm font-semibold'
+                : 'text-[#747D8A] hover:text-[#A3AAB5]'
+            }`}
+          >
+            Metadata
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('captions')}
+            className={`flex-1 py-1 rounded-md text-[11px] font-medium transition-all ${
+              activeTab === 'captions'
+                ? 'bg-[#16181C] text-[#F3F4F6] shadow-sm font-semibold'
+                : 'text-[#747D8A] hover:text-[#A3AAB5]'
+            }`}
+          >
+            Captions
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('destinations')}
+            className={`flex-1 py-1 rounded-md text-[11px] font-medium transition-all ${
+              activeTab === 'destinations'
+                ? 'bg-[#16181C] text-[#F3F4F6] shadow-sm font-semibold'
+                : 'text-[#747D8A] hover:text-[#A3AAB5]'
+            }`}
+          >
+            Destinations
+          </button>
+        </div>
+      </div>
+
+      {/* INSPECTOR CONTENT (Scrollable) */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-4">
+        {!clip ? (
+          <div className="h-48 flex flex-col items-center justify-center text-center text-[#747D8A]">
+            <Info size={24} className="mb-2 text-[#2E3239]" />
+            <p className="text-xs font-semibold text-[#A3AAB5]">No Clip Selected</p>
+            <p className="text-[11px] mt-1 max-w-[200px]">
+              Select a clip from the left queue to inspect and configure publishing.
+            </p>
+          </div>
+        ) : activeTab === 'metadata' ? (
+          /* TAB 1: METADATA EDITOR */
+          <div className="space-y-3.5 animate-in fade-in duration-150">
+            {/* Title Field */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <label className="text-[11px] font-semibold text-[#A3AAB5]">Clip Title</label>
+                <span
+                  className={`text-[10px] font-mono tabular-nums ${
+                    isYtTitleOver ? 'text-[#F43F5E] font-bold' : ytTitleLen > 80 ? 'text-[#EAB308]' : 'text-[#747D8A]'
+                  }`}
+                >
+                  {ytTitleLen} / 100
+                </span>
+              </div>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => {
+                  setTitle(e.target.value);
+                  onUpdateClipMetadata({ title: e.target.value });
+                }}
+                className="w-full h-8 px-2.5 text-xs rounded-lg bg-[#23262C] border border-[#2E3239] text-[#F3F4F6] focus:outline-none focus:border-[#2563EB]"
+                placeholder="High-performing hook title..."
+              />
+              {isYtTitleOver && (
+                <p className="text-[10px] text-[#F43F5E] flex items-center gap-1">
+                  <AlertTriangle size={11} />
+                  <span>Exceeds YouTube Shorts 100-character title limit</span>
+                </p>
+              )}
+            </div>
+
+            {/* Hook / Description */}
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-[#A3AAB5]">Hook / Core Value</label>
+              <textarea
+                rows={3}
+                value={hook}
+                onChange={(e) => {
+                  setHook(e.target.value);
+                  onUpdateClipMetadata({ hook: e.target.value });
+                }}
+                className="w-full p-2 text-xs rounded-lg bg-[#23262C] border border-[#2E3239] text-[#F3F4F6] focus:outline-none focus:border-[#2563EB] resize-none"
+                placeholder="Summary hook that grabs attention..."
+              />
+            </div>
+
+            {/* Hashtags */}
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-[#A3AAB5]">Hashtags</label>
+              <input
+                type="text"
+                value={hashtags}
+                onChange={(e) => {
+                  setHashtags(e.target.value);
+                  onUpdateClipMetadata({ hashtags: e.target.value });
+                }}
+                className="w-full h-8 px-2.5 text-xs rounded-lg bg-[#23262C] border border-[#2E3239] text-[#F3F4F6] focus:outline-none focus:border-[#2563EB] font-mono text-[11px]"
+                placeholder="#Shorts #Creator #Dispatch"
+              />
+            </div>
+
+            {/* Technical Metadata Card */}
+            <div className="p-2.5 rounded-lg bg-[#1C1F24] border border-[#2E3239] space-y-2 text-xs">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-[#747D8A] block">
+                Technical Blueprint
+              </span>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div>
+                  <span className="text-[#747D8A] block">Duration</span>
+                  <span className="font-mono text-[#F3F4F6]">{clip.duration.toFixed(1)}s</span>
+                </div>
+                <div>
+                  <span className="text-[#747D8A] block">AI Score</span>
+                  <span className="font-mono font-semibold text-[#60A5FA]">{clip.virality_score} / 100</span>
+                </div>
+                <div>
+                  <span className="text-[#747D8A] block">Orientation</span>
+                  <span className="font-mono text-[#F3F4F6] capitalize">{clip.source_orientation || 'Portrait'}</span>
+                </div>
+                <div>
+                  <span className="text-[#747D8A] block">Framing</span>
+                  <span className="font-mono text-[#F3F4F6]">{clip.layout_mode || 'fit_black'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Save Draft Button */}
+            <button
+              type="button"
+              onClick={handleSaveMetadataDraft}
+              className="w-full py-1.5 rounded-lg bg-[#23262C] hover:bg-[#2E3239] border border-[#2E3239] text-xs text-[#F3F4F6] flex items-center justify-center gap-1.5 transition-all active:scale-95"
+            >
+              {isSavedNotice ? <Check size={13} className="text-[#10B981]" /> : <Save size={13} />}
+              <span>{isSavedNotice ? 'Draft Changes Saved' : 'Save Draft'}</span>
+            </button>
+          </div>
+        ) : activeTab === 'captions' ? (
+          /* TAB 2: CAPTION STYLE & PRESETS */
+          <div className="space-y-4 animate-in fade-in duration-150">
+            {/* Quick Presets */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-semibold text-[#A3AAB5] flex items-center gap-1">
+                <Palette size={12} className="text-[#2563EB]" />
+                <span>Caption Presets</span>
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {CAPTION_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleApplyPreset(p)}
+                    className="p-2 rounded-lg bg-[#23262C] hover:bg-[#2E3239] border border-[#2E3239] text-left transition-all active:scale-95"
+                  >
+                    <span
+                      className="text-xs font-bold block"
+                      style={{ fontFamily: p.font, color: p.color }}
+                    >
+                      {p.name}
+                    </span>
+                    <span className="text-[10px] text-[#747D8A]">Font: {p.font}</span>
+                  </button>
+                ))}
+              </div>
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="templates"
+                  sectionLabel="Preset"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
+            </div>
+
+            {/* Font Family Selector */}
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-[#A3AAB5]">Font Family</label>
+              <select
+                value={currentStyle.font_family}
+                onChange={(e) => onUpdateTrackStyle({ font_family: e.target.value })}
+                className="w-full h-8 px-2 text-xs rounded-lg bg-[#23262C] border border-[#2E3239] text-[#F3F4F6] focus:outline-none focus:border-[#2563EB]"
+              >
+                {['Impact', 'Montserrat', 'Poppins', 'Inter', 'Oswald', 'Arial Black'].map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Font Size Slider */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <label className="text-[11px] font-semibold text-[#A3AAB5]">Font Size</label>
+                <span className="text-[10px] font-mono text-[#F3F4F6]">{currentStyle.font_size || 26}px</span>
+              </div>
+              <input
+                type="range"
+                min={16}
+                max={42}
+                step={1}
+                value={currentStyle.font_size || 26}
+                onChange={(e) => onUpdateTrackStyle({ font_size: parseInt(e.target.value) })}
+                className="w-full h-1 bg-[#23262C] accent-[#2563EB] cursor-pointer"
+              />
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="font"
+                  sectionLabel="Font"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
+            </div>
+
+            {/* Color Pickers */}
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-[#A3AAB5]">Text Color</label>
+                  <div className="flex items-center gap-2 bg-[#23262C] p-1.5 rounded-lg border border-[#2E3239]">
+                    <input
+                      type="color"
+                      value={currentStyle.primary_color || '#FFFFFF'}
+                      onChange={(e) => onUpdateTrackStyle({ primary_color: e.target.value })}
+                      className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
+                    />
+                    <span className="text-[10px] font-mono text-[#F3F4F6]">{currentStyle.primary_color || '#FFFFFF'}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] text-[#A3AAB5]">Active Highlight</label>
+                  <div className="flex items-center gap-2 bg-[#23262C] p-1.5 rounded-lg border border-[#2E3239]">
+                    <input
+                      type="color"
+                      value={currentStyle.highlight_color || '#FFE600'}
+                      onChange={(e) => onUpdateTrackStyle({ highlight_color: e.target.value })}
+                      className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
+                    />
+                    <span className="text-[10px] font-mono text-[#F3F4F6]">{currentStyle.highlight_color || '#FFE600'}</span>
+                  </div>
+                </div>
+              </div>
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="color"
+                  sectionLabel="Color"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
+            </div>
+
+            {/* Position & Size */}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs">
+                <label className="text-[11px] font-semibold text-[#A3AAB5]">Position & Size</label>
+                <span className="text-[10px] text-[#747D8A]">Move on preview</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-[#A3AAB5]">Vertical (Y)</span>
+                    <span className="font-mono text-[10px] text-[#F3F4F6]">
+                      {Math.round((currentLayout.position_y ?? 0.78) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={15}
+                    max={90}
+                    step={1}
+                    value={Math.round((currentLayout.position_y ?? 0.78) * 100)}
+                    onChange={(e) => onUpdateTrackLayout?.({ position_y: Number((Number(e.target.value) / 100).toFixed(2)) })}
+                    className="w-full h-1 bg-[#23262C] accent-[#2563EB] cursor-pointer"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-[#A3AAB5]">Scale</span>
+                    <span className="font-mono text-[10px] text-[#F3F4F6]">
+                      {(currentLayout.scale ?? 1.0).toFixed(2)}x
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={60}
+                    max={200}
+                    step={5}
+                    value={Math.round((currentLayout.scale ?? 1.0) * 100)}
+                    onChange={(e) => onUpdateTrackLayout?.({ scale: Number((Number(e.target.value) / 100).toFixed(2)) })}
+                    className="w-full h-1 bg-[#23262C] accent-[#2563EB] cursor-pointer"
+                  />
+                </div>
+              </div>
+              {onApplyStyleToAll && (
+                <ApplyToAllButton
+                  section="layout"
+                  sectionLabel="Position & Size"
+                  label="Apply to All Captions"
+                  onApply={onApplyStyleToAll}
+                />
+              )}
+            </div>
+
+            {/* Save Captions Button */}
+            <button
+              type="button"
+              onClick={onSaveCaptions}
+              disabled={isSavingCaptions}
+              className="w-full py-1.5 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium text-xs shadow-hero-sm transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              <Save size={13} />
+              <span>{isSavingCaptions ? 'Saving to Backend...' : 'Persist Caption Styles'}</span>
+            </button>
+          </div>
+        ) : (
+          /* TAB 3: PUBLISHING DESTINATIONS */
+          <div className="space-y-3 animate-in fade-in duration-150">
+            {/* YouTube Shorts Card */}
+            <div
+              onClick={() => togglePlatform('youtube')}
+              className={`p-2.5 rounded-lg border cursor-pointer transition-all ${
+                selectedPlatforms.includes('youtube')
+                  ? 'bg-[#1C1F24] border-[#2563EB]/60 shadow-sm'
+                  : 'bg-[#16181C] border-[#2E3239] opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-[#FF0000] flex items-center justify-center text-white text-[10px] font-bold">
+                    YT
+                  </div>
+                  <span className="text-xs font-semibold text-[#F3F4F6]">YouTube Shorts</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={selectedPlatforms.includes('youtube')}
+                  onChange={() => {}}
+                  className="rounded accent-[#2563EB]"
+                />
+              </div>
+              <div className="mt-2 text-[11px] flex items-center justify-between text-[#747D8A]">
+                <span>Status: <strong className={isYouTubeConnected ? 'text-[#10B981]' : 'text-[#F43F5E]'}>{ytChannel}</strong></span>
+                <span className="font-mono text-[10px]">Max 100 char</span>
+              </div>
+            </div>
+
+            {/* Instagram Reels Card */}
+            <div
+              onClick={() => togglePlatform('instagram')}
+              className={`p-2.5 rounded-lg border cursor-pointer transition-all ${
+                selectedPlatforms.includes('instagram')
+                  ? 'bg-[#1C1F24] border-[#2563EB]/60 shadow-sm'
+                  : 'bg-[#16181C] border-[#2E3239] opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-gradient-to-tr from-[#FED373] via-[#D92E7F] to-[#9B36B7] flex items-center justify-center text-white text-[10px] font-bold">
+                    IG
+                  </div>
+                  <span className="text-xs font-semibold text-[#F3F4F6]">Instagram Reels</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={selectedPlatforms.includes('instagram')}
+                  onChange={() => {}}
+                  className="rounded accent-[#2563EB]"
+                />
+              </div>
+              <div className="mt-2 text-[11px] flex items-center justify-between text-[#747D8A]">
+                <span>Auth: <strong className="text-[#A3AAB5]">Token (.env)</strong></span>
+                <span className="font-mono text-[10px]">Max 2,200 char</span>
+              </div>
+            </div>
+
+            {/* LinkedIn Video Card */}
+            <div
+              onClick={() => togglePlatform('linkedin')}
+              className={`p-2.5 rounded-lg border cursor-pointer transition-all ${
+                selectedPlatforms.includes('linkedin')
+                  ? 'bg-[#1C1F24] border-[#2563EB]/60 shadow-sm'
+                  : 'bg-[#16181C] border-[#2E3239] opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-[#0A66C2] flex items-center justify-center text-white text-[10px] font-bold">
+                    in
+                  </div>
+                  <span className="text-xs font-semibold text-[#F3F4F6]">LinkedIn</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={selectedPlatforms.includes('linkedin')}
+                  onChange={() => {}}
+                  className="rounded accent-[#2563EB]"
+                />
+              </div>
+              <div className="mt-2 text-[11px] flex items-center justify-between text-[#747D8A]">
+                <span>Auth: <strong className="text-[#A3AAB5]">OAuth (.env)</strong></span>
+                <span className="font-mono text-[10px]">Max 3,000 char</span>
+              </div>
+            </div>
+
+            {/* X / Twitter Card */}
+            <div
+              onClick={() => togglePlatform('x')}
+              className={`p-2.5 rounded-lg border cursor-pointer transition-all ${
+                selectedPlatforms.includes('x')
+                  ? 'bg-[#1C1F24] border-[#2563EB]/60 shadow-sm'
+                  : 'bg-[#16181C] border-[#2E3239] opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-[#18181B] border border-[#27272A] flex items-center justify-center text-white text-[10px] font-bold">
+                    X
+                  </div>
+                  <span className="text-xs font-semibold text-[#F3F4F6]">X (Twitter)</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={selectedPlatforms.includes('x')}
+                  onChange={() => {}}
+                  className="rounded accent-[#2563EB]"
+                />
+              </div>
+              <div className="mt-2 text-[11px] flex items-center justify-between text-[#747D8A]">
+                <span>Auth: <strong className="text-[#A3AAB5]">API Key (.env)</strong></span>
+                <span className={`font-mono text-[10px] ${isXTextOver ? 'text-[#F43F5E] font-bold' : ''}`}>
+                  {xTextLen} / 280
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* STICKY BOTTOM ACTION DOCK */}
+      {clip && (
+        <div className="p-3 border-t border-[#2E3239] bg-[#16181C] shrink-0 space-y-2.5">
+          {/* Privacy & Safe Mode Guarantee */}
+          <div className="flex items-center justify-between text-[11px] text-[#A3AAB5]">
+            <span>Publish Mode:</span>
+            <span
+              className={`font-semibold font-mono px-1.5 py-0.2 rounded border ${
+                publishMode === 'private'
+                  ? 'bg-[#10B981]/10 border-[#10B981]/30 text-[#10B981]'
+                  : 'bg-[#2563EB]/10 border-[#2563EB]/30 text-[#60A5FA]'
+              }`}
+            >
+              {publishMode === 'private' ? 'Private Draft' : 'Public Broadcast'}
+            </span>
+          </div>
+
+          {/* Action Buttons Row */}
+          <div className="flex items-center gap-2">
+            {/* Reject Button */}
+            <button
+              type="button"
+              onClick={() => setRejectConfirmOpen(!rejectConfirmOpen)}
+              disabled={isRejecting || isApproving}
+              className="flex-1 py-2 rounded-lg bg-[#23262C] hover:bg-[#F43F5E]/20 border border-[#2E3239] hover:border-[#F43F5E]/50 text-[#F43F5E] text-xs font-medium transition-all active:scale-95 disabled:opacity-40"
+            >
+              <span>Reject</span>
+            </button>
+
+            {/* Primary Hero CTA: Approve & Publish */}
+            <button
+              type="button"
+              onClick={onApproveClip}
+              disabled={isApproving || isRejecting}
+              className="flex-[2] py-2 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold shadow-hero-glow transition-all active:scale-[0.98] disabled:opacity-40 flex items-center justify-center gap-1.5"
+            >
+              {isApproving ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Enqueuing...</span>
+                </>
+              ) : (
+                <>
+                  <Send size={13} />
+                  <span>Approve & Publish</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Inline Rejection Reason Dropdown if toggled */}
+          {rejectConfirmOpen && (
+            <div className="p-2 rounded-lg bg-[#1C1F24] border border-[#F43F5E]/40 space-y-2 animate-in fade-in duration-150">
+              <label className="text-[10px] uppercase font-mono text-[#F43F5E] block">
+                Confirm Rejection Reason:
+              </label>
+              <select
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                className="w-full h-7 px-2 text-xs rounded bg-[#23262C] border border-[#2E3239] text-[#F3F4F6]"
+              >
+                <option value="Quality / Hook mismatch">Quality / Hook mismatch</option>
+                <option value="Duplicate content">Duplicate content</option>
+                <option value="Audio or video glitch">Audio or video glitch</option>
+                <option value="Not relevant">Not relevant</option>
+              </select>
+              <div className="flex items-center justify-end gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setRejectConfirmOpen(false)}
+                  className="px-2 py-0.5 rounded text-[11px] text-[#A3AAB5] hover:text-[#F3F4F6]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRejectClip(rejectReason)}
+                  className="px-2.5 py-0.5 rounded bg-[#F43F5E] text-white text-[11px] font-semibold"
+                >
+                  Confirm Reject
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </aside>
+  );
+};
+
+
+============================================================
+FILE: frontend\src\studio\KeyboardShortcutsModal.tsx
+============================================================
+import React from 'react';
+import { X, Keyboard, Command } from 'lucide-react';
+
+interface KeyboardShortcutsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+const SHORTCUTS = [
+  { key: 'Space', desc: 'Toggle Video Playback (Play / Pause)' },
+  { key: 'J', desc: 'Seek 5 seconds backward' },
+  { key: 'K', desc: 'Pause video playback' },
+  { key: 'L', desc: 'Seek 5 seconds forward' },
+  { key: '← / ↑', desc: 'Select previous clip in queue' },
+  { key: '→ / ↓', desc: 'Select next clip in queue' },
+  { key: 'A', desc: 'Quick Approve selected clip' },
+  { key: 'R', desc: 'Quick Reject selected clip' },
+  { key: 'E', desc: 'Jump to Caption Style tab' },
+  { key: 'F', desc: 'Toggle Focus Mode (Collapse both side panes)' },
+  { key: '?', desc: 'Open / Close this shortcuts cheat sheet' },
+  { key: 'Esc', desc: 'Close open dialogs or exit Focus Mode' },
+];
+
+export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
+  isOpen,
+  onClose,
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+      <div className="w-full max-w-md rounded-2xl bg-[#16181C] border border-[#2E3239] shadow-2xl overflow-hidden select-none">
+        {/* Header */}
+        <div className="px-4 py-3 bg-[#1C1F24] border-b border-[#2E3239] flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Keyboard size={16} className="text-[#2563EB]" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-[#F3F4F6]">
+              Workstation Shortcuts
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded text-[#747D8A] hover:text-[#F3F4F6] hover:bg-[#23262C]"
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* Shortcuts Table */}
+        <div className="p-4 space-y-2 max-h-[70vh] overflow-y-auto">
+          {SHORTCUTS.map((s) => (
+            <div
+              key={s.key}
+              className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-[#23262C]/50 border border-[#2E3239]/50 text-xs"
+            >
+              <span className="text-[#A3AAB5]">{s.desc}</span>
+              <kbd className="px-2 py-0.5 rounded bg-[#16181C] border border-[#2E3239] text-[#F3F4F6] font-mono text-[11px] font-semibold shadow-sm">
+                {s.key}
+              </kbd>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer Note */}
+        <div className="px-4 py-2.5 bg-[#1C1F24] border-t border-[#2E3239] text-[10px] text-[#747D8A] flex items-center justify-between">
+          <span>Shortcuts are paused when typing in text fields.</span>
+          <kbd className="px-1.5 py-0.5 rounded bg-[#23262C] font-mono text-[9px] text-[#A3AAB5]">Esc to close</kbd>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+============================================================
+FILE: frontend\src\studio\PreviewStage.tsx
+============================================================
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  RotateCw,
+  Volume2,
+  VolumeX,
+  Maximize2,
+  Minimize2,
+  RefreshCw,
+  Film,
+  Sparkles,
+  Layers,
+  Crop,
+  CheckCircle2,
+  Scissors
+} from 'lucide-react';
+import { ClipItem, LayoutMode, AvailableLayoutMode } from './types';
+import { CaptionTrack, CaptionGroup } from '../captions/types';
+import { InteractiveTextCanvas } from '../captions/InteractiveTextCanvas';
+import { apiUrl } from '../bridge';
+
+interface PreviewStageProps {
+  clip: ClipItem | null;
+  track: CaptionTrack | null;
+  currentTime: number;
+  duration: number;
+  isPlaying: boolean;
+  onTimeUpdate: (time: number) => void;
+  onDurationChange: (duration: number) => void;
+  onTogglePlay: () => void;
+  onSeek: (time: number) => void;
+  onUpdateTrackGroup: (groupId: string, patch: Partial<CaptionGroup>) => void;
+  selectedGroupId: string | null;
+  onSelectGroup: (groupId: string | null) => void;
+  onLayoutChange: (mode: LayoutMode) => Promise<void>;
+  onTriggerRender: () => Promise<void>;
+  isRendering: boolean;
+  pcHost: string;
+  onRetryClip: () => void;
+}
+
+export const PreviewMediaNotice: React.FC<{ title: string; detail: string; onRetry: () => void }> = ({ title, detail, onRetry }) => (
+  <div className="mx-auto max-w-sm p-6 text-center" role="alert">
+    <Film size={32} className="mx-auto mb-3 text-text-muted" />
+    <h3 className="text-[14px] font-semibold text-text-main">{title}</h3>
+    <p className="mt-2 text-[12px] text-text-muted">{detail}</p>
+    <button
+      type="button"
+      onClick={onRetry}
+      className="mt-4 inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border bg-surface-200 px-4 text-[12px] font-medium text-text-main hover:bg-surface-300 active:scale-[0.98]"
+    >
+      <RefreshCw size={14} />
+      Retry preview
+    </button>
+  </div>
+);
+
+function formatTimecode(sec: number): string {
+  const safe = Math.max(0, Number.isFinite(sec) ? sec : 0);
+  const m = Math.floor(safe / 60);
+  const s = Math.floor(safe % 60);
+  const ms = Math.floor((safe % 1) * 10);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
+}
+
+export const PreviewStage: React.FC<PreviewStageProps> = ({
+  clip,
+  track,
+  currentTime,
+  duration,
+  isPlaying,
+  onTimeUpdate,
+  onDurationChange,
+  onTogglePlay,
+  onSeek,
+  onUpdateTrackGroup,
+  selectedGroupId,
+  onSelectGroup,
+  onLayoutChange,
+  onTriggerRender,
+  isRendering,
+  pcHost,
+  onRetryClip,
+}) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const stageContainerRef = useRef<HTMLDivElement>(null);
+  const [volume, setVolume] = useState<number>(1.0);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [failedSourceKey, setFailedSourceKey] = useState<string | null>(null);
+  const [mediaAttempt, setMediaAttempt] = useState(0);
+
+  // Synchronize external seek with native video element
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    if (Math.abs(vid.currentTime - currentTime) > 0.35 && !isScrubbing) {
+      vid.currentTime = currentTime;
+    }
+  }, [currentTime, isScrubbing]);
+
+  // Synchronize play/pause
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    if (isPlaying && vid.paused) {
+      vid.play().catch(() => {});
+    } else if (!isPlaying && !vid.paused) {
+      vid.pause();
+    }
+  }, [isPlaying]);
+
+  const handleVolumeChange = (newVol: number) => {
+    setVolume(newVol);
+    if (videoRef.current) {
+      videoRef.current.volume = newVol;
+    }
+    if (newVol > 0 && isMuted) {
+      setIsMuted(false);
+      if (videoRef.current) videoRef.current.muted = false;
+    }
+  };
+
+  const toggleMute = () => {
+    const next = !isMuted;
+    setIsMuted(next);
+    if (videoRef.current) {
+      videoRef.current.muted = next;
+    }
+  };
+
+  const toggleFullscreen = () => {
+    if (!stageContainerRef.current) return;
+    if (!document.fullscreenElement) {
+      stageContainerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  };
+
+  // Resolve video URL: prefer rendered clip MP4, fallback to source video
+  const resolvedVideoUrl = clip?.video_url
+    ? (clip.video_url.startsWith('http') ? clip.video_url : apiUrl(clip.video_url, pcHost))
+    : clip?.source_video_url
+    ? (clip.source_video_url.startsWith('http') ? clip.source_video_url : apiUrl(clip.source_video_url, pcHost))
+    : null;
+
+  const mediaSourceKey = clip && resolvedVideoUrl ? `${clip.id}:${resolvedVideoUrl}` : null;
+  const hasPreviewError = Boolean(mediaSourceKey && failedSourceKey === mediaSourceKey);
+
+  const retryPreview = () => {
+    setFailedSourceKey(null);
+    setMediaAttempt((attempt) => attempt + 1);
+  };
+
+  const currentLayoutMode: LayoutMode = clip?.layout_mode || 'fit_black';
+
+  return (
+    <div
+      ref={stageContainerRef}
+      className="flex-1 min-w-0 h-full flex flex-col bg-[#0D0F12] select-none overflow-hidden relative"
+    >
+      {/* STAGE HEADER BAR */}
+      <div className="h-10 px-4 bg-[#16181C] border-b border-[#2E3239] flex items-center justify-between z-20 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Film size={14} className="text-[#2563EB] shrink-0" />
+          <span className="text-xs font-semibold text-[#F3F4F6] truncate max-w-[280px]">
+            {clip ? (clip.title || clip.hook || clip.id) : 'No Clip Selected'}
+          </span>
+          {clip?.target_aspect && (
+            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-[#23262C] border border-[#2E3239] text-[#A3AAB5]">
+              {clip.target_aspect}
+            </span>
+          )}
+        </div>
+
+        {/* Framing & Render Controls */}
+        {clip && (
+          <div className="flex items-center gap-2">
+            {/* Aspect Ratio Framing Selector */}
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-[11px] text-[#747D8A] hidden md:inline">Framing:</span>
+              <select
+                value={currentLayoutMode}
+                onChange={(e) => onLayoutChange(e.target.value as LayoutMode)}
+                className="bg-[#23262C] border border-[#2E3239] rounded px-2 py-1 text-xs text-[#F3F4F6] focus:outline-none focus:border-[#2563EB]"
+                title="Select Framing / Crop Mode"
+              >
+                {(clip.available_layout_modes || [
+                  { id: 'fit_blur', label: 'Fit + Blur' },
+                  { id: 'crop_916', label: 'Crop 9:16' },
+                  { id: 'fit_black', label: 'Fit + Black' },
+                  { id: 'native_916', label: 'Native 9:16' },
+                  { id: 'native_169', label: 'Native 16:9' }
+                ]).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Re-render Button */}
+            <button
+              type="button"
+              onClick={onTriggerRender}
+              disabled={isRendering}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border transition-all active:scale-95 ${
+                isRendering
+                  ? 'bg-[#23262C] border-[#2E3239] text-[#747D8A] cursor-not-allowed'
+                  : 'bg-[#23262C] border-[#2E3239] hover:border-[#2563EB]/50 text-[#F3F4F6] hover:bg-[#2E3239]'
+              }`}
+              title="Render atomic FFmpeg clip with latest captions & framing"
+            >
+              <RefreshCw size={12} className={isRendering ? 'animate-spin text-[#2563EB]' : 'text-[#A3AAB5]'} />
+              <span>{isRendering ? 'Rendering...' : 'Bake Render'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* VIDEO PREVIEW STAGE CANVAS */}
+      <div className="flex-1 min-h-0 w-full flex items-center justify-center p-3 relative overflow-hidden bg-[#0D0F12]">
+        {clip && resolvedVideoUrl && hasPreviewError ? (
+          <PreviewMediaNotice
+            title="Video preview failed to load"
+            detail="The media may be missing, unsupported, or temporarily unreachable. Your selected clip and captions are still available."
+            onRetry={retryPreview}
+          />
+        ) : clip && !resolvedVideoUrl ? (
+          <PreviewMediaNotice
+            title="Preview source unavailable"
+            detail="This selected clip has no video URL. Retry loading its details from the PC."
+            onRetry={onRetryClip}
+          />
+        ) : clip && resolvedVideoUrl ? (
+          <div className="relative h-full aspect-[9/16] max-w-full max-h-full rounded-xl bg-black border border-[#2E3239] shadow-2xl overflow-hidden flex items-center justify-center group">
+            {/* HTML5 Video Element with progressive poster */}
+            <video
+              key={`${resolvedVideoUrl}:${mediaAttempt}`}
+              ref={videoRef}
+              src={resolvedVideoUrl}
+              poster={clip.thumbnail_url ? (clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)) : undefined}
+              className="w-full h-full object-contain pointer-events-auto"
+              playsInline
+              preload="metadata"
+              onClick={onTogglePlay}
+              onTimeUpdate={() => {
+                if (videoRef.current && !isScrubbing) {
+                  onTimeUpdate(videoRef.current.currentTime);
+                }
+              }}
+              onLoadedMetadata={() => {
+                if (videoRef.current) {
+                  onDurationChange(videoRef.current.duration || clip.duration || 1);
+                }
+              }}
+              onError={(event) => {
+                const code = event.currentTarget.error?.code;
+                console.error(`Video preview failed for clip ${clip.id}${code ? ` (media error ${code})` : ''}`);
+                setFailedSourceKey(mediaSourceKey);
+              }}
+              onEnded={() => onSeek(0)}
+            />
+
+            {/* Live Interactive Caption Overlay */}
+            <div className="absolute inset-0 pointer-events-none">
+              <InteractiveTextCanvas
+                track={track}
+                currentTime={currentTime}
+                selectedGroupId={selectedGroupId}
+                onSelectGroup={onSelectGroup}
+                onUpdateGroup={onUpdateTrackGroup}
+                layoutMode={currentLayoutMode}
+                isInteractive={false}
+              />
+            </div>
+
+            {/* Floating Play / Pause Overlay Indicator */}
+            {!isPlaying && (
+              <button
+                type="button"
+                onClick={onTogglePlay}
+                className="absolute inset-0 m-auto w-14 h-14 rounded-full bg-black/60 border border-white/20 text-white flex items-center justify-center shadow-hero-glow backdrop-blur-sm transition-all hover:scale-105 active:scale-95"
+              >
+                <Play size={24} className="ml-1 fill-white" />
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center text-center p-6 text-[#747D8A]">
+            <Film size={40} className="mb-3 text-[#2E3239]" />
+            <h3 className="text-sm font-semibold text-[#A3AAB5]">No clip selected</h3>
+            <p className="text-xs mt-1 max-w-xs">
+              Select a clip from the left queue to preview the video and edit captions.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* PLAYBACK CONTROL DOCK (Layer 1 Surface) */}
+      <div className="h-12 px-4 bg-[#16181C] border-t border-[#2E3239] flex items-center justify-between z-20 shrink-0">
+        {/* Left: Play/Pause, Step Back/Forward */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={onTogglePlay}
+            disabled={!clip}
+            className="w-8 h-8 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white flex items-center justify-center shadow-hero-sm transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+            title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+          >
+            {isPlaying ? <Pause size={14} className="fill-white" /> : <Play size={14} className="ml-0.5 fill-white" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSeek(Math.max(0, currentTime - 5))}
+            disabled={!clip}
+            className="p-1.5 rounded-md text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all disabled:opacity-40"
+            title="Jump back 5s (J)"
+          >
+            <RotateCcw size={15} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSeek(Math.min(duration || 100, currentTime + 5))}
+            disabled={!clip}
+            className="p-1.5 rounded-md text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all disabled:opacity-40"
+            title="Jump forward 5s (L)"
+          >
+            <RotateCw size={15} />
+          </button>
+
+          {/* Timecode Display */}
+          <div className="text-xs font-mono tabular-nums text-[#A3AAB5] ml-2 hidden sm:block">
+            <span className="text-[#F3F4F6] font-semibold">{formatTimecode(currentTime)}</span>
+            <span className="text-[#747D8A]"> / </span>
+            <span>{formatTimecode(duration || clip?.duration || 0)}</span>
+          </div>
+        </div>
+
+        {/* Center: Scrubber Slider */}
+        <div className="flex-1 max-w-xl mx-4">
+          <input
+            type="range"
+            min={0}
+            max={Math.max(1, duration || clip?.duration || 1)}
+            step={0.05}
+            value={currentTime}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setIsScrubbing(true);
+              onSeek(val);
+            }}
+            onMouseUp={() => setIsScrubbing(false)}
+            onTouchEnd={() => setIsScrubbing(false)}
+            disabled={!clip}
+            className="creator-scrubber w-full"
+            style={{
+              '--track-bg': '#23262C'
+            } as any}
+          />
+        </div>
+
+        {/* Right: Volume & Fullscreen */}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 hidden md:flex">
+            <button
+              type="button"
+              onClick={toggleMute}
+              className="p-1.5 rounded-md text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+              title={isMuted ? 'Unmute' : 'Mute'}
+            >
+              {isMuted || volume === 0 ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={isMuted ? 0 : volume}
+              onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+              className="w-16 h-1 rounded-full accent-[#2563EB] bg-[#23262C] cursor-pointer"
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="p-1.5 rounded-md text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+            title="Fullscreen Video"
+          >
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+============================================================
+FILE: frontend\src\studio\QueuePane.tsx
+============================================================
+import React, { useState, useMemo } from 'react';
+import {
+  Search,
+  SlidersHorizontal,
+  ChevronDown,
+  ChevronRight,
+  CheckSquare,
+  Square,
+  Sparkles,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Film,
+  PanelLeftClose,
+  PanelLeftOpen,
+  X,
+  Layers,
+  ArrowUpDown
+} from 'lucide-react';
+import { ClipItem, QueueFilter, QueueSort, SessionGroupData } from './types';
+import { apiUrl } from '../bridge';
+
+interface QueuePaneProps {
+  clips: ClipItem[];
+  selectedClipId: string | null;
+  onSelectClip: (clip: ClipItem) => void;
+  selectedIds: Set<string>;
+  onToggleSelectId: (id: string, e: React.MouseEvent) => void;
+  onSelectAllVisible: (ids: string[]) => void;
+  onClearSelection: () => void;
+  onSelectByScoreThreshold: (threshold: number) => void;
+  onRequestBatchApprove: () => void;
+  onRequestBatchReject: () => void;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+  width: number;
+  pcHost: string;
+}
+
+export const QueuePane: React.FC<QueuePaneProps> = ({
+  clips,
+  selectedClipId,
+  onSelectClip,
+  selectedIds,
+  onToggleSelectId,
+  onSelectAllVisible,
+  onClearSelection,
+  onSelectByScoreThreshold,
+  onRequestBatchApprove,
+  onRequestBatchReject,
+  isCollapsed,
+  onToggleCollapse,
+  width,
+  pcHost,
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filter, setFilter] = useState<QueueFilter>('all');
+  const [sort, setSort] = useState<QueueSort>('score');
+  const [collapsedSessions, setCollapsedSessions] = useState<Record<string, boolean>>({});
+
+  // Filter clips
+  const filteredClips = useMemo(() => {
+    let result = [...clips];
+
+    // Status filter
+    if (filter === 'ready') {
+      result = result.filter(c => c.status === 'ready_review');
+    } else if (filter === 'approved') {
+      result = result.filter(c => c.status === 'approved');
+    } else if (filter === 'published') {
+      result = result.filter(c => c.status === 'published');
+    } else if (filter === 'rejected') {
+      result = result.filter(c => c.status === 'rejected');
+    }
+
+    // Search query
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(c =>
+        (c.title && c.title.toLowerCase().includes(q)) ||
+        (c.hook && c.hook.toLowerCase().includes(q)) ||
+        (c.session_id && c.session_id.toLowerCase().includes(q)) ||
+        (c.hashtags && c.hashtags.toLowerCase().includes(q))
+      );
+    }
+
+    // Sort
+    result.sort((a, b) => {
+      if (sort === 'score') {
+        return (b.virality_score || 0) - (a.virality_score || 0);
+      }
+      if (sort === 'newest') {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+      if (sort === 'oldest') {
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      }
+      if (sort === 'duration') {
+        return (b.duration || 0) - (a.duration || 0);
+      }
+      return 0;
+    });
+
+    return result;
+  }, [clips, filter, searchQuery, sort]);
+
+  // Group by session
+  const sessionGroups: SessionGroupData[] = useMemo(() => {
+    const groupsMap = new Map<string, ClipItem[]>();
+    for (const clip of filteredClips) {
+      const sId = clip.session_id || 'unassigned_session';
+      if (!groupsMap.has(sId)) {
+        groupsMap.set(sId, []);
+      }
+      groupsMap.get(sId)!.push(clip);
+    }
+
+    const groups: SessionGroupData[] = [];
+    groupsMap.forEach((gClips, sId) => {
+      const firstClip = gClips[0];
+      const title = sId === 'unassigned_session'
+        ? 'Direct Inbox Recordings'
+        : `Session ${sId.replace(/^sess_/, '').slice(0, 8)}`;
+      groups.push({
+        sessionId: sId,
+        title,
+        createdAt: firstClip.created_at,
+        clips: gClips,
+      });
+    });
+
+    return groups;
+  }, [filteredClips]);
+
+  const toggleSessionCollapse = (sessionId: string) => {
+    setCollapsedSessions(prev => ({
+      ...prev,
+      [sessionId]: !prev[sessionId]
+    }));
+  };
+
+  const counts = useMemo(() => {
+    return {
+      all: clips.length,
+      ready: clips.filter(c => c.status === 'ready_review').length,
+      approved: clips.filter(c => c.status === 'approved').length,
+      published: clips.filter(c => c.status === 'published').length,
+      rejected: clips.filter(c => c.status === 'rejected').length,
+    };
+  }, [clips]);
+
+  const allVisibleIds = useMemo(() => filteredClips.map(c => c.id), [filteredClips]);
+  const isAllVisibleSelected = allVisibleIds.length > 0 && allVisibleIds.every(id => selectedIds.has(id));
+
+  if (isCollapsed) {
+    return (
+      <aside className="w-10 min-w-[40px] h-full bg-[#16181C] border-r border-[#2E3239] flex flex-col items-center py-3 select-none shrink-0 transition-all">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="p-1.5 rounded-md text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+          title="Expand Queue Pane"
+        >
+          <PanelLeftOpen size={16} />
+        </button>
+        <div className="mt-8 [writing-mode:vertical-rl] rotate-180 text-[11px] font-mono uppercase tracking-wider text-[#747D8A]">
+          Queue ({clips.length})
+        </div>
+      </aside>
+    );
+  }
+
+  return (
+    <aside
+      style={{ width: `${width}px` }}
+      className="h-full bg-[#16181C] border-r border-[#2E3239] flex flex-col select-none shrink-0 overflow-hidden"
+    >
+      {/* QUEUE HEADER & SEARCH */}
+      <div className="p-3 border-b border-[#2E3239] space-y-2.5 shrink-0 bg-[#16181C]">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Layers size={15} className="text-[#2563EB]" />
+            <h2 className="text-xs font-bold uppercase tracking-wider text-[#F3F4F6]">
+              Review Queue
+            </h2>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-[#23262C] border border-[#2E3239] text-[#A3AAB5]">
+              {clips.length}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="p-1 rounded text-[#747D8A] hover:text-[#F3F4F6] hover:bg-[#23262C] transition-all"
+            title="Collapse Queue (Collapse to icon rail)"
+          >
+            <PanelLeftClose size={15} />
+          </button>
+        </div>
+
+        {/* Search Field */}
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-2.5 text-[#747D8A]" />
+          <input
+            type="text"
+            placeholder="Search clips or hooks..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full h-8 pl-8 pr-7 text-xs rounded-lg bg-[#23262C] border border-[#2E3239] text-[#F3F4F6] placeholder-[#747D8A] focus:outline-none focus:border-[#2563EB] transition-all"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-2 text-[#747D8A] hover:text-[#F3F4F6]"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+
+        {/* Filter Pills */}
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-0.5">
+          {(['all', 'ready', 'approved', 'published', 'rejected'] as QueueFilter[]).map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFilter(f)}
+              className={`px-2 py-1 rounded-md text-[11px] font-medium transition-all shrink-0 flex items-center gap-1 ${
+                filter === f
+                  ? 'bg-[#2563EB] text-white shadow-hero-sm font-semibold'
+                  : 'bg-[#23262C] border border-[#2E3239] text-[#A3AAB5] hover:text-[#F3F4F6]'
+              }`}
+            >
+              <span className="capitalize">{f}</span>
+              <span className={`text-[10px] font-mono ${filter === f ? 'text-white/80' : 'text-[#747D8A]'}`}>
+                {counts[f]}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Sort & Quick Threshold Selection */}
+        <div className="flex items-center justify-between text-[11px] text-[#A3AAB5] pt-0.5">
+          <div className="flex items-center gap-1.5">
+            <ArrowUpDown size={12} className="text-[#747D8A]" />
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as QueueSort)}
+              className="bg-[#23262C] border border-[#2E3239] rounded px-1.5 py-0.5 text-[11px] text-[#F3F4F6] focus:outline-none focus:border-[#2563EB]"
+            >
+              <option value="score">Score (High-Low)</option>
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="duration">Duration</option>
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onSelectByScoreThreshold(85)}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#23262C] hover:bg-[#2563EB]/15 border border-[#2E3239] hover:border-[#2563EB]/40 text-[#60A5FA] text-[10px] font-mono font-medium transition-all"
+            title="Auto-select all ready clips with AI Score >= 85"
+          >
+            <Sparkles size={10} />
+            <span>Score ≥ 85</span>
+          </button>
+        </div>
+      </div>
+
+      {/* BATCH ACTION TOOLBAR (Visible when >= 1 item selected) */}
+      {selectedIds.size > 0 && (
+        <div className="bg-[#1C1F24] border-b border-[#2563EB]/40 p-2.5 flex items-center justify-between text-xs animate-in slide-in-from-top-1 duration-150 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono font-semibold text-[#60A5FA]">{selectedIds.size}</span>
+            <span className="text-[#A3AAB5]">selected</span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onRequestBatchApprove}
+              className="px-2 py-1 rounded bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium text-[11px] shadow-hero-sm transition-all active:scale-95 flex items-center gap-1"
+            >
+              <CheckCircle2 size={12} />
+              <span>Approve ({selectedIds.size})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onRequestBatchReject}
+              className="px-2 py-1 rounded bg-[#23262C] hover:bg-[#F43F5E]/20 border border-[#2E3239] hover:border-[#F43F5E]/50 text-[#F43F5E] text-[11px] transition-all active:scale-95"
+            >
+              <span>Reject</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClearSelection}
+              className="p-1 rounded text-[#747D8A] hover:text-[#F3F4F6]"
+              title="Clear selection"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* QUEUE LIST VIEW (Scrollable) */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-3">
+        {filteredClips.length === 0 ? (
+          <div className="h-48 flex flex-col items-center justify-center text-center p-4 text-[#747D8A]">
+            <Film size={28} className="mb-2 text-[#2E3239]" />
+            <p className="text-xs font-semibold text-[#A3AAB5]">No clips found</p>
+            <p className="text-[11px] mt-1 max-w-[200px]">
+              {searchQuery ? 'Try clearing your search query' : 'Record or upload footage to generate AI clips.'}
+            </p>
+          </div>
+        ) : (
+          sessionGroups.map((group) => {
+            const isCollapsed = Boolean(collapsedSessions[group.sessionId]);
+            return (
+              <div key={group.sessionId} className="rounded-lg bg-[#16181C] border border-[#242830] overflow-hidden">
+                {/* Session Header */}
+                <button
+                  type="button"
+                  onClick={() => toggleSessionCollapse(group.sessionId)}
+                  className="w-full px-2.5 py-1.5 bg-[#1C1F24] hover:bg-[#23262C] flex items-center justify-between text-left transition-colors border-b border-[#242830]"
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {isCollapsed ? <ChevronRight size={13} className="text-[#747D8A]" /> : <ChevronDown size={13} className="text-[#747D8A]" />}
+                    <span className="text-[11px] font-semibold text-[#F3F4F6] truncate">
+                      {group.title}
+                    </span>
+                    <span className="text-[10px] font-mono text-[#747D8A]">
+                      ({group.clips.length})
+                    </span>
+                  </div>
+
+                  <span className="text-[10px] font-mono text-[#747D8A] shrink-0">
+                    {group.createdAt ? new Date(group.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''}
+                  </span>
+                </button>
+
+                {/* Session Clips Stack */}
+                {!isCollapsed && (
+                  <div className="p-1 space-y-1">
+                    {group.clips.map((clip) => {
+                      const isSelected = selectedClipId === clip.id;
+                      const isChecked = selectedIds.has(clip.id);
+                      const thumb = clip.thumbnail_url
+                        ? (clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost))
+                        : null;
+
+                      return (
+                        <div
+                          key={clip.id}
+                          onClick={() => onSelectClip(clip)}
+                          className={`group relative flex items-start gap-2.5 p-1.5 rounded-md cursor-pointer transition-all border ${
+                            isSelected
+                              ? 'bg-[#1C1F24] border-[#2563EB]/50 border-l-2 border-l-[#2563EB] shadow-sm'
+                              : 'bg-[#16181C] border-transparent hover:bg-[#1C1F24] hover:border-[#2E3239]'
+                          }`}
+                        >
+                          {/* Selection Checkbox */}
+                          <button
+                            type="button"
+                            onClick={(e) => onToggleSelectId(clip.id, e)}
+                            className="mt-1 text-[#747D8A] hover:text-[#60A5FA] shrink-0 transition-colors"
+                            title={isChecked ? 'Deselect clip' : 'Select clip for batch review'}
+                          >
+                            {isChecked ? (
+                              <CheckSquare size={14} className="text-[#2563EB]" />
+                            ) : (
+                              <Square size={14} className="opacity-40 group-hover:opacity-100" />
+                            )}
+                          </button>
+
+                          {/* 9:16 Thumbnail */}
+                          <div className="relative w-12 h-18 rounded bg-[#23262C] overflow-hidden shrink-0 border border-[#2E3239] flex items-center justify-center">
+                            {thumb ? (
+                              <img
+                                src={thumb}
+                                alt=""
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <Film size={16} className="text-[#747D8A]" />
+                            )}
+                            <div className="absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded bg-black/75 text-[9px] font-mono text-white tabular-nums">
+                              {Math.round(clip.duration)}s
+                            </div>
+                          </div>
+
+                          {/* Clip Metadata */}
+                          <div className="flex-1 min-w-0 pr-1">
+                            <h3
+                              className={`text-xs font-semibold leading-tight line-clamp-1 ${
+                                isSelected ? 'text-[#F3F4F6]' : 'text-[#EDEDED] group-hover:text-[#F3F4F6]'
+                              }`}
+                              title={clip.title || clip.hook}
+                            >
+                              {clip.title || clip.hook || 'Untitled Highlight'}
+                            </h3>
+
+                            <p className="text-[11px] text-[#747D8A] line-clamp-1 mt-0.5" title={clip.hook}>
+                              {clip.hook || clip.description || 'No hook summary'}
+                            </p>
+
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              {/* Score Badge */}
+                              <span
+                                className={`text-[10px] font-mono font-semibold px-1.5 py-0.2 rounded border ${
+                                  clip.virality_score >= 85
+                                    ? 'bg-[#2563EB]/15 border-[#2563EB]/40 text-[#60A5FA]'
+                                    : 'bg-[#23262C] border-[#2E3239] text-[#A3AAB5]'
+                                }`}
+                              >
+                                {clip.virality_score}
+                              </span>
+
+                              {/* Status Badge */}
+                              <span
+                                className={`text-[10px] px-1.5 py-0.2 rounded border capitalize ${
+                                  clip.status === 'ready_review'
+                                    ? 'bg-[#EAB308]/10 border-[#EAB308]/30 text-[#EAB308]'
+                                    : clip.status === 'approved'
+                                    ? 'bg-[#10B981]/10 border-[#10B981]/30 text-[#10B981]'
+                                    : clip.status === 'published'
+                                    ? 'bg-[#2563EB]/10 border-[#2563EB]/30 text-[#60A5FA]'
+                                    : 'bg-[#23262C] border-[#2E3239] text-[#747D8A]'
+                                }`}
+                              >
+                                {clip.status === 'ready_review' ? 'Ready' : clip.status}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* QUEUE FOOTER */}
+      <div className="p-2.5 border-t border-[#2E3239] bg-[#16181C] flex items-center justify-between text-[11px] text-[#747D8A] shrink-0 font-mono">
+        <button
+          type="button"
+          onClick={() => onSelectAllVisible(allVisibleIds)}
+          className="hover:text-[#F3F4F6] transition-colors"
+        >
+          {isAllVisibleSelected ? 'Deselect All' : `Select All (${filteredClips.length})`}
+        </button>
+        <span>{filteredClips.length} clips shown</span>
+      </div>
+    </aside>
+  );
+};
+
+
+============================================================
+FILE: frontend\src\studio\StudioHeader.tsx
+============================================================
+import React from 'react';
+import {
+  Sparkles,
+  HardDrive,
+  Maximize2,
+  Minimize2,
+  HelpCircle,
+  Smartphone,
+  ShieldCheck,
+  ShieldAlert,
+  Radio,
+  CheckCircle2,
+  XCircle,
+  Layers
+} from 'lucide-react';
+import { SystemStatus, IntegrationsStatus, ClipItem } from './types';
+
+interface StudioHeaderProps {
+  systemStatus: SystemStatus | null;
+  integrations: IntegrationsStatus | null;
+  selectedClip: ClipItem | null;
+  totalClipsCount: number;
+  readyClipsCount: number;
+  isFocusMode: boolean;
+  onToggleFocusMode: () => void;
+  onOpenShortcuts: () => void;
+  onSwitchToMobileFrame: () => void;
+  publishMode: 'private' | 'public';
+  onTogglePublishMode: (mode: 'private' | 'public') => void;
+}
+
+export const StudioHeader: React.FC<StudioHeaderProps> = ({
+  systemStatus,
+  integrations,
+  selectedClip,
+  totalClipsCount,
+  readyClipsCount,
+  isFocusMode,
+  onToggleFocusMode,
+  onOpenShortcuts,
+  onSwitchToMobileFrame,
+  publishMode,
+  onTogglePublishMode,
+}) => {
+  const isYouTubeConnected = Boolean(integrations?.youtube?.connected);
+  const ytChannel = integrations?.youtube?.channel_title || (isYouTubeConnected ? 'Connected' : 'Offline');
+  const isGeminiConfigured = Boolean(integrations?.gemini?.configured);
+
+  const diskFree = systemStatus ? `${systemStatus.disk_free_gb} GB` : '-- GB';
+  const diskPercent = systemStatus ? `${systemStatus.disk_percent_used}%` : '--%';
+
+  return (
+    <header className="h-[54px] min-h-[54px] w-full bg-[#16181C] border-b border-[#2E3239] px-4 flex items-center justify-between select-none z-40 shrink-0">
+      {/* LEFT BRAND & CONTEXT */}
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-md bg-[#2563EB] flex items-center justify-center text-white shadow-hero-sm font-mono font-bold text-xs tracking-tighter">
+            D
+          </div>
+          <div className="flex flex-col">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[13px] font-bold tracking-tight text-[#F3F4F6] font-mono">
+                DISPATCH
+              </span>
+              <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#23262C] border border-[#2E3239] text-[#A3AAB5]">
+                PC Studio
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="h-4 w-px bg-[#2E3239] mx-1 hidden sm:block" />
+
+        {/* Selected Clip Context */}
+        {selectedClip ? (
+          <div className="hidden lg:flex items-center gap-2 text-xs">
+            <span className="text-[#747D8A]">Reviewing:</span>
+            <span className="font-semibold text-[#F3F4F6] max-w-[220px] truncate" title={selectedClip.title || selectedClip.hook}>
+              {selectedClip.title || selectedClip.hook || selectedClip.id}
+            </span>
+            <span className="text-[11px] font-mono text-[#A3AAB5] px-1.5 py-0.5 rounded bg-[#23262C] border border-[#2E3239]">
+              {selectedClip.duration ? `${Math.round(selectedClip.duration)}s` : '--'}
+            </span>
+            <span className="text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded bg-[#2563EB]/15 border border-[#2563EB]/40 text-[#60A5FA]">
+              Score {selectedClip.virality_score}
+            </span>
+          </div>
+        ) : (
+          <div className="hidden lg:flex items-center gap-2 text-xs text-[#747D8A]">
+            <span>{totalClipsCount} clips in queue</span>
+            {readyClipsCount > 0 && (
+              <span className="text-[#EAB308] font-mono font-medium">({readyClipsCount} awaiting review)</span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* RIGHT TELEMETRY & ACTIONS */}
+      <div className="flex items-center gap-2 sm:gap-3">
+        {/* Safe Publishing Mode Toggle */}
+        <div className="flex items-center bg-[#23262C] p-0.5 rounded-lg border border-[#2E3239] text-xs">
+          <button
+            type="button"
+            onClick={() => onTogglePublishMode('private')}
+            className={`px-2 py-1 rounded-md text-[11px] font-medium transition-all ${
+              publishMode === 'private'
+                ? 'bg-[#16181C] text-[#F3F4F6] shadow-sm font-semibold'
+                : 'text-[#747D8A] hover:text-[#A3AAB5]'
+            }`}
+            title="Safe Mode: Videos uploaded as Private drafts"
+          >
+            <span className="flex items-center gap-1">
+              <ShieldCheck size={12} className={publishMode === 'private' ? 'text-[#10B981]' : ''} />
+              Private Draft
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onTogglePublishMode('public')}
+            className={`px-2 py-1 rounded-md text-[11px] font-medium transition-all ${
+              publishMode === 'public'
+                ? 'bg-[#2563EB] text-white shadow-sm font-semibold'
+                : 'text-[#747D8A] hover:text-[#A3AAB5]'
+            }`}
+            title="Direct Mode: Auto public publishing"
+          >
+            <span className="flex items-center gap-1">
+              <Radio size={12} />
+              Auto Public
+            </span>
+          </button>
+        </div>
+
+        {/* Disk & Storage Status */}
+        <div
+          className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#23262C] border border-[#2E3239] text-[11px] font-mono text-[#A3AAB5]"
+          title={`Total Disk Used: ${diskPercent} (${diskFree} free)`}
+        >
+          <HardDrive size={13} className="text-[#747D8A]" />
+          <span>{diskFree} free</span>
+          <span className="text-[#747D8A] text-[10px]">({diskPercent})</span>
+        </div>
+
+        {/* Gemini Status */}
+        <div
+          className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-mono ${
+            isGeminiConfigured
+              ? 'bg-[#10B981]/10 border-[#10B981]/30 text-[#10B981]'
+              : 'bg-[#23262C] border-[#2E3239] text-[#747D8A]'
+          }`}
+          title={isGeminiConfigured ? 'Gemini AI Vision & Highlights Connected' : 'Gemini Key Not Configured'}
+        >
+          <Sparkles size={13} />
+          <span>{isGeminiConfigured ? 'Gemini Active' : 'No Gemini'}</span>
+        </div>
+
+        {/* YouTube Status Badge */}
+        <div
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-medium max-w-[160px] truncate ${
+            isYouTubeConnected
+              ? 'bg-[#2563EB]/10 border-[#2563EB]/40 text-[#60A5FA]'
+              : 'bg-[#F43F5E]/10 border-[#F43F5E]/30 text-[#F43F5E]'
+          }`}
+          title={isYouTubeConnected ? `YouTube Channel: ${ytChannel}` : 'YouTube OAuth Disconnected'}
+        >
+          <span className={`w-2 h-2 rounded-full shrink-0 ${isYouTubeConnected ? 'bg-[#10B981]' : 'bg-[#F43F5E]'}`} />
+          <span className="truncate">{ytChannel}</span>
+        </div>
+
+        {/* Focus Mode Toggle */}
+        <button
+          type="button"
+          onClick={onToggleFocusMode}
+          className={`p-1.5 rounded-lg border transition-all active:scale-95 ${
+            isFocusMode
+              ? 'bg-[#2563EB] border-[#2563EB] text-white shadow-hero-sm'
+              : 'bg-[#23262C] border-[#2E3239] text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#2E3239]'
+          }`}
+          title={isFocusMode ? 'Exit Focus Mode (F)' : 'Enter Focus Mode (F) - Hide side panes'}
+        >
+          {isFocusMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </button>
+
+        {/* Keyboard Shortcuts Help */}
+        <button
+          type="button"
+          onClick={onOpenShortcuts}
+          className="p-1.5 rounded-lg bg-[#23262C] border border-[#2E3239] text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#2E3239] transition-all active:scale-95"
+          title="Keyboard Shortcuts (?)"
+        >
+          <HelpCircle size={15} />
+        </button>
+
+        {/* Phone Frame Simulator Switch */}
+        <button
+          type="button"
+          onClick={onSwitchToMobileFrame}
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#23262C] border border-[#2E3239] text-[#A3AAB5] hover:text-[#F3F4F6] hover:bg-[#2E3239] text-[11px] font-mono transition-all active:scale-95"
+          title="Switch to POCO C65 Mobile Shell Preview"
+        >
+          <Smartphone size={13} />
+          <span>Mobile Frame</span>
+        </button>
+      </div>
+    </header>
+  );
+};
+

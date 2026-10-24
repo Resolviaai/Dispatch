@@ -79,6 +79,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [importState, setImportState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle');
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [clipsStale, setClipsStale] = useState(false);
+  const [inboxStale, setInboxStale] = useState(false);
   const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
 
   // Mirrors the server-side video ID extraction (dispatch/youtube_inbox/catcher.py)
@@ -151,9 +153,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
           const ready = Array.isArray(data.ready) ? data.ready : [];
           const approved = Array.isArray(data.recent_approved) ? data.recent_approved : [];
           setClips([...ready, ...approved]);
+          setClipsStale(false);
         }
       } catch {
-        // silent offline fallback
+        if (isMounted) setClipsStale(true); // keep cached data, but mark it stale
       }
     };
     fetchClips();
@@ -174,9 +177,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         if (res.ok && isMounted) {
           const data = await res.json();
           setInboxItems(Array.isArray(data.items) ? data.items : []);
+          setInboxStale(false);
         }
       } catch {
-        // silent offline fallback
+        if (isMounted) setInboxStale(true); // keep cached data, but mark it stale
       }
     };
     fetchInbox();
@@ -436,6 +440,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-base font-semibold tracking-tight text-text-main flex items-center gap-2">
+              {(clipsStale || inboxStale) && (
+                <span role="status" className="ml-1 px-2 py-0.5 rounded-full bg-[#F59E0B]/10 border border-[#F59E0B]/40 text-[#F59E0B] text-xs font-medium normal-case">
+                  Cached - refresh failed
+                </span>
+              )}
               <Film size={18} className="text-primary shrink-0" />
               <span>Recorded Sessions</span>
             </h1>
@@ -480,7 +489,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <button
               type="button"
               onClick={() => setFilter('all')}
-              className={`flex-1 min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
                 filter === 'all'
                   ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
                   : 'text-text-muted hover:text-text-main'
@@ -491,7 +500,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <button
               type="button"
               onClick={() => setFilter('queued')}
-              className={`flex-1 min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
                 filter === 'queued'
                   ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
                   : 'text-text-muted hover:text-text-main'
@@ -502,7 +511,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <button
               type="button"
               onClick={() => setFilter('uploaded')}
-              className={`flex-1 min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
                 filter === 'uploaded'
                   ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
                   : 'text-text-muted hover:text-text-main'
@@ -807,7 +816,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
                               {/* OVERLAY BADGES */}
                               <div className="absolute top-2 left-2 pointer-events-none flex items-center gap-1.5">
-                                <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[9px] font-mono text-emerald-400 font-semibold tracking-wide uppercase">
+                                <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[10px] font-mono text-emerald-400 font-semibold tracking-wide uppercase">
                                   Raw #{segment.sequenceNumber || idx + 1}
                                 </span>
                                 <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[10px] font-mono tabular-nums font-semibold text-white">

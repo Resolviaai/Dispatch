@@ -298,30 +298,24 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
         self.assertEqual(job_resumed["current_stage"], "TRANSCRIBE")
 
     def test_p07_discovery_pairing_plus_direct_file_upload(self):
-        """Pairwise 7: Discovered pairing credentials used to perform direct file upload."""
-        pair_res = self.client.get("/api/sync/pairing/config")
-        self.assertEqual(pair_res.status_code, 200)
-        token = pair_res.json()["auth_token"]
-
+        """RETIRED-FLOW CONTRACT (2026-10-24, YouTube-only): the direct LAN upload
+        path (/api/sync/upload/direct) is retired with 410 - it accepted arbitrary
+        bytes without an expected hash (TOFU) and violated the YouTube-only rule.
+        Pairing credentials must NOT enable a second media handoff."""
+        import time as _t
         dummy_video = self.temp_dir / "direct_upload.mp4"
         self.create_synthetic_mp4(dummy_video, duration_seconds=1.0)
-        seg_id = f"seg_direct_{int(time.time() * 1000)}"
+        seg_id = f"seg_direct_{int(_t.time() * 1000)}"
 
         with open(dummy_video, "rb") as f:
             res_up = self.client.post(
                 "/api/sync/upload/direct",
-                data={"segment_id": seg_id, "session_id": "sess_direct", "auth_token": token},
+                data={"segment_id": seg_id, "session_id": "sess_direct", "auth_token": "any-token"},
                 files={"file": (f"{seg_id}.mp4", f, "video/mp4")}
             )
-        self.assertEqual(res_up.status_code, 200)
-        self.assertEqual(res_up.json()["status"], "completed")
-        self.assertTrue(res_up.json()["verified"])
+        self.assertEqual(res_up.status_code, 410)
+        self.assertNotIn("job_id", res_up.json())  # nothing entered the pipeline
 
-        # Check job enqueued in queue
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT job_id FROM pipeline_jobs WHERE chunk_id = ?", (res_up.json()["chunk_id"],))
-            self.assertIsNotNone(cursor.fetchone())
 
     def test_p08_negative_preference_feedback_plus_prompt_adaptation(self):
         """Pairwise 8: Rejected clip reasons are reflected in subsequent AI highlight prompts."""

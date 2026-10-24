@@ -1,0 +1,1703 @@
+﻿
+============================================================
+FILE: android\app\src\test\java\com\resolvia\dispatch\recorder\CameraRequestGenerationTest.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CameraRequestGenerationTest {
+    @Test
+    fun newerRequestMakesOlderCameraFutureStale() {
+        val requests = CameraRequestGeneration()
+        val first = requests.begin()
+        val second = requests.begin()
+
+        assertFalse(requests.isCurrent(first))
+        assertTrue(requests.isCurrent(second))
+    }
+
+    @Test
+    fun lifecycleInvalidatesPendingCameraFuture() {
+        val requests = CameraRequestGeneration()
+        val request = requests.begin()
+
+        requests.invalidate()
+
+        assertFalse(requests.isCurrent(request))
+    }
+}
+
+
+============================================================
+FILE: android\app\src\test\java\com\resolvia\dispatch\recorder\RecordingSafetyPolicyTest.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import java.nio.file.Files
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
+import org.junit.Test
+
+class RecordingSafetyPolicyTest {
+    private val tempDirectory = Files.createTempDirectory("dispatch-recording-policy").toFile()
+
+    @After
+    fun cleanUp() {
+        tempDirectory.deleteRecursively()
+    }
+
+    @Test
+    fun erroredAndShortNonEmptySegmentsArePreserved() {
+        assertEquals(
+            RecordingFinalizeDisposition.PRESERVE_AND_REPORT_ERROR,
+            RecordingSafetyPolicy.finalizeDisposition(hasCameraError = true, fileLength = 512, durationMs = 30_000)
+        )
+        assertEquals(
+            RecordingFinalizeDisposition.PRESERVE_AND_REPORT_ERROR,
+            RecordingSafetyPolicy.finalizeDisposition(hasCameraError = false, fileLength = 512, durationMs = 500)
+        )
+    }
+
+    @Test
+    fun onlyEmptySuccessfulFinalizationIsDisposable() {
+        assertEquals(
+            RecordingFinalizeDisposition.DELETE_EMPTY_AND_REPORT_ERROR,
+            RecordingSafetyPolicy.finalizeDisposition(hasCameraError = false, fileLength = 0, durationMs = 5_000)
+        )
+        assertEquals(
+            RecordingFinalizeDisposition.COMMIT,
+            RecordingSafetyPolicy.finalizeDisposition(hasCameraError = false, fileLength = 512, durationMs = 5_000)
+        )
+    }
+
+    @Test
+    fun storageReserveAndDuplicateFinalizeUseProductionPolicy() {
+        assertFalse(RecordingSafetyPolicy.hasEnoughSpace(RecordingSafetyPolicy.MINIMUM_FREE_BYTES - 1))
+        assertTrue(RecordingSafetyPolicy.hasEnoughSpace(RecordingSafetyPolicy.MINIMUM_FREE_BYTES))
+        assertThrows(RecordingStorageException::class.java) { RecordingSafetyPolicy.requireAvailableSpace(null) }
+        assertThrows(RecordingStorageException::class.java) {
+            RecordingSafetyPolicy.requireAvailableSpace(RecordingSafetyPolicy.MINIMUM_FREE_BYTES - 1)
+        }
+        assertEquals(RecordingSafetyPolicy.MINIMUM_FREE_BYTES, RecordingSafetyPolicy.requireAvailableSpace(RecordingSafetyPolicy.MINIMUM_FREE_BYTES))
+        assertTrue(RecordingSafetyPolicy.isAlreadyCommittedSegmentStatus("QUEUED_FOR_UPLOAD"))
+        assertTrue(RecordingSafetyPolicy.isAlreadyCommittedSegmentStatus("FAILED_CORRUPT"))
+        assertFalse(RecordingSafetyPolicy.isAlreadyCommittedSegmentStatus("RECORDING"))
+    }
+
+    @Test
+    fun finalizedCommitPrefersNonEmptyTempThenExistingFinalFile() {
+        val tmp = tempDirectory.resolve("segment.tmp")
+        val final = tempDirectory.resolve("segment.mp4")
+        assertNull(RecordingSafetyPolicy.finalizedFileCandidate(tmp, final))
+
+        final.writeBytes(byteArrayOf(4))
+        assertEquals(final, RecordingSafetyPolicy.finalizedFileCandidate(tmp, final))
+
+        tmp.writeBytes(byteArrayOf(1, 2, 3))
+        assertEquals(tmp, RecordingSafetyPolicy.finalizedFileCandidate(tmp, final))
+    }
+}
+
+
+============================================================
+FILE: android\app\src\test\java\com\resolvia\dispatch\recorder\RecordingScreenDimmingStateTest.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RecordingScreenDimmingStateTest {
+    @Test
+    fun onlyActiveForegroundRecordingCanDimAfterInactivity() {
+        val state = RecordingScreenDimmingState()
+        assertFalse(state.onInactivityTimeout())
+
+        state.setRecordingEnabled(true)
+        assertFalse(state.onInactivityTimeout())
+        state.onActivityResumed()
+        assertTrue(state.shouldRunInactivityTimer)
+        assertTrue(state.onInactivityTimeout())
+        assertTrue(state.isDimmed)
+        assertFalse(state.shouldRunInactivityTimer)
+    }
+
+    @Test
+    fun firstWakeGestureIsConsumedThroughItsEndAndDoesNotCountAsCameraInput() {
+        val state = RecordingScreenDimmingState()
+        state.setRecordingEnabled(true)
+        state.onActivityResumed()
+        assertTrue(state.onInactivityTimeout())
+
+        val down = state.onTouch(RecordingTouchAction.DOWN)
+        assertTrue(down.consume)
+        assertTrue(down.wokeScreen)
+        assertFalse(down.userActivity)
+        assertTrue(state.onTouch(RecordingTouchAction.MOVE).consume)
+        assertTrue(state.onTouch(RecordingTouchAction.UP).consume)
+        assertTrue(state.shouldRunInactivityTimer)
+
+        val nextTap = state.onTouch(RecordingTouchAction.DOWN)
+        assertFalse(nextTap.consume)
+        assertTrue(nextTap.userActivity)
+    }
+
+    @Test
+    fun stoppingOrPausingRecordingRestoresVisibleStateAndDisarmsTimer() {
+        val state = RecordingScreenDimmingState()
+        state.setRecordingEnabled(true)
+        state.onActivityResumed()
+        assertTrue(state.onInactivityTimeout())
+
+        state.setRecordingEnabled(false)
+        assertFalse(state.isDimmed)
+        assertFalse(state.shouldRunInactivityTimer)
+
+        state.setRecordingEnabled(true)
+        assertTrue(state.shouldRunInactivityTimer)
+        assertTrue(state.onInactivityTimeout())
+        state.onActivityPaused()
+        assertFalse(state.isDimmed)
+        assertFalse(state.shouldRunInactivityTimer)
+    }
+}
+
+
+============================================================
+FILE: android\app\src\test\java\com\resolvia\dispatch\sync\ConfirmedUploadProgressTest.kt
+============================================================
+package com.resolvia.dispatch.sync
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ConfirmedUploadProgressTest {
+    @Test
+    fun acceptsOnlyConfirmedOffsetsAndRewindsStaleLocalProgress() {
+        val progress = ConfirmedUploadProgress(initialOffset = 800, totalBytes = 1_000)
+
+        assertTrue(progress.observe(400))
+        assertEquals(400L, progress.offset)
+        assertEquals(0, progress.consecutiveNoProgress)
+    }
+
+    @Test
+    fun repeatedOffsetAndAmbiguousStatusExhaustTheBoundedRetryBudget() {
+        val progress = ConfirmedUploadProgress(initialOffset = 400, totalBytes = 1_000)
+
+        repeat(ConfirmedUploadProgress.MAX_NO_PROGRESS_ATTEMPTS - 1) {
+            assertFalse(progress.observe(400))
+            assertFalse(progress.retryExhausted)
+        }
+        assertFalse(progress.observe(null))
+        assertTrue(progress.retryExhausted)
+    }
+
+    @Test
+    fun retryDelayIsCappedAndIncludesOnlyBoundedJitter() {
+        val progress = ConfirmedUploadProgress(initialOffset = 0, totalBytes = 1_000)
+        repeat(ConfirmedUploadProgress.MAX_NO_PROGRESS_ATTEMPTS) { progress.observe(0) }
+
+        assertEquals(8_500L, progress.retryDelayMs(ConfirmedUploadProgress.MAX_JITTER_MS))
+        assertEquals(8_000L, progress.retryDelayMs(-1L))
+    }
+}
+
+
+============================================================
+FILE: android\app\src\test\java\com\resolvia\dispatch\sync\RecordingRecoveryPolicyTest.kt
+============================================================
+package com.resolvia.dispatch.sync
+
+import java.nio.file.Files
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RecordingRecoveryPolicyTest {
+    private val tempDirectory = Files.createTempDirectory("dispatch-recovery-test").toFile()
+
+    @After
+    fun cleanUp() {
+        tempDirectory.deleteRecursively()
+    }
+
+    @Test
+    fun liveSessionIsExcludedFromRecovery() {
+        assertFalse(shouldRecoverRecordingSession("session-live", "session-live"))
+        assertTrue(shouldRecoverRecordingSession("session-old", "session-live"))
+        assertTrue(shouldRecoverRecordingSession("session-old", null))
+    }
+
+    @Test
+    fun finalizedFileCanRecoverAfterRenameBeforeRoomCommit() {
+        val tmp = tempDirectory.resolve("segment.tmp")
+        val finalized = tempDirectory.resolve("segment.mp4")
+        finalized.writeBytes(byteArrayOf(1, 2, 3))
+
+        assertEquals(finalized, findRecoveryCandidate(tmp, finalized))
+    }
+
+    @Test
+    fun nonEmptyTemporaryFileIsPreferredAndEmptyFilesAreNotRecoverable() {
+        val tmp = tempDirectory.resolve("segment.tmp")
+        val finalized = tempDirectory.resolve("segment.mp4")
+        finalized.writeBytes(byteArrayOf(4))
+        tmp.writeBytes(byteArrayOf(1, 2))
+
+        assertEquals(tmp, findRecoveryCandidate(tmp, finalized))
+
+        tmp.writeBytes(byteArrayOf())
+        finalized.writeBytes(byteArrayOf())
+        assertNull(findRecoveryCandidate(tmp, finalized))
+    }
+}
+
+
+============================================================
+FILE: android\app\src\test\java\com\resolvia\dispatch\update\DispatchUpdateManagerTest.kt
+============================================================
+package com.resolvia.dispatch.update
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Assert.assertNotNull
+import org.junit.Test
+
+/** Deterministic JVM tests for the updater's policy, parsing, and URL rules. */
+class DispatchUpdateManagerTest {
+
+    private fun manifestJson(
+        versionCode: Int = 4,
+        versionName: String = "1.0.3",
+        tag: String = "v1.0.3-alpha",
+        packageName: String = "com.resolvia.dispatch",
+        schema: Int = 1,
+        size: Long = 11_000_000L,
+        sha: String = "a".repeat(64),
+        notes: String = "fixes",
+    ): String = """
+    {"schemaVersion":$schema,"packageName":"$packageName","versionCode":$versionCode,
+     "versionName":"$versionName","releaseTag":"$tag","generatedAt":"2026-10-24T00:00:00Z",
+     "releaseNotes":"$notes","apkAsset":"Dispatch.apk","apkSizeBytes":$size,"apkSha256":"$sha"}
+    """.trimIndent()
+
+    // --- parsing ---
+    @Test fun `parses a valid manifest`() {
+        val m = DispatchUpdateManager.parseManifest(manifestJson())
+        assertEquals(4, m.versionCode)
+        assertEquals("v1.0.3-alpha", m.releaseTag)
+        assertEquals("a".repeat(64), m.apkSha256)
+    }
+
+    @Test fun `rejects unsupported schema versions`() {
+        for (schema in listOf(0, 2, -5)) {
+            try {
+                DispatchUpdateManager.parseManifest(manifestJson(schema = schema))
+                fail("schema $schema must be rejected")
+            } catch (e: DispatchUpdateManager.ManifestException) { /* expected */ }
+        }
+    }
+
+    @Test fun `rejects malformed json and wrong package`() {
+        try { DispatchUpdateManager.parseManifest("{not json"); fail() } catch (_: DispatchUpdateManager.ManifestException) {}
+        try { DispatchUpdateManager.parseManifest(manifestJson(packageName = "com.other.app")); fail() } catch (_: DispatchUpdateManager.ManifestException) {}
+    }
+
+    @Test fun `rejects invalid versionCode size digest and tag`() {
+        for (json in listOf(
+            manifestJson(versionCode = 0),
+            manifestJson(versionCode = -3),
+            manifestJson(size = 0),
+            manifestJson(size = DispatchUpdateManager.MAX_APK_BYTES + 1),
+            manifestJson(sha = "zz".repeat(32)),
+            manifestJson(sha = "abc"),
+            manifestJson(tag = "../../etc/passwd"),
+            manifestJson(tag = "v1.0.3 alpha; rm"),
+            manifestJson(tag = "not-a-tag"),
+        )) {
+            try {
+                DispatchUpdateManager.parseManifest(json)
+                fail("must reject: $json")
+            } catch (_: DispatchUpdateManager.ManifestException) { /* expected */ }
+        }
+    }
+
+    // --- version policy ---
+    @Test fun `newer version offered, same and downgrade refused`() {
+        val m = DispatchUpdateManager.parseManifest(manifestJson(versionCode = 5))
+        assertTrue(DispatchUpdateManager.shouldOfferUpdate(m, 4).shouldUpdate)
+        assertFalse(DispatchUpdateManager.shouldOfferUpdate(m, 5).shouldUpdate)
+        assertFalse(DispatchUpdateManager.shouldOfferUpdate(m, 6).shouldUpdate)
+    }
+
+    @Test fun `unknown installed version fails closed`() {
+        val m = DispatchUpdateManager.parseManifest(manifestJson())
+        assertFalse(DispatchUpdateManager.shouldOfferUpdate(m, -1).shouldUpdate)
+    }
+
+    // --- channel policy / urls ---
+    @Test fun `urls derive from the same exact tag`() {
+        val tag = "v1.0.3-alpha"
+        val manifestUrl = DispatchUpdateManager.manifestUrlFor(tag)
+        val apkUrl = DispatchUpdateManager.apkUrlFor(tag)
+        assertTrue(manifestUrl.endsWith("/releases/download/$tag/update.json"))
+        assertTrue(apkUrl.endsWith("/releases/download/$tag/Dispatch.apk"))
+        assertTrue(DispatchUpdateManager.isAllowedDownloadUrl(manifestUrl))
+        assertTrue(DispatchUpdateManager.isAllowedDownloadUrl(apkUrl))
+        assertTrue(DispatchUpdateManager.isAllowedDownloadUrl(
+            "https://objects.githubusercontent.com/release-asset/xyz"))
+    }
+
+    @Test fun `disallowed urls and tags are refused`() {
+        for (url in listOf(
+            "http://github.com/Resolviaai/Dispatch/releases/download/v1.0.3-alpha/Dispatch.apk",
+            "https://evil.example.com/Resolviaai/Dispatch/releases/download/v1.0.3-alpha/Dispatch.apk",
+            "https://github.com/EvilOrg/Dispatch/releases/download/v1.0.3-alpha/Dispatch.apk",
+        )) {
+            assertFalse(url, DispatchUpdateManager.isAllowedDownloadUrl(url))
+        }
+        try {
+            DispatchUpdateManager.apkUrlFor("../../evil")
+            fail()
+        } catch (_: IllegalArgumentException) { /* expected */ }
+        // legit asset-CDN redirect targets must be ACCEPTED (audit Bug 1 regression)
+        assertTrue(
+            DispatchUpdateManager.isAllowedDownloadUrl(
+                "https://objects.githubusercontent.com/releases/abc/Dispatch.apk?X=1"))
+        assertTrue(
+            DispatchUpdateManager.isAllowedDownloadUrl(
+                "https://release-assets.githubusercontent.com/1406999073/abc?sig=zz"))
+        // hostile lookalikes must be REJECTED
+        for (bad in listOf(
+            "https://objects..githubusercontent.com/x",
+            "https://objects.githubusercontent.com.evil.com/x",
+            "https://githubusercontent.com/x",
+            "https://objects.githubusercontents.com/x",
+            "https://github.com/Resolviaai/OtherRepo/releases/download/v1/x.apk",
+            "ftp://objects.githubusercontent.com/x",
+        )) {
+            assertFalse(bad, DispatchUpdateManager.isAllowedDownloadUrl(bad))
+        }
+    }
+
+    // --- identity constant agreement with the release script ---
+    @Test fun `trusted fingerprint matches the release script pin`() {
+        var script: String? = null
+        for (up in 1..6) {
+            val f = java.io.File("../".repeat(up) + "scripts/prepare_release.ps1")
+            if (f.exists()) { script = f.readText(); break }
+        }
+        if (script == null) script = java.io.File("scripts/prepare_release.ps1").takeIf { it.exists() }?.readText()
+        assertNotNull("prepare_release.ps1 not found from test working dir", script)
+        assertTrue("release script must pin the same fingerprint",
+            script!!.contains(DispatchUpdateManager.TRUSTED_CERT_SHA256))
+        assertTrue("release script must pin the same fingerprint",
+            script.contains(DispatchUpdateManager.TRUSTED_CERT_SHA256))
+    }
+
+    // --- incremental hashing ---
+    @Test fun `incremental sha256 matches known vector`() {
+        // Reader must SERVE the data once, then report EOF (-1). The previous fake
+        // returned the same bytes forever, so the digest loop never terminated
+        // (audit Bug 2) and the assertion only checked the digest's length.
+        val data = "dispatch".toByteArray(Charsets.US_ASCII)
+        var served = false
+        val digest = DispatchUpdateManager.sha256Of { buf ->
+            if (served) -1 else {
+                System.arraycopy(data, 0, buf, 0, data.size)
+                served = true
+                data.size
+            }
+        }
+        assertEquals("db8d1b6d64e4ec90ceb335fc4344e75799fdc20cd236d27cc85ed4783a33d3fa", digest)
+    }
+}
+
+
+============================================================
+FILE: android\build.gradle.kts
+============================================================
+plugins {
+    id("com.android.application") version "8.13.2" apply false
+    id("org.jetbrains.kotlin.android") version "2.1.20" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.1.20" apply false
+    id("com.google.devtools.ksp") version "2.1.20-1.0.32" apply false
+}
+
+============================================================
+FILE: android\fix_camera_capture_minimal.py
+============================================================
+"""Minimal compatibility repair for Dispatch CameraCaptureManager.
+
+Run from C:\\CODE\\Dispatch\\android. The script only updates
+CameraCaptureManager.kt, creates a .pre-fix.bak backup, and refuses to run
+if the expected source patterns do not match exactly.
+"""
+from pathlib import Path
+import shutil
+
+RELATIVE = Path("app/src/main/java/com/resolvia/dispatch/recorder/CameraCaptureManager.kt")
+if not RELATIVE.is_file():
+    raise SystemExit(
+        "CameraCaptureManager.kt not found. Run this script from C:\\CODE\\Dispatch\\android."
+    )
+
+raw = RELATIVE.read_bytes()
+newline = "\r\n" if b"\r\n" in raw else "\n"
+source = raw.decode("utf-8").replace("\r\n", "\n")
+original = source
+
+
+def replace_once(old: str, new: str, label: str) -> None:
+    global source
+    count = source.count(old)
+    if count != 1:
+        raise SystemExit(f"Expected one occurrence for {label}, found {count}. No file was written.")
+    source = source.replace(old, new, 1)
+
+# Keep the helper signature/semantics already used by the checked-in unit tests.
+replace_once(
+    "internal fun isAeAfLockConfirmed(afLockConfirmed: Boolean, aeLockConfirmed: Boolean): Boolean =\n"
+    "    afLockConfirmed || aeLockConfirmed",
+    "internal fun isAeAfLockConfirmed(hasAf: Boolean, hasAe: Boolean, focusSuccessful: Boolean): Boolean =\n"
+    "    hasAe || (hasAf && focusSuccessful)",
+    "AE/AF confirmation helper",
+)
+
+# Restore the previous mutable combined lock-state contract. The current callers and
+# native bridge consume isAeAfLocked as one Boolean; the split state was only partly applied.
+replace_once(
+    "    @Volatile var isAeLocked: Boolean = false\n"
+    "        private set\n"
+    "    @Volatile var isAfLocked: Boolean = false\n"
+    "        private set\n"
+    "    @Volatile var isAeAfLockUncertain: Boolean = false\n"
+    "        private set\n"
+    "    val isAeAfLocked: Boolean\n"
+    "        get() = isAeAfLockConfirmed(isAfLocked, isAeLocked)",
+    "    @Volatile var isAeAfLocked: Boolean = false\n"
+    "        private set\n\n"
+    "    private fun clearConfirmedLockState() {\n"
+    "        isAeAfLocked = false\n"
+    "    }",
+    "combined AE/AF lock-state property",
+)
+
+# CameraRequestGeneration intentionally exposes begin()/isCurrent(), not AtomicLong methods.
+old_begin_count = source.count("focusOperationGeneration.incrementAndGet()")
+old_get_count = source.count("focusOperationGeneration.get()")
+if old_begin_count == 0 or old_get_count == 0:
+    raise SystemExit(
+        "Expected the incomplete CameraRequestGeneration API calls were not found. "
+        "No file was written; inspect the current source first."
+    )
+source = source.replace("focusOperationGeneration.incrementAndGet()", "focusOperationGeneration.begin()")
+source = source.replace(
+    "focusOperationGeneration.get() != operationGeneration",
+    "!focusOperationGeneration.isCurrent(operationGeneration)",
+)
+source = source.replace(
+    "focusOperationGeneration.get() == operationGeneration",
+    "focusOperationGeneration.isCurrent(operationGeneration)",
+)
+
+# Fail closed if any incompatible declarations/calls remain.
+checks = {
+    "three-argument helper": "internal fun isAeAfLockConfirmed(hasAf: Boolean, hasAe: Boolean, focusSuccessful: Boolean): Boolean",
+    "combined mutable lock state": "@Volatile var isAeAfLocked: Boolean = false",
+    "lock reset helper": "private fun clearConfirmedLockState()",
+}
+for label, needle in checks.items():
+    if needle not in source:
+        raise SystemExit(f"Validation failed: missing {label}. No file was written.")
+if "isAeAfLocked = isAeAfLockConfirmed(isAfLocked, isAeLocked)" in source:
+    raise SystemExit("Validation failed: computed read-only lock property remains. No file was written.")
+if "focusOperationGeneration.incrementAndGet()" in source or "focusOperationGeneration.get()" in source:
+    raise SystemExit("Validation failed: legacy generation calls remain. No file was written.")
+if source == original:
+    raise SystemExit("No changes produced. No file was written.")
+
+backup = RELATIVE.with_suffix(RELATIVE.suffix + ".pre-fix.bak")
+if backup.exists():
+    raise SystemExit(
+        f"Backup already exists at {backup}. No file was written. Preserve that backup and inspect the current file first."
+    )
+shutil.copy2(RELATIVE, backup)
+RELATIVE.write_bytes(source.replace("\n", newline).encode("utf-8"))
+print(f"Patched: {RELATIVE}")
+print(f"Backup:  {backup}")
+print("Scope: CameraCaptureManager.kt only; no camera algorithm bodies were rewritten.")
+print("Next: run .\\gradlew.bat assembleDebug and .\\gradlew.bat testDebugUnitTest.")
+
+
+============================================================
+FILE: android\generate_android_icons.py
+============================================================
+"""Generate complete Android mipmap icon set from master symbol."""
+import os
+from pathlib import Path
+from PIL import Image, ImageDraw
+
+res_dir = Path("android/app/src/main/res")
+densities = {
+    "mipmap-mdpi": 48,
+    "mipmap-hdpi": 72,
+    "mipmap-xhdpi": 96,
+    "mipmap-xxhdpi": 144,
+    "mipmap-xxxhdpi": 192,
+}
+
+# Source app icon PNG from branding/dist (512x512)
+src_icon_path = Path("branding/dist/dispatch-symbol-app-icon-512.png")
+if not src_icon_path.exists():
+    raise FileNotFoundError(f"Missing {src_icon_path}")
+
+base_img = Image.open(src_icon_path).convert("RGBA")
+
+# Create circular mask for round icons
+def make_round(img):
+    w, h = img.size
+    mask = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, w, h), fill=255)
+    round_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    round_img.paste(img, (0, 0), mask=mask)
+    return round_img
+
+for folder_name, size in densities.items():
+    folder = res_dir / folder_name
+    folder.mkdir(parents=True, exist_ok=True)
+    
+    # Square / Adaptive
+    resized = base_img.resize((size, size), Image.Resampling.LANCZOS)
+    resized.save(folder / "ic_launcher.png", format="PNG")
+    
+    # Round
+    round_img = make_round(resized)
+    round_img.save(folder / "ic_launcher_round.png", format="PNG")
+    print(f"Generated {folder_name} ({size}x{size})")
+
+# Also create values/colors.xml and mipmap-anydpi-v26 XMLs
+values_dir = res_dir / "values"
+values_dir.mkdir(parents=True, exist_ok=True)
+
+colors_xml = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#070A0F</color>
+    <color name="primary_blue">#2563EB</color>
+</resources>
+"""
+(values_dir / "colors.xml").write_text(colors_xml, encoding="utf-8")
+
+# Adaptive vector drawable foreground in drawable/
+drawable_dir = res_dir / "drawable"
+drawable_dir.mkdir(parents=True, exist_ok=True)
+
+fg_vector = """<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 60,44 L 136,44 C 178,44 212,78 212,128 C 212,178 178,212 136,212 L 60,212 A 16,16 0 0,1 44,196 L 44,60 A 16,16 0 0,1 60,44 Z M 96,91.05 L 160,128 L 96,164.95 Z"
+        android:fillType="evenOdd"/>
+</vector>
+"""
+(drawable_dir / "ic_launcher_foreground.xml").write_text(fg_vector, encoding="utf-8")
+
+anydpi_dir = res_dir / "mipmap-anydpi-v26"
+anydpi_dir.mkdir(parents=True, exist_ok=True)
+
+adaptive_xml = """<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+"""
+(anydpi_dir / "ic_launcher.xml").write_text(adaptive_xml, encoding="utf-8")
+(anydpi_dir / "ic_launcher_round.xml").write_text(adaptive_xml, encoding="utf-8")
+
+print("All Android app icon resources created successfully!")
+
+
+============================================================
+FILE: android\gradlew.bat
+============================================================
+@rem
+@rem Copyright 2015 the original author or authors.
+@rem
+@rem Licensed under the Apache License, Version 2.0 (the "License");
+@rem you may not use this file except in compliance with the License.
+@rem You may obtain a copy of the License at
+@rem
+@rem      https://www.apache.org/licenses/LICENSE-2.0
+@rem
+@rem Unless required by applicable law or agreed to in writing, software
+@rem distributed under the License is distributed on an "AS IS" BASIS,
+@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+@rem See the License for the specific language governing permissions and
+@rem limitations under the License.
+@rem
+
+@if "%DEBUG%" == "" @echo off
+@rem ##########################################################################
+@rem
+@rem  Gradle startup script for Windows
+@rem
+@rem ##########################################################################
+
+@rem Set local scope for the variables with windows NT shell
+if "%OS%"=="Windows_NT" setlocal
+
+set DIRNAME=%~dp0
+if "%DIRNAME%" == "" set DIRNAME=.
+set APP_BASE_NAME=%~n0
+set APP_HOME=%DIRNAME%
+
+@rem Resolve any "." and ".." in APP_HOME to make it shorter.
+for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
+
+@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
+
+@rem Find java.exe
+if defined JAVA_HOME goto findJavaFromJavaHome
+
+set JAVA_EXE=java.exe
+%JAVA_EXE% -version >NUL 2>&1
+if "%ERRORLEVEL%" == "0" goto execute
+
+echo.
+echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
+
+goto fail
+
+:findJavaFromJavaHome
+set JAVA_HOME=%JAVA_HOME:"=%
+set JAVA_EXE=%JAVA_HOME%/bin/java.exe
+
+if exist "%JAVA_EXE%" goto execute
+
+echo.
+echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME%
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
+
+goto fail
+
+:execute
+@rem Setup the command line
+
+set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
+
+
+@rem Execute Gradle
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
+
+:end
+@rem End local scope for the variables with windows NT shell
+if "%ERRORLEVEL%"=="0" goto mainEnd
+
+:fail
+rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
+rem the _cmd.exe /c_ return code!
+if  not "" == "%GRADLE_EXIT_CONSOLE%" exit 1
+exit /b 1
+
+:mainEnd
+if "%OS%"=="Windows_NT" endlocal
+
+:omega
+
+
+============================================================
+FILE: android\settings.gradle.kts
+============================================================
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "Dispatch"
+include(":app")
+
+
+============================================================
+FILE: cloud-worker\package.json
+============================================================
+{
+  "name": "dispatch-cloud-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --experimental-strip-types",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "aws4fetch": "^1.0.20"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261023.1",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
+  }
+}
+
+
+============================================================
+FILE: cloud-worker\src\index.ts
+============================================================
+/**
+ * Dispatch cloud control-plane Worker (plan D5/D8, alpha brief).
+ * Auth: `Authorization: Bearer <DISPATCH_WORKER_TOKEN>` = trusted owner PC (names the
+ * target user via X-Dispatch-User-Id); Supabase end-user JWTs are verified against
+ * SUPABASE_URL/auth/v1/user. Privileged DB operations run as atomic Postgres functions
+ * (migration 0002) via the service-role key (Worker secret). Video bytes NEVER pass
+ * through this Worker: clients upload/fetch private R2 directly via short-lived
+ * presigned URLs (aws4fetch SIGV4, service s3 / region auto, explicit expiry).
+ */
+import { AwsClient } from "aws4fetch";
+import { encryptToken, buildAuthorizeUrl, validateTokenResponse } from "./oauth.ts";
+
+export interface Env {
+  SUPABASE_URL: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
+  SUPABASE_ANON_KEY: string;
+  DISPATCH_WORKER_TOKEN: string;
+  BUCKET: R2Bucket;
+  R2_S3_ACCESS_KEY_ID: string;
+  R2_S3_SECRET_ACCESS_KEY: string;
+  R2_BUCKET_NAME: string;
+  R2_ACCOUNT_ID: string;
+  TOKEN_VAULT_KEY: string;
+  YOUTUBE_CLIENT_ID: string;
+  YOUTUBE_CLIENT_SECRET: string;
+  OAUTH_REDIRECT_URI: string;
+}
+
+const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
+const KINDS = { clip_video: "video/mp4", thumbnail: "image/jpeg" } as const;
+type Kind = keyof typeof KINDS;
+const CAP_BYTES: Record<Kind, number> = { clip_video: 536870912, thumbnail: 8388608 };
+
+// ---------- pure helpers (also unit-tested) ----------
+export function validateReserveInput(kind: string, mime: string, expectedBytes: number): string | null {
+  if (!(kind in KINDS)) return "unsupported kind";
+  if (KINDS[kind as Kind] !== mime) return "unsupported mime for kind";
+  if (!Number.isInteger(expectedBytes) || expectedBytes <= 0) return "expected_bytes must be a positive integer";
+  if (expectedBytes > CAP_BYTES[kind as Kind]) return "expected_bytes exceeds object cap";
+  return null;
+}
+
+export function json(status: number, body: Record<string, unknown>): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+// Table-valued Postgres RPCs come back from PostgREST as ARRAYS.
+function firstRow<T>(rows: unknown): T {
+  if (Array.isArray(rows)) return rows[0] as T;
+  return rows as T; // scalar/void/single-object RPCs
+}
+
+// ---------- Supabase REST (service-role) ----------
+async function rpc<T>(env: Env, fn: string, params: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(params),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`rpc ${fn} failed: ${res.status} ${text.slice(0, 200)}`);
+  return firstRow<T>(text ? JSON.parse(text) : null);
+}
+
+async function selectOne<T>(env: Env, table: string, id: string, columns: string): Promise<T | null> {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}&select=${columns}`,
+    { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
+  if (!res.ok) throw new Error(`select ${table} failed: ${res.status}`);
+  return ((await res.json()) as T[])[0] ?? null;
+}
+
+// ---------- auth ----------
+export async function authenticate(env: Env, request: Request): Promise<{ userId: string } | null> {
+  const auth = request.headers.get("Authorization") ?? "";
+  if (!auth.startsWith("Bearer ")) return null;
+  const token = auth.slice(7);
+  if (env.DISPATCH_WORKER_TOKEN && token === env.DISPATCH_WORKER_TOKEN) {
+    const uid = request.headers.get("X-Dispatch-User-Id");
+    return uid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)
+      ? { userId: uid } : null;
+  }
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const user = (await res.json()) as { id?: string };
+  return user.id ? { userId: user.id } : null;
+}
+
+// ---------- R2 presign (aws4fetch: service s3, region auto, explicit X-Amz-Expires) ----------
+export function makeS3(env: Env): AwsClient {
+  return new AwsClient({
+    accessKeyId: env.R2_S3_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_S3_SECRET_ACCESS_KEY,
+    service: "s3",
+    region: "auto",
+  });
+}
+function s3Url(env: Env, key: string): string {
+  return `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${key}`;
+}
+async function presign(env: Env, method: "PUT" | "GET", key: string, mime?: string, contentLength?: number): Promise<string> {
+  const headers: Record<string, string> = {};
+  if (mime) headers["content-type"] = mime;
+  if (contentLength !== undefined) headers["content-length"] = String(contentLength); // defense-in-depth only: R2 does NOT enforce signed content-length on presigned PUTs (verified live 2026-10-24); the authoritative guard is complete-time actual-size verification
+  const signed = await makeS3(env).sign(
+    new Request(`${s3Url(env, key)}?X-Amz-Expires=${PRESIGN_EXPIRES}`,
+      { method, headers: Object.keys(headers).length ? headers : undefined }),
+    { aws: { signQuery: true } },
+  );
+  return signed.url.toString(); // bearer-capable short-lived URL; never persisted or logged
+}
+
+async function readJson<T>(request: Request): Promise<T | null> {
+  try { return (await request.json()) as T; } catch { return null; }
+}
+
+interface MediaObj {
+  id: string; user_id: string; status: string; kind: Kind; mime_type: string;
+  staging_key: string | null; final_key: string | null; expected_bytes?: number; byte_count?: number;
+}
+
+// ---------- routes ----------
+async function runCleanup(env: Env): Promise<Response> {
+      const list = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_abandoned_staging`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      if (!list.ok) return json(502, { error: `list abandoned failed: ${list.status}` });
+      const listBody = await list.json();
+      const rows: Array<{ media_object_id: string; staging_key: string; reservation_id: string }> = Array.isArray(listBody) ? listBody : [];
+      const results: Array<{ media_object_id: string; status: string }> = [];
+      for (const row of rows ?? []) {
+        try {
+          await env.BUCKET.delete(row.staging_key); // throws on R2 failure
+        } catch (e) {
+          results.push({ media_object_id: row.media_object_id, status: `delete_failed_retry_later:${e instanceof Error ? e.message : e}` });
+          continue; // nothing released; the row stays listed for the next run
+        }
+        await rpc(env, "cloud_confirm_abandon", { p_media_object_id: row.media_object_id });
+        results.push({ media_object_id: row.media_object_id, status: "abandoned" });
+      }
+      const leftovers = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_promotion_leftovers`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      const leftoverBody = leftovers.ok ? await leftovers.json() : null;
+      const leftoverRows: Array<{ media_object_id: string; staging_key: string }> = Array.isArray(leftoverBody) ? leftoverBody : [];
+      for (const row of leftoverRows) {
+        try {
+          await env.BUCKET.delete(row.staging_key);
+          await rpc(env, "cloud_confirm_staging_removed", { p_media_id: row.media_object_id });
+          results.push({ media_object_id: row.media_object_id, status: "promotion_leftover_reaped" });
+        } catch (e) {
+          results.push({ media_object_id: row.media_object_id, status: `leftover_retry_later:${e instanceof Error ? e.message : e}` });
+        }
+      }
+      // Phase 3: staging-watch sweep. Presigned PUT URLs can be replayed until
+      // they expire, recreating staging objects after completion/abandonment.
+      // Re-delete every watched key (idempotent) throughout the watch window.
+      const watched = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_watched_staging`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      const watchedBody = watched.ok ? await watched.json() : null;
+      const watchedKeys: Array<string> = Array.isArray(watchedBody) ? watchedBody.map((r: { staging_key: string }) => r.staging_key) : [];
+      for (const key of watchedKeys) {
+        try {
+          await env.BUCKET.delete(key);
+        } catch {
+          // retried on the next run; watch rows are pruned only after expiry
+        }
+      }
+      await rpc(env, "cloud_prune_staging_watch", {}).catch(() => {});
+      return json(200, { processed: results.length, swept_staging_keys: watchedKeys.length, results });
+}
+
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/health") return json(200, { ok: true });
+      if (request.method === "POST" && url.pathname === "/cleanup") {
+        // Trusted-PC maintenance only: the raw worker token, no user impersonation.
+        const token = (request.headers.get("Authorization") ?? "").slice(7);
+        if (!env.DISPATCH_WORKER_TOKEN || token !== env.DISPATCH_WORKER_TOKEN) {
+          return json(401, { error: "unauthorized" });
+        }
+        return runCleanup(env);
+      }
+
+    // ---- On-device YouTube OAuth (authenticated via Supabase JWT only) ----
+    if (url.pathname === "/oauth/google/start" && request.method === "GET") {
+      // Custom-Tab navigation cannot set headers: the short-lived Supabase access
+      // token arrives as ?token= and is verified the same strict way (never trusted
+      // without server-side validation). It expires in <=1h, limiting replay value.
+      const qsToken = url.searchParams.get("token");
+      const reqForAuth = qsToken
+        ? new Request(request.url, { headers: { Authorization: `Bearer ${qsToken}` } })
+        : request;
+      const user = await authenticate(env, reqForAuth);
+      if (!user) return json(401, { error: "unauthorized" });
+      const state = crypto.randomUUID() + crypto.randomUUID();
+      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: user.userId });
+      return Response.redirect(
+        buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
+    }
+    if (url.pathname === "/oauth/google/callback" && request.method === "GET") {
+      const code = url.searchParams.get("code") ?? "";
+      const state = url.searchParams.get("state") ?? "";
+      if (!code || !state) return json(400, { error: "missing code/state" });
+      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_state: state }),
+      });
+      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
+      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
+      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      if (!uid) return json(400, { error: "invalid or expired state" });
+      const tokRes = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code, client_id: env.YOUTUBE_CLIENT_ID, client_secret: env.YOUTUBE_CLIENT_SECRET,
+          redirect_uri: env.OAUTH_REDIRECT_URI, grant_type: "authorization_code",
+        }),
+      });
+      const tok = (await tokRes.json()) as Record<string, unknown>;
+      if (!tokRes.ok) return json(502, { error: `token exchange failed: ${JSON.stringify(tok).slice(0, 120)}` });
+      const bad = validateTokenResponse(tok);
+      if (bad) return json(502, { error: bad });
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, tok.refresh_token as string);
+      let email: string | null = null;
+      try {
+        const payload = JSON.parse(atob((tok.id_token as string).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+        email = typeof payload.email === "string" ? payload.email : null;
+      } catch { /* id_token optional */ }
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_refresh_token`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: uid, p_refresh_token_encrypted: enc, p_google_email: email }),
+      });
+      return new Response("<html><body style='font-family:sans-serif;background:#161616;color:#F5F5F5;text-align:center;padding-top:20vh'><h2>YouTube connected</h2><p>You can close this page and return to Dispatch.</p></body></html>",
+        { headers: { "content-type": "text/html" } });
+    }
+
+    // ---- Remote processing jobs (authenticated app clients, any network) ----
+    if (url.pathname === "/jobs/submit" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const body = await request.json().catch(() => ({})) as { url?: string };
+      const ytUrl = (body.url ?? "").trim();
+      if (!/^https:\/\/(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{6,20}/.test(ytUrl))
+        return json(400, { error: "invalid YouTube URL" });
+      const sub = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_submit_job`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: user.userId, p_url: ytUrl }),
+      });
+      if (!sub.ok) return json(502, { error: `submit failed: ${sub.status}` });
+      const subBody = await sub.json() as unknown;
+      const arr = Array.isArray(subBody) ? subBody as Array<{ id: string; status: string }> : [];
+      return json(200, { job_id: arr[0]?.id ?? null, status: arr[0]?.status ?? "queued" });
+    }
+    if (url.pathname === "/jobs/status" && request.method === "GET") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const res = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,youtube_url,status,video_id,last_error,created_at&order=created_at.desc&limit=20`,
+        { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
+      if (!res.ok) return json(502, { error: `status failed: ${res.status}` });
+      return json(200, { jobs: await res.json() });
+    }
+
+    const actor = await authenticate(env, request);
+    if (!actor) return json(401, { error: "unauthorized" });
+    const userId = actor.userId;
+
+    try {
+      if (request.method === "POST" && url.pathname === "/reserve") {
+        const body = await readJson<{ kind: string; mime_type: string; expected_bytes: number; client_token: string; clip_id?: string }>(request);
+        if (!body?.client_token) return json(400, { error: "client_token required" });
+        const invalid = validateReserveInput(body.kind, body.mime_type, body.expected_bytes);
+        if (invalid) return json(400, { error: invalid });
+        try {
+          const r = await rpc<{ reservation_id: string; staging_key: string; media_object_id: string }>(env, "cloud_reserve_upload", {
+            p_user_id: userId, p_kind: body.kind, p_mime: body.mime_type,
+            p_expected_bytes: body.expected_bytes, p_client_token: body.client_token,
+            p_clip_id: body.clip_id ?? null,
+          });
+          if (!r?.reservation_id) return json(502, { error: "reserve returned no reservation" });
+          return json(200, {
+            reservation_id: r.reservation_id,
+            media_object_id: r.media_object_id,
+            upload_url: await presign(env, "PUT", r.staging_key, body.mime_type, body.expected_bytes),
+            expires_in: PRESIGN_EXPIRES,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const status = msg.includes("quota") || msg.includes("cap") || msg.includes("outstanding") ? 413
+            : msg.includes("different parameters") || msg.includes("already ") ? 409 : 502;
+          return json(status, { error: msg });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/complete") {
+        const body = await readJson<{ reservation_id: string }>(request);
+        if (!body?.reservation_id) return json(400, { error: "reservation_id required" });
+        const lookup = await rpc<{ media_object_id: string; user_id: string; status: string }>(env, "cloud_reserve_lookup", { p_reservation_id: body.reservation_id });
+        if (!lookup?.media_object_id) return json(404, { error: "reservation not found" });
+        const obj = await selectOne<MediaObj>(env, "media_objects", lookup.media_object_id, "id,user_id,status,kind,mime_type,staging_key,final_key,byte_count");
+        if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
+        if (lookup.status === "completed" && obj.final_key) {
+          return json(200, { object_id: obj.id, final_key: obj.final_key, byte_count: obj.byte_count, idempotent: true });
+        }
+        if (!obj.staging_key) return json(409, { error: "no staging object; re-reserve" });
+        // REAL object size from the R2 binding — client claims never govern usage.
+        const head = await env.BUCKET.head(obj.staging_key);
+        if (!head) return json(409, { error: "staging object missing; re-upload then complete" });
+        const res = await selectOne<{ expected_bytes: number }>(env, "upload_reservations", body.reservation_id, "expected_bytes");
+        const invalid = validateReserveInput(obj.kind, obj.mime_type, head.size)
+          ?? (head.size > (res?.expected_bytes ?? 0) ? "actual size exceeds reserved expectation" : null);
+        if (invalid) {
+          await env.BUCKET.delete(obj.staging_key);
+          await rpc(env, "cloud_fail_reservation", { p_reservation_id: body.reservation_id });
+          return json(422, { error: `uploaded object rejected: ${invalid}` });
+        }
+        // Stable final key per media object: retries reuse it, so no unbounded orphans.
+        const finalKey = `final/${userId}/${obj.id}`;
+        const copy = await makeS3(env).fetch(new Request(s3Url(env, finalKey), {
+          method: "PUT", headers: { "x-amz-copy-source": `/${env.R2_BUCKET_NAME}/${obj.staging_key}` },
+        }));
+        if (!copy.ok) return json(502, { error: `R2 copy failed: ${copy.status}` });
+        // Verify the final object exists before committing anything.
+        if (!(await env.BUCKET.head(finalKey))) return json(502, { error: "final object missing after copy" });
+        let stored: { id: string; final_key: string; byte_count: number };
+        try {
+          stored = await rpc<typeof stored>(env, "cloud_complete_upload", {
+            p_reservation_id: body.reservation_id, p_actual_bytes: head.size, p_final_key: finalKey,
+          });
+        } catch (e) {
+          // DB completion failed: staging stays for retry; final object is the stable
+          // key so a retry overwrites it rather than accumulating orphans.
+          return json(503, { error: `completion persisted failed; retry: ${e instanceof Error ? e.message : e}` });
+        }
+        // DB succeeded — only now may staging be removed; then release the duplicate.
+        await env.BUCKET.delete(obj.staging_key);
+        let stagingCleanupPending = false;
+        try {
+          await rpc(env, "cloud_confirm_staging_removed", { p_media_id: obj.id });
+        } catch {
+          stagingCleanupPending = true; // duplicate stays counted; /cleanup reaps it
+        }
+        return json(200, { object_id: stored.id, final_key: stored.final_key, byte_count: stored.byte_count, staging_cleanup_pending: stagingCleanupPending });
+      }
+
+      if (request.method === "POST" && url.pathname === "/media-url") {
+        const body = await readJson<{ media_object_id: string }>(request);
+        if (!body?.media_object_id) return json(400, { error: "media_object_id required" });
+        const obj = await selectOne<MediaObj>(env, "media_objects", body.media_object_id, "user_id,status,final_key");
+        if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
+        if (obj.status !== "active") return json(409, { error: `media not active (${obj.status})` });
+        return json(200, { url: await presign(env, "GET", obj.final_key as string), expires_in: PRESIGN_EXPIRES });
+      }
+
+      if (request.method === "POST" && url.pathname === "/delete") {
+        const body = await readJson<{ media_object_id: string }>(request);
+        if (!body?.media_object_id) return json(400, { error: "media_object_id required" });
+        const obj = await selectOne<MediaObj>(env, "media_objects", body.media_object_id, "id,user_id,status,staging_key,final_key");
+        if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
+        if (obj.status === "pending") {
+          // Never falsely report deletion: a pending upload is cancelled, not deleted.
+          await rpc(env, "cloud_fail_reservation_by_media", { p_media_id: body.media_object_id });
+          if (obj.staging_key) await env.BUCKET.delete(obj.staging_key).catch(() => {});
+          return json(200, { status: "cancelled_pending" });
+        }
+        if (obj.status === "deleted") return json(200, { status: "deleted", idempotent: true });
+        if (obj.status !== "deletion_pending") await rpc(env, "cloud_mark_deletion", { p_media_id: body.media_object_id });
+        try {
+          if (obj.final_key) await env.BUCKET.delete(obj.final_key);
+        } catch (e) {
+          return json(503, { status: "deletion_pending", error: `R2 delete failed; will retry: ${e}` });
+        }
+        await rpc(env, "cloud_confirm_deletion", { p_media_id: body.media_object_id });
+        return json(200, { status: "deleted" });
+      }
+
+      return json(404, { error: "not found" });
+    } catch (e) {
+      return json(500, { error: `worker error: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // Scheduled cleanup (see [triggers] in wrangler.toml): abandoned staging,
+    // promotion leftovers, and the staging-watch sweep run unattended.
+    ctx.waitUntil(runCleanup(env).then((r) => console.log(`scheduled cleanup: ${r.status}`)));
+  },
+};
+
+
+============================================================
+FILE: cloud-worker\src\oauth.ts
+============================================================
+/**
+ * On-device YouTube OAuth (ADR-001 Decision 4): the phone opens Google consent in a
+ * Custom Tab via /oauth/google/start; Google returns the one-time code to
+ * /oauth/google/callback; the Worker exchanges it server-side (confidential secret
+ * stays here) and stores the refresh token ENCRYPTED (AES-256-GCM, vault key =
+ * Worker secret) in Supabase against the initiating user. The PC backend decrypts
+ * with the same vault key when processing that user's videos.
+ */
+
+const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
+const SCOPES = [
+  "https://www.googleapis.com/auth/youtube",
+  "https://www.googleapis.com/auth/youtube.force-ssl",
+  "https://www.googleapis.com/auth/userinfo.email",
+];
+
+export interface OAuthEnv extends Record<string, string> {
+  SUPABASE_URL: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
+  TOKEN_VAULT_KEY: string; // 32-byte base64 AES-256 key
+  YOUTUBE_CLIENT_ID: string;
+  YOUTUBE_CLIENT_SECRET: string;
+  OAUTH_REDIRECT_URI: string; // https://<worker>/oauth/google/callback
+}
+
+export function b64url(bytes: Uint8Array): string {
+  let bin = "";
+  bytes.forEach(b => bin += String.fromCharCode(b));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function aesKey(vaultKeyB64: string): Promise<CryptoKey> {
+  const raw = Uint8Array.from(atob(vaultKeyB64), c => c.charCodeAt(0));
+  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+/** AES-256-GCM; output = base64url(iv || ciphertext). */
+export async function encryptToken(vaultKeyB64: string, plaintext: string): Promise<string> {
+  const key = await aesKey(vaultKeyB64);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv },
+    key, new TextEncoder().encode(plaintext));
+  return b64url(new Uint8Array([...iv, ...new Uint8Array(ct)]));
+}
+
+/** Deterministic JSON parse helpers with strict validation. */
+export function validateTokenResponse(body: Record<string, unknown>): string {
+  const rt = typeof body.refresh_token === "string" ? body.refresh_token : "";
+  if (!rt) return "no refresh_token in token response";
+  if (rt.length < 20 || rt.length > 512) return "refresh_token size implausible";
+  return "";
+}
+
+export function buildAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {
+  const q = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    access_type: "offline",
+    prompt: "consent",
+    include_granted_scopes: "true",
+    scope: SCOPES.join(" "),
+    state,
+  });
+  return `${GOOGLE_AUTH}?${q.toString()}`;
+}
+
+
+============================================================
+FILE: cloud-worker\tsconfig.json
+============================================================
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "lib": ["es2022"],
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts"]
+}
+
+
+============================================================
+FILE: cloud-worker\wrangler.toml
+============================================================
+# Copy to wrangler.toml and fill values before deploy. NEVER commit the real file.
+name = "dispatch-cloud"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# Owner sets these via `wrangler secret put` or the dashboard — never in files:
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY,
+#   DISPATCH_WORKER_TOKEN, R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY, R2_ACCOUNT_ID
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "dispatch-clips"
+
+[vars]
+SUPABASE_URL = "https://aldzlbdxplqkcnyjhzmm.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZHpsYmR4cGxxa2NueWpoem1tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3NDU4MjIsImV4cCI6MjEwODMyMTgyMn0.6wwdz6wIbm8YFVQyKyXpuw3Wub2dMfG5Fq-Z83iD9Mw"
+R2_ACCOUNT_ID = "75d8978aa7345a0df28e89bff1e847ec"
+R2_BUCKET_NAME = "dispatch-clips"
+
+OAUTH_REDIRECT_URI = "https://dispatch-cloud.resolviaai.workers.dev/oauth/google/callback"
+[triggers]
+crons = ["0 */6 * * *"]
+
+
+============================================================
+FILE: DESIGN_SYSTEM.md
+============================================================
+# Dispatch Unified Mobile & Studio Design System Specification
+
+> **Version:** 2.0.0  
+> **Status:** Authoritative System Constitution  
+> **Curriculum Synthesis:** Forensic extraction of 10 Masterclass YouTube Video Transcripts (`design_research/`) + LeadMiner Design Tokens + CapCut Mobile Interaction Model.  
+> **Aesthetic Archetype:** Hybrid **Jensen Huang** (Precise SaaS/AI Operational Grid) $\times$ **Steve Jobs** (Clean Minimalist System).  
+> **Target Scope:** Dual-Surface Source of Truth — Web Review Studio (Wide Desktop) & Native Mobile App (POCO C65 / Android 13/14 HyperOS).
+
+---
+
+## 1. System Philosophy & Executive Summary
+
+Dispatch is a high-grade personal content engine for solo creators. A creator shooting high-definition video on a smartphone and editing vertical clips on a laptop does not have time for ambiguous controls, unanchored floating elements, or AI neon slop.
+
+The visual language of Dispatch is **tactile, calculated, stable, and unmistakably premium**. It adheres strictly to human-computer interaction (HCI) research, biomechanical thumb ergonomics, and the mathematical laws of spatial geometry.
+
+### The Seven Unbreakable Laws of Dispatch UI
+1. **The Single-Direction Law (Video 1):** Every mobile section moves along exactly ONE physical axis. Either a vertical card stack OR a horizontal snap carousel. Multi-axis 2D dashboard grids on mobile are strictly prohibited.
+2. **The 44px Biomechanical Touch Target Rule (Videos 1 & 6):** Every clickable target maintains a minimum $44\text{px} \times 44\text{px}$ bounding box (matching the 10–12mm human thumb pad), with an $8\text{px}$ minimum hitbox separation.
+3. **The 4-Layer Elevation Architecture:** Never pick arbitrary hex colors. Every pixel belongs to an explicit elevation layer (Canvas `#161616` $\to$ Cards `#1C1C1C` $\to$ Wells `#232323` $\to$ Hero Accent `#2563EB`).
+4. **The Senior 4-Size Typography Limit (Video 10):** Operational screens use a maximum of 4 font sizes and 2 font weights. Numbers and metrics are strictly set in `font-mono tabular-nums`.
+5. **Zero Decorative Emojis (Anti-AI Vibecoding Standard):** OS emojis (🚀, 💡, 🔥, ⚡, 📦) are strictly banned. Only crisp, uniform $1.5\text{px}\text{--}2.0\text{px}$ vector SVG icons (`lucide-react`) are permitted.
+6. **Concentric Geometry ($R_{\text{inner}} = R_{\text{outer}} - P$):** Nested elements must follow exact geometric curvature math so border contours remain parallel and natural.
+7. **Tactile Immediacy (Video 9):** Every interactive control provides instant physical tactile feedback (`active:scale-[0.98] transition-all duration-150`) in $<16\text{ms}$.
+
+---
+
+## 2. The 4-Layer Color Architecture & Depth System
+
+Dispatch eliminates arbitrary neon palettes and enforces the **60/30/10 Rule (Videos 8 & 10)**:
+- **60% Surface Base:** Deep charcoal canvas (`#161616`) anchor.
+- **30% Structural Contrast:** Elevated cards (`#1C1C1C`), recessed wells (`#232323`), and borders (`#2E2E2E`).
+- **10% Brand Accent:** Electric Creator Blue (`#2563EB`), reserved strictly for primary actions, active highlights, and focused states.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ Layer 3: Functional Accents & Semantics (10%)              │
+│   • Dispatch Hero CTA (#2563EB / hover: #3B82F6)           │
+│   • Semantic States: Success #22C55E, Warning #F59E0B      │
+├────────────────────────────────────────────────────────────┤
+│ Layer 2: Nested Containers, Wells, Inputs, Deep Wells (30%)│
+│   • bg-surface-200 (#232323) | bg-surface-300 (#282828)   │
+│   • border-border (#2E2E2E) or border-border-strong        │
+├────────────────────────────────────────────────────────────┤
+│ Layer 1: Elevated Surfaces & Cards (30%)                   │
+│   • bg-surface-100 (#1C1C1C)                               │
+│   • border-border (#2E2E2E)                                │
+├────────────────────────────────────────────────────────────┤
+│ Layer 0: Root Canvas / Background (60%)                    │
+│   • bg-studio / bg-background (#161616)                    │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Complete Color Token Reference Table
+
+| Token Name | Hex Code | Tailwind Token | Android Compose Token | Purpose & Application |
+| :--- | :--- | :--- | :--- | :--- |
+| **Canvas** | `#161616` | `bg-studio`, `bg-background` | `CanvasBackground` | Root page background, full window backdrop |
+| **Surface 100** | `#1C1C1C` | `bg-surface-100` | `CardSurface` | Elevated cards, header bars, bottom sheets |
+| **Surface 200** | `#232323` | `bg-surface-200` | `InputBackground` | Nested data wells, input containers, inactive tab wells |
+| **Surface 300** | `#282828` | `bg-surface-300` | `InputBackgroundDeep`| Deep slider tracks, recessed toolbars, preview frames |
+| **Border Default**| `#2E2E2E` | `border-border` | `CardBorder` | Card borders, dividers, subtle separators |
+| **Border Strong** | `#383838` | `border-border-strong`| `CardBorderStrong` | Hover borders, active selection borders |
+| **Hero Brand** | `#2563EB` | `bg-primary`, `text-primary` | `PrimaryBlue` | Primary CTAs, active timeline playhead, focus rings |
+| **Hero Hover** | `#3B82F6` | `hover:bg-primary-hover` | `PrimaryBlueHover` | Hover state for primary buttons |
+| **Hero Soft** | `rgba(37,99,235,0.15)` | `bg-primary/15` | `PrimaryBlueSoft` | Active badge backgrounds, selected template rings |
+| **Text Main** | `#EDEDED` | `text-text-main` | `TextPrimary` | High-contrast headings, prominent labels, titles |
+| **Text Secondary**| `#A0A0A0` | `text-text-secondary` | `TextSecondary` | Subtitles, field labels, metadata descriptions |
+| **Text Muted** | `#707070` | `text-text-muted` | `TextMuted` | Secondary timestamps, unit markers, helper text |
+| **Semantic Success**| `#22C55E`| `text-success`, `bg-success/15`| `SemanticSuccess` | Verified sync, uploaded state, healthy battery |
+| **Semantic Warning**| `#F59E0B`| `text-warning`, `bg-warning/15`| `SemanticWarning` | Soft rate limits, pending upload, YouTube auth req. |
+| **Semantic Danger** | `#EF4444`| `text-danger`, `bg-danger/15` | `SemanticRecording`| Recording pulse, delete clip, permanent failures |
+
+---
+
+## 3. Spatial Geometry & The 8-Point Grid Mathematics (Videos 5 & 10)
+
+Dispatch strictly forbids random pixel dimensions (e.g., `11px`, `19px`, `25px`). Every spatial distance, padding, margin, and container dimension must be cleanly divisible by **4** or **8**.
+
+### Spatial Scale Progression
+```css
+--space-1:  4px;   /* Micro gap: icon-to-label, badge internal padding */
+--space-2:  8px;   /* Tight grouping: label-to-input, chip gap, horizontal spacing */
+--space-3: 12px;   /* Compact container inset, dense list spacing */
+--space-4: 16px;   /* Standard card padding (p-4), modal body inset */
+--space-5: 20px;   /* Comfortable screen gutter (px-5) on compact mobile */
+--space-6: 24px;   /* Standard screen gutter (px-6) on tablet/desktop */
+--space-8: 32px;   /* Section separation between distinct feature blocks */
+--space-12: 48px;  /* View transition margins, empty state breathing room */
+```
+
+### Concentric Corner Radii Formula
+When an inner element sits inside an outer card with padding $P$:
+$$R_{\text{inner}} = R_{\text{outer}} - P$$
+
+* If outer card is `rounded-2xl` ($16\text{px}$) with `p-4` ($16\text{px}$):
+  $$R_{\text{inner}} = 16 - 16 = 0\text{px} \quad \implies \text{Flush or use } R_{\text{inner}} = 6\text{--}8\text{px} \text{ (rounded-md/lg)}$$
+* If outer card is `rounded-xl` ($12\text{px}$) with `p-2` ($8\text{px}$):
+  $$R_{\text{inner}} = 12 - 8 = 4\text{px} \text{ (rounded-sm)}$$
+* If outer card is `rounded-2xl` ($16\text{px}$) with `p-2` ($8\text{px}$):
+  $$R_{\text{inner}} = 16 - 8 = 8\text{px} \text{ (rounded-lg)}$$
+
+---
+
+## 4. Mobile Ergonomics & Bottom Navigation Architecture (Videos 1 & 6)
+
+Mobile navigation is the backbone of app usability. The bottom navigation bar is prime thumb territory.
+
+### Navigation Rules
+1. **The 3 to 5 Tab Law:** Maximum 5 tabs. 3 to 4 is ideal. More than 5 leads to choice paralysis and accidental taps.
+2. **Tab Anatomy:**
+   - Active Tab: Dual visual cue (bold label in brand color + filled vector icon + glowing dot indicator).
+   - Inactive Tab: Outline icon with muted text (`#707070` $\to$ hover `#EDEDED`).
+   - Hitbox: minimum `min-h-[44px] min-w-[64px]` per tab item.
+3. **Safe Area & Home Indicator Clearance:**
+   - Modern notchless phones (POCO C65, iPhone 14/15) have an OS home indicator bar ($34\text{px}$).
+   - The navigation bar must sit strictly above the safe area, never overlapping the home indicator:
+     `pb-[calc(env(safe-area-inset-bottom,34px)+8px)]` or dedicated bottom spacer.
+4. **No Desktop Clutter at the Bottom:** Never put back buttons, logo watermarks, or search bars inside the bottom navigation bar. Use the top bar or dedicated search screens.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ TOP APP BAR (Contextual: Title, Sync Badge, Refresh)       │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│                  MAIN CONTENT VIEWPORT                     │
+│               (Single Direction Vertical Stack)            │
+│                                                            │
+├────────────────────────────────────────────────────────────┤
+│ BOTTOM NAVIGATION DECK (Layer 1: #1C1C1C, border #2E2E2E)  │
+│   [ Record ]      [ Sessions ]      [ Clips ]   [ Settings]│
+├────────────────────────────────────────────────────────────┤
+│ HOME INDICATOR SAFE AREA (34px clear void: #1C1C1C)        │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Typographic Discipline & Numeric Place-Value Alignment (Videos 1, 8, 10)
+
+### The Mobile Type Scaling Paradox (Video 1)
+Despite phone screens being physically smaller than desktop monitors, human eyes hold phones closer ($25\text{--}35\text{cm}$) and thumbs navigate handheld. Therefore, **mobile base body text must never be smaller than 14–16px**, while desktop dashboards can afford 12–14px.
+
+### The 4-Size / 2-Weight Scale for Operational Screens (Video 10)
+| Role | Size | Weight | Tracking / Leading | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| **Page Title** | $18\text{px}$ (`text-lg`) | Semibold (`font-semibold`) | `tracking-tight leading-tight` | "Ready to review" |
+| **Section Header**| $14\text{px}$ (`text-sm`) | Semibold (`font-semibold`) | `tracking-normal leading-snug` | "Layout Framing" |
+| **Body / Labels** | $12\text{px}$ (`text-xs`) | Regular (`font-normal`) | `leading-relaxed text-text-secondary`| "Clips ready from this session" |
+| **Micro Metadata**| $10\text{px}$ (`text-[10px]`)| Medium (`font-medium`) | `font-mono tabular-nums text-text-muted` | "[00:12.40 - 00:14.80]" |
+
+### Place-Value & Monospace Rules
+- All numeric measurements, file sizes, timestamps, and confidence percentages must enforce `font-mono tabular-nums`.
+- In tables and lists, numbers must always be **right-aligned** so digits line up by place value (tens over tens, hundreds over hundreds).
+- Always use non-breaking spaces before units: `42&nbsp;s`, `18.4&nbsp;MB`, `1080&nbsp;p`.
+- Never use three periods `...`; always use the typographic ellipsis glyph `…` (`&hellip;`).
+
+---
+
+## 6. Tactile Micro-Interactions & Animation Physics (Video 9)
+
+An interface feels cheap when buttons don't react immediately. Dispatch implements tactile micro-physics:
+
+1. **Optimistic Press Compression:**
+   Every button and interactive card must implement tactile spring compression on touch:
+   ```css
+   .btn-tactile {
+     transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease;
+   }
+   .btn-tactile:active {
+     transform: scale(0.98);
+   }
+   ```
+2. **Spring Physics for Popovers & Active Words:**
+   Active karaoke subtitle popover badges use calibrated spring stiffness ($k = 636$, damping $c = 24$) with duration $100\text{--}120\text{ms}$.
+3. **Optimistic Toast Notifications (Video 9):**
+   Toasts enter with vertical slide-up ($150\text{ms}$ ease-out), transition state from spinner $\to$ checkmark, and auto-dismiss without blocking the workspace.
+4. **The Law of the Single Hero CTA:**
+   Every screen has **exactly ONE primary glowing hero button** (`bg-primary text-white shadow-hero-glow`). Secondary actions (e.g. "Reject", "Cancel") must remain neutral recessed (`bg-surface-200 border-border text-text-main`). Never have competing colored buttons side-by-side.
+
+---
+
+## 7. The Six Cognitive UX Drivers (Video 3)
+
+1. **Smart Defaults (70–90% Retention):** Pre-select the most common configuration (e.g. 9:16 Fit+Black, Yellow Pop subtitles, YouTube Shorts export). Eliminates decision fatigue.
+2. **Goal Gradient Effect:** Start pipelines visually at $\ge 20\%$ rather than $0\%$ to motivate completion.
+3. **Reciprocity:** Deliver value upfront (render video preview and live subtitle tracks) before demanding user actions.
+4. **IKEA / Endowment Effect:** Allow creators to customize, reposition, and tweak word timings; once a user touches the canvas, they value the clip significantly higher.
+5. **Loss Aversion:** Frame warnings around potential loss (e.g., "Unuploaded raw video will remain safely stored on device until sync is verified").
+6. **Anchor Contrast:** Compare upload speeds and processing metrics against baseline benchmarks.
+
+---
+
+## 8. Anti-AI Vibecoding Standards (Prohibited Patterns)
+
+| Prohibited Pattern (AI Slop) | Mandated Dispatch Standard |
+| :--- | :--- |
+| Native OS emojis (🚀, 💡, 🔥, ⚡, 📦) as icons | Crisp vector SVG icons (`lucide-react` / Phosphor) with uniform 1.5–2px stroke |
+| Arbitrary neon purple/cyan gradients on buttons | Strict 4-layer tonal architecture with Electric Creator Blue `#2563EB` |
+| Harsh black drop shadows (`rgba(0,0,0,0.8)`) | Subtle elevated border (`border-border` `#2E2E2E`) + soft blurred glow |
+| 6+ different font sizes and weights on one card | Maximum 4 font sizes and 2 font weights on core operational screens |
+| Centered currency and metric numbers | Right-aligned numbers set in `font-mono tabular-nums` |
+| Floating cards with no background anchor | Explicit Layer 0 Canvas (`#161616`) anchor containing all cards |
+| Multi-axis chaotic grid layouts on mobile | Strictly single-direction layout per section (vertical stack OR horizontal carousel) |
+| Multiple glowing primary buttons on one screen | Exactly ONE hero CTA button per viewport |
+
+
+============================================================
+FILE: dispatch.egg-info\dependency_links.txt
+============================================================
+
+
+
+============================================================
+FILE: dispatch.egg-info\entry_points.txt
+============================================================
+[console_scripts]
+dispatch = dispatch.main:main
+
+
+============================================================
+FILE: dispatch.egg-info\requires.txt
+============================================================
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
+python-dotenv>=1.0.0
+psutil>=5.9.0
+requests>=2.31.0
+faster-whisper>=1.0.0
+google-api-python-client>=2.140.0
+google-auth-oauthlib>=1.2.0
+google-genai>=1.0.0
+yt-dlp>=2024.8.0
+youtube-transcript-api>=0.6.2
+pillow>=10.0.0
+python-multipart>=0.0.12
+fonttools>=4.40.0
+
+
+============================================================
+FILE: dispatch.egg-info\SOURCES.txt
+============================================================
+README.md
+pyproject.toml
+dispatch/__init__.py
+dispatch/config.py
+dispatch/db.py
+dispatch/main.py
+dispatch.egg-info/PKG-INFO
+dispatch.egg-info/SOURCES.txt
+dispatch.egg-info/dependency_links.txt
+dispatch.egg-info/entry_points.txt
+dispatch.egg-info/requires.txt
+dispatch.egg-info/top_level.txt
+dispatch/ai_clips/__init__.py
+dispatch/ai_clips/highlight_finder.py
+dispatch/ai_clips/preference_learner.py
+dispatch/ai_clips/prompt_templates.py
+dispatch/ai_clips/worker.py
+dispatch/captions/__init__.py
+dispatch/captions/exporter.py
+dispatch/captions/grouper.py
+dispatch/captions/model.py
+dispatch/captions/presets.py
+dispatch/captions/range_sync.py
+dispatch/governor/__init__.py
+dispatch/governor/resource_governor.py
+dispatch/ingestion/__init__.py
+dispatch/ingestion/validator.py
+dispatch/ingestion/watcher.py
+dispatch/orchestrator/__init__.py
+dispatch/orchestrator/heartbeat.py
+dispatch/orchestrator/job_queue.py
+dispatch/orchestrator/pipeline_runner.py
+dispatch/orchestrator/recovery.py
+dispatch/orchestrator/retry_engine.py
+dispatch/orchestrator/state_machine.py
+dispatch/publisher/__init__.py
+dispatch/publisher/instagram.py
+dispatch/publisher/linkedin.py
+dispatch/publisher/outbox.py
+dispatch/publisher/twitter.py
+dispatch/publisher/youtube.py
+dispatch/sync/__init__.py
+dispatch/sync/pairing_codes.py
+dispatch/sync/receiver.py
+dispatch/tools/download_fonts.py
+dispatch/transcription/__init__.py
+dispatch/transcription/audio.py
+dispatch/transcription/gemini_engine.py
+dispatch/transcription/transcriber.py
+dispatch/transcription/worker.py
+dispatch/transport/__init__.py
+dispatch/transport/discovery.py
+dispatch/transport/transport_manager.py
+dispatch/video_engine/__init__.py
+dispatch/video_engine/reframer.py
+dispatch/video_engine/renderer.py
+dispatch/video_engine/silence.py
+dispatch/video_engine/subtitle_generator.py
+dispatch/video_engine/thumbnail.py
+dispatch/web/__init__.py
+dispatch/web/app.py
+dispatch/youtube_inbox/__init__.py
+dispatch/youtube_inbox/catcher.py
+dispatch/youtube_inbox/oauth.py
+dispatch/youtube_inbox/poller.py
+dispatch/youtube_inbox/vtt_parser.py
+dispatch_mobile/__init__.py
+dispatch_mobile/db.py
+dispatch_mobile/recovery.py
+dispatch_mobile/retention.py
+dispatch_mobile/segmenter.py
+tests/test_adversarial_chunk_crypto.py
+tests/test_ai_clips.py
+tests/test_ai_highlight_editorial_quality.py
+tests/test_branding_assets.py
+tests/test_caption_animations_and_backgrounds.py
+tests/test_caption_approval_contract.py
+tests/test_caption_range_sync.py
+tests/test_captions_subsystem.py
+tests/test_chaos.py
+tests/test_clip_trim_contract.py
+tests/test_destructive.py
+tests/test_end_to_end.py
+tests/test_fit_blur_visual_parity.py
+tests/test_font_library_and_rendering.py
+tests/test_gemini_two_stage.py
+tests/test_governor.py
+tests/test_ingestion.py
+tests/test_job_queue.py
+tests/test_layout_framing_architecture.py
+tests/test_mobile_engine.py
+tests/test_orientation.py
+tests/test_phase1_security.py
+tests/test_phase2_youtube.py
+tests/test_phase3_highlights.py
+tests/test_phase4_publishing.py
+tests/test_pillar1_ingestion.py
+tests/test_pillar2_transcription.py
+tests/test_pillar3_highlights.py
+tests/test_pipeline_runner.py
+tests/test_publisher.py
+tests/test_recordings_sessions_separation.py
+tests/test_sync_engine.py
+tests/test_text_caption_separation.py
+tests/test_text_visibility_and_glow.py
+tests/test_thumbnail_freshness.py
+tests/test_transcription.py
+tests/test_transport.py
+tests/test_video_engine.py
+tests/test_web.py
+tests/test_youtube_auth_pairing.py
+tests/test_youtube_caption_timing_fix.py
+tests/test_youtube_inbox.py
+tests/test_youtube_ingest_endpoint.py
+tests/test_youtube_processing_tracker.py
+
+============================================================
+FILE: dispatch.egg-info\top_level.txt
+============================================================
+dispatch
+dispatch_mobile
+
+
+============================================================
+FILE: dispatch\__init__.py
+============================================================
+"""Dispatch: Autonomous Personal Content Engine."""
+__version__ = "1.0.0"
+
+
+============================================================
+FILE: dispatch\ai_clips\__init__.py
+============================================================
+"""AI Clips package for Dispatch."""
+from dispatch.ai_clips.highlight_finder import (
+    identify_and_save_highlights,
+    extract_clips_gemini,
+    extract_clips_local_heuristic,
+    snap_to_word_boundary
+)
+from dispatch.ai_clips.preference_learner import get_negative_feedback_prompt
+
+__all__ = [
+    "identify_and_save_highlights",
+    "extract_clips_gemini",
+    "extract_clips_local_heuristic",
+    "snap_to_word_boundary",
+    "get_negative_feedback_prompt"
+]
+

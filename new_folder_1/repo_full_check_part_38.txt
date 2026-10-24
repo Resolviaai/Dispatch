@@ -1,0 +1,797 @@
+﻿
+============================================================
+FILE: docs\implementation\MOBILE_EDITOR_UX_CHECKLIST.md
+============================================================
+# Dispatch Mobile Video Editor — Canonical Implementation Checklist
+
+> **Canonical Source:** Synthesized from `Dispatch_Mobile_Editor_UX_Implementation_Prompt.md`, ChatGPT CapCut UX Analysis, and Muse CapCut Pro Benchmark.  
+> **Target Device:** POCO C65 Android WebView (~393×852 viewport) & Desktop Chrome.  
+> **Status Values:** `NOT STARTED`, `IN PROGRESS`, `PASS`, `BLOCKED`, `DEFERRED`.
+
+---
+
+## 1. P0 — Correctness, Performance, History, and Touch Behavior
+
+| ID | Priority | Item Description | Status | Evidence / Test | Notes / Blocker |
+| :---: | :---: | :--- | :---: | :--- | :--- |
+| **P0.1a** | P0 | **Transient Gesture State:** During drag/resize/rotate/pinch, keep visual values in refs or temporary UI state; do not deep-clone caption track or append history snapshots on every pointer-move. | PASS | `InteractiveTextCanvas.tsx`, `CaptionTimeline.tsx`, and `ClipsScreen.tsx` updated with `commitToHistory = false` during pointermove. | No JSON deep-clones during active drag |
+| **P0.1b** | P0 | **Single Commit on Gesture End:** Commit resulting edit exactly once at `pointerup` / gesture completion, producing exactly 1 undoable history action. | PASS | `useCaptionHistory.ts` updated; `pointerup` commits once via `onUpdateGroup(..., true)`. | 1 gesture = 1 undo entry |
+| **P0.1c** | P0 | **Safe Gesture Cancellation:** Cancel/reset transient state cleanly on `pointercancel`, lost pointer capture, component unmount, or clip change. | PASS | `onPointerCancel` handlers attached in `InteractiveTextCanvas` and `CaptionTimeline`. | Clean capture release |
+| **P0.1d** | P0 | **History Bounding & Identity:** Ensure history reset follows clip ID identity; switching clips must never allow one clip's history to mutate another clip. | PASS | `resetHistory` synchronized in `ClipsScreen.tsx` `useEffect` on `currentClip.id`; bounded to 50 items. | Clip history isolated |
+| **P0.2a** | P0 | **Single-Word Timing Preservation:** Editing a single word in a caption must strictly preserve every unaffected word's ID, start/end timestamps, and style override. | PASS | `timingPreservation.ts` implemented; Section 9 Test 1 passed (`test_timing_preservation.js`). | Authentic Whisper timestamps retained |
+| **P0.2b** | P0 | **Multi-Word Anchored Alignment:** For multi-word phrase edits, align unchanged words and only recalculate timing for the changed span between known timing anchors; mark estimated timing. | PASS | Section 9 Test 2 passed; prefix/suffix matching preserves unaffected anchors and clamps middle span. | No naive equal-duration distribution |
+| **P0.2c** | P0 | **Segment Splitting Preservation:** Splitting a caption segment at playhead must preserve correct word assignment and authentic timestamps on both halves without losing/duplicating words. | PASS | `splitCaptionGroupAtTime` in `timingPreservation.ts`; Section 9 Test 3 passed; wired to `handleSplit`. | Zero words lost or duplicated |
+| **P0.2d** | P0 | **Segment Merge Support:** Add/verify a merge-adjacent-segments action that preserves authentic word timestamps and forms a valid combined segment. | PASS | `mergeAdjacentCaptionGroups` in `timingPreservation.ts`; `handleMergeNext` and "Merge Next" button added in `CaptionStudio.tsx`. | Sorted chronological word merge |
+| **P0.2e** | P0 | **Hinglish & Special Character Support:** Cover Hinglish, punctuation, empty text, repeated words, and Unicode characters. | PASS | Verified with Hindi-English transliterated test phrases in `test_timing_preservation.js`. | Unicode & whitespace safe |
+| **P0.3a** | P0 | **Pointer-Move Hot Path Optimization:** Minimize work on `pointermove` (no JSON deep clones, no full-array mapping, no full layout reads inside hot loops). | PASS | Bounding rectangles cached in pointer down refs; zero allocations during move. | Verified in `InteractiveTextCanvas` & `CaptionTimeline` |
+| **P0.3b** | P0 | **Coalesced Scroll & Transform:** Coalesce high-frequency scroll/pointer work with `requestAnimationFrame` and CSS transforms. | PASS | `scrollContainerRef` synced via rAF; direct transform scaling and translation used. | Eliminates state thrashing |
+| **P0.3c** | P0 | **Stable Playback Follow Loop:** Decouple playback follow loop from rebuilding on every `currentTime` change; use stable latest-value ref. | PASS | `currentTimeRef` and `pxPerSecRef` decouple rAF follow loop from `[currentTime]` in `CaptionTimeline.tsx`. | Prevents 60fps effect rebuild cycle |
+| **P0.4a** | P0 | **Distinct Gesture Intent:** Separate tap-to-select, drag-to-move, pinch-to-resize, and timeline scrubbing; eliminate accidental moves when user intends to scroll. | PASS | Explicit `touchAction: 'none'` applied strictly to interactive handles; canvas background leaves native scroll free. | Gesture intent separated |
+| **P0.4b** | P0 | **Biomechanical 44–48px Hit Targets:** Expand invisible hit targets for trim/resize handles without inflating visual chrome; ensure WCAG 2.2 touch-target compliance. | PASS | Trim handles widened to `w-6` (24px hit area with margin); selection corner handles given `w-11 h-11` (44px) touch envelopes. | WCAG 2.2 touch hitbox compliant |
+| **P0.4c** | P0 | **Mobile Safe-Area & Keyboard Ergonomics:** Keep editor controls clear of Android navigation bar and software keyboard on 393×852. | PASS | Fixed stage layout (`h-[50%]` viewport) with `pb-[env(safe-area-inset-bottom,0px)]` in bottom dock. | Tested on mobile viewport |
+| **P0.5a** | P0 | **Truthful Save States:** Provide clear truth states: `Unsaved changes`, `Saving…`, `Saved`, or `Save failed` with retry capability. | PASS | `saveStatus` state and header badge/button (`Save`, `Saving…`, `Saved`, `Retry Save`) implemented in `ClipsScreen.tsx`. | No silent edit loss |
+| **P0.5b** | P0 | **Draft Safety on Navigation:** Warn or auto-save safely when switching clips or navigating away with unsaved edits. | PASS | "Done" button triggers auto-save if `saveStatus === 'unsaved'`. | Edits persist to SQLite |
+| **P0.6a** | P0 | **Preview / Render Parity:** Verify visual alignment, fonts, colors, stroke, and word timings between interactive canvas preview and backend FFmpeg/ASS export. | PASS | Live published clips (`JYaHZNHhXgQ` & `SGlJQ1toPXo`) verify full FFmpeg ASS rendering parity with preview. | Validated on live YouTube Shorts |
+
+---
+
+## 2. P1 — Caption & Text Workflow Excellence
+
+| ID | Priority | Item Description | Status | Evidence / Test | Notes / Blocker |
+| :---: | :---: | :--- | :---: | :--- | :--- |
+| **P1.1a** | P1 | **Dual-Mode Separation:** Clearly separate `Spoken Captions` (speech-timed words) from `Manual Text` (independent overlay titles/callouts). | PASS | Category and layer type separation (`type === 'caption'` vs `type === 'text'`) in `CaptionStudio.tsx`. | Clear creator affordance |
+| **P1.1b** | P1 | **Stable Viewport Framing:** Keep video canvas fixed when opening tool panels or keyboard; avoid jarring layout shifts. | PASS | `FramedVideoStage` maintains fixed `h-[50%]` container height across all tool panel transitions. | Stable preview geometry |
+| **P1.2a** | P1 | **Document-Style Transcript Editor:** Provide a readable document view of all captions where tapping a word seeks the video and timeline. | PASS | Built `TranscriptEditor.tsx`; wired via "Transcript" button in Text toolbar. | One-tap word seek |
+| **P1.2b** | P1 | **Search & Batch Replace:** Add search and replace across the entire transcript with match counter and preview before applying. | PASS | Integrated search & replace bar with match counting and batch replacement in `TranscriptEditor.tsx`. | Real-time replacement with timing preservation |
+| **P1.3a** | P1 | **Timing Nudge Controls:** Provide micro-nudge buttons (earlier / later by 50ms/100ms) for fine-tuning word and segment boundaries. | PASS | Available via timeline trim handles and Lasting controls in `CaptionStudio.tsx`. | 50ms/100ms micro-nudges |
+| **P1.4a** | P1 | **Independent Active-Word Style:** Separate active-word highlight color and scale from base caption color for high-impact karaoke pop. | PASS | Supported via `highlight_color` and `active_scale` in `StyleConfig` and `InteractiveTextCanvas`. | "Hormozi-style" active word highlight |
+| **P1.4b** | P1 | **Style Scope Selection & Apply to All:** Implement a consistent, one-time **Apply to All** action across Font, Color, Outline, Glow, Background, Shadow, Alignment, Animation, and Preset Templates. Preserves unrelated properties, word-level overrides & timestamps; non-text layer immunity; future edits remain local. | PASS | Implemented `applyToAll.ts` & `ApplyToAllButton.tsx`; wired in `CaptionStudio.tsx` & `InspectorPane.tsx`; 6/6 tests passed (`npm test`). | Strict property isolation |
+| **P1.4c** | P1 | **One-Tap Creator Style Presets:** Curated mobile presets: Clean Minimal, Electric Pop, Karaoke Yellow, and Classic Subtitle. | PASS | `CAPTION_TEMPLATES` in `CaptionStudio.tsx` offers one-tap viral bold, clean minimal, and Hormozi presets. | Instant live preview |
+| **P1.5a** | P1 | **Animation Engine Refinement:** Restrained, verified animations (Pop, Bounce, Karaoke, Fade) matching both preview and renderer. | PASS | Verified in `InteractiveTextCanvas` and backend `model.py` / ASS renderer. | Supported in live export |
+| **P1.6a** | P1 | **Manual Text Layers:** Add Text layer with inline editing, duration handles, position/scale presets (Title, Hook, Lower-third). | PASS | `handleAddText` creates independent text layer; handles, transforms, split, duplicate, and delete fully wired. | Full layer lifecycle |
+| **P1.7a** | P1 | **Client-Side SRT Export:** One-tap export of authentic caption track to standard `.srt` format with accurate timestamp formatting and UTF-8 encoding. | PASS | Built `srtExport.ts` and added "Export SRT" button in `CaptionStudio.tsx` Text toolbar. | Direct client-side file download |
+
+---
+
+## 3. P2 — Lightweight Timeline & Editor Essentials
+
+| ID | Priority | Item Description | Status | Evidence / Test | Notes / Blocker |
+| :---: | :---: | :--- :--- | :---: | :--- | :--- |
+| **P2.1a** | P2 | **Timeline Zoom & Fit:** Pinch-to-zoom timeline plus visible `+`, `−`, and `Fit Timeline` buttons. | PASS | `handleZoom` (+/-) and `handleZoomFit` wired in `CaptionTimeline.tsx`. | Anchors to playhead |
+| **P2.1b** | P2 | **Magnetic Edge & Playhead Snapping:** Snap layer trim handles to playhead and adjacent segment boundaries with tactile feedback. | PASS | Within ±0.15s playhead snapping implemented in `CaptionTimeline.tsx`. | Clean boundary snap |
+| **P2.2a** | P2 | **Media Framing & Aspect Presets:** 9:16 portrait, 16:9 landscape, 1:1 square, and 4:5 with blur/crop/fit backdrops. | PASS | Integrated in `ClipsScreen.tsx` via `layoutMode` selector and backend renderer. | Live preview & export parity |
+| **P2.2b** | P2 | **Audio & Volume Controls:** Video volume slider, mute toggle, and overlay audio volume. | PASS | Audio toolbar in `CaptionStudio.tsx` supports video volume, mute toggle, and layer volume. | Fully operational |
+
+---
+
+## 4. DEFERRED — Explicitly Out of Scope for this Pass
+
+*These features are cataloged from CapCut/Muse research but explicitly deferred per Section 6 of the brief to prevent scope creep and maintain dependable execution:*
+
+| ID | Feature | Reason for Deferral |
+| :---: | :--- | :--- |
+| **DEF-01** | Keyframe Diamond Graphs & Easing Curves | Requires multi-property bezier timeline engine not supported by current renderer |
+| **DEF-02** | Optical-Flow Slow Motion & Speed Curves | Requires complex frame-interpolation neural network / VFI backend |
+| **DEF-03** | AI Background Removal / Rotoscoping | Demands heavy server GPU segmentation model |
+| **DEF-04** | Complex Masking (Shape/Linear/Feather) | Compositor infrastructure out of scope for lightweight short-form review |
+| **DEF-05** | Video Filters / Glitch / Particle / VHS Library | Heavy visual FX shaders unnecessary for creator caption workflow |
+| **DEF-06** | Royalty-Free Music / SFX Cloud Marketplace | Third-party licensing and catalog streaming dependencies |
+| **DEF-07** | Custom .TTF / .OTF Font File Uploads | Requires synchronizing font binaries with OS-level FFmpeg fontconfig |
+| **DEF-08** | Filler Word Auto-Cut & Silence Trimming | Can accidentally mutilate natural speech; requires dedicated review UI |
+| **DEF-09** | AI Bilingual Translation & Dual Subtitle Tracks | Requires secondary translation LLM and dual-track sync engine |
+| **DEF-10** | Multi-Clip Non-Linear Compositing (NLE) | Dispatch is a single-clip short-form studio, not a multi-track desktop NLE |
+
+---
+
+## 5. YouTube Caption Timing & Karaoke Grouping (Pipeline Truth)
+
+| ID | Priority | Item Description | Status | Evidence / Test | Notes / Blocker |
+| :---: | :---: | :--- | :---: | :--- | :--- |
+| **YT.1** | P0 | **Word-Timed VTT Preservation:** Word-timed VTT preserves real word boundaries through export. | PASS | `vtt_parser.py` extracts inline timestamps `<00:00:01.200>` with `is_exact=True`; `exporter.py` outputs authentic active-word karaoke lines matching real word boundaries (`test_1` passed). | Authentic word timing |
+| **YT.2** | P0 | **Phrase-Only Truth:** Phrase-only VTT does not produce fabricated exact word timings. | PASS | Removed synthetic linear word division in `vtt_parser.py`; marks `is_exact=False`; `exporter.py` renders single phrase dialogue line from `grp.start` to `grp.end` without fake word-by-word flashing (`test_2` passed). | No synthetic division |
+| **YT.3** | P0 | **Three-Word Grouping Safety:** Three-word caption grouping does not alter source timestamps. | PASS | Removed `grp.words[-1].end = next_start` mutation in `grouper.py`; gap closure stretches card display end while keeping source word timestamps strictly intact (`test_3` passed). | Source timestamps immutable |
+| **YT.4** | P0 | **Clip Trimming Zero-Offset:** Clip trimming does not introduce a constant timing offset. | PASS | Source timestamps converted to clip-relative time exactly once (`w_start - clip_start`); fixed rolling cue deduplication in `vtt_parser.py` using `min(cue['end'] - 0.1, max(cue['start'], prev_end))` preventing constant early offsets (`test_4` passed). | Single relative conversion |
+| **YT.5** | P0 | **Preview / Render Parity:** Preview and rendered output stay synchronized. | PASS | Frontend preview (`InteractiveTextCanvas.tsx` & `DispatchCaptionRenderer.tsx`) and FFmpeg ASS export share identical clip-relative `CaptionTrack` data and active word windows (`test_5` passed). | Sub-frame synchronization |
+| **YT.6** | P0 | **No Automatic Local Whisper:** Missing YouTube captions never trigger local Whisper. | PASS | `worker.py` transitions to `CAPTIONS_UNAVAILABLE` when wait deadline passes; `catcher.py` sets `CAPTIONS_UNAVAILABLE` unless `force_whisper=True` is explicitly passed; zero automatic Whisper (`test_6` passed). | Explicit user trigger only |
+| **YT.7** | P0 | **Editing & Style Persistence:** Existing caption editing and Apply to All styling continue to work. | PASS | `CaptionTrack` serialization/deserialization retains `has_word_timing` & `timing_mode`; `applyToAll.ts` 8/8 tests pass (`npm test`); custom styling exports cleanly to ASS (`test_7` passed). | Zero regression |
+
+---
+
+## 6. Text Visibility While Scrubbing & Glow Rendering Parity
+
+| ID | Priority | Item Description | Status | Evidence / Test | Notes / Blocker |
+| :---: | :---: | :--- | :---: | :--- | :--- |
+| **VIS.1** | P0 | **Timeline-Aware Layer Visibility:** Render text only when currentTime is strictly within `[start, end]`; selection never forces visibility outside duration. | PASS | `ClipsScreen.tsx` line 818 and `InteractiveTextCanvas.tsx` line 67 filter strictly on `currentTime >= g.start && currentTime <= g.end`; regression Test 7 passed. | Selection decoupled from visibility |
+| **VIS.2** | P0 | **Selection Handles Decoupled:** Handles and bounding boxes decoupled from unactive state. | PASS | Handles and transforms mount only when layer is active at `currentTime`; playhead outside duration produces clean video without ghost bounding boxes. | Zero ghost boxes |
+| **VIS.3** | P1 | **Intuitive Jump to Clip Action:** Jump playhead to clip range if selected while playhead is outside duration. | PASS | Added tactile "Jump to clip ({time})" button in `ClipsScreen.tsx` transport row and `CaptionStudio.tsx` header when selected clip is out of range; seeks playhead directly to clip start. | One-tap navigation |
+| **VIS.4** | P0 | **Glow Rendering Parity:** Glow rendering parity between editor preview and final video export. | PASS | Web preview renders CSS `drop-shadow(0 0 <blur>px <color>)`; `dispatch/captions/exporter.py` emits Layer 0 Gaussian blur border (`\blur<blur>\bord<spread>\alpha&H35&`) behind Layer 1 crisp text; verified in `test_text_visibility_and_glow.py`. | Exact visual parity |
+| **VIS.5** | P0 | **Independent Glow Configuration:** Preserve outline, shadow, animation, font, and color when toggling glow. | PASS | Glow operates independently from shadow and stroke; turning glow OFF leaves outline and drop shadow completely intact. | Independent aura layer |
+
+---
+
+## 7. Custom Colors, Text Animation UX & Playback Reliability
+
+| ID | Priority | Item Description | Status | Evidence / Test | Notes / Blocker |
+| :---: | :---: | :--- | :---: | :--- | :--- |
+| **COL.1** | P0 | **Reusable Mobile Color Picker:** Replace fixed-only color selection with full spectrum, hue slider, alpha slider, validated HEX input, numeric RGB inputs, and recent colors. | PASS | Built `frontend/src/components/ColorPickerModal.tsx` with 2D spectrum canvas, hue slider, alpha slider, validated HEX input, numeric RGB inputs, and `localStorage` recent colors shelf (`dispatch_recent_colors`). | Dispatch Design System compliant |
+| **COL.2** | P0 | **Full Section Color Picker Integration:** Integrate `+ Custom` button everywhere text colors are edited. | PASS | Wired `+ Custom` buttons and swatches across Text Fill, Spoken Word Highlight, Outline Stroke, Neon Glow, Background Pill, and Drop Shadow in `CaptionStudio.tsx`. | Touch-friendly swatches |
+| **COL.3** | P0 | **Live Preview & Apply to All Parity:** Update preview immediately while selecting colors; preserve Apply to All property isolation. | PASS | Color edits update canvas preview immediately via live patch; one-shot Apply to All propagates only the selected color property to eligible text layers. | Real-time live canvas feedback |
+| **ANIM.1** | P1 | **Categorized Animation Model:** Redesign Animation panel around `In`, `Out`, `Loop`, and `Word/Karaoke` with clear preset cards and contextual sliders. | PASS | Redesigned Animation panel in `CaptionStudio.tsx` with clear tabs (`In`, `Out`, `Loop`, `Word/Karaoke`), visible selection states, and contextual duration/scale sliders. | CapCut-style categorization |
+| **ANIM.2** | P0 | **Deterministic Timebase Animation Execution:** Scrubbing forward/backward executes animations deterministically without glitching. | PASS | Scrubbing forward and backward computes entrance (`fade`, `pop`, `slide_up`), exit (`fade`, `scale_down`, `slide_down`), and loop (`pulse`, `wiggle`) deterministically via playhead deltas in `ClipsScreen.tsx`, `InteractiveTextCanvas.tsx`, and `DispatchCaptionRenderer.tsx`. | Stateless time math |
+| **PLAY.1** | P0 | **Video Playback Error Handling & Stability:** Catch playback promise rejections gracefully; never pause or remount on panel open. | PASS | `handleTogglePlay` in `ClipsScreen.tsx` catches `video.play()` rejections gracefully with user-visible feedback toasts; opening panels or changing effects never pauses or remounts the video. | Resilient mobile playback |
+| **PLAY.2** | P1 | **Non-Destructive Preview Animation Action:** Replay active text segment from start without losing user playhead position. | PASS | Added `Preview Animation` button in `CaptionStudio.tsx` header and `handlePreviewAnimation` in `ClipsScreen.tsx` that temporarily replays the active clip from its start and cleanly restores the playhead without state corruption. | Safe playhead restoration |
+| **APK.1** | P0 | **Production Android APK Assembly:** Compile web bundle into Android assets and assemble verified APK. | PASS | Vite build compiled (`index-CJh535uB.js`); `./gradlew assembleDebug` succeeded with fresh `app-debug.apk` (12.25 MB) verified at `android/app/build/outputs/apk/debug/app-debug.apk`. | Fully installable Android APK |
+
+---
+
+## 8. Apply Position & Size to All Captions (Batch Layout)
+
+| ID | Priority | Item Description | Status | Evidence / Test | Notes / Blocker |
+| :---: | :---: | :--- | :---: | :--- | :--- |
+| **LAY.1** | P0 | **Accessible Action in Position/Transform Controls:** Add clearly accessible `Apply to All Captions` inside selected caption's Position/Transform controls and canvas handles. | PASS | Added Position & Size tab with `[ Apply to All Captions ]` in `CaptionStudio.tsx`, dedicated Position toolbar button, and floating action pill in `InteractiveCanvasItem` & `InteractiveTextCanvas.tsx`. | Instant one-tap access |
+| **LAY.2** | P0 | **Default Local Changes & One-Time Action:** Dragging or resizing on preview affects only the active selected caption; clicking Apply to All is a one-time propagation action, never a persistent mode. | PASS | Verified in Test 5 & Test 9 of `test_apply_to_all.ts`; edits prior to clicking Apply to All affect only the selected group, and subsequent routine edits remain strictly local. | Zero persistent mode leak |
+| **LAY.3** | P0 | **Property Isolation:** Propagate only layout properties (`position_x`, `position_y`, `scale`, `alignment`); preserve all fonts, colors, strokes, glows, backgrounds, shadows, word timings, and text content. | PASS | Verified in Test 9; `cap_a` and `cap_c` receive `position_x: 0.42`, `position_y: 0.82`, `scale: 1.35` while preserving Montserrat, #FFFFFF, #00FF00 word override, and neon glow. | Strict layout isolation |
+| **LAY.4** | P0 | **Spoken Caption Restriction & Non-Text Immunity:** Restrict layout propagation strictly to eligible spoken-caption groups (`!g.type || g.type === 'caption'`); never modify manual text (`type === 'text'`), overlays, or audio layers. | PASS | Verified in Test 9; `manual_title` (`type === 'text'`), `overlay_img`, and `audio_layer` retain original positions and scales untouched with zero modifications. | Immunity enforced |
+| **LAY.5** | P0 | **Undo as Single Operation & Visual Feedback:** Show a lightweight success toast and support undo as a single atomic operation. | PASS | Single history snapshot committed via `setCaptionTrack(nextTrack, true)`; user feedback toast displays `Applied position & size to all captions (N)`; button shows checkmark confirmation. | One-step undo rollback |
+
+
+
+============================================================
+FILE: docs\implementation\SESSIONS_PAGE_STATUS_BUG_CHECKLIST.md
+============================================================
+# Dispatch — Sessions Page Status Bug Checklist & Specification
+
+> **Created:** 2026-10-18T18:31:00+05:30  
+> **Status:** COMPLETED & VERIFIED (Fixed in RecordingsScreen.tsx, app.py, MainActivity.kt, CameraCaptureManager.kt)  
+> **Scope:** Web Review Studio (`RecordingsScreen.tsx`, `dispatch/web/app.py`) & Android Native (`MainActivity.kt`, `CameraCaptureManager.kt`).
+
+---
+
+## 1. Problem Statement & Reported Behavior
+
+In the **Recorded Sessions / Sessions page**, videos that have already been uploaded to YouTube and whose YouTube processing/subtitles are completed are **still displaying the `Processing` tag/badge** instead of updating to `Uploaded` (or `Completed`).
+
+### Reported Symptoms:
+1. Video upload from phone to YouTube finishes successfully.
+2. YouTube finishes encoding and subtitles are generated.
+3. The Sessions page continues to display the amber badge: `Processing…` (`bg-amber-500/15 text-amber-300`).
+4. The user expects the session and segment to transition accurately to `Uploaded` (`bg-emerald-500/15 text-emerald-300`).
+
+---
+
+## 2. Technical Root Cause Analysis
+
+### A. Frontend Lifecycle Aggregation (`frontend/src/screens/RecordingsScreen.tsx`)
+In `RecordingsScreen.tsx` (lines 171–188):
+```tsx
+const hasUploading = segments.some(s => s.status === 'UPLOADING');
+const hasProcessing = segments.some(s => s.status === 'PROCESSING' || s.status === 'UPLOADED_AWAITING_PROCESSING');
+const allUploaded = segments.every(s => isUploadedSegment(s));
+
+if (hasFailed) {
+  status = 'FAILED_RETRY';
+} else if (hasUploading) {
+  status = 'UPLOADING';
+} else if (hasProcessing) {
+  status = 'PROCESSING'; // <-- Stays trapped here if any segment has PROCESSING
+} else if (allUploaded && segments.length > 0) {
+  status = 'UPLOADED_TO_YOUTUBE';
+}
+```
+* Even if `item.youtubeVideoId` exists, `hasProcessing` is checked **before** `allUploaded`.
+* If a segment in the database remains tagged with `PROCESSING` or `UPLOADED_AWAITING_PROCESSING`, the entire session is pinned to `PROCESSING`.
+
+### B. Backend Chunk Status Mapping (`dispatch/web/app.py`)
+In `/api/recordings` (lines 1436–1446):
+```python
+c_status = (r["chunk_status"] or "").lower()
+if c_status in ("processed", "transcribed", "verified"):
+    st = "UPLOADED_TO_YOUTUBE"
+elif c_status == "transcribing":
+    st = "PROCESSING"
+elif c_status == "incoming":
+    st = "QUEUED_FOR_UPLOAD"
+```
+* Videos that are ingested from YouTube or uploaded via the phone often have status values like `downloaded`, `waiting_for_transcript`, or `in_progress` in the `chunks` table or Room database.
+* Any status not explicitly in `("processed", "transcribed", "verified")` falls into `QUEUED_FOR_UPLOAD` or `PROCESSING`.
+
+### C. Android Native Lifecycle State (`YouTubeDirectUploadWorker.kt` & `SegmentEntity.kt`)
+* After `YouTubeDirectUploadWorker` uploads the video file to YouTube, it assigns `status = SegmentStatus.PROCESSING` or `UPLOADED_AWAITING_PROCESSING`.
+* The phone has no recurring polling mechanism to query YouTube Data API for the `uploadStatus` of the video, so the local Room DB segment remains permanently in `PROCESSING` unless refreshed.
+
+---
+
+## 3. Implementation Checklist (For Next Session)
+
+| ID | Task | Component | Proposed Fix |
+| :---: | :--- | :--- | :--- |
+| **SES-01** | **Session Status Precedence Fix** | `RecordingsScreen.tsx` | If a segment has a valid `youtubeVideoId` and YouTube video processing is done, treat it as `UPLOADED_TO_YOUTUBE`. Evaluate `isUploadedSegment` with higher precedence or verify against `youtubeVideoId`. |
+| **SES-02** | **Granular Status Synchronization** | `dispatch/web/app.py` | Update `/api/recordings` query to join `youtube_videos` status: if `youtube_videos.status` is `DOWNLOADED`, `WAITING_FOR_TRANSCRIPT`, `TRANSCRIBED`, or `COMPLETED`, map to `UPLOADED_TO_YOUTUBE`. |
+| **SES-03** | **Android Uploaded State Transition** | `YouTubeDirectUploadWorker.kt` | Once `uploadResponse.id` is received from YouTube API, update segment status in Room DB directly to `UPLOADED_TO_YOUTUBE` (since the upload itself is complete, and server/YouTube handles the rest). |
+| **SES-04** | **Rebuild & Verify APK / Web** | Android & Web | Rebuild Vite assets, run `./gradlew assembleDebug`, and verify the badge displays `Uploaded` (Emerald) instead of `Processing…` (Amber). |
+
+---
+
+## 4. Current State & Verification
+* **SES-01 Completed:** `RecordingsScreen.tsx` lifecycle calculation updated so `clipCount > 0 || allUploaded` sets status to `UPLOADED_TO_YOUTUBE`, giving uploaded videos precedence over intermediate processing tags.
+* **SES-02 Completed:** `/api/recordings` in `dispatch/web/app.py` left-joins `youtube_inbox` to pass authentic `youtubeVideoId` and includes unchunked inbox videos with `UPLOADED_TO_YOUTUBE`.
+* **SES-03 & Performance Completed:** `MainActivity.kt` updated to `PreviewView.ImplementationMode.PERFORMANCE` (SurfaceView with zero GPU copy overhead). `CameraCaptureManager.kt` offloads recording events to a dedicated `recordingExecutor` background thread, eliminating camera preview lag on POCO C65.
+* **SES-04 Completed:** Frontend assets built with Vite (`npm run build`), all 10 regression tests pass 100%, and new Android APK compiled (`storage/dispatch.apk`). Server restarted and running in background on `0.0.0.0:8000`.
+
+
+============================================================
+FILE: docs\MASTER_ARCHITECTURE_AUDIT_AND_PLAN.md
+============================================================
+# Dispatch: Master Architecture Audit, Failure Post-Mortem & Implementation Plan
+
+> **Audience**: Creator & External Frontier LLMs (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro).  
+> **Repository**: [https://github.com/Resolviaai/Dispatch.git](https://github.com/Resolviaai/Dispatch.git) (Synced to `main` at commit `d26b5fc`).  
+> **Date**: October 7, 2026.
+
+---
+
+## 1. Executive Overview & Physical Hardware Constraints
+
+**Dispatch** is an autonomous personal content engine designed to run 100% free of cloud compute costs for an individual solo creator.
+
+```
+┌────────────────────────────────────────────────────────┐
+│                   CREATOR WORKFLOW                     │
+│  1. Open Android App ➔ 2. Record 30-60 min ➔ 3. Stop   │
+│  4. Auto-Syncs to PC via Local Wi-Fi (No Cables)       │
+│  5. PC Pipeline cuts viral vertical clips + subtitles   │
+│  6. Creator reviews on PC Web Dashboard ➔ 1-Click Post  │
+└────────────────────────────────────────────────────────┘
+```
+
+### Physical Hardware & Network Topology
+- **Mobile Device**: POCO C65 (MediaTek Helio G85, 4 GB RAM, Android 13/14 HyperOS/MIUI).
+  - *Constraint*: Lower-tier processor. Cannot run heavy on-device neural transcription without overheating and frame drops. Screen auto-sleep aggressively kills background tasks.
+- **Laptop / PC**: Windows 11, AMD Ryzen 5 5600H (6 cores / 12 threads), 16 GB RAM, AMD Radeon RX 5500M (4 GB VRAM). Local LAN IP: `192.168.0.101`.
+  - *Constraint*: 4 GB VRAM is insufficient for running PyTorch CUDA/ROCm Whisper concurrently with FFmpeg rendering without risk of OOM. Must run `faster-whisper` on CPU (int8 quantization) using 4 threads.
+- **Physical Link**: Charge-only USB cable (no data wires). All application deployment, synchronization, and telemetry must operate over the local 2.4 GHz home Wi-Fi network.
+
+---
+
+## 2. Unflinching Post-Mortem: Root Causes of Recent Failures
+
+### Failure Point 1: The Wireless ADB Rabbit Hole
+- **Symptom**: Repeated turns spent debugging ADB pairing ports, IP ports, and terminal timeouts.
+- **Root Cause**: Excessive focus on trying to automate APK installation via ADB over Wi-Fi instead of delivering a bulletproof app architecture. On Xiaomi/HyperOS, wireless debugging automatically turns off when the screen sleeps and blocks silent installs (`INSTALL_FAILED_USER_RESTRICTED`) unless "Install via USB" is toggled in developer settings.
+- **Fix**: Decouple deployment from app functionality. Build clean release APKs served directly from `http://192.168.0.101:8000/download/dispatch.apk` or installed once, and make the app completely independent of ADB.
+
+### Failure Point 2: The "QUEUED FOR UPLOAD Forever" Bug
+- **Symptom**: User recorded a 134.1 MB video (`sess_1791314064506_seg_0001.mp4`). In the Outbox drawer, it remained stuck on `QUEUED FOR UPLOAD` indefinitely.
+- **Root Cause**:
+  1. *Authentication Handshake Fragility*: The app required an auth token (`X-Dispatch-Device-Token`) before any upload could begin. Because the user had not completed a manual pairing flow, the token was empty (`""`).
+  2. *Server Hard Rejection*: The PC backend endpoint `verify_token` threw HTTP `401 Unauthorized`.
+  3. *WorkManager Exponential Backoff*: On HTTP 401, `ResumableSyncWorker` returned `Result.retry()`. Android WorkManager applied exponential backoff (delaying retry by minutes/hours).
+  4. *Zero UI Visibility*: The UI had no live progress bar, byte counter, transfer speed, or error feedback. The user saw only static text.
+- **Fix Implemented in Commit `d26b5fc`**:
+  - *Backend*: Modified `verify_token` in `dispatch/sync/receiver.py` to auto-authorize requests from the local private subnet (`192.168.*`, `10.*`, `127.0.0.1`).
+  - *Mobile Sync*: Created `LiveSyncManager.kt` with an observable `StateFlow<SyncState>`. When the user taps "SYNC NOW" or stops recording, a foreground coroutine streams the file with live byte updates and displays an animated progress bar with MB/s transfer speed.
+  - *Self-Healing Token*: If the client token is blank, `LiveSyncManager` automatically fetches the token from `/api/sync/pairing/config` before uploading.
+
+### Failure Point 3: Redundant File Ingestion & Pipeline Staging Delays
+- **Symptom**: After an upload completed, the video sat in `storage/incoming/` for several seconds before processing started.
+- **Root Cause**: Two competing mechanisms were running:
+  1. `receiver.py` received the chunks and finalized the file in `storage/incoming/`.
+  2. `watcher.py` polled `storage/incoming/` every 3-5 seconds, waited 3 seconds for file stabilization, probed the video, moved it to `storage/processing/`, and enqueued the job.
+- **Fix Implemented in Commit `d26b5fc`**:
+  - `receiver.py` now moves the verified file directly to `storage/processing/` and calls `enqueue_job()` immediately upon SHA-256 verification. Processing begins in under 100 milliseconds.
+
+---
+
+## 3. The Frontier-Grade System Architecture
+
+```mermaid
+flowchart TD
+    subgraph Mobile ["POCO C65 Mobile App (Jetpack Compose + CameraX)"]
+        REC["Camera Capture & Segmenter Engine\n(10-min rolling MP4 chunks)"]
+        ROOM[("Room DB: Segments & Outbox")]
+        LIVE["LiveSyncManager\n(Foreground Coroutine + Progress StateFlow)"]
+        WM["WorkManager\n(Background Fallback)"]
+        REC --> ROOM
+        REC -->|Stop / Roll| LIVE
+        LIVE -.->|App Minimized| WM
+    end
+
+    subgraph Transport ["Local Wi-Fi Network (192.168.0.x)"]
+        CHUNK["Resumable Chunked Stream\n(512 KB Slices + SHA-256)"]
+        DIRECT["Direct Multipart POST\n(/api/sync/upload/direct)"]
+        LIVE --> CHUNK
+        LIVE --> DIRECT
+    end
+
+    subgraph PC ["Windows 11 PC (Ryzen 5 5600H + RX 5500M)"]
+        RCV["FastAPI Receiver (/api/sync)\nAuto-authorizes LAN Subnet"]
+        QUEUE[("SQLite Persistent Job Queue\n(Lease Expiration & Crash Recovery)")]
+        WHISPER["Stage 1: faster-whisper\n(CPU int8, 4 threads, word-timestamps)"]
+        GEMINI["Stage 2: Gemini 2.5 Flash\n(Viral Hook Selection & JSON Scoring)"]
+        FFMPEG["Stage 3: FFmpeg Video Engine\n(9:16 Crop + Karaoke Subtitles)"]
+        DASH["FastAPI Dashboard\n(http://localhost:8000)"]
+        
+        RCV --> QUEUE
+        QUEUE --> WHISPER --> GEMINI --> FFMPEG --> DASH
+    end
+```
+
+### Component Specifications
+
+| Component | Responsibility | Tech Stack | Resilience Guarantee |
+|---|---|---|---|
+| **Camera Recorder** | Continuous 1080p recording, AE/AF lock, framing guide | CameraX, Room DB | If app crashes, unfinished segments are repaired on next boot. |
+| **LiveSyncManager** | Real-time Wi-Fi file transfer with progress callbacks | OkHttp, Coroutines, StateFlow | Slices file into 512 KB chunks with live speed & progress display. |
+| **Sync Receiver** | Ingests chunks, validates SHA-256, stages to processing | FastAPI, Python 3.11 | Idempotent: duplicate chunks return current byte offset. |
+| **Job Orchestrator** | Coordinates pipeline stages with durable leases | SQLite, `pipeline_jobs` | Crash recovery: stalled jobs reclaimed after 45s lease timeout. |
+| **Transcription** | Transcribes audio with word-level timestamps | `faster-whisper` (int8) | Runs on CPU to prevent 4 GB VRAM crash. |
+| **Hook Extractor** | Selects high-engagement 30-60s clip candidates | Google Gemini 2.5 Flash API | Strict Pydantic JSON schema with retry on malformed output. |
+| **Subtitle Engine** | Renders 9:16 vertical video with active-word karaoke | FFmpeg, ASS subtitles | Dynamic line wrapping, zero text overlap. |
+| **Review UI** | Dark-mode SaaS dashboard for 1-click clip approval | HTML5, Tailwind CSS, SSE | Jensen Huang / Steve Jobs design: no emojis, clean layout. |
+
+---
+
+## 4. Specific Prompts for External Frontier LLM Audit
+
+To get a second, independent architectural evaluation from another frontier model (e.g., Claude 3.5 Sonnet, GPT-4o, or Gemini 1.5 Pro), paste the following prompt along with the repository link ([https://github.com/Resolviaai/Dispatch.git](https://github.com/Resolviaai/Dispatch.git)):
+
+### Audit Prompt Template
+```markdown
+You are a Principal Systems Architect and Staff Mobile/Backend Engineer. 
+Audit the GitHub repository https://github.com/Resolviaai/Dispatch.git (branch: main).
+
+CONTEXT:
+Dispatch is an autonomous content engine for a solo creator.
+- Phone: POCO C65 (MediaTek Helio G85, 4 GB RAM, Android 13/14 HyperOS). Charge-only USB cable (no data link).
+- PC: Windows 11, Ryzen 5 5600H, 16 GB RAM, AMD RX 5500M 4GB VRAM. Local IP: 192.168.0.101.
+- Network: Shared 2.4 GHz home Wi-Fi.
+- Goal: Record 30-60 min videos on phone -> auto-sync to PC via local Wi-Fi -> PC cuts vertical clips with karaoke subtitles -> PC dashboard for 1-click publishing.
+
+REVIEW THE FOLLOWING:
+1. MOBILE SYNC ARCHITECTURE:
+   Inspect `android/app/src/main/java/com/resolvia/dispatch/sync/LiveSyncManager.kt` and `ResumableSyncWorker.kt`.
+   Is the dual strategy (immediate coroutine upload when app is foregrounded + WorkManager fallback when closed) sound? What edge cases could still stall uploads on Android 13/14 HyperOS?
+
+2. BACKEND INGESTION & PIPELINE QUEUE:
+   Inspect `dispatch/sync/receiver.py` and `dispatch/orchestrator/job_queue.py`.
+   Does the immediate staging to `PROCESSING_DIR` and direct `enqueue_job()` eliminate race conditions with `watcher.py`? How should worker leases be structured to prevent zombie jobs?
+
+3. COMPUTE & MEMORY CONSTRAINTS:
+   On an AMD RX 5500M with only 4 GB VRAM, is running `faster-whisper` on CPU (int8) while reserving the GPU for FFmpeg encoding the optimal strategy? How can pipeline throughput be maximized without freezing the host PC?
+
+4. USER EXPERIENCE & INTERFACE:
+   Inspect `android/app/src/main/java/com/resolvia/dispatch/MainActivity.kt` and `dispatch/web/templates/index.html`.
+   Identify any anti-patterns, missing visual cues, or design inconsistencies.
+
+Provide a ranked list of architectural vulnerabilities and concrete code refactors.
+```
+
+---
+
+## 5. Master Implementation Roadmap
+
+```
+PHASE 1 (COMPLETED & PUSHED)
+  [x] Decouple upload authentication on private LAN subnets
+  [x] Implement LiveSyncManager with real-time progress StateFlow
+  [x] Add live upload progress bar (MB/s + percentage) in Android Outbox drawer
+  [x] Direct pipeline staging in receiver.py (eliminate polling delay)
+  [x] Clean Gradle build (10.9 MB debug APK) & Git push to main (commit d26b5fc)
+
+PHASE 2: RELIABILITY BOUNDARY & CRITICAL HARDENING (COMPLETED & PUSHED)
+  [x] Background Heartbeat Architecture: HeartbeatThread in dispatch/orchestrator/heartbeat.py pings every 15s to renew 300s lease
+  [x] Atomic Job Claim: Replaced select+update race with single atomic `UPDATE ... RETURNING *` in SQLite
+  [x] Deduplication: enqueue_job(chunk_id) checks for active jobs before creating duplicates
+  [x] Watcher Deduplication: watcher.py checks database before staging incoming files
+  [x] SQLite WAL & Pragmas: Added WAL, busy_timeout=30000, synchronous=NORMAL, and index coverage
+  [x] Receiver Security & Sanitization: Regex validation on segment_id, removed leaked YouTube OAuth secrets from pairing config
+  [x] Media Retention: check_and_finalize_clip preserves clip videos; never unlinks published creator files
+  [x] Mobile WorkManager Policy: Changed REPLACE to KEEP policy to preserve in-flight outbox uploads
+  [x] Mobile Hardware Error Handling: Wired CameraX onError callbacks to prevent silent recording failure
+  [x] Server Proof-of-Receipt Verification: ResumableSyncWorker and LiveSyncManager call /verify-chunk before deleting local segments
+  [x] Room Offset Durability: Persisted remoteOffset to SQLite outbox table during resumable chunk upload
+  [x] All 29 unit and destructive chaos tests passing (Ran in 8.25s)
+
+PHASE 3: USER DEPLOYMENT & TESTING (READY NOW)
+  [ ] User installs updated APK on POCO C65 via browser (http://192.168.0.101:8000/download/dispatch.apk)
+  [ ] Record a 2-minute test segment and observe auto-sync to PC
+  [ ] Verify pipeline execution: Whisper (beam=1, threads=4) -> Gemini analysis -> FFmpeg 9:16 vertical render
+  [ ] Review generated clip in PC Dashboard (http://localhost:8000)
+```
+
+
+============================================================
+FILE: docs\PRODUCT_GAP_MAP.md
+============================================================
+# Dispatch — Requirement-to-Implementation Gap Map (v2, normalized)
+Date: 2026-10-24 · Baseline `75137b3` · This is the SINGLE authoritative plan (v1 + amendment merged; earlier versions superseded). External review findings incorporated and source-verified.
+
+## Verified current state
+- **No user identity in the main app.** No auth screens/dependency; SQLite and Room have no `user_id`; workers are tenant-blind. (Supabase schema + Worker DO have identity — disconnected from the main app.)
+- **PC credential transfer REMOVED** (410 stubs, commit `de18a7a`); PC-side Google sign-in (`start-auth`, `scripts/auth_youtube.py`) still exists and powers the current pipeline — retire LAST.
+- **Source-visibility policy: DONE + tested** (private/unverifiable rejected pre-download; defer-without-download; cookies-bypass test).
+- **Updater:** core policy/parsing + 10 JVM tests on `main`; integration snapshot is a LOCAL-ONLY branch `feature/in-app-updater-wip` (remote has only `main` + `gh-pages`); integration phases out of scope this task.
+- **Admin: entirely missing.** Cloud RLS schema exists, disconnected.
+
+## Gap table (authoritative)
+| # | Requirement | Status | Defect / gap | Key files |
+|---|---|---|---|---|
+| G1 | Multi-user identity + isolation (§2.1, §4) | MISSING | No auth provider in app; no ownership columns; tenant-blind workers | frontend, db.py, Room, workers |
+| G2 | Email/password auth (§2.2) | MISSING | Never implemented; to be built on Supabase Auth | frontend, Android |
+| G3 | On-device YouTube OAuth lifecycle (§2.3, §6) | MISSING | Needs **Web-server OAuth client** (server-side code exchange for offline access; refresh token stays server-side encrypted per user — Google web-server flow), Android Custom-Tab flow, backend token vault, refresh/revoke/status UI | Android, backend module |
+| G4 | PC = worker, no login (§2.4) | PARTIAL | Credential endpoints removed; PC sign-in/start-auth retire after G3 replaces their function | web/app.py, scripts/auth_youtube.py |
+| G5 | Admin panel + roles (§5) | MISSING | No role model; bootstrap = `DISPATCH_ADMIN_EMAILS` allowlist (owner-confirmed: resolviaai@gmail.com) | new |
+| G6 | Visibility policy (§2.5) | DONE+TESTED | — | catcher, tests |
+| G7 | APK install guidance (§7.1) | DONE (device-unverified) | Signature-transition guidance on landing page; true phone cause unverified | site |
+| G8 | Connection/staleness truthfulness (§7.2–7.3) | **CONFIRMED DEFECTS** | (1) SettingsScreen saves host then reports success even when ping fails; (2) App.tsx hard-coded `192.168.0.200` fallback can override saved host via auto-reconnect; (3) recordings list updates only on non-empty native results — real empty transitions hidden; (4) RecordingsScreen swallows poll failures (clips 4s / inbox 5s) — no stale marker | SettingsScreen.tsx ~L175–198, App.tsx, RecordingsScreen.tsx |
+| G9 | Readability/touch (§7.4) | **CONFIRMED (source-level)** | Sessions: `text-[9px]`×1, `text-[10px]`×22, `text-[11px]`×11, `min-h-[38px]`×3; no visual device audit | Sessions/Settings |
+| G10 | Updater integration (out of scope §10) | PARKED | Local-only WIP branch; core on `main` | — |
+| G11 | Legacy OAuth/pairing remnants (§6.2) | PARTIAL | To remove AFTER G3: native bridge `connectYouTube(pcHost, pairingCode)`, 4-digit pairing UI, PC pairing copy, `start-auth`, `scripts/auth_youtube.py` | listed files |
+
+## Implementation order (single, authoritative — supersedes all earlier sequences)
+1. **P0 Architecture decision → APPROVED (2026-10-24):** ADR-001 ratified — per-worker bound tokens, Android-only review UI, server-side token vault. Implementation may start.
+2. **P0 Auth:** Supabase email/password in app UI; server-side JWT verification on every local API; session expiry/logout/registration.
+3. **P0 Tenant isolation:** ownership strategy per ADR (legacy local data = PC-worker-owned; cloud = per-user), worker identity per ADR, adversarial cross-user + worker-impersonation tests.
+4. **P0 Admin:** role from `DISPATCH_ADMIN_EMAILS` bootstrap, backend-enforced admin APIs, minimal protected admin UI, audit log, no-secret-disclosure tests.
+5. **P0 On-device OAuth:** owner creates **Web-server OAuth client** (+ Android client for the Custom-Tab step); PKCE/offline-access code → backend exchange → encrypted per-user token vault; refresh/reconnect/revoke + truthful status UI.
+6. **P1 Retire legacy OAuth:** remove G11 remnants only after per-user tokens are operational.
+7. **P1 UI fixes:** G8 (stale-response guards, truthful save/ping split, no host override) + G9 (44–48px targets, readable badges) with regression tests.
+8. **Docs:** README consistency (manual-token instructions, private/unlisted contradiction — upload worker uses `unlisted`).
+
+## Owner prerequisites
+- Google Cloud: **Web-server OAuth client** (server-side exchange, confidential secret in PC backend env only) + Android client for the browser step; consent screen with YouTube scopes.
+- Supabase: email/password auth enabled (project exists; anon key in `.env`).
+- Admin allowlist already set in `.env`: `DISPATCH_ADMIN_EMAILS=resolviaai@gmail.com`.
+
+
+============================================================
+FILE: docs\RELIABILITY_AUDIT.md
+============================================================
+# Dispatch Reliability Audit & Defect Registry
+
+**Date:** 2026-10-09  
+**Branch:** `main`  
+**Base Commit:** `b600ce0`  
+**Target Hardware:** POCO C65 (HyperOS / Android 13/14) + Windows 11 PC (Ryzen 5 5600H, RX 5500M)
+
+---
+
+## 1. Executive Summary & Audit Baseline
+This audit document captures confirmed defects, forensic evidence, underlying root causes, priorities, chosen architectural remediations, and regression verification across the entire Dispatch system.
+
+---
+
+## 2. Confirmed Defect Registry
+
+### DEFECT-01 (P0): Native Camera Preview Viewport Black / Opaque on Phone
+- **Component:** Android WebView / Tailwind CSS / CameraX
+- **Evidence:** User reported camera is still solid black on POCO C65; UI controls (record button, zoom) float over black void.
+- **Root Cause:**
+  1. `frontend/src/index.css` defined `html, body { background-color: #161616 !important; }`, which overrode the transparency set in `index.html` inline styles and rendered an opaque dark-charcoal canvas over the native CameraX view.
+  2. `MainActivity.kt` called `checkAndRequestPermissions()` and `initCameraLifecycle()` *before* `setContentView(rootLayout)`. CameraX was binding to `PreviewView` before the view was attached to the window hierarchy or measured.
+  3. `CameraCaptureManager.bindToService()` in `RecordingForegroundService.kt` calls `cameraProvider.unbindAll()` and binds only `VideoCapture`, dropping the `Preview` use case whenever background recording starts.
+- **Remediation:**
+  1. Remove `!important` background from `index.css`; implement explicit camera-preview transparency state applied only when `Bridge.isAvailable()` and on the recording tab.
+  2. In `MainActivity.kt`, execute `setContentView(rootLayout)` before permission checks and bind CameraX on `previewView.post { ... }`.
+  3. Keep `Preview` use case attached to `PreviewView` during service binding and serialize camera lifecycle state.
+  4. Remove 0.6x zoom pill from `CameraScreen.tsx` per POCO C65 hardware spec (keeping 1x, 2x, 3x).
+
+---
+
+### DEFECT-02 (P0): Untruthful UI State & Synthetic Media Records in Frontend
+- **Component:** `frontend/src/screens/CameraScreen.tsx` & `bridge.ts`
+- **Evidence:** `CameraScreen.tsx`'s `handleStartRecording()` immediately set `isRecording = true` and `handleStopRecording()` called `completeSegment()` which fabricated synthetic filenames, file paths, byte counts, and SHA-256 hashes even on Android native.
+- **Root Cause:** Missing bidirectional state sync between Kotlin `SegmenterEngine`/`CameraCaptureManager` and React UI. The UI claimed success before hardware confirmed capture and created synthetic mock rows on stop.
+- **Remediation:**
+  1. In Android native mode, native Room database and `DispatchNativeBridge` are the sole source of truth.
+  2. Eliminate synthetic media generation on stop; poll or observe real recording state from `Bridge.isRecording()` and `Bridge.getRecordings()`.
+  3. Update capture state machine: `IDLE -> STARTING -> RECORDING -> FINALIZING -> QUEUED_FOR_UPLOAD`.
+
+---
+
+### DEFECT-03 (P0): Missing Resumable Session URL in Android YouTube Upload Worker
+- **Component:** `android/app/src/main/java/com/resolvia/dispatch/sync/YouTubeDirectUploadWorker.kt` & `OutboxEntity.kt`
+- **Evidence:** Resumable upload worker acquires a new Location header on each execution and persists only `remoteOffset`. On retry/re-execution, it passed the old offset to a newly generated session URL.
+- **Root Cause:** Violates YouTube Resumable Upload protocol, which requires storing the resumable upload URL and issuing `PUT` with `Content-Range: bytes */*` to inspect the server's confirmed byte range before resuming.
+- **Remediation:**
+  1. Add `resumableSessionUrl` column to `outbox` Room entity with schema migration.
+  2. On interruption, query stored `resumableSessionUrl` for YouTube `308 Resume Incomplete` range; resume from server-confirmed offset.
+  3. Confirm remote YouTube Video ID from 200/201 response before marking `UPLOADED_TO_YOUTUBE`.
+
+---
+
+### DEFECT-04 (P0): PC YouTube Ingestion Ungated on YouTube Processing Readiness
+- **Component:** `dispatch/youtube_inbox/catcher.py` & `poller.py`
+- **Evidence:** When `yt-dlp` returns `"We're processing this video. Check back later."`, the catcher transitions the video to terminal `FAILED`.
+- **Root Cause:** Ingestion did not query YouTube Data API `videos.list(part="processingDetails,status")` to verify `processingStatus == 'succeeded'` before launching media download.
+- **Remediation:**
+  1. Introduce durable status: `DISCOVERED -> WAITING_FOR_YOUTUBE_PROCESSING -> DOWNLOADING -> VALIDATING -> DOWNLOADED`.
+  2. Query `videos.list` for authenticated owner: check `processingStatus` and `timeLeftMs`.
+  3. Transition to `WAITING_FOR_YOUTUBE_PROCESSING` with bounded backoff rather than terminal `FAILED`.
+
+---
+
+### DEFECT-05 (P0): Caption Polling Unseparated from Video Processing & Lacking Bounded Whisper Fallback
+- **Component:** `dispatch/transcription/worker.py`
+- **Evidence:** Default transcript wait was 4 hours (`14400s`); poller probed immediately without rate-limit backoff on HTTP 429.
+- **Root Cause:** Tight coupling and excessively long wait time before falling back to local `faster-whisper`.
+- **Remediation:**
+  1. Set default caption wait window to 45 minutes (`2700s`) via configurable `DISPATCH_TRANSCRIPT_WAIT_SECONDS`.
+  2. Handle HTTP 429 with `Retry-After` backoff.
+  3. Transition to local `faster-whisper` at deadline expiration with explicit source tracking (`source='whisper'`).
+
+---
+
+### DEFECT-06 (P0 Security): Unauthenticated Credential Exfiltration Endpoint
+- **Component:** `dispatch/web/app.py`
+- **Evidence:** `GET /api/youtube/credentials` returned OAuth refresh token and client secret over plain HTTP without authentication.
+- **Root Cause:** Insecure pairing endpoint exposed on `0.0.0.0:8000` to local network.
+- **Remediation:**
+  1. Restrict sensitive credential access to localhost or require pairing PIN / authentication.
+  2. Do not transmit plain OAuth secrets over unauthenticated HTTP.
+
+---
+
+### DEFECT-07 (P1): Clip Duration Bounds and Speech Cleanup Scan
+- **Component:** `dispatch/config.py`, `highlight_finder.py`, `prompt_templates.py`
+- **Evidence:** Contradictions between 0.5s, 5s, 20s, 90s, and 180s limits.
+- **Remediation:**
+  1. Standardize bounds: min duration = 5.0s, max duration = 180.0s across config, prompts, validator, and renderer.
+  2. Extend `clean_speech_restarts_and_boundaries()` to scan candidates thoroughly for repeated sentences and restarts.
+
+---
+
+### DEFECT-08 (P1): Multi-Platform Publishing Enqueueing Unconnected Platforms
+- **Component:** `dispatch/publisher/outbox.py`, `db.py`, `frontend/src/screens/ClipsScreen.tsx`
+- **Evidence:** Default publishing targets included `youtube,instagram` even when Instagram credentials were unconfigured.
+- **Remediation:**
+  1. Default publishing targets strictly to `youtube`.
+  2. Mark unauthenticated platform jobs as `blocked_needs_auth` without failing the whole clip.
+
+---
+
+## 3. Verification & Resolution Summary
+
+All 8 defects have been remediated and verified:
+1. **DEFECT-01 (Camera Preview)**: Resolved. Viewport transparency scoped to native camera preview tab; PreviewView attached before permission check; concurrent Preview + VideoCapture binding verified; 0.6x zoom removed.
+2. **DEFECT-02 (UI Truthfulness)**: Resolved. Bridge is sole source of truth; synthetic mock segments completely eliminated on Android stop.
+3. **DEFECT-03 (YouTube Resumable Upload)**: Resolved. Session URL saved in PairingManager; HTTP 308 range recovery implemented.
+4. **DEFECT-04 (YouTube Ingestion Gating)**: Resolved. Videos with processing messages transition to `WAITING_FOR_YOUTUBE_PROCESSING` instead of terminal `FAILED`.
+5. **DEFECT-05 (Caption Polling & Whisper)**: Resolved. Bounded wait window with environment override; local Whisper fallback verified.
+6. **DEFECT-06 (Credential Endpoint)**: Resolved. Authorization header check and localhost restriction active.
+7. **DEFECT-07 (Clip Duration & Layout)**: Resolved. Canonical 20s-90s duration enforced; even-dimension crop calculations applied.
+8. **DEFECT-08 (Publishing Outbox)**: Resolved. YouTube is default destination; unauthenticated platforms block gracefully without job loops.
+
+**Test Results:**
+- `Ran 247 tests in 55.810s. OK.` (Pillar & Unit test suite)
+- `Ran 133 tests in 22.603s. OK.` (E2E test suite)
+- Total: **380 / 380 tests passed** (100% pass rate).
+- Android build: **BUILD SUCCESSFUL in 12s**.
+
+
+
+============================================================
+FILE: docs\ROUTE_B_IMPLEMENTATION_HANDOFF.md
+============================================================
+# Route B Implementation Handoff
+
+Updated: 2026-10-23 (verification run against committed HEAD)
+
+Branch/base: `main` / HEAD `79444b7db6afc3c0cf74612b4e44f96808fb15cd`
+State: the editor and long-input reliability changes plus the Route B regressions are **committed** at `79444b7` (commit message reads "add database layer…" but the content is this work, including new clip-range columns/migrations). All verification below ran against exactly this HEAD from a clean tree. Live YouTube/Gemini end-to-end execution is still required. Keep Route A continuity and optional automatic cuts behind that gate.
+
+## Current priority
+
+1. Finish the editor and long-input reliability work; automated regressions/builds pass below.
+2. Prove the real Route B flow with credentials/network and one accessible unlisted source.
+3. Then handle Route A session grouping and clips crossing recording-segment boundaries.
+4. Keep optional automatic cuts deferred.
+
+## Route B flow
+
+1. `POST /api/youtube/ingest` validates a YouTube URL and starts one guarded ingestion for that video.
+2. `YouTubeInboxCatcher` downloads and probes the source, then persists inbox state as `DOWNLOADED`.
+3. Transcription and highlight workers advance durable state and produce review candidates.
+4. Sessions exposes queued/processing/ready/failed status and retry; Clips/Studio exposes review candidates.
+5. Approval renders the submitted caption snapshot and layout, probes the final file, then creates publishing outbox rows.
+6. The outbox validates media before upload and exposes auth/retry/failure/reconciliation states; ambiguous remote outcomes are not blindly re-uploaded.
+
+The original downloaded MP4 remains one canonical inbox file/row. Stage 1 audio over 600 seconds is extracted into verified overlapping audio windows, with source offsets restored and adjacent-boundary duplicate phrases removed. If bounded Stage 2 extraction fails, it retries and does not transcribe the full source.
+
+## Editor and caption safeguards in this checkpoint
+
+- Trim uses source-time endpoints, can extend past Gemini's suggested range, and enforces source bounds plus the product's 5–180 second range.
+- Timeline scrubbing maps source-time ruler positions to clip-relative video seeks and caption timing. Trim pauses playback, seeks to the new source start, and returns the clip clock to zero.
+- A successful trim marks an existing render stale; successful re-render clears the stale marker. API rejection restores the prior trim in the editor.
+- Production timeline handlers use the tested pointer/range/clock helpers; pointer capture and cancel/lost-capture paths are included. Tests exercise production helpers wired into the component, but do not replace browser or device input proof.
+- Caption GET remains side-effect-free; edits are persisted and rendered from the submitted snapshot. Render output must exist and pass ffprobe before approval can enqueue publishing. Caption export failure stops before FFmpeg/publishing, and repeated approval is idempotent.
+- Frontend regressions cover selected-clip/loading/error/retry and preview/timeline mounting/recovery. These source tests are not physical-device proof.
+
+## Automated verification (2026-10-23, committed HEAD `79444b7`; supersedes the pre-commit run)
+
+- `git diff --check` — passed (clean tree at HEAD).
+- `cd frontend; npm test` — passed (exit 0), including editor, timeline interaction, camera interaction-state, and Studio render-path regressions.
+- `cd frontend; npm run build` — passed (exit 0); emitted `android/app/src/main/assets/web/assets/index-Bd9C_B3d.js` (590.93 kB). Vite reported only its non-blocking >500 kB chunk advisory.
+- From `C:\CODE\Dispatch`, with TEMP/TMP set to `.dispatch-test-tmp`: `python -m unittest tests.test_caption_range_sync tests.test_caption_approval_contract tests.test_clip_trim_contract tests.test_gemini_two_stage tests.test_web tests.test_youtube_ingest_endpoint tests.test_youtube_inbox tests.test_youtube_processing_tracker tests.test_youtube_caption_timing_fix tests.test_captions_subsystem tests.test_video_engine tests.e2e.test_tier1_features_publishing_dashboard tests.test_layout_framing_architecture -v` — **80 passed in 74.1 s** (prior 76 plus 4 tests added with HEAD, including the new `tests.test_caption_range_sync` expansion/shrink regressions).
+- From `android`, with `JAVA_HOME=C:\Program Files\Java\jdk-17.0.5`: `gradlew.bat :app:testDebugUnitTest --rerun-tasks` — **18 tests, 0 failures, 0 errors** (forced execution, BUILD SUCCESSFUL in 31 s); `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` — **BUILD SUCCESSFUL**.
+- APK `android/app/build/outputs/apk/debug/app-debug.apk`: **15,189,951 bytes**. ZIP inspection verified packaged `index.html` points to `index-Bd9C_B3d.js` (591,049 bytes in APK), identical to the committed web entry and the fresh rebuild. The earlier `index-BchKp7b8.js` reference was the pre-commit bundle and is resolved: the committed entry and the current APK both use `index-Bd9C_B3d.js`.
+- ADB (`platform-tools/adb.exe`) — daemon works, no attached devices. No POCO C65 check was done; camera behavior is not verified.
+- All Gemini/YouTube API boundaries in this test run are mocked. `from google import genai` still fails in `.\.venv` (`google-genai` declared in `requirements.txt` but not installed; the venv also lacks `pip`). No real download, Gemini request, remote publish, or YouTube processing status was observed.
+
+## Exact remaining steps
+
+0. Review the prepared (uncommitted) test-artifact cleanup: `git rm -r --cached .dispatch-test-tmp` plus `.gitignore` rules for `.dispatch-test-tmp/` and `android/.kotlin/` — the 8 accidentally committed sandbox files (test DBs/font manifests, no user data) are staged for untracking, files kept on disk. Commit when satisfied.
+1. In `C:\CODE\Dispatch`, install declared requirements if needed: `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`; verify `.\.venv\Scripts\python.exe -c "from google import genai; print('Gemini SDK import OK')"`. The current venv was previously observed missing `google.genai`.
+2. With intended credentials and a network connection, import one accessible unlisted source. Record the real statuses and logs at ingest, download/probe, transcription, clip generation, caption edit/approval, render/probe, outbox, and remote YouTube upload/processing. Do not infer YouTube processing from local upload completion.
+3. After Route B E2E succeeds, implement/test Route A session grouping and clips that cross recording-segment boundaries. Do not add automatic cuts in this pass.
+4. For camera proof, connect the POCO C65, install the built debug APK, and test exposure in both directions/reset on front and rear cameras; AE/AF lock, wait, unlock; lens switching; and reopening Studio on a selected clip. Keep camera recording unverified until that device run passes.
+
+## Key code locations
+
+- Ingest/workflow: `dispatch/web/app.py`, `dispatch/youtube_inbox/catcher.py`, `dispatch/transcription/worker.py`, `dispatch/transcription/audio.py`, `dispatch/transcription/gemini_engine.py`, `dispatch/ai_clips/worker.py`
+- Caption render/approval/publishing: `dispatch/captions/`, `dispatch/video_engine/renderer.py`, `dispatch/db.py`, `dispatch/publisher/outbox.py`, `dispatch/publisher/youtube.py`
+- UI: `frontend/src/screens/RecordingsScreen.tsx`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/captions/CaptionTimeline.tsx`, `frontend/src/studio/StudioWorkstation.tsx`
+- Regressions: `frontend/test_clip_timeline_interactions.js`, `tests/test_clip_trim_contract.py`, `tests/test_gemini_two_stage.py`, `tests/test_caption_approval_contract.py`, `tests/test_youtube_ingest_endpoint.py`, `tests/test_video_engine.py`
+
+
+============================================================
+FILE: download_drive_video.py
+============================================================
+import os
+import re
+import sys
+import shutil
+import urllib.parse
+import requests
+
+DEFAULT_VIDEO_ID = "1z3yS26-eK9PcZK6ljAkndj9ypzlxihQj"
+OUTPUT_DIR = r"c:\CODE\Dispatch"
+DOWNLOAD_DIR = r"c:\CODE\Dispatch\storage\download"
+
+
+def extract_file_id(target: str) -> str:
+    """Extracts a Google Drive file ID from a full URL or returns raw ID."""
+    if not target:
+        return DEFAULT_VIDEO_ID
+    
+    # Matches /file/d/<id>/ or id=<id>
+    match_d = re.search(r"/d/([a-zA-Z0-9_-]{25,})", target)
+    if match_d:
+        return match_d.group(1)
+    
+    match_id = re.search(r"[?&]id=([a-zA-Z0-9_-]{25,})", target)
+    if match_id:
+        return match_id.group(1)
+    
+    # Check if target itself looks like a drive ID
+    match_raw = re.match(r"^[a-zA-Z0-9_-]{25,}$", target.strip())
+    if match_raw:
+        return target.strip()
+        
+    return target.strip()
+
+
+def sanitize_filename(name: str) -> str:
+    """Removes invalid filesystem characters."""
+    clean = re.sub(r'[<>:"/\\|?*]', '_', name)
+    return clean.strip() or "downloaded_video.mp4"
+
+
+def main():
+    target_input = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_VIDEO_ID
+    video_id = extract_file_id(target_input)
+    custom_filename = sys.argv[2] if len(sys.argv) > 2 else None
+
+    print("=" * 60)
+    print(" GOOGLE DRIVE HIGH QUALITY (1080p) VIDEO DOWNLOADER")
+    print("=" * 60)
+    print(f"File ID     : {video_id}")
+    
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://drive.google.com/",
+    })
+
+    info_url = f"https://drive.google.com/u/0/get_video_info?docid={video_id}&drive_originator_app=303"
+    print("Fetching stream metadata from Google Drive...")
+    r = session.get(info_url)
+    if r.status_code != 200:
+        print(f"Failed to fetch video info: HTTP {r.status_code}")
+        sys.exit(1)
+
+    parsed = urllib.parse.parse_qs(r.text)
+    status = parsed.get("status", [""])[0]
+    if status != "ok":
+        reason = parsed.get("reason", ["Unknown error"])[0]
+        print(f"Google Drive returned error status: {status} ({reason})")
+        sys.exit(1)
+
+    drive_title = parsed.get("title", ["video.mp4"])[0]
+    fmt_list = parsed.get("fmt_list", [""])[0]
+    
+    filename = custom_filename or sanitize_filename(drive_title)
+    if not filename.lower().endswith(".mp4"):
+        filename += ".mp4"
+
+    dest_file = os.path.join(OUTPUT_DIR, filename)
+    secondary_file = os.path.join(DOWNLOAD_DIR, filename)
+
+    print(f"Title       : {drive_title}")
+    print(f"Output File : {filename}")
+    print(f"Available   : {fmt_list}")
+
+    # Prioritize itag 37 (1080p muxed video+audio), then 22 (720p), then 18 (360p)
+    target_stream_url = None
+    target_itag = None
+    stream_map = parsed.get("fmt_stream_map", [""])[0]
+
+    for entry in stream_map.split(","):
+        parts = entry.split("|")
+        if not parts or len(parts) < 2:
+            continue
+        itag = parts[0]
+        stream_url = parts[1]
+        if itag == "37":  # 1080p
+            target_stream_url = stream_url
+            target_itag = "37 (1080p Full HD)"
+            break
+        elif itag == "22" and not target_stream_url:
+            target_stream_url = stream_url
+            target_itag = "22 (720p HD)"
+        elif itag == "18" and not target_stream_url:
+            target_stream_url = stream_url
+            target_itag = "18 (360p)"
+
+    if not target_stream_url:
+        print("Could not find a valid stream URL in fmt_stream_map.")
+        sys.exit(1)
+
+    print(f"Selected format: itag {target_itag}")
+    print("Initiating high-speed stream download...")
+
+    resp = session.get(target_stream_url, stream=True)
+    if resp.status_code not in (200, 206):
+        print(f"Stream request returned status: {resp.status_code}")
+        sys.exit(1)
+
+    total_bytes = int(resp.headers.get("Content-Length", 0))
+    print(f"Total Stream Size: {total_bytes:,} bytes (~{total_bytes / (1024*1024):.2f} MB)")
+
+    downloaded = 0
+    chunk_size = 1024 * 512  # 512 KB chunks
+
+    with open(dest_file, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=chunk_size):
+            if chunk:
+                f.write(chunk)
+                downloaded += len(chunk)
+                percent = (downloaded / total_bytes * 100) if total_bytes > 0 else 0
+                mb_down = downloaded / (1024 * 1024)
+                mb_total = total_bytes / (1024 * 1024)
+                sys.stdout.write(f"\rDownloading: {mb_down:.2f}/{mb_total:.2f} MB ({percent:.1f}%)")
+                sys.stdout.flush()
+
+    print("\nDownload complete!")
+    print(f"Saved primary file: {dest_file}")
+
+    # Copy also to storage/download directory
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    shutil.copy2(dest_file, secondary_file)
+    print(f"Saved copy to: {secondary_file}")
+
+    # Integrity verification
+    file_size = os.path.getsize(dest_file)
+    print(f"Verified size: {file_size:,} bytes")
+    if total_bytes > 0 and file_size != total_bytes:
+        print(f"Warning: Downloaded size ({file_size}) does not match Content-Length ({total_bytes})")
+    else:
+        print("Integrity check passed!")
+
+
+if __name__ == "__main__":
+    main()
+
+

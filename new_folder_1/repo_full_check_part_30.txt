@@ -1,0 +1,1513 @@
+﻿
+============================================================
+FILE: dispatch\orchestrator\pipeline_runner.py
+============================================================
+"""Discrete Checkpointed Pipeline Stage Runner.
+Executes media processing stage by stage, validating outputs before advancing checkpoints.
+Never re-runs already-completed stages when recovering from crashes or interruptions.
+"""
+import os
+import time
+import logging
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+from dispatch.config import (
+    PROCESSING_DIR,
+    DEFAULT_PUBLISH_MODE
+)
+from dispatch import db
+from dispatch.ingestion.validator import probe_video
+from dispatch.transcription.transcriber import transcribe_video
+from dispatch.ai_clips.highlight_finder import identify_and_save_highlights
+from dispatch.video_engine.renderer import render_clip
+from dispatch.orchestrator.state_machine import PipelineStage, JobStatus
+from dispatch.orchestrator.job_queue import (
+    complete_stage_checkpoint,
+    fail_stage_job,
+    renew_heartbeat,
+    LeaseLostError
+)
+from dispatch.orchestrator.heartbeat import HeartbeatThread
+from dispatch.orchestrator.retry_engine import RetryEngine
+from dispatch.governor.resource_governor import ResourceGovernor
+
+logger = logging.getLogger("dispatch.orchestrator.runner")
+
+
+class PipelineStageRunner:
+    """Dispatches and validates individual processing stages with durable checkpoints."""
+
+    def __init__(self, governor: Optional[ResourceGovernor] = None, retry_engine: Optional[RetryEngine] = None):
+        self.governor = governor or ResourceGovernor()
+        self.retry_engine = retry_engine or RetryEngine()
+
+    def process_job_step(self, job: Dict[str, Any], worker_id: str) -> bool:
+        """Processes the current checkpointed stage of a job.
+        
+        Returns True if stage was completed, False if deferred or failed.
+        """
+        job_id = job["job_id"]
+        chunk_id = job["chunk_id"]
+        current_stage = PipelineStage(job["current_stage"])
+        attempt_count = job.get("attempt_count", 1)
+
+        # 1. Resource Policy Gate Check
+        # For heavy compute stages (TRANSCRIBE, RENDER), check system health first
+        if current_stage in (PipelineStage.TRANSCRIBE, PipelineStage.RENDER):
+            can_run, reason = self.governor.can_process_heavy_task()
+            if not can_run:
+                logger.info("Job %s deferring stage %s: %s", job_id, current_stage.value, reason)
+                fail_stage_job(
+                    job_id=job_id,
+                    error_message=f"Resource governor hold: {reason}",
+                    wait_state=JobStatus.WAITING_FOR_RESOURCES,
+                    delay_seconds=30
+                )
+                return False
+
+        # 2. Retrieve chunk metadata from database
+        chunk = db.get_chunk_by_id(chunk_id)
+        if not chunk:
+            fail_stage_job(
+                job_id=job_id,
+                error_message=f"Chunk {chunk_id} not found in database",
+                wait_state=JobStatus.FAILED_PERMANENT,
+                delay_seconds=0
+            )
+            return False
+
+        filepath = Path(chunk["filepath"])
+
+        # 3. Dispatch to discrete stage handler
+        try:
+            renew_heartbeat(job_id, worker_id, extend_seconds=60)
+
+            if current_stage == PipelineStage.VERIFY:
+                self._run_verify_stage(job, chunk, filepath)
+            elif current_stage == PipelineStage.TRANSCRIBE:
+                self._run_transcribe_stage(job, chunk, filepath, worker_id)
+            elif current_stage == PipelineStage.ANALYZE:
+                self._run_analyze_stage(job, chunk, filepath)
+            elif current_stage == PipelineStage.RENDER:
+                self._run_render_stage(job, chunk, filepath, worker_id)
+            elif current_stage == PipelineStage.FINALIZE:
+                self._run_finalize_stage(job, chunk, filepath)
+            else:
+                logger.warning("Unknown stage %s for job %s", current_stage, job_id)
+                return False
+
+            # Checkpoint stage completion with fencing lease check
+            complete_stage_checkpoint(job_id, current_stage, worker_id=worker_id)
+            return True
+
+        except LeaseLostError as le:
+            logger.warning("Fencing lease lost for job %s at stage %s: %s. Safely abandoning step.",
+                           job_id, current_stage.value, le)
+            return False
+        except Exception as e:
+            logger.exception("Error processing stage %s for job %s: %s", current_stage.value, job_id, e)
+            target_status, is_permanent, reason = self.retry_engine.classify_error(e)
+            delay = 0 if is_permanent else self.retry_engine.compute_backoff_seconds(attempt_count)
+            fail_stage_job(
+                job_id=job_id,
+                error_message=f"Stage {current_stage.value} failed: {e} ({reason})",
+                wait_state=target_status if not is_permanent else JobStatus.FAILED_PERMANENT,
+                delay_seconds=delay
+            )
+            return False
+
+    def _run_verify_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path):
+        """Stage 1: Verify source media container, size, and codecs."""
+        if not filepath.exists():
+            raise FileNotFoundError(f"Source video file not found at {filepath}")
+
+        if filepath.stat().st_size == 0:
+            raise ValueError(f"Source video file {filepath} is 0 bytes")
+
+        is_valid, meta, err = probe_video(filepath, chunk_id=chunk["id"])
+        if not is_valid:
+            raise ValueError(f"Corrupt or invalid media file: {err}")
+
+        logger.info("VERIFY passed for job %s: %.1fs, %s, %s",
+                    job["job_id"], meta.get("duration", 0), meta.get("aspect_ratio"), meta.get("resolution"))
+
+    def _run_transcribe_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path, worker_id: str):
+        """Stage 2: Transcribe audio to word-level timestamps. Reuses DB if already present."""
+        chunk_id = chunk["id"]
+
+        # Check if already transcribed from a prior interrupted run
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT full_text, segments_json FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+            existing = cursor.fetchone()
+
+        if existing and existing["segments_json"]:
+            logger.info("Transcribe checkpoint: Reusing existing transcript for chunk %s", chunk_id)
+            return
+
+        # Perform transcription with active background heartbeat
+        with HeartbeatThread(job_id=job["job_id"], worker_id=worker_id, interval_seconds=15, lease_seconds=300):
+            transcript_data = transcribe_video(
+                video_path=filepath,
+                chunk_id=chunk_id,
+                session_id=chunk.get("session_id")
+            )
+
+        if not transcript_data or not transcript_data.get("segments"):
+            logger.warning("Empty transcription segments for chunk %s (audio may be silent)", chunk_id)
+
+    def _run_analyze_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path):
+        """Stage 3: AI highlight identification and packaging. Reuses DB if already present."""
+        chunk_id = chunk["id"]
+
+        # Check if clips already generated
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM clips WHERE chunk_id = ?", (chunk_id,))
+            existing_clips = cursor.fetchall()
+
+        if existing_clips and len(existing_clips) > 0:
+            logger.info("Analyze checkpoint: Reusing %d existing clips for chunk %s", len(existing_clips), chunk_id)
+            return
+
+        # Retrieve transcript
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+            t_row = cursor.fetchone()
+
+        import json
+        segments = json.loads(t_row["segments_json"]) if t_row and t_row["segments_json"] else []
+
+        # Validate duration
+        is_valid, meta, _ = probe_video(filepath)
+        duration = meta.get("duration", 60.0) if is_valid else 60.0
+
+        publish_mode = db.get_setting("publish_mode", DEFAULT_PUBLISH_MODE)
+        clip_ids = identify_and_save_highlights(
+            chunk_id=chunk_id,
+            session_id=chunk.get("session_id"),
+            segments=segments,
+            total_duration=duration,
+            publish_mode=publish_mode
+        )
+
+        logger.info("Analyze completed for job %s: Identified %d clips", job["job_id"], len(clip_ids))
+
+    def _run_render_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path, worker_id: str):
+        """Stage 4: Render candidate clips. Skips already-rendered clips atomically."""
+        chunk_id = chunk["id"]
+        is_valid, meta, _ = probe_video(filepath)
+        aspect_ratio = meta.get("aspect_ratio", "16:9") if is_valid else "16:9"
+
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+            t_row = cursor.fetchone()
+            cursor.execute("SELECT * FROM clips WHERE chunk_id = ?", (chunk_id,))
+            clips = cursor.fetchall()
+
+        import json
+        segments = json.loads(t_row["segments_json"]) if t_row and t_row["segments_json"] else []
+
+        if not clips:
+            logger.warning("No clips found to render for chunk %s", chunk_id)
+            return
+
+        with HeartbeatThread(job_id=job["job_id"], worker_id=worker_id, interval_seconds=15, lease_seconds=300):
+            for clip in clips:
+                cid = clip["id"]
+                rendered_path = Path(clip["video_path"]) if clip["video_path"] else None
+
+                # Skip if already rendered and file is valid AND rendered_layout_mode matches
+                if (rendered_path and rendered_path.exists() and rendered_path.stat().st_size > 0
+                        and clip.get("rendered_layout_mode") == clip.get("layout_mode")):
+                    logger.info("Render checkpoint: Clip %s already rendered at %s", cid, rendered_path.name)
+                    continue
+
+                render_clip(
+                    source_video=filepath,
+                    clip_id=cid,
+                    start_time=clip["start_time"],
+                    end_time=clip["end_time"],
+                    aspect_ratio=aspect_ratio,
+                    layout_mode=clip["layout_mode"],
+                    segments=segments,
+                    subtitle_options={"enabled": False, "preserve_timing": True}
+                )
+
+    def _run_finalize_stage(self, job: Dict[str, Any], chunk: Dict[str, Any], filepath: Path):
+        """Stage 5: Finalize chunk and mark processed. Preserves raw source video to prevent data loss."""
+        chunk_id = chunk["id"]
+
+        with db.get_db_connection() as conn:
+            conn.execute("UPDATE chunks SET status = 'processed' WHERE id = ?", (chunk_id,))
+
+        logger.info("Finalized job %s and chunk %s successfully! (Source video preserved at %s)",
+                    job["job_id"], chunk_id, filepath.name)
+
+
+============================================================
+FILE: dispatch\orchestrator\recovery.py
+============================================================
+"""Laptop Crash and Power Loss Recovery Engine.
+Reclaims expired worker leases after sudden power loss, process crashes, or system restarts.
+Ensures jobs resume from the exact last completed stage checkpoint.
+"""
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, List
+
+from dispatch.db import get_db_connection
+from dispatch.config import PROCESSING_DIR
+from dispatch.orchestrator.job_queue import init_job_queue_schema
+
+logger = logging.getLogger("dispatch.orchestrator.recovery")
+
+
+def recover_laptop_orchestrator() -> Dict[str, Any]:
+    """Scan and recover orphaned jobs and clean temporary artifacts on boot or heartbeat tick."""
+    init_job_queue_schema()
+    now_str = datetime.now().isoformat()
+    reclaimed_jobs = []
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # 1. Identify jobs whose worker lease has expired (stale / crashed worker)
+        cursor.execute("""
+            SELECT job_id, chunk_id, current_stage, worker_id, attempt_count
+            FROM pipeline_jobs
+            WHERE status = 'PROCESSING'
+              AND datetime(lease_expires_at) < datetime(?)
+        """, (now_str,))
+        expired = cursor.fetchall()
+
+        for job in expired:
+            job_id = job["job_id"]
+            stage = job["current_stage"]
+
+            cursor.execute("""
+                UPDATE pipeline_jobs
+                SET status = 'RETRY_PENDING',
+                    worker_id = NULL,
+                    lease_expires_at = NULL,
+                    last_error = 'Worker lease expired; recovered on restart',
+                    next_retry_at = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+            """, (now_str, now_str, job_id))
+
+            reclaimed_jobs.append(job_id)
+            logger.info("Reclaimed stale job %s from failed worker (Resuming at stage %s)", job_id, stage)
+
+    # 2. Clean temporary files in processing folder without touching source chunks
+    cleaned_temp_files = 0
+    if PROCESSING_DIR.exists():
+        for f in PROCESSING_DIR.iterdir():
+            if f.is_file() and f.suffix in (".tmp", ".part", ".ass"):
+                try:
+                    f.unlink()
+                    cleaned_temp_files += 1
+                except Exception as e:
+                    logger.debug("Could not clean temp file %s: %s", f.name, e)
+
+    if reclaimed_jobs:
+        logger.info("Laptop orchestrator recovery complete: %d jobs reclaimed, %d temp files cleaned",
+                    len(reclaimed_jobs), cleaned_temp_files)
+
+    return {
+        "reclaimed_jobs": reclaimed_jobs,
+        "cleaned_temp_files": cleaned_temp_files
+    }
+
+
+============================================================
+FILE: dispatch\orchestrator\retry_engine.py
+============================================================
+"""Centralized Retry Engine & Error Classifier.
+Calculates jittered exponential backoff and distinguishes transient from permanent failures.
+"""
+import random
+import logging
+from typing import Tuple, Type
+from dispatch.orchestrator.state_machine import JobStatus
+
+logger = logging.getLogger("dispatch.orchestrator.retry")
+
+
+class RetryEngine:
+    """Calculates backoff delays and classifies error types for resilient pipeline recovery."""
+
+    def __init__(
+        self,
+        base_delay_seconds: int = 15,
+        max_delay_seconds: int = 900,  # Max 15 minutes
+        jitter_factor: float = 0.25
+    ):
+        self.base_delay = base_delay_seconds
+        self.max_delay = max_delay_seconds
+        self.jitter_factor = jitter_factor
+
+    def compute_backoff_seconds(self, attempt_count: int) -> int:
+        """Calculates exponential backoff with random jitter."""
+        attempt = max(1, attempt_count)
+        raw_backoff = self.base_delay * (2 ** (attempt - 1))
+        capped = min(self.max_delay, raw_backoff)
+        jitter = capped * self.jitter_factor * (random.uniform(-1.0, 1.0))
+        final_delay = max(5, int(capped + jitter))
+        return final_delay
+
+    @staticmethod
+    def classify_error(exc: Exception) -> Tuple[JobStatus, bool, str]:
+        """Analyzes an exception and returns (JobStatus, is_permanent, reason).
+        
+        Returns:
+            Tuple of:
+            - target_status: JobStatus to transition into
+            - is_permanent: True if unrecoverable, False if retryable
+            - reason: human-readable classification
+        """
+        exc_str = str(exc).lower()
+        exc_type = type(exc).__name__
+
+        # 1. AI API Rate Limit / Transient Service Failures
+        if any(term in exc_str for term in ["429", "resource_exhausted", "quota", "rate limit"]):
+            return JobStatus.WAITING_FOR_AI, False, "AI API rate limit or quota exceeded (429)"
+
+        if any(term in exc_str for term in ["503", "502", "504", "service unavailable", "overloaded", "timeout"]):
+            return JobStatus.WAITING_FOR_AI, False, "AI API service temporarily unavailable or timed out"
+
+        # 2. Disk Space Exhaustion
+        if any(term in exc_str for term in ["no space left", "enospc", "disk full", "not enough space"]):
+            return JobStatus.WAITING_FOR_RESOURCES, False, "Disk space exhausted"
+
+        # 3. Windows File Locks / Transient I/O Contention
+        if "used by another process" in exc_str or "winerror 32" in exc_str:
+            return JobStatus.RETRY_PENDING, False, "File temporarily locked by another OS process"
+
+        # 4. Permanent Corruptions or Unrecoverable Formats
+        if any(term in exc_str for term in [
+            "invalid data found when processing input",
+            "could not find codec parameters",
+            "moov atom not found",
+            "file is empty",
+            "0 bytes",
+            "format not supported"
+        ]):
+            return JobStatus.FAILED_PERMANENT, True, f"Unrecoverable media corruption: {exc}"
+
+        if isinstance(exc, FileNotFoundError) and "storage/incoming" in exc_str:
+            return JobStatus.FAILED_PERMANENT, True, "Source file permanently missing"
+
+        # 5. Default generic retryable failure
+        return JobStatus.RETRY_PENDING, False, f"Transient pipeline error ({exc_type}): {exc}"
+
+
+============================================================
+FILE: dispatch\orchestrator\state_machine.py
+============================================================
+"""Discrete State Machine for Dispatch Pipeline.
+Defines every durable state and transition for jobs, chunks, and clips.
+Never infers state from RAM; all state transitions are recorded in SQLite.
+"""
+from enum import Enum
+
+
+class PipelineStage(str, Enum):
+    VERIFY = "VERIFY"
+    TRANSCRIBE = "TRANSCRIBE"
+    ANALYZE = "ANALYZE"
+    RENDER = "RENDER"
+    FINALIZE = "FINALIZE"
+    COMPLETED = "COMPLETED"
+
+
+class JobStatus(str, Enum):
+    QUEUED = "QUEUED"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    WAITING_FOR_NETWORK = "WAITING_FOR_NETWORK"
+    WAITING_FOR_WORKER = "WAITING_FOR_WORKER"
+    WAITING_FOR_AI = "WAITING_FOR_AI"
+    WAITING_FOR_RESOURCES = "WAITING_FOR_RESOURCES"
+    RETRY_PENDING = "RETRY_PENDING"
+    FAILED_RETRYABLE = "FAILED_RETRYABLE"
+    FAILED_PERMANENT = "FAILED_PERMANENT"
+
+
+# Valid stage progression order
+STAGE_PROGRESSION = [
+    PipelineStage.VERIFY,
+    PipelineStage.TRANSCRIBE,
+    PipelineStage.ANALYZE,
+    PipelineStage.RENDER,
+    PipelineStage.FINALIZE,
+    PipelineStage.COMPLETED
+]
+
+
+def get_next_stage(current_stage: PipelineStage) -> PipelineStage:
+    """Return the next stage in the pipeline progression."""
+    try:
+        idx = STAGE_PROGRESSION.index(current_stage)
+        if idx + 1 < len(STAGE_PROGRESSION):
+            return STAGE_PROGRESSION[idx + 1]
+    except ValueError:
+        pass
+    return PipelineStage.COMPLETED
+
+
+============================================================
+FILE: dispatch\publisher\__init__.py
+============================================================
+"""Publisher package for Dispatch."""
+from dispatch.publisher.youtube import upload_youtube_short
+from dispatch.publisher.instagram import upload_instagram_reel
+from dispatch.publisher.linkedin import upload_linkedin_video
+from dispatch.publisher.twitter import upload_x_video
+from dispatch.publisher.outbox import process_outbox_queue, watch_outbox_loop
+
+__all__ = [
+    "upload_youtube_short",
+    "upload_instagram_reel",
+    "upload_linkedin_video",
+    "upload_x_video",
+    "process_outbox_queue",
+    "watch_outbox_loop"
+]
+
+
+============================================================
+FILE: dispatch\publisher\instagram.py
+============================================================
+"""Instagram Reels publishing adapter using Instagram Graph API."""
+import os
+import time
+import logging
+import requests
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+logger = logging.getLogger("dispatch.publisher.instagram")
+
+GRAPH_API_VERSION = "v19.0"
+GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+
+
+def upload_instagram_reel(
+    video_path: Path,
+    caption: str,
+    access_token: Optional[str] = None,
+    ig_user_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Upload video to Instagram Reels via Instagram Graph API.
+    
+    Args:
+        video_path: Local path to .mp4 video file.
+        caption: Caption text with hashtags.
+        access_token: Instagram Graph API User Access Token.
+        ig_user_id: Instagram Business/Creator Account ID.
+        
+    Returns:
+        Dict with status, remote_id, and url.
+    """
+    token = access_token or os.getenv("INSTAGRAM_ACCESS_TOKEN")
+    user_id = ig_user_id or os.getenv("INSTAGRAM_USER_ID")
+
+    if not token or not user_id:
+        raise PermissionError("Instagram Graph API credentials missing (INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID).")
+
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video file missing: {video_path}")
+
+    file_size = video_path.stat().st_size
+
+    try:
+        logger.info("Initiating Instagram Reels container creation for %s (%d bytes)", user_id, file_size)
+
+        # Step 1: Create Resumable Media Container
+        container_url = f"{GRAPH_BASE_URL}/{user_id}/media"
+        params = {
+            "media_type": "REELS",
+            "upload_type": "resumable",
+            "caption": caption,
+            "access_token": token
+        }
+        res = requests.post(container_url, data=params, timeout=30)
+        res.raise_for_status()
+        container_data = res.json()
+        container_id = container_data.get("id")
+        upload_uri = container_data.get("uri")
+
+        if not container_id:
+            raise ValueError(f"No container ID returned: {container_data}")
+
+        # Step 2: Upload Video Bytes
+        if upload_uri:
+            logger.info("Uploading %d video bytes to Instagram upload URI...", file_size)
+            with open(video_path, "rb") as f:
+                headers = {
+                    "Authorization": f"OAuth {token}",
+                    "offset": "0",
+                    "file_size": str(file_size)
+                }
+                upload_res = requests.post(upload_uri, headers=headers, data=f, timeout=120)
+                upload_res.raise_for_status()
+
+        # Step 3: Poll Container Processing Status
+        logger.info("Polling container %s processing status...", container_id)
+        status_url = f"{GRAPH_BASE_URL}/{container_id}"
+        is_ready = False
+        for _ in range(24):  # Up to 2 minutes (24 * 5s)
+            status_res = requests.get(
+                status_url,
+                params={"fields": "status_code,status", "access_token": token},
+                timeout=15
+            )
+            if status_res.status_code == 200:
+                sdata = status_res.json()
+                code = sdata.get("status_code")
+                if code == "FINISHED":
+                    is_ready = True
+                    break
+                elif code == "ERROR":
+                    raise RuntimeError(f"Instagram processing error: {sdata.get('status')}")
+            time.sleep(5)
+
+        if not is_ready:
+            raise TimeoutError(f"Instagram container {container_id} timed out processing")
+
+        # Step 4: Publish Container
+        logger.info("Publishing container %s to Instagram Reels...", container_id)
+        publish_url = f"{GRAPH_BASE_URL}/{user_id}/media_publish"
+        pub_res = requests.post(publish_url, data={"creation_id": container_id, "access_token": token}, timeout=30)
+        pub_res.raise_for_status()
+        media_id = pub_res.json().get("id", container_id)
+
+        # Step 5: Fetch permalink
+        permalink = f"https://www.instagram.com/reel/{media_id}"
+        try:
+            p_res = requests.get(
+                f"{GRAPH_BASE_URL}/{media_id}",
+                params={"fields": "permalink", "access_token": token},
+                timeout=10
+            )
+            if p_res.status_code == 200:
+                permalink = p_res.json().get("permalink", permalink)
+        except Exception:
+            pass
+
+        logger.info("Successfully published Reel to Instagram: %s", permalink)
+        return {
+            "status": "published",
+            "remote_id": media_id,
+            "remote_url": permalink,
+            "is_simulation": False
+        }
+
+    except Exception as e:
+        logger.error("Instagram publish failed: %s", e)
+        raise
+
+
+============================================================
+FILE: dispatch\publisher\linkedin.py
+============================================================
+"""LinkedIn video publishing adapter using LinkedIn UGC API."""
+import os
+import time
+import logging
+import requests
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+logger = logging.getLogger("dispatch.publisher.linkedin")
+
+
+def upload_linkedin_video(
+    video_path: Path,
+    commentary: str,
+    title: Optional[str] = None,
+    access_token: Optional[str] = None,
+    author_urn: Optional[str] = None
+) -> Dict[str, Any]:
+    """Publish video to LinkedIn personal profile or company page.
+    
+    Args:
+        video_path: Path to local .mp4 video file.
+        commentary: Post text commentary with hashtags.
+        title: Optional video title.
+        access_token: OAuth 2.0 access token with w_member_social or w_organization_social.
+        author_urn: urn:li:person:XXXX or urn:li:organization:XXXX.
+        
+    Returns:
+        Dict with status, remote_id, remote_url, is_simulation.
+    """
+    token = access_token or os.getenv("LINKEDIN_ACCESS_TOKEN")
+    author = author_urn or os.getenv("LINKEDIN_AUTHOR_URN")
+
+    if not token or not author:
+        raise PermissionError("LinkedIn API credentials missing (LINKEDIN_ACCESS_TOKEN and LINKEDIN_AUTHOR_URN).")
+
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video file missing: {video_path}")
+
+    file_size = video_path.stat().st_size
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Restli-Protocol-Version": "2.0.0",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        logger.info("Registering LinkedIn video asset upload for %s (%d bytes)", author, file_size)
+
+        # Step 1: Register Upload
+        register_url = "https://api.linkedin.com/v2/assets?action=registerUpload"
+        register_body = {
+            "registerUploadRequest": {
+                "recipes": ["urn:li:digitalmediaRecipe:feedshare-video"],
+                "owner": author,
+                "serviceRelationships": [
+                    {
+                        "relationshipType": "OWNER",
+                        "identifier": "urn:li:userGeneratedContent"
+                    }
+                ]
+            }
+        }
+        reg_res = requests.post(register_url, headers=headers, json=register_body, timeout=30)
+        reg_res.raise_for_status()
+        reg_data = reg_res.json().get("value", {})
+        asset_urn = reg_data.get("asset")
+        upload_mech = reg_data.get("uploadMechanism", {})
+        upload_url = upload_mech.get("com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest", {}).get("uploadUrl")
+
+        if not asset_urn or not upload_url:
+            raise ValueError(f"LinkedIn upload registration failed: {reg_data}")
+
+        # Step 2: Upload Video Bytes
+        logger.info("Uploading %d video bytes to LinkedIn CDN...", file_size)
+        with open(video_path, "rb") as f:
+            upload_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"}
+            up_res = requests.post(upload_url, headers=upload_headers, data=f, timeout=180)
+            up_res.raise_for_status()
+
+        # Step 3: Create UGC Post
+        logger.info("Creating LinkedIn UGC video post...")
+        post_url = "https://api.linkedin.com/v2/ugcPosts"
+        post_body = {
+            "author": author,
+            "lifecycleState": "PUBLISHED",
+            "specificContent": {
+                "com.linkedin.ugc.ShareContent": {
+                    "media": [
+                        {
+                            "media": asset_urn,
+                            "status": "READY",
+                            "title": {"text": (title or commentary[:50])}
+                        }
+                    ],
+                    "shareCommentary": {"text": commentary},
+                    "shareMediaCategory": "VIDEO"
+                }
+            },
+            "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"}
+        }
+
+        p_res = requests.post(post_url, headers=headers, json=post_body, timeout=30)
+        p_res.raise_for_status()
+        ugc_urn = p_res.json().get("id", asset_urn)
+        remote_url = f"https://www.linkedin.com/feed/update/{ugc_urn}"
+
+        logger.info("Successfully published video to LinkedIn: %s", remote_url)
+        return {
+            "status": "published",
+            "remote_id": ugc_urn,
+            "remote_url": remote_url,
+            "is_simulation": False
+        }
+
+    except Exception as e:
+        logger.error("LinkedIn publish failed: %s", e)
+        raise
+
+
+============================================================
+FILE: dispatch\publisher\outbox.py
+============================================================
+"""Publishing Outbox Queue processor.
+Ensures durable, idempotent publishing to YouTube and Instagram with automatic cleanup of published local clips.
+"""
+import time
+import logging
+import threading
+import socket
+import http.client
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+try:
+    import requests
+except ImportError:
+    requests = None
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
+from dispatch.publisher.youtube import upload_youtube_short
+from dispatch.publisher.instagram import upload_instagram_reel
+from dispatch.publisher.linkedin import upload_linkedin_video
+from dispatch.publisher.twitter import upload_x_video
+from dispatch.config import MIN_CLIP_DURATION, MAX_CLIP_DURATION
+from dispatch.ingestion.validator import probe_video
+from dispatch import db
+
+logger = logging.getLogger("dispatch.publisher.outbox")
+_processing_lock = threading.Lock()
+
+
+def is_ambiguous_network_error(exc: Exception) -> bool:
+    """Classify whether an exception represents an ambiguous outcome where bytes may have
+    reached the remote platform, but the response was lost, dropped, or timed out.
+    Enforces that ambiguous errors are NEVER blindly retried.
+    """
+    if exc is None:
+        return False
+
+    # 1. Native Python network & socket timeout/disconnect types
+    ambiguous_types = [
+        TimeoutError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+        BrokenPipeError,
+        http.client.RemoteDisconnected,
+        http.client.IncompleteRead,
+    ]
+    if hasattr(socket, "timeout"):
+        ambiguous_types.append(socket.timeout)
+
+    # 2. Third-party HTTP client libraries
+    if requests is not None:
+        ambiguous_types.extend([
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+        ])
+    if httpx is not None:
+        ambiguous_types.extend([
+            httpx.TimeoutException,
+            httpx.NetworkError,
+        ])
+
+    for t in ambiguous_types:
+        if isinstance(exc, t):
+            return True
+
+    # 3. OSError / Windows Socket error codes (e.g. WSAECONNABORTED 10053, WSAECONNRESET 10054, WSAETIMEDOUT 10060)
+    if isinstance(exc, OSError):
+        ambiguous_errnos = {
+            10053,  # WSAECONNABORTED
+            10054,  # WSAECONNRESET
+            10060,  # WSAETIMEDOUT
+            54,     # ECONNRESET (BSD/macOS)
+            104,    # ECONNRESET (Linux)
+            32,     # EPIPE
+            110,    # ETIMEDOUT (Linux)
+        }
+        if getattr(exc, "winerror", None) in ambiguous_errnos or getattr(exc, "errno", None) in ambiguous_errnos:
+            return True
+
+    # 4. Check nested __cause__ or __context__
+    if getattr(exc, "__cause__", None) and is_ambiguous_network_error(exc.__cause__):
+        return True
+    if getattr(exc, "__context__", None) and is_ambiguous_network_error(exc.__context__):
+        return True
+
+    # 5. String signature fallback
+    err_str = str(exc).lower()
+    ambiguous_patterns = (
+        "timeout", "timed out", "connection reset", "connection aborted",
+        "broken pipe", "remotely closed", "remote disconnected",
+        "winerror 10053", "winerror 10054", "forcibly closed"
+    )
+    return any(p in err_str for p in ambiguous_patterns)
+
+
+def reconcile_youtube_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Query YouTube Data API search for dispatch_idempotency_key to determine if video was uploaded."""
+    from dispatch.youtube_inbox.oauth import get_youtube_service
+    service = get_youtube_service()
+    if not service:
+        return {"reconciled": False, "reason": "YouTube service unavailable"}
+
+    idempotency_key = job.get("idempotency_key") or f"idem_{job['clip_id']}_{job['platform']}"
+    marker = f"dispatch_idempotency_key:{idempotency_key}"
+    try:
+        req = service.search().list(part="snippet", forMine=True, q=marker, type="video", maxResults=5)
+        resp = req.execute()
+        items = resp.get("items", [])
+        if items:
+            vid = items[0]["id"]["videoId"]
+            vurl = f"https://www.youtube.com/watch?v={vid}"
+            return {"reconciled": True, "published": True, "remote_id": vid, "remote_url": vurl}
+        return {"reconciled": True, "published": False}
+    except Exception as e:
+        return {"reconciled": False, "reason": str(e)}
+
+
+def process_outbox_queue() -> int:
+    """Process all queued jobs in publishing_outbox.
+    Returns:
+        Number of successfully published jobs in this pass.
+    """
+    acquired = _processing_lock.acquire(blocking=False)
+    if not acquired:
+        logger.debug("Outbox queue processor is already active; skipping duplicate run.")
+        return 0
+
+    try:
+        return _process_outbox_queue_internal()
+    finally:
+        _processing_lock.release()
+
+
+def _process_outbox_queue_internal() -> int:
+    # 1. Recover stale uploading jobs orphaned by unexpected process restarts (> 10 min)
+    # If job has been uploading for > 10 min, do NOT blindly republish: mark 'reconciliation_required'
+    try:
+        with db.get_db_connection() as conn:
+            conn.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'reconciliation_required',
+                    updated_at = CURRENT_TIMESTAMP,
+                    last_error = 'Stale uploading state detected after process interruption; manual or remote reconciliation required'
+                WHERE status = 'uploading' 
+                  AND (julianday('now') - julianday(COALESCE(attempt_started_at, updated_at, created_at))) * 1440.0 > 10.0
+            """)
+    except Exception as e:
+        logger.debug("Stale outbox recovery check note: %s", e)
+
+    queue = db.get_outbox_queue()
+    if not queue:
+        return 0
+
+    logger.info("Found %d pending publishing jobs in outbox", len(queue))
+    success_count = 0
+
+    for job in queue:
+        job_id = job["id"]
+        clip_id = job["clip_id"]
+        platform = job["platform"].lower()
+        publish_mode = job.get("publish_mode") or "private"
+        video_path = Path(job["video_path"]) if job.get("video_path") else None
+        title = job.get("title") or "Dispatch Video"
+        description = job.get("description") or ""
+        hashtags = job.get("hashtags") or ""
+        attempt_count = job.get("attempt_count") or 0
+        remote_id = job.get("remote_id")
+
+        # If remote_id already exists from a previous ambiguous attempt, do not republish!
+        if remote_id:
+            logger.warning("Job %s already has remote_id %s; marking reconciliation_required rather than republishing", job_id, remote_id)
+            with db.get_db_connection() as conn:
+                conn.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'reconciliation_required',
+                        updated_at = CURRENT_TIMESTAMP,
+                        last_error = 'Job already has confirmed remote_id; reconciliation required before retry'
+                    WHERE id = ?
+                """, (job_id,))
+            continue
+
+        if not video_path or not video_path.exists():
+            logger.error("Job %s clip video file missing: %s", job_id, video_path)
+            with db.get_db_connection() as conn:
+                conn.execute(
+                    "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = 'Local video file missing' WHERE id = ?",
+                    (job_id,)
+                )
+            continue
+
+        # Reject corrupt or unsupported media before any publisher can perform a real upload.
+        is_valid, meta, validation_error = probe_video(video_path)
+        meta = meta or {}
+        if not is_valid or meta.get("duration") is None:
+            err_msg = f"Video validation failed: {validation_error or 'unsupported or corrupt media'}"
+        else:
+            actual_duration = float(meta["duration"])
+            err_msg = None
+            if actual_duration < MIN_CLIP_DURATION or actual_duration > MAX_CLIP_DURATION:
+                err_msg = f"Clip duration ({actual_duration:.2f}s) violates absolute duration requirements [{MIN_CLIP_DURATION}s, {MAX_CLIP_DURATION}s]"
+
+        if err_msg:
+            logger.error("Job %s cannot be published: %s", job_id, err_msg)
+            with db.get_db_connection() as conn:
+                conn.execute(
+                    "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
+                    (err_msg, job_id)
+                )
+            continue
+
+        # Atomically claim job as uploading
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE publishing_outbox 
+                SET status = 'uploading',
+                    attempt_started_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'queued'
+            """, (job_id,))
+            if cursor.rowcount == 0:
+                logger.debug("Job %s already claimed by another worker; skipping", job_id)
+                continue
+
+        try:
+            logger.info("Publishing clip %s to %s (Mode: %s, Attempt: %d)", clip_id, platform, publish_mode, attempt_count + 1)
+
+            idempotency_key = job.get("idempotency_key") or f"idem_{clip_id}_{platform}"
+            idempotency_marker = f"dispatch_idempotency_key:{idempotency_key}"
+
+            if platform in ("youtube", "youtube_shorts"):
+                privacy = "public" if publish_mode == "public" else ("unlisted" if publish_mode == "unlisted" else "private")
+                # Include idempotency key marker in description
+                full_desc = f"{description}\n\n{hashtags}\n\n{idempotency_marker}".strip()
+                result = upload_youtube_short(
+                    video_path=video_path,
+                    title=title,
+                    description=full_desc,
+                    tags=hashtags,
+                    privacy_status=privacy
+                )
+            elif platform == "instagram":
+                result = upload_instagram_reel(
+                    video_path=video_path,
+                    caption=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}"
+                )
+            elif platform == "linkedin":
+                result = upload_linkedin_video(
+                    video_path=video_path,
+                    commentary=f"{title}\n\n{description}\n\n{hashtags}",
+                    title=title
+                )
+            elif platform in ("x", "twitter"):
+                result = upload_x_video(
+                    video_path=video_path,
+                    text=f"{title}\n\n{hashtags}"
+                )
+            else:
+                err_msg = f"Unsupported publishing platform '{platform}'"
+                logger.warning("%s for job %s", err_msg, job_id)
+                with db.get_db_connection() as conn:
+                    conn.execute(
+                        "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
+                        (err_msg, job_id)
+                    )
+                continue
+
+            # Update job record to published
+            with db.get_db_connection() as conn:
+                conn.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'published', 
+                        remote_id = ?, 
+                        remote_url = ?, 
+                        updated_at = CURRENT_TIMESTAMP,
+                        published_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (result.get("remote_id"), result.get("remote_url"), job_id))
+
+            success_count += 1
+            logger.info("Successfully published %s to %s (%s)", clip_id, platform, result.get("remote_url"))
+
+            # Check if all outbox jobs for this clip have finished
+            check_and_finalize_clip(clip_id, video_path)
+
+        except PermissionError as pe:
+            logger.warning("Publishing job %s (%s) blocked: %s", job_id, platform, pe)
+            with db.get_db_connection() as conn:
+                conn.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'blocked_needs_auth',
+                        updated_at = CURRENT_TIMESTAMP,
+                        last_error = ?
+                    WHERE id = ?
+                """, (str(pe), job_id))
+
+        except Exception as e:
+            err_str = str(e)
+            logger.error("Publishing error for job %s (%s): %s", job_id, platform, err_str)
+            new_attempts = attempt_count + 1
+            # Check for ambiguous timeout or disconnect errors
+            is_ambiguous = is_ambiguous_network_error(e)
+            
+            with db.get_db_connection() as conn:
+                if is_ambiguous:
+                    # CRITICAL FORENSIC FIX: Even on the FIRST ambiguous timeout/disconnect, NEVER blindly republish!
+                    # Move immediately to reconciliation_required to prevent duplicate posts.
+                    conn.execute("""
+                        UPDATE publishing_outbox 
+                        SET status = 'reconciliation_required',
+                            attempt_count = ?,
+                            updated_at = CURRENT_TIMESTAMP,
+                            last_error = ?
+                        WHERE id = ?
+                    """, (new_attempts, f"Ambiguous remote error (reconciliation required before retry): {err_str}", job_id))
+                elif new_attempts >= 5:
+                    conn.execute("""
+                        UPDATE publishing_outbox 
+                        SET status = 'failed',
+                            attempt_count = ?,
+                            updated_at = CURRENT_TIMESTAMP,
+                            last_error = ?
+                        WHERE id = ?
+                    """, (new_attempts, err_str, job_id))
+                else:
+                    # Exponential backoff for definitive non-ambiguous transient errors: 30s, 60s, 120s, 240s...
+                    delay_seconds = min(3600, 30 * (2 ** (new_attempts - 1)))
+                    conn.execute("""
+                        UPDATE publishing_outbox 
+                        SET status = 'queued',
+                            attempt_count = ?,
+                            updated_at = CURRENT_TIMESTAMP,
+                            next_retry_at = datetime('now', ?),
+                            last_error = ?
+                        WHERE id = ?
+                    """, (new_attempts, f"+{delay_seconds} seconds", err_str, job_id))
+
+    return success_count
+
+
+def check_and_finalize_clip(clip_id: str, video_path: Path):
+    """Check if all platform jobs for this clip are completed, and mark clip published in database."""
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM publishing_outbox WHERE clip_id = ?", (clip_id,))
+        statuses = [row["status"] for row in cursor.fetchall()]
+
+        if statuses and all(s == "published" for s in statuses):
+            cursor.execute("""
+                UPDATE clips 
+                SET status = 'published', published_at = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            """, (clip_id,))
+            conn.commit()
+            logger.info("All platform uploads confirmed for clip %s. Clip marked published (media preserved).", clip_id)
+
+
+class PublishingOutboxWorker:
+    """Daemon thread worker that regularly monitors and processes queued social publishing jobs."""
+
+    def __init__(self, poll_interval: float = 10.0):
+        self.poll_interval = poll_interval
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        """Start background polling thread."""
+        if self._thread and self._thread.is_alive():
+            logger.warning("Publishing outbox worker is already running.")
+            return
+
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="PublishingOutboxWorker",
+            daemon=True
+        )
+        self._thread.start()
+        logger.info("Autonomous Publishing Outbox worker started (daemon thread, interval: %.1fs)", self.poll_interval)
+
+    def stop(self):
+        """Signal worker to stop and wait for completion."""
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+            logger.info("Publishing outbox worker stopped.")
+
+    def _run_loop(self):
+        logger.info("Starting publishing outbox worker loop")
+        while not self._stop_event.is_set():
+            try:
+                process_outbox_queue()
+            except Exception as e:
+                logger.error("Publishing outbox worker loop exception: %s", e)
+            self._stop_event.wait(self.poll_interval)
+
+
+def trigger_outbox_pass():
+    """Trigger an immediate asynchronous publishing pass without waiting for the next poll interval."""
+    t = threading.Thread(
+        target=process_outbox_queue,
+        name="ImmediateOutboxPass",
+        daemon=True
+    )
+    t.start()
+
+
+def watch_outbox_loop(poll_interval: float = 10.0):
+    """Background polling loop for the publishing outbox (standalone runner)."""
+    worker = PublishingOutboxWorker(poll_interval=poll_interval)
+    worker.start()
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        worker.stop()
+
+
+============================================================
+FILE: dispatch\publisher\twitter.py
+============================================================
+"""X (formerly Twitter) video publishing adapter using X API v2 and v1.1 Media Upload."""
+import os
+import time
+import logging
+import requests
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+logger = logging.getLogger("dispatch.publisher.twitter")
+
+
+def upload_x_video(
+    video_path: Path,
+    text: str,
+    bearer_token: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_secret: Optional[str] = None,
+    oauth_token: Optional[str] = None,
+    oauth_secret: Optional[str] = None
+) -> Dict[str, Any]:
+    """Publish short-form video tweet to X / Twitter.
+    
+    Args:
+        video_path: Local path to .mp4 video file.
+        text: Tweet text with hashtags.
+        bearer_token: X API v2 Bearer Token.
+        api_key, api_secret, oauth_token, oauth_secret: OAuth 1.0a credentials for media upload.
+        
+    Returns:
+        Dict with status, remote_id, remote_url, is_simulation.
+    """
+    token = bearer_token or os.getenv("X_BEARER_TOKEN") or os.getenv("TWITTER_BEARER_TOKEN")
+    key = api_key or os.getenv("X_API_KEY")
+
+    if not token and not key:
+        raise PermissionError("X / Twitter API credentials missing (X_API_KEY, X_BEARER_TOKEN).")
+
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video file missing: {video_path}")
+
+    file_size = video_path.stat().st_size
+
+    try:
+        from requests_oauthlib import OAuth1
+        oauth = OAuth1(
+            key or os.getenv("X_API_KEY"),
+            api_secret or os.getenv("X_API_SECRET"),
+            oauth_token or os.getenv("X_ACCESS_TOKEN"),
+            oauth_secret or os.getenv("X_ACCESS_SECRET")
+        )
+
+        upload_url = "https://upload.twitter.com/1.1/media/upload.json"
+
+        # Step 1: INIT
+        init_res = requests.post(
+            upload_url,
+            auth=oauth,
+            data={
+                "command": "INIT",
+                "media_type": "video/mp4",
+                "total_bytes": str(file_size),
+                "media_category": "tweet_video"
+            },
+            timeout=30
+        )
+        init_res.raise_for_status()
+        media_id = init_res.json()["media_id_string"]
+
+        # Step 2: APPEND chunks (5MB slices)
+        segment_id = 0
+        with open(video_path, "rb") as f:
+            while True:
+                chunk = f.read(5 * 1024 * 1024)
+                if not chunk:
+                    break
+                append_res = requests.post(
+                    upload_url,
+                    auth=oauth,
+                    data={"command": "APPEND", "media_id": media_id, "segment_index": str(segment_id)},
+                    files={"media": chunk},
+                    timeout=60
+                )
+                append_res.raise_for_status()
+                segment_id += 1
+
+        # Step 3: FINALIZE
+        fin_res = requests.post(upload_url, auth=oauth, data={"command": "FINALIZE", "media_id": media_id}, timeout=30)
+        fin_res.raise_for_status()
+
+        # Step 4: Post Tweet via v2
+        tweet_url = "https://api.twitter.com/2/tweets"
+        tweet_body = {
+            "text": text[:280],
+            "media": {"media_ids": [media_id]}
+        }
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        tweet_res = requests.post(tweet_url, auth=oauth if not token else None, headers=headers, json=tweet_body, timeout=30)
+        tweet_res.raise_for_status()
+        tweet_id = tweet_res.json().get("data", {}).get("id", media_id)
+        permalink = f"https://x.com/i/status/{tweet_id}"
+
+        logger.info("Successfully published video to X: %s", permalink)
+        return {
+            "status": "published",
+            "remote_id": tweet_id,
+            "remote_url": permalink,
+            "is_simulation": False
+        }
+
+    except Exception as e:
+        logger.error("X video publish failed: %s", e)
+        raise
+
+
+============================================================
+FILE: dispatch\publisher\youtube.py
+============================================================
+"""YouTube Shorts publishing adapter using YouTube Data API v3."""
+import os
+import logging
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+logger = logging.getLogger("dispatch.publisher.youtube")
+
+
+def upload_youtube_short(
+    video_path: Path,
+    title: str,
+    description: str,
+    tags: str,
+    privacy_status: str = "private",
+    credentials_path: Optional[Path] = None
+) -> Dict[str, Any]:
+    """Upload video to YouTube as a Short.
+    
+    Args:
+        video_path: Local path to .mp4 video file.
+        title: Title of the Short (must include #Shorts).
+        description: Description text.
+        tags: Comma-separated or hashtag-separated tags.
+        privacy_status: 'private', 'unlisted', or 'public'.
+        credentials_path: Optional path to OAuth client credentials.
+        
+    Returns:
+        Dict with status, remote_id, and url.
+    """
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video file missing: {video_path}")
+
+    # Ensure #Shorts is present in title or description
+    if "#Shorts" not in title and "#shorts" not in title:
+        title = f"{title} #Shorts"
+
+    safe_tags = tags or ""
+    tag_list = [t.strip().lstrip("#") for t in safe_tags.replace(",", " ").split() if t.strip()]
+
+    # Check for credentials
+    from dispatch.config import ROOT_DIR, YOUTUBE_TOKEN_PATH
+
+    if credentials_path is not None:
+        # Caller explicitly requested a specific credentials file — honour that contract strictly.
+        # Do NOT silently fall back to the system-wide token when a specific path was requested.
+        if credentials_path.exists():
+            token_file = credentials_path
+        else:
+            token_file = None
+    else:
+        # Auto-discovery: scan well-known locations
+        env_token_path = os.getenv("DISPATCH_YOUTUBE_TOKEN_PATH")
+        candidates = [
+            Path(env_token_path) if env_token_path else None,
+            YOUTUBE_TOKEN_PATH,
+            ROOT_DIR / "youtube_token.json",
+            Path("youtube_token.json"),
+        ]
+        token_file = None
+        for c in candidates:
+            if c and c.exists():
+                token_file = c
+                break
+
+    if not token_file and not os.getenv("YOUTUBE_ACCESS_TOKEN"):
+        raise PermissionError("YouTube OAuth credentials missing (youtube_token.json). Please authenticate via Settings.")
+
+    # If real credentials exist, execute actual Google API client upload
+    try:
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+
+        if token_file and token_file.exists():
+            creds = Credentials.from_authorized_user_file(str(token_file))
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleAuthRequest())
+                    if hasattr(creds, "to_json"):
+                        with open(token_file, "w", encoding="utf-8") as f:
+                            f.write(creds.to_json())
+                        logger.info("Refreshed and persisted YouTube OAuth token in publisher to %s", token_file)
+                except Exception as refresh_err:
+                    logger.warning("Failed to refresh YouTube OAuth token in publisher: %s", refresh_err)
+        else:
+            creds = Credentials(
+                token=os.getenv("YOUTUBE_ACCESS_TOKEN"),
+                refresh_token=os.getenv("YOUTUBE_REFRESH_TOKEN"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+                client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+            )
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleAuthRequest())
+                except Exception as refresh_err:
+                    logger.warning("Failed to refresh env-based token in publisher: %s", refresh_err)
+
+        youtube = build("youtube", "v3", credentials=creds)
+
+        body = {
+            "snippet": {
+                "title": title[:100],
+                "description": description,
+                "tags": tag_list,
+                "categoryId": "22"  # People & Blogs
+            },
+            "status": {
+                "privacyStatus": privacy_status,
+                "selfDeclaredMadeForKids": False
+            }
+        }
+
+        media = MediaFileUpload(str(video_path), mimetype="video/mp4", resumable=True)
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+        response = request.execute()
+
+        video_id = response.get("id")
+        return {
+            "status": "published",
+            "remote_id": video_id,
+            "remote_url": f"https://youtube.com/shorts/{video_id}",
+            "is_simulation": False
+        }
+
+    except Exception as e:
+        logger.error("Real YouTube upload failed: %s", e)
+        raise
+
+
+============================================================
+FILE: dispatch\sync\__init__.py
+============================================================
+"""Dispatch Sync Receiver Package."""
+from dispatch.sync.receiver import router
+
+__all__ = ["router"]
+
+
+============================================================
+FILE: dispatch\sync\pairing_codes.py
+============================================================
+"""Short-lived, single-use pairing authorization for YouTube credential transfer."""
+import hashlib
+import secrets
+import threading
+import time
+from collections import defaultdict
+from typing import DefaultDict, List
+
+PAIRING_CODE_TTL_SECONDS = 300
+PAIRING_ATTEMPT_WINDOW_SECONDS = 60
+PAIRING_MAX_ATTEMPTS = 5
+PAIRING_LOCKOUT_SECONDS = 300
+
+_lock = threading.Lock()
+_active_code_digest: str = ""
+_active_code_expires_at = 0.0
+_failed_attempts: DefaultDict[str, List[float]] = defaultdict(list)
+_lockouts: dict[str, float] = {}
+
+
+class PairingCodeError(Exception):
+    """Pairing authorization failure with a safe HTTP status and message."""
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _digest(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def issue_pairing_code() -> tuple[str, int]:
+    """Replace any outstanding code with a new random 4-digit single-use code."""
+    global _active_code_digest, _active_code_expires_at
+    code = f"{secrets.randbelow(10_000):04d}"
+    with _lock:
+        _active_code_digest = _digest(code)
+        _active_code_expires_at = time.monotonic() + PAIRING_CODE_TTL_SECONDS
+    return code, PAIRING_CODE_TTL_SECONDS
+
+
+def consume_pairing_code(code: str, client_ip: str) -> None:
+    """Validate and consume the active code, rate-limiting invalid attempts per IP."""
+    global _active_code_digest, _active_code_expires_at
+    now = time.monotonic()
+    address = client_ip or "unknown"
+    with _lock:
+        lockout_until = _lockouts.get(address, 0.0)
+        if now < lockout_until:
+            remaining = max(1, int(lockout_until - now))
+            raise PairingCodeError(429, f"Too many incorrect pairing attempts. Retry in {remaining} seconds.")
+        attempts = [
+            timestamp for timestamp in _failed_attempts.get(address, [])
+            if now - timestamp < PAIRING_ATTEMPT_WINDOW_SECONDS
+        ]
+        _failed_attempts[address] = attempts
+
+        valid_shape = len(code) == 4 and code.isdigit()
+        matches = valid_shape and secrets.compare_digest(_digest(code), _active_code_digest)
+        not_expired = now < _active_code_expires_at
+        if not (matches and not_expired and _active_code_digest):
+            attempts.append(now)
+            _failed_attempts[address] = attempts
+            if len(attempts) >= PAIRING_MAX_ATTEMPTS:
+                _lockouts[address] = now + PAIRING_LOCKOUT_SECONDS
+                _failed_attempts.pop(address, None)
+            if _active_code_digest and not not_expired:
+                _active_code_digest = ""
+                _active_code_expires_at = 0.0
+            raise PairingCodeError(401, "Pairing code is invalid, expired, or already used. Create a new code on the PC.")
+
+        _active_code_digest = ""
+        _active_code_expires_at = 0.0
+        _failed_attempts.pop(address, None)
+        _lockouts.pop(address, None)
+
+
+def reset_pairing_codes_for_tests() -> None:
+    """Reset in-memory pairing authorization state for isolated tests."""
+    global _active_code_digest, _active_code_expires_at
+    with _lock:
+        _active_code_digest = ""
+        _active_code_expires_at = 0.0
+        _failed_attempts.clear()
+        _lockouts.clear()
+

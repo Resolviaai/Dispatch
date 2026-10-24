@@ -873,71 +873,12 @@ async def upload_chunk(
     }
 
 
-@router.post("/upload/direct")
-async def upload_direct_file(
-    file: UploadFile = File(...),
-    segment_id: str = Form(...),
-    session_id: Optional[str] = Form(None),
-    auth_token: Optional[str] = Form(None),
-    x_auth_token: Optional[str] = Header(None, alias="x-auth-token")
-):
-    """Direct streaming multipart upload for mobile segments with immediate pipeline execution."""
-    token = auth_token or x_auth_token
-    verify_token(token)
-    seg_id = sanitize_segment_id(segment_id)
-
-    temp_target = INCOMING_DIR / f"{seg_id}.direct_upload"
-    final_target = PROCESSING_DIR / f"{seg_id}.mp4"
-
-    hasher = hashlib.sha256()
-    total_bytes = 0
-    try:
-        with open(temp_target, "wb") as f:
-            while chunk := await file.read(1024 * 512):
-                f.write(chunk)
-                hasher.update(chunk)
-                total_bytes += len(chunk)
-
-        computed_sha = hasher.hexdigest()
-        logger.info("Direct upload complete for %s (%d bytes, SHA: %s)", seg_id, total_bytes, computed_sha[:8])
-
-        # Purge any partial file from interrupted resumable attempts
-        (INCOMING_DIR / f"{seg_id}.part").unlink(missing_ok=True)
-
-        if final_target.exists():
-            final_target.unlink(missing_ok=True)
-        shutil.move(str(temp_target), str(final_target))
-
-    except Exception as e:
-        temp_target.unlink(missing_ok=True)
-        raise e
-
-    chunk_id = db.register_chunk(
-        session_id=session_id,
-        filename=final_target.name,
-        filepath=str(final_target),
-        file_hash=computed_sha
+@router.post("/upload/direct", include_in_schema=False)
+async def upload_direct_file_disabled():
+    """RETIRED (2026-10-24, YouTube-only architecture): this endpoint accepted
+    arbitrary streamed bytes with no expected hash (TOFU) and no size cap.
+    Phone segments arrive via YouTube; do not reintroduce a LAN byte path."""
+    raise HTTPException(
+        status_code=410,
+        detail="Direct LAN upload retired. Recordings arrive via YouTube.",
     )
-
-    is_valid, meta, err = probe_video(final_target, chunk_id=chunk_id)
-    if is_valid:
-        db.update_chunk_metadata(
-            chunk_id=chunk_id,
-            duration=meta["duration"],
-            width=meta["width"],
-            height=meta["height"],
-            aspect_ratio=meta["aspect_ratio"],
-            status="verified"
-        )
-
-    job_id = enqueue_job(chunk_id=chunk_id, session_id=session_id)
-    logger.info("Directly enqueued pipeline job %s for chunk %s", job_id, chunk_id)
-
-    return {
-        "status": "completed",
-        "segment_id": seg_id,
-        "chunk_id": chunk_id,
-        "job_id": job_id,
-        "bytes_received": total_bytes,
-        "verified": True
-    }

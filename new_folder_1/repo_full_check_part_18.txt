@@ -1,0 +1,2398 @@
+﻿
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseApiDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseApiDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseApiDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseApiDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseApiDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseApiDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseApiDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseApiDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseApiDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseApiDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseApiDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseApiDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseApiDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseApiDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseApiDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseApiDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseApiDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseApiDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseCompileOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnly`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseCompileOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseCompileOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseCompileOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseCompileOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseCompileOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseCompileOnly`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseCompileOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseCompileOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseCompileOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseCompileOnly`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseCompileOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseCompileOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseCompileOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseCompileOnlyDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseCompileOnlyDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseCompileOnlyDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseCompileOnlyDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseCompileOnlyDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseCompileOnlyDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseCompileOnlyDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseCompileOnlyDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseCompileOnlyDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseImplementationConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementation`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseImplementation", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementation`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseImplementation", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementation`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementation`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementation`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseImplementation", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseImplementation`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseImplementation", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseImplementation`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseImplementation", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseImplementation`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseImplementation", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseImplementation`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseImplementation", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseImplementation`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseImplementation", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseImplementationDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementationDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseImplementationDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementationDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementationDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementationDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseImplementationDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseImplementationDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseImplementationDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseImplementationDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseImplementationDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseImplementationDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseImplementationDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseImplementationDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseImplementationDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseImplementationDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseImplementationDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseImplementationDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseImplementationDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseIntransitiveDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseIntransitiveDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseIntransitiveDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseIntransitiveDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseIntransitiveDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseIntransitiveDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseIntransitiveDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseIntransitiveDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseIntransitiveDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseRuntimeOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseRuntimeOnly`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseRuntimeOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseRuntimeOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseRuntimeOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseRuntimeOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseRuntimeOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseRuntimeOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseRuntimeOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseRuntimeOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseRuntimeOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseRuntimeOnly`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseRuntimeOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseRuntimeOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseRuntimeOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseRuntimeOnly`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseRuntimeOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseRuntimeOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseRuntimeOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesReleaseWearAppConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseWearApp`(dependencyNotation: Any): Dependency? =
+    add("testFixturesReleaseWearApp", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseWearApp`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesReleaseWearApp", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseWearApp`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseWearApp`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesReleaseWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesReleaseWearApp`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesReleaseWearApp", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesReleaseWearApp`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesReleaseWearApp", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseWearApp`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesReleaseWearApp", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesReleaseWearApp`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesReleaseWearApp", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseWearApp`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesReleaseWearApp", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesReleaseWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesReleaseWearApp`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesReleaseWearApp", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesRuntimeOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesRuntimeOnly`(dependencyNotation: Any): Dependency? =
+    add("testFixturesRuntimeOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesRuntimeOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesRuntimeOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesRuntimeOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesRuntimeOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesRuntimeOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesRuntimeOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesRuntimeOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesRuntimeOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesRuntimeOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesRuntimeOnly`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesRuntimeOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesRuntimeOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesRuntimeOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesRuntimeOnly`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesRuntimeOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesRuntimeOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesRuntimeOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesRuntimeOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestFixturesWearAppConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testFixturesWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesWearApp`(dependencyNotation: Any): Dependency? =
+    add("testFixturesWearApp", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testFixturesWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesWearApp`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testFixturesWearApp", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testFixturesWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesWearApp`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesWearApp' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesWearApp`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testFixturesWearApp", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesWearApp' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testFixturesWearApp`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testFixturesWearApp", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testFixturesWearApp' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testFixturesWearApp`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testFixturesWearApp", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesWearApp`(constraintNotation: Any): DependencyConstraint =
+    add("testFixturesWearApp", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testFixturesWearApp' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testFixturesWearApp`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testFixturesWearApp", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testFixturesWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesWearApp`(artifactNotation: Any): PublishArtifact =
+    add("testFixturesWearApp", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testFixturesWearApp' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testFixturesWearApp`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testFixturesWearApp", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\TestImplementationConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'testImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testImplementation`(dependencyNotation: Any): Dependency? =
+    add("testImplementation", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'testImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testImplementation`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "testImplementation", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'testImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testImplementation`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testImplementation`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "testImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testImplementation' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`testImplementation`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "testImplementation", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'testImplementation' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`testImplementation`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("testImplementation", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'testImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testImplementation`(constraintNotation: Any): DependencyConstraint =
+    add("testImplementation", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'testImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`testImplementation`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("testImplementation", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'testImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testImplementation`(artifactNotation: Any): PublishArtifact =
+    add("testImplementation", artifactNotation)
+
+/**
+ * Adds an artifact to the 'testImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`testImplementation`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("testImplementation", artifactNotation, configureAction)
+
+
+
+

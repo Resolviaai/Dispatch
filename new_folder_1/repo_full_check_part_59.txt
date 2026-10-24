@@ -1,0 +1,489 @@
+﻿
+============================================================
+FILE: Transcript\01_EVERYTHING_you_need_to_know_to_build_a_Dashboard_UI_in_8_minutes_(beginner_friendly).txt
+============================================================
+Link: https://www.youtube.com/watch?v=B7k5rOgmOGY&t=49s&pp=ygUTdWkgZGFzaGJvYXJkIGRlc2lnbg%3D%3D
+Title: EVERYTHING you need to know to build a Dashboard UI in 8 minutes (beginner friendly)
+
+Dashboards are a staple of any design portfolio, but most suck. Not because they're ugly, but because they're disorganized and messy. So, in this video, I'm going to show you how to design your very first dashboard UI completely from scratch in a way that's simple, aesthetic, and actually usable. And by the end, you won't just have a great-look layout. You'll understand why the best dashboards feel effortless to use.
+
+It starts with the sidebar, which houses most of the persistent and globally relevant elements. Think about it as the spine of your product. Elements like navigation, profile management and search are typically in here, but sometimes profile management and search can go in the top bar, too. Starting from the top, sometimes a logo is put up here, but I find this a more convenient spot for profile management.
+
+A profile picture makes it easy to identify, and the arrows indicate that this is clickable. Next, links. We want to start with a recognizable icon and a short title. This is especially helpful if you plan on making your sidebar collapsible, like this. And it's also helpful if you want to add a notification number or a new chip to it. Navigation is all about reducing cognitive load. To do that, we'll want to group our links by what's relevant.
+
+And then since settings and help center are rarely used, we can send them down to the bottom. As the amount of links expands, you'll want to start nesting links into drop downs. And make sure to have an active state. We're using this rectangle as an indicator. This is optional, but if you want to highlight features, search or integrations, this would be a good place to put them in.
+
+Finally, also optional, but with all this empty space, we could add in some notifications. Companies like Dub and Linear have already started doing this sort of thing. And just like that, you've built an aesthetic, but also functional sidebar super easily. If it wasn't clear already, we're building a link tracking software for this demo. So, let's get into it. Sidebars are relatively hard to screw up. The same cannot be said about dashboards.
+
+This dashboard feels like someone emptied a drawer onto the screen. If your dashboard looks like it requires a PhD to operate, then it's too complex. Just do one thing well with your dashboard. First, I want to point out a few important considerations. If you compare a dashboard to a landing page, you'll see the features of a dashboard are much smaller because we're trying to shove in many more things.
+
+These are the textiles for the landing page, and these are the textiles for the dashboard. We've got a lot of smaller font sizes without much spacing in between sizes. Grids and layouts are also much more strictly followed for dashboards than landing pages because we're using most or all of the space on screen. Third and final, what you put in this main section of the dashboard reflects what is most important to the user.
+
+For example, if you're building a project management dashboard, displaying the project status would be very useful. Or if you're building a financial dashboard, you should show investments right at the top. Taking all of that into consideration, we'll be using a very simple two column, two row grid with link management at the top and a few important metrics down below. The very top of the dashboard is generally reserved for important page actions or simple navigation.
+
+For our relatively simple dashboard, we'll have a drop down and a button to make a link, which seems pretty important. For any data displayed on the homepage, you'll want to keep it super simple. So, we'll just have the favicon, the shorten link, the actual link, and when it was made. We'll also add how many clicks each link has gotten. Since we still want to have a good amount of space in the middle, we can add a brief description, kind of similar to GitHub.
+
+If we wanted visual separation, we can make each link have its own border. But for less clutter, we'll stack them into a list. This layout also makes it easier to add an empty state when there are no links to display, which is important to be thinking about. Now, this static list is looking great, but in real world applications, we need to manage data efficiently. This is where a small micro interaction comes in.
+
+Letting the user select multiple links which reveals a new contextual button, bulk actions. Moving on to the charts below. Let's do it properly. First, don't make weird like this. I don't know what these are, and neither does anyone else. Instead, let's start with a basic line graph. Add some grid lines and numbers since everyone forgets those. Pop in a quick summary and date selector, and we're good to go.
+
+For the other one, we'll have a bar chart to break down by each link with the favicon on the side to make them easily identifiable. We'll add the same range selector and give the user access to signups and conversion on this chart, too. There's no reason that charts can't be simple and informative, but also aesthetic. But sometimes you need some inspiration first. And one tool I use all the time for this is Mvin, who curates hundreds of thousands of beautifully organized screenshots from real apps.
+
+things like project management tools, banking dashboards, and even admin panels. You can search by element like charts or even filter by industry or device type. And it's not just pretty UIs. It helps me see how real teams design flows like how they onboard users or structure complex settings pages. You can check out Mobin using my link in the description to get 20% off. However, most of the functionality of a dashboard isn't actually here in what we've built.
+
+We're displaying a lot of information, but we can't do anything yet. That's where modals, popovers, and even new pages come into play. A popover is something like this, and best used when the context is simple, like these display settings, and are nonblocking, meaning the user can click away without any consequences. A modal is best used when the context is more complex, but you still want to keep the user on the same page.
+
+This is because creating a link is directly related to the links that are displayed on screen. A modal is considered blocking because you need to click create or cancel before dealing with other things. And since you can't see the page when the changes are being made, a toast notification confirming the changes is generally a good practice. Speaking of toasts, they're the notification system of your dashboard. Anytime you want to make the user aware of something without taking over the entire screen or prompt them to take action, you use a toast.
+
+We talked about empty states earlier, but toasts are great for a warning or error states, which frequently get missed. Finally, if the context is more permanent or is very large, like clicking on an existing link, it's reasonable to direct the user to a new page. If you're going to do that, having a back button or breadcrumb is pretty much required. We've just built the bulk of one page on a dashboard, but laying out other pages are fairly trivial since there are really only four main dashboard components.
+
+First, lists and tables. These are the most common, and we've used several of them already, from our link table to link details or even the sidebar. Making a good list mostly comes down to separation with three ways to do it. The first is just space. The second is lines or dividers. And the third is with color. But making a good table is more about functionality where displaying the data is only half the battle.
+
+Giving the user the options to search, filter, or sort the table transforms it into an interactive tool. Next is cards. This includes our charts and toast notifications. Most dashboards are comprised of many cards together. Keep the margins well spaced so content isn't too tightly packed. Also, you can choose between a border or background colors. I prefer outlines on dark modes and background colors on light mode, but that's totally up to you.
+
+User input is another common one. We've used these making our link modal and any sort of settings pages has them. Or if you're lucky, you'll get tables with forms inside of cards like here on Versel. Fourth and final are tabs. These are fantastic for essentially adding new pages without cluttering the sidebar. For example, in notion, we get different views of very related tables without leaving the context of the page.
+
+Breaking Notion settings down a little more, we've got mostly lists with some user inputs and some cards once we get to connections, all inside of a modal. So once you master these four elements, you can build virtually any dashboard page. Finally, animation and interaction on dashboards is pretty tame and user focused when compared to some websites and landing pages. Starting with our chart animations, here is where we can get a little more creative.
+
+For example, on this chart, when we hover, we get the number as well as a bubble with a percent in it. Or on our other chart, when we hover, all of the other bars dim out. But what everyone wants is a snappy, fast dashboard. That's where optimistic UI comes into play. For example, on Gmail, when I delete an email, it disappears instantly, assuming that the server request will succeed.
+
+The app is optimistic that it will succeed so you don't get these awkward pauses before your link disappears. And with that, you have the majority of a functional aesthetic dashboard, which is more than most designers can say. If you're interested in checking out Mobin, it'll be the first link down below. And I also have the design files listed down there, too. Thanks for watching, and I'll see you in the next one.
+
+[Music]
+
+
+============================================================
+FILE: Transcript\02_The_3_dashboard_UI_flaws_that_give_away_you've_NEVER_built_one.txt
+============================================================
+Link: https://www.youtube.com/watch?v=Ksx9C2-3yMo&t=18s&pp=ygUTdWkgZGFzaGJvYXJkIGRlc2lnbg%3D%3D
+Title: The 3 dashboard UI flaws that give away you've NEVER built one
+
+Designing a dashboard isn't that hard, but orchestrating one is. And there's a massive difference between UI that might look good and UI that actually works when you start using it. So, whether you're live coding a new project or creating a piece for your portfolio, we're covering the three tells that immediately give away you've never built one before and exactly how to fix each and every one. >> [music] >> The one thing that all dashboards have in common is they're built to display data.
+
+So, if we focus on building the UI around the data we need to display, we end up with a much more usable experience. For example, take a look at this table. It seems relatively logically laid out, but clearly nothing is driving the form. But, for example, if we turned the department and employment into chips or took these numbers and right align them, things start to shape up.
+
+We do this because there's only a set number of departments or employment statuses, and we right align the numbers so the digits align by place value. Then, we can augment this further by truncating long text to give more breathing room to the other columns or even shade out rows of the table that are inactive or deactivated. And when we compare the before and after, we can clearly see which is more visually appealing to look at and importantly, which is letting the data drive the form.
+
+And the same is true for data that probably shouldn't even be in a table in the first place. This table definitely works. Don't get me wrong, we could use it, but the time delineated nature means that this isn't the best format and we aren't letting the data determine the shape of the UI. Instead, if we were to arrange this as a timeline, it starts to become a lot easier to follow rather than a time sorted table.
+
+This form factor could then be tucked into a sidebar pop out or made wider as a second column beside the table, but either way, now we're letting the data drive the UI. And color is a very important consideration when we do start designing these tables. [music] Landing pages, you can get away with a lot, but dashboard colors shouldn't just be sprinkled in to look nice. It should come from the data itself.
+
+In these activity logs, the red icon in the chip draws your eye to it because the action is urgent. The avatar is there because your eye can associate who did what way faster than reading a name in the column. And once you're thinking that way, it's a pretty simple jump to adding a chart to roll up the data into a summary. Because this data has a time dimension, and our chart shows you that instantly instead of making you hunt through a timestamp column, just like Often when I talk about hierarchy, I use examples like this, where this card has poor hierarchy, and this card has strong hierarchy.
+
+But there's another type of hierarchy based on what you show and what you hide, and it's called progressive disclosure. For example, this share functionality isn't permanently ingrained in the side of the table since it's not that frequently accessed and frankly not important enough. Instead, we tuck it into a popover so we don't have to rip the user to an entirely different page. And within this popover, the primary action is of course the search box, which is why it's immediately visible at the top.
+
+A secondary action like removing a user isn't overly important, so instead of ingraining it in the UI, we show the remove button on hover along with a tooltip. We could be more explicit by always having them, or even still more explicit by having the full label present. But since we're tight on space and removing a user from sharing isn't a main action, we progressively reveal it as soon as the user starts to look for that functionality.
+
+And what I've just described is called the spectrum of explicitness, where a global, always visible share button is quite high, whereas an icon to copy a cell on hover is much lower on that same spectrum. And Apple does the same thing really well in their Reminders app. On swipe left and right, it reveals useful but secondary actions compared to actually checking off the reminder. And if you think about it, this is exactly what an onboarding is.
+
+When a user lands on your app for the first time, they shouldn't be staring at a fully loaded dashboard wondering where to start. A good onboarding might start with a single tooltip pointing at the most important action. Once they've done that, maybe a second one appears or a simple checklist in the corner. You're not hiding functionality, you're sequencing it so that the user is never overwhelmed. Compare that to explaining the entire product in a modal with six bullet points the second you log in and then instantly forgetting the moment you dismiss.
+
+And the best way to get a feel for how to handle this, the progressive disclosure, the spectrum of explicitness, and the onboarding flows, is to look at a lot of real software. Which is exactly what today's sponsor Mavin makes dead simple. They've curated hundreds of thousands of screens from real mobile and web apps. So, instead of piecing together an onboarding flow, you can search through hundreds of them.
+
+They also just launched an MCP. So, you can pull Mavin's full library directly into your AI development. I had it throw together a mood board for a banking app with real screenshots and actual links in about 2 minutes. If you're interested in checking it out, the very first link A really important concept that AI has a hard time wrapping its figurative head around is that UI is as much about what you can see as what you can't see.
+
+Like for as much as this table works well and looks good, additional functionality in such a dense design needs to come from parts of the UI that you can't immediately see. This could be as simple as a copy chip over the cells or perhaps comment functionality with a small triangle indicator. Here's all the UI that you can see and then this is all of the UI that you can't immediately see but is still there.
+
+And it's not a small amount. We need it all to actually make any of this table function. Putting the individual pieces together, the spacing, the sizing isn't that hard but orchestrating them does require some thought. And this applies just as much to the smaller items as it does to the larger drawers, models, and elements that have hidden components and states. It makes it easier to see that new features or elements often don't require a dedicated page just to be better thought through how they're implemented.
+
+But, this isn't just true for dense UI like tables. Think about moments in software that you almost never see. An announcement about a newly launched feature or an onboarding pop-up explaining how part of the product works. But, what's missing pretty much unequivocally on all beginner dashboards are tooltips. We have to assume that the user won't understand all of our icons or that they might want more details or information on ambiguous labels.
+
+It goes to show that there's so much UI that's hiding that's important for a finished product. And with that, those are the three subtle flaws that'll give away that you've never built a dashboard before. The data driving the form, the right things hidden until they're needed, and all the invisible UI that makes the whole thing actually function. If you want to check out Mavin, it'll be the very first link down below.
+
+You can get the link to all of the Figma assets used in this video down there, too. Thank you so much for watching, and I'll
+
+
+============================================================
+FILE: Transcript\03_Redesigning_a_Finance_Dashboard_UI_from_SCRATCH_(ft._Dribbble).txt
+============================================================
+Link: https://www.youtube.com/watch?v=Yr2uIcFZDDQ&t=1s&pp=ygUTdWkgZGFzaGJvYXJkIGRlc2lnbg%3D%3D
+Title: Redesigning a Finance Dashboard UI from SCRATCH (ft. Dribbble)
+
+so I was scrolling through dribble trying to find UI elements to redesign for my last video when I came across this design I did end up taking this chart card to redesign but later it got me thinking about the entire design in common dribble fashion it looks amazing but doesn't actually make that much sense once you start zooming in what bro what are you talking about man
+
+so today we're redesigning it from scratch from the ground up so you know the right way to design UI dashboard and so you don't post your work on dribble and get made fun of by some dumb guy on YouTube with 1500 sub subscribers let's go quick side note before we begin if you do want to edit any of these files we're working on stick around to the
+
+end of the video to find out how to get access to them for free when I'm looking at this the first thing I can think is that things are going to get cut off by the fold somewhere around here and that's fine I can scroll but if I'm going to have to I don't want all this space up here while the important is down at the bottom
+
+so our first order of business is to do an assessment of the hierarchy and probably end up tossing a few elements in the process let's break this down into what I'm going to call the header of this UI and the rest of it for this header I'm thinking we could shove this all into a sidebar that could also be handy for navigation firstly the menu and logo
+
+look good to me that's a hell of a lot better logo than I could certainly make but we definitely don't need to announce that this is a financial dashboard since that should hopefully be apparent next we're going to give Dwayne Tatum some co-workers so he's not a CEO assistant without a CEO we'll also add a button to manage the team just in case Dwayne wants to fire
+
+someone in the future now we have two search bars that look like they do exactly the same thing so we're going to get rid of one I also don't know the last time I saw Financial dashboard with the option to dictate text but I'm going to go on a limb and remove that too I don't think the date is entirely necessary but we might add it in
+
+if we have room however this button is definitely necessary and more than that we shouldn't have to click on the button to see our tasks we'll move this to the side and turn it into a separate section later let's build out our sidebar now that we've gotten down to the essentials log go at the very top followed by the menu icon then we'll put our team next
+
+and the settings all the way at the bottom lastly I assume this button is to add a widget or a section to the dashboard this is a pretty good feature but it's in an awkward spot so we'll put it in our sidebar instead if we choose to collapse the menu I'm thinking it could look something like this all right now we've opened up all the space up
+
+here but also kind of screwed it up down below let's move the sidebar for a second so we can get a better understanding of what we're working with there are 12 cards or elements here and many of them look pretty useless for example the system lock should be integrated with the credit card information so you can lock the card online when you accidentally send Bill Gates a
+
+Bitcoin after he promised to send you two back anyways the growth rate should definitely be part of the annual profits card I don't even have a clue what is going on with this 13 Days card but I'm getting rid of it this chart also should be included in the annual profits card too this questioner at the bottom is bulky and provides no real value to us maybe
+
+we'll find a way to work it in later but we're getting rid of it for now that just leaves these elements for us let's start with the modals that we'll be adding elements to so the credit card widget and the annual profits widget you know when I said in common dble fashion it looks amazing but doesn't actually make that much sense once you start zooming in well
+
+this this is what I mean this looks like a credit card which can receive direct deposits or send them for that matter either so I'm going to scrap this direct deposit button and instead replace it with our lock card button we'll also get rid of this receive button since you can't really receive money with a credit card I don't know what the hell is going on with
+
+this design I like the idea of actually having a credit card on here with our number on it I'm going to take some inspiration from the wise card and by that I mean steal it entirely we'll apply our brand colors but this is lacking something we going to take our logo blow it up and reduce the opacity now things are starting to make sense with these changes
+
+we need to retitle the card to something better I'm going to replace the monthly fee with a minimum payment and add the due date lastly I'll add a way for us to scroll to more cards if we wanted to add more than one to this dashboard when it comes to laying out the dashboard let's think about this as a grid where the more important information should be
+
+higher and farther left without knowing how the other models will shape up let's just try ranking the importance of the modals as we make them think about this as our tier list credit cards are certainly important Financial information so I'm going to give it a mid-level priority for now you know what makes less sense than receiving money on a credit card this chart it design is honestly
+
+pretty sound but without any labels these numbers don't mean anything we don't need any massive changes just to add some much needed context a made the executive decision that having a chart like this along with the growth percentages is repetitive so we're trashing the chart entirely to add the growth percentages we're going to use these chips with the percentages for every level not much else needs to
+
+be changed but as far as the importance of this information I'd say it's pretty low let's move on to the next one this is the chart we redesigned in this video so if you want the entire breakdown check out that video after this one but basically curving data lines like this bad and fading of the data line worse other than that we just moved things around added
+
+some grid lines and a time scale selector however in an effort to match the theme of the dashboard a little better I'm going to make a few minor tweaks instead of having the slider to select the time scale we'll change this into a drop down I'll also add a compare Buton button just in case there are multiple portfolios that they want to compare across finally I'll put
+
+this icon back to take the user to a full screen version of this chart I'm going to put this in the low priority level to since while it's nice to view your Investments you don't generally need to access them on a regular basis the largest and probably second most important model is the activity manager let's examine everything up here looks pretty good except for this minimize icon
+
+since I'm not entirely sure how we'd make this much smaller or replace that with an all activities button instead however the same cannot be said for down below this wallet verification makes sense but the other two let's start with this card it's a pretty diagram but entirely useless same with this navigation am I expected to click on these tiny circles to navigate around I honestly have no
+
+clue what they were going for here so we're turning this into a fraudulent activity alert every good alert starts with this icon we can then add the amount date and place the transaction took place that makes much more sense than what we started with next up for the business plan we're once again missing too much context to make sense of what this is I do however like
+
+this diagram so I'm going to flip this 90° and change the colors a little bit we'll turn this into a bank loan approval instead just add the loan amount and the repayment date and we're good to go activity of the day-to-day business is definitely a high priority function so up it goes okay now we're going to take this button and turn it into an entire model so
+
+we can actually view our tasks for the layout we're going wide and thin and I was originally thinking we could fit four reminders in here but in keeping with the margins from the other models we'll do two cards and add some filters too of course with only two here we'll need a way to view them all so let's put a big red button up here for that
+
+of course we'll also need a way to add new reminders so we'll put that right beside our all tasks button seeing as this was pretty much our call to action this should be a high priority model brilliant our next model is for income and expenses it contains some pretty important information but has basically no visuals or anything to represent the data let's fix that I'm thinking the
+
+best way for us to represent money coming in and out is is by having a two-sided bar chart with the bars that extend upwards representing income and the bars that extend downwards representing expenses let's slap that at the bottom of the card we'll give this one a title of Revenue and expenses and pop the dollar values back on there lastly We'll add an icon to take us
+
+to the full screen chart from a business standpoint income and expenses seem pretty important so high priority all right that is all of our sections designed out so let's start putting them together starting with our high priority models with the task calendar being the furthest top left left we have two orientations but this one leaves an awkward Gap that will be difficult to fill with something while
+
+the other does not our only mid-level priority is the active cards so we're going to slot that in here lastly we can pop our low priority modals down here and look at how well that fits together I may have planned that out a little bit but we have a clear Gap that we do need to fill out no offense to the original Creator but I just don't
+
+think there was a ton of financial thought behind this dashboard it's clearly lacking some sort of line of credit section so that's exactly what we're going to slot in here originally I was thinking of using a layout like this but then I thought wait a minute let's use a pie chart instead data representation people it'll make or break the UI and ux of your dashboard so anyways
+
+we throw in a pie chart toss the interest payment because who cares about that and then add this Kabab icon just in case someone actually does care about it then we can slot that perfectly into our empty space follows that is a solid looking Financial dashboard that is slightly more usable now if I missed any changes let me know in the comments down below below and if
+
+you want access to all the files that we worked on today it'll be the first link in the description down below thanks for watching if you enjoyed consider subscribing and I'll see you in the next one [Music]
+
+
+============================================================
+FILE: Transcript\04_I_Studied_2,108_Dashboards_To_See_What_Sticks.txt
+============================================================
+Link: https://www.youtube.com/watch?v=kdRkuqu8apE&t=1s&pp=ygUTdWkgZGFzaGJvYXJkIGRlc2lnbg%3D%3D
+Title: I Studied 2,108 Dashboards To See What Sticks
+
+Most dashboards look identical. They work, but they don't stick. Templates are everywhere. AI can generate one in seconds. And yet, every day, tens of thousands of designers come on Mobbin searching for the same thing. Dashboards, mostly web ones. So, why do people keep coming back? Dashboards are the designer's dream selfie. Visually impressive, complex enough to flex, and fits perfectly in one screenshot. Fair. I went through 2,108 of them, and look, the obvious stuff is all there.
+
+Clear hierarchy, good spacing, useful charts. These are perfectly fine dashboards. But, if I close this right now, would you remember any of them? >> [music] >> The ones I kept coming back to, they're always one step ahead. Instead of just a line chart, Faith puts the key insights next to [music] it. It doesn't just show you what happened. It shows you what to do about it. Origin shows you your weekly recap in a way that's easy to understand, along with a daily market brief with valuable insights.
+
+After a run, Runner packages your stats into highlights that give you a sense of accomplishment. The other pattern was visual. Most dashboards look the same. But, then you see something like Shopify's live view. It lets you monitor store visitors across the globe in real time. Every dot is a real person browsing your store somewhere right now. >> Visitors is a web analytics tool. Most dashboards tend to look busy.
+
+Being this clean stands out. Front uses a heat map where darker Cake [music] put a literal birthday cake inside their ownership donut chart. Instead of showing an empty table after you've paid all your bills, Mercury lets you play a game. You can tell these weren't templates. Someone sat down and thought, "How do I actually make this data make sense to my users so they get it instantly?" I think sometimes we're also buying the dashboard.
+
+The word dashboard originally had nothing to do with data. Nearly 200 years ago, it was literally a wooden board on a horse carriage used to block mud and horse poop when the horse dashed forward. As cars replaced carriages, dashboard became the place for signals. The form [music] keeps changing. The job never changed. Today, nearly one in five products on Mobbin have their dashboard as the home [music] screen.
+
+When we're choosing between Shopify and 10 other platforms that do roughly the same thing, the dashboard does a lot of the convincing. One screenshot that tells you exactly what this product does, how you're doing, and what to do next. A lot of the dashboards that stood out Opal turns screen time insights into a format like Instagram story. You swipe through your own data like it's content. When something looks this good, people Orbit makes tracking subscriptions weirdly enjoyable.
+
+And then there's this whole thing where some products start coining their own metrics. Duolingo made streaks a thing. Oura gives you a readiness score. Instead of saying, "I worked out for 30 minutes today," an Apple user might just say, "I closed my rings." Once that happens, it's very unlikely that this person would change to another fitness tracker. We've all had a moment staring at a dashboard asking, "Why?
+
+What changed? What caused this spike?" That's the gap [music] AI is filling. Sometimes as subtle as a single prompt right below your chart, [music] or a full AI layer you can talk to right On Mobbin, AI dashboards get about twice the saves and exports of the average dashboard screen. It reveals that [music] designers are actively collecting these as references. Thousands of dashboards later, I keep going back to that one simple gut check.
+
+Would I screenshot this, and why? Because the dashboards that I would screenshot weren't the prettiest ones. They were the ones that knew what to leave out, and they just happened to look good doing it. We've also studied thousands of onboarding flows to find out what works. Turns out an effective onboarding flow isn't about keeping it short. In the next episode, you're going to love this because we are actively working on a video on paywalls.
+
+So,
+
+
+============================================================
+FILE: Transcript\05_The_secret_behind_weirdly_perfect_UI_designs.txt
+============================================================
+Link: https://www.youtube.com/watch?v=neE6wOuBIP8&pp=ygUJdWkgZGVzaWdu
+Title: The secret behind weirdly perfect UI designs
+
+This is a checklist UI. And this is a receipt I got from my local Walmart. And they have more in common than you might think. There's a reason that this receipt has no center text other than these codes, and it's the same reason that this design doesn't feel right when compared to this one. On a receipt, the text is aligned hard left, and the prices are hard right.
+
+The only center things are the parts you're not really meant to read at all. The alignment is what let you do that. Notice how there's no dividers and not really any white space. It's just two edges holding everything together. And it works the same way on the screen, too. If we start with a profile card like this, your first instinct might be to start adding in more and more content to fill up the empty space, which ends up looking strange.
+
+Instead, try thinking about the edges where we can place content. On every card, we have four edges, but we also have a bottom edge against this avatar and name where we can stack more things. The issue here is we're not following the edges with these buttons, and there's also way too many. You might be tempted to stretch the buttons out and collapse all the secondary buttons into the top left corner menu, and suddenly the card does look better.
+
+But hiding elements isn't generally the best way to fix this. So, instead, either we move content to clear up edges, which leaves this top part very unresolved, or we can manufacture new edges to effectively move this top edge down, lining up our buttons and avatar into a solid line for the content below. And at this point, you might be seeing that everything in here borders on at least two or more edges.
+
+And that's true for almost all compact UIs, whether it's chat inputs or Kanban cards or even sidebars. And that's also why a checklist like this looks perfectly built, since every line creates a new edge for the next stack onto. If we replace these with larger icons, we're now missing that bottom edge, so we need a subline to restore it once again. So, we've got a design where every element is locked to an edge, but what happens when I take these lines and let them run the full width of the screen.
+
+Every edge is exactly where it was, but suddenly things don't feel so perfect anymore. Now, take a look at this. Which of these feels like more of a chore to read through? The content is identical. The presentation is [music] not. So, if we return to our checklist, you reasonably might start adding in more white space to counter the density. And it does help a little, but it's also made everything longer.
+
+The problem here isn't that there's too much content though. It's that there's [music] too much undifferentiated content. See, when I drop in avatars where we reference people, it starts to feel a little easier to parse [music] through. Then, if I group based on due date, now it doesn't matter how much or little text we have. You can find any task in about a second, and the density is now working for us instead of against us.
+
+And this is exactly why old AI chats use way too many bullet points, or why Claude code loves making tables at the end of its chats. It differentiates the content, so it makes our wall of text a lot more friendly to read. So, grouping and varying the content makes navigating much easier. But, you're still reading, just in smaller chunks now. Except, there was one thing that you didn't need to read at all.
+
+You knew who each task referenced the moment the avatars went in. Let me ask you, if I show you this red octagon, what do you think of first? Stop [music] signs. And notice how you didn't need to read anything to get there, because it's just so universal. Now, check out this card versus this card. Which is easier to understand? The first card actually has more raw information on it, which is potentially useful.
+
+But, the second card takes most of that plain text and turns it into diagrams and icons, which register the instant you look at it. You see, the instinct when something isn't clear is to explain it harder. Add a comparison, add a label, or add a tooltip. And this feels productive, because every one of those additions is technically more information. But, you've made the screen harder to read in order to make it easier to understand, which is a trade-off you almost never want.
+
+But, that's not exclusively true. You see, when you look at this action bar, you know what this checkbox does because of its placement above the rest. But, otherwise, you're kind of just guessing for the rest of these, at least while you wait for the tooltip to pop up. UIs that convey the information they need to and stay clean do it by using the right visuals that are immediately recognizable.
+
+Bringing it back to the checklist, this could mean highlighting and underlining links in blue or using chips to categorize content. By adding these, we're also giving the user functionality to intuitively swap tags that would otherwise be hidden behind a menu. But, before you can create a product, you first need a marketing landing page, which is exactly what Relume Publish, the sponsor of today's video, does. Their agent pulls on the Relume library of human-made components behind 2 million existing websites.
+
+I asked it to build a website for a local landscaping business by dumping in my materials and prompts. Relume first turns that into a brief, then builds a site map and wireframe with its components. Once you're happy, it finishes the build with blocks that are directly editable. Once that's looking good, just hit publish and your site goes live at a real URL. From there, four agents, a copywriter, strategist, designer, and analyst work on the live site using built-in analytics and can even suggest changes when they detect an issue.
+
+If you are interested in checking it out, it'll be the very first link down below. But, to understand why these things make a UI feel weirdly perfect, we need to dive deeper into how people actually use an interface. Here's the thing, nobody reads a screen. [music] You land somewhere with a question already in your head and you hunt until you find the answer. When I open VS Code, I'm not looking at the entire editor, I'm looking for just one file.
+
+And same idea when I open a settings panel, you're looking for just one setting. Nothing on a screen is ever fully consumed. And you've been doing it this entire video, too. You knew who each house belonged to before you read a name and you knew this was a stop sign with nothing else written on it. That's what edges and differentiation and swapping text for visuals [music] are actually all doing.
+
+They're not making it prettier, they're making it faster to scan. It's at every one of those tools makes the screen faster to scan without ever telling you where to start. Now, think about a checkbox. Off, it's a thin border and nothing else. No color, no icon, it's easy to skip right past it. But check it and it earns a fill and a checkmark. Nobody would ever design one that's blue when it's off because the color is the whole signal that something has changed.
+
+Which brings me to this settings panel. The edges are clean, the tabs are doing the grouping, every value is a chip with an icon so we're showing, not telling. This screen does everything we've talked about so far and yet it's not very clear which of these is important because look at what these chips actually say. Every one of these is on the default state. It's like having six checkboxes that are blue when they're off.
+
+So, to make one of these stand out, you might reach for something to give the chip more color, bolder text when all you need to do to make it stand out is change its surroundings. And that's also exactly why in this menu, the only blue component is the one trying to get me to resubscribe to my Cloud Pro plan because emphasis isn't something that an element has, it's the difference between it and its neighbors.
+
+Now, you might have noticed something about every single example so far. They're all cards and that was actually on purpose. You get four edges handed to you for free and if the content doesn't fit, you just resize it. But nobody actually builds just a card. Most people see a wide open canvas and start adding in containers and cards to create some structure until you end up with borders on borders and three radii all stacked together.
+
+None of that really helps. So instead, with a single line, we can dissolve all of our cards into the interface itself. That column edge is doing what the card edge was doing. Every row stacks onto the one above it. The sections group the content, so you're not scanning one long undifferentiated list. The chips and icons are still doing the reading for you, and default values are gray, so the ones that aren't find your eye.
+
+So, cards or no cards, everything ultimately still works towards creating a scannable interface. Thank you so much for watching. If you are interested in checking out Relume, that'll be the very first link down below. The link to all of the Figma assets used in this video will be down there, too. And I will see
+
+
+============================================================
+FILE: Transcript\06_4_Levels_of_UIUX_Design_(The_Gap_Is_HUGE).txt
+============================================================
+Link: https://www.youtube.com/watch?v=U7jTCgIWS4w&pp=ygUJdWkgZGVzaWdu
+Title: 4 Levels of UI/UX Design (The Gap Is HUGE)
+
+Hey, today you'll learn super interesting tips to design apps and websites that users actually love. With the risk of getting us hungry, let's start with looking at food delivery apps. Look at these four versions of the same screen. The one where you decide what you're eating. They have the same photos, same meals, and same information, but not the same experience. One was designed by a junior, one by a mid, one by a senior, and one by a staff designer.
+
+Which one do you think has the best UX and UI? A, B, C, or D? Pause the video and decide. Write in the comments which one you picked and why. So, let's start with C. The screen a junior would design. There is one decision here they got right and four places where it goes wrong. The right one is the photos. They showed you the food instead of the restaurant's logo.
+
+A logo tells you who is selling. A photo tells you what you are eating and that is what you came for. Then the size. Those photos are 56 pixels. An image in a list can identify or it can create appetite. An appetite takes real space. At 56 pixels, you can see there's a bowl of something, but it doesn't make you want to eat it. And why is it so small?
+
+Because six restaurants fit above the fold at that size. Juniors and marketers usually want as much as they can get above the fold. That is the first mistake, and it's still being taught as a good thing. Everybody scrolls now. What matters is whether the first thing somebody sees is worth continuing for, not how much you fit before the cut. We cover this in much more detail in our UX Peak Plus platform because there is more nuance to it.
+
+Second mistake, filters and sort are hidden inside two drop-downs with 17 options behind them you would never know about. Third, the card has no hierarchy. The name is 13 pixels. Everything under it is 11.5, all on one gray line at the same size and color. If you cannot say which element somebody should read first, they will not be able to either. And fourth, every corner here is four pixels while the category images are circles.
+
+Two different shape languages on the same screen. Now, a the mid [music] same six restaurants and four things change. The photos change from a square to a rectangle, get three times wider, and become the biggest thing on the card. The corners are rounder now, and the same rounding runs across the whole screen. The screen is more polished all around. The spacing is better. There's more white space and the colors are handled with more care.
+
+And there is hierarchy which matters more than any of it. The name steps up. The rating takes the star and the weight. And everything else drops back. That is what lets you scan a list instead of reading it. And the filters are visible. Eight ships sitting on the screen tapable. What the junior buried is now something you can find. Then D, the senior. The photos get even bigger as they go full width and take over the card.
+
+The category row stops being photos and becomes a custom icon set. That does two things. It gives the app a personality that the stock photos do not. And it stops six food photos competing with the six food photos directly underneath them, so the actual meals stand out more. The quick filters are still here. And next to them, there is now a filter button that you can tap on and see more filter options that you can apply.
+
+With the sort button sitting beside it, that's exactly where Zomato, Swiggy, and Global put theirs. And there is account now 640 places. You know how much you are looking through, which changes how you approach it. And then the layout switch, cards, or a compact list. Big photos make you want food. A list lets you compare quickly. And some people might prefer the second one. So instead of choosing for everybody, the senior lets you choose.
+
+When there is no correct default for everybody, give people the control, which leaves B, the staff screen, which takes all of that further. The search placeholder says what you can actually search for, places, dishes, or cuisines. The icons and their backgrounds are cleaner and quieter, so the row stays out of the way of the food. The top card carries a best match label based on what we know about the user.
+
+and the main one, the name and the numbers come off the photo, which means the card looks the same whatever the restaurant uploads as its photo. Uber Eats builds its cards the same way. Photo on top and the details underneath. Small caveat, [music] none of these is finished. With more time, you could improve every one of them, including the staff screen. We cannot get into every detail in one video, but in our UX Peak Plus platform, we go through every one of these decisions properly.
+
+why each one was made, the pros and cons on both sides, and real apps pulled apart to show you how they solve the same problems. And we take the staff screen further than it goes here, so you can see what the next round of improvements actually looks like. Because [music] copying a screen you like gets you that one screen. Understanding why a senior or a staff designer chose what they chose is what you can use everywhere else.
+
+That is what moves a career, and it's how you end up building apps and websites people actually love. Link is in the description. So, tell us in the comments which one you picked and whether anything here changed your mind. Let's move to another awesome tip. It's 8:00 at night. You're on the sofa looking for a new place to live. You open the app and there are more than 1,500 homes for sale in Portland.
+
+Obviously, you're not going to look through all of them. You already have a rough idea of what you want. Something within your budget, at least three bedrooms, and two bathrooms. Luckily, there's a filter button right at the top. You open it, choose what you're looking for, and a minute later, those 1500 homes are down to just 41. Sounds pretty simple, but this is where filters get interesting because those requirements usually aren't as fixed as they sound.
+
+Maybe you want three bedrooms, but if that leaves you with almost nothing, you'd probably consider two. Maybe you have a budget in mind. But if another 50,000 suddenly gives you much better options, you might be willing to stretch it. So the job of a filter isn't just to ask the user for a bunch of values and hide everything that doesn't match. It has to help them narrow down a huge set of options while they're still figuring out what they actually want.
+
+And this problem is everywhere. Shopping, flights, jobs, food delivery. You start with hundreds of thousands of options and somehow the interface has to help you get down to the few that are actually worth your time. That's what makes filters surprisingly difficult to design. And when you're designing something like this, a really useful starting point is looking at how strong products already solve the same problem. Whether you're designing filters, an onboarding flow, settings page, or homepage, having good references can save you a lot of guessing.
+
+That's one of the reasons we use Mobin. It gives you a huge library of real screens and flows from products that have actually shipped. So you can see how different companies approach similar design problems. And now Mobin has taken that a step further with Mobin MCP which is a gamecher. You can connect Mobin directly to tools like Claude code cursor or codecs and essentially make all of that research part of your existing workflow.
+
+So instead of manually searching through hundreds of screens, collecting screenshots and trying to compare everything yourself, you could ask Claude something like using Mobin, show me how leading developer tools handle onboarding. find the most relevant examples, identify the patterns they have in common, compare the different approaches, and create a visual report for me. And it can actually search mobin screens, flows, and sections for you, pull together the relevant references, and help you understand where products follow similar patterns and where they make different choices.
+
+It can even turn that research into a visual report with the actual Mobin references rather than you having to collect everything manually. We've partnered with Mobin for this video and you can get 20% off Mobin through our link below. So now you tap the filter icon. What would you actually want to see? Option A, option B, option C, or option D? All four were designed for the exact same app and the exact same user.
+
+The only difference is the level of the designer behind them. One was designed by a junior designer, one by a mid-level designer, one by a senior designer, and one by a staff designer. Before we break them down, write in the comments which one you like most and why. Version A looks clean, but most of that simplicity comes from moving the work somewhere else. The junior designer is trying to keep things simple and clean.
+
+Instead of putting every control on one screen, each filter gets its own page. So, you have price, bedrooms, bathrooms, and home type, and you deal with them one at a time. At first, that seems like a pretty sensible way to reduce clutter. But once you actually use it, you start to see the problem. Let's say I want at least three bedrooms. I tap bedrooms, choose three, then go back.
+
+Now I want two bathrooms. I open bathrooms, choose two, and go back again. Then I finally tap show homes. That's seven taps just to set two basic filters. But the taps aren't really the biggest problem. The bigger problem is what happens every time you move to another page. When I'm choosing bathrooms, I can't see the bedroom choice I just made. I can't see my price range either.
+
+So, I'm making each decision separately, even though those decisions are actually connected. Maybe I want three bedrooms, but if that gives me almost nothing, I'd happily take two. Maybe another 50,000 suddenly opens up much better homes. That's the kind of trade-off you want to understand while you're filtering, not after you've finished. And the full page approach makes that harder, too. As soon as I open the filter, the homes I was just looking at disappear completely.
+
+There's also no feedback on the main action. The button just says show homes. I could have 41 matches. I could have four. I could have none. I only find out after I tap it. So, the junior designer has focused on making the interface feel simple by showing us less at once. But there's an important difference between making the interface look simpler and making the decision easier. And that's what the next designer starts to improve.
+
+Version B fixes the biggest problem with version A. It brings the decisions back together. The filter no longer takes over the whole screen. Instead, it opens as a sheet over the results. So, you still have some sense of the page you came from and what you're filtering. And instead of hiding bedrooms and bathrooms on separate pages, everything now lives in one scroll. That makes it much easier to balance the choices against each other.
+
+Maybe I start with three bedrooms, then adjust the budget, or I drop to two bedrooms and see whether that gives me much better options. Price is also easier to adjust. Instead of relying only on manual inputs, we now have a slider. A slider is useful when you want to quickly move through a range and get roughly where you want to be without having to type a new number every time.
+
+And if you already know your exact budget, the manual inputs are still there, so you get both quick exploration with the slider and precision when you need it. There's one choice I wouldn't make, though. Bedrooms and bathrooms use steppers. Plus and minus works well when you're nudging a number you already have, like the quantity in your basket or the temperature on a thermostat. But if I already know I want three bedrooms, making me tap my way up to three is slower and it hides the other options from me.
+
+And finally, the button is much more useful. Instead of just saying show homes, it tells me exactly what my current filters will return. Show 41 homes. So before I apply anything, I already know whether I've narrowed the search too much or not enough. Version C goes beyond making the filter easier to use. It starts helping you make the decision. The first thing you'll notice is the price filter.
+
+We still have the slider and manual inputs from the mid version, but now there's also a histogram behind the slider. That histogram shows the distribution of the available homes across different prices. So before $700,000 and $750,000 were just two numbers on a range. Now I can actually see whether most homes are clustered around that price, whether I'm already near the edge of the market, or whether stretching my budget a little would suddenly open up a lot more options.
+
+So instead of blindly moving the slider and waiting to see what happens, I can understand the market while I'm adjusting it. The control isn't just asking me for a price anymore. It's showing me what's actually available, so I can make a more informed trade-off. Then we get to bedrooms and bathrooms. The steppers are gone, and now all the options are visible at once. So, if I want three bedrooms, I can just tap three plus instead of tapping my way up to it.
+
+And the plus is important. We said at the beginning that we want at least three bedrooms, so choosing three shouldn't accidentally remove every four-bedroom home from the results. If I really do want exactly three, I can still choose that separately. That's a small detail, but it matches the way people actually think about this kind of search. Home type gets a smaller visual upgrade, too. Instead of textoly options, each property type now has an icon, making the choices easier to recognize and scan.
+
+Version D doesn't just show you the market. It starts connecting that market to your search and your own budget. You can see that immediately in the price section. We still have the histogram from the senior version, but now there's even more context around it. If I've selected three plus bedrooms, I can see that I'm looking at 3 plusbedroom homes, their median price, and on the right that 459 out of 1,557 homes currently fit my filters.
+
+So, I'm not looking at price in isolation anymore. I can immediately understand how much of the market actually fits what I'm looking for. And then there's the bigger change underneath. Because when someone asks, "What's your maximum price?" You might not actually know. What you may know is, "I have $65,000 for a deposit, [music] and I'd be comfortable spending around $5,000 a month." So, instead of forcing me to somehow turn those numbers into a house price myself, the product does that work for me.
+
+I enter my deposit, my comfortable monthly payment, and the interest rate, and it works out roughly what price I can shop at. Then, it places that limit directly onto the histogram. Now I can see the market, the homes that match my filters and where my own budget cuts through all of it in the same place. That's much more useful than asking the user to guess a maximum price and then discover later whether it was realistic.
+
+Then we get to bedrooms and bathrooms. And there's another important change here. Each option now shows how many homes I'd get before I choose it. Maybe three bedrooms leaves me with 459 homes, while four leaves me with 229. So I can see what making the filter stricter will cost me before I make the decision. Instead of choose something, see what happened, go back, try something else, the interface gives me that information upfront.
+
+And we can push the bedroom control one step further. So far, we've assumed that if I choose three bedrooms, I mean three or more, but maybe I genuinely want somewhere between two and four bedrooms. This version lets me select two then four and creates a range between them that gives us more flexibility and more control. The trade-off is that all this extra content makes the interface busier.
+
+So, the challenge is knowing what information genuinely helps the decision and what just adds noise. And that's it for today's video. Let us know which version you preferred, what you would have done differently, or anything you completely disagree with. We want to hear it all. Oh, and one last thing. Unfortunately, I did catch a cold halfway through recording this video, so apologies if you noticed. I should be back to 100% by the end of the month.
+
+Hope you enjoyed this video, and we'll
+
+
+============================================================
+FILE: Transcript\07_Every_UIUX_Concept_Explained_in_Under_10_Minutes.txt
+============================================================
+Link: https://www.youtube.com/watch?v=EcbgbKtOELY&t=31s&pp=ygUJdWkgZGVzaWdu
+Title: Every UI/UX Concept Explained in Under 10 Minutes
+
+If you want to get good at UI UX design, you got to start with the basics. So, This one's easiest to explain with an example first. If I have three text and icon pairs, but I put a container around drinks and food, you know that they're related and dessert is not. Then, if I put a container around drinks, you know that it's selected and you can toggle over to food.
+
+If I gray this text out, you know that it's inactive and clicking it probably won't do anything. See how you just knew all of that? I didn't need to write instructions on how it worked because the UI was signifying how things worked. Good UI has many signifiers, like a button press state, highlights on active nav items, hover states, or even tooltips to tell the user what a UI Now, take a look at this card.
+
+It displays all of the information in a logical, repeatable format, but it looks like a spreadsheet, not a design. So, let's give it some hierarchy, which is pretty intuitive. We have size, position, and color to use to our advantage. Starting from the top, an image always adds a great pop of color and makes scanning super easy, just like Uber. If in this case the item is the most important, we want that large and bold and at the top because otherwise it'll blend in with something like the time and date, which can be below and much smaller.
+
+And it's this contrast, the difference between small and big or colorful and not, that actually creates the hierarchy. It's also why price should be at the top, right aligned, and blue. It's different than the rest, which draws the eye to it. The location should be smaller and below like this. But, instead of just from and to, we can use icons and align to demonstrate that it's moving from Jamesville to Syracuse without having to actually say that.
+
+Now, with that said, it's not an exact science and you could definitely end up with a design that looks like this instead and it wouldn't be wrong. But, the same ideas apply. Most important things near the top, bigger and colorful is more important, and images are used whenever possible. And as you start to design more and more, you'll notice that similar patterns arise when you need labels or buttons, which we're going to talk about in a minute.
+
+>> [music] >> Now, some people have this misconception that all of your content needs to align to a 12-column grid and be exactly eight pixels apart. But, these are just guidelines. For example, this design doesn't line up with any of the columns and that's not uncommon, especially for custom landing pages. But, for highly structured pages like galleries, blogs, or any repeating content, they can actually be useful for responsiveness by giving guidelines for responsive behavior on tablet [music] with eight columns and mobile with four.
+
+But, much more important than using excessive grids and layouts is white space, letting things breathe. For example, in a simple section like this, the large text would have a font size and line height like this and the subtext would have a font size and line height like so. Buttons would be similar and optionally a top announcement bar like this. [music] Then, simply 32 pixels between every item, but you can also group elements that just go together like the announcement and text or the text and subtext, [music] which is just another form of visual hierarchy.
+
+And this is where we see the four-point grid system actually come into play. Everything is a multiple, not because it inherently looks better, but because you can always split things in half, which creates consistency throughout a design. >> Typography is really interesting because design is mostly just text. And for picking a font, I can almost unilaterally say you'll never need more than one for any design. So, find a nice sans serif font like the ones on screen and stick to it.
+
+Over the last seven years of designing, I've rarely used [music] any fonts other than what's on screen and this shouldn't be where you're spending tons of time. I'm also not a big fan of calling any design skill a hack, but this one kind of is. This design looks okay right now, but our header text feels a little too loose. If you tighten up the letter spacing on this by about -2% to -3% and drop the line height to about 110% to 120%, it instantly makes any larger text look super pro real fast.
+
+But, hierarchy with typography is a little bit more nuanced. And if we look at our previous example, text sizes can vary wildly. For landing pages and websites, you generally don't want more than six font sizes, which can have a really large range. For things like dashboards, that range shrinks dramatically [music] to where you don't normally have text sizes larger than 24 pixels because of the increase in information density.
+
+But, honestly, one of the most important concepts of design is getting inspiration and doing research from a good source, like today's sponsor, Mobbin, who curates hundreds of thousands of mobile and web apps along with landing pages, too. So, you can always pull inspiration from real designs built by the top design teams in the world. [music] And if you're struggling with a specific section, just go and search for it and instantly pull up real-world examples with links to the live sites, too.
+
+If you're interested, you can check out Mobbin using the first link down below to get 20% off. Now, back to the video. >> Colors are difficult and everyone has their own taste, but I'm a big fan of starting with one primary color. Generally, this is your brand color. Then, you can lighten it for a good background or darken it for text colors. Both good ways to incorporate subtle color and make an otherwise drab design look much more interesting.
+
+And with all of that, we're already halfway to a color ramp, which is what large companies use to build out chips, states, charts, and really anything else. But, I also think it's important as a beginner to let the color find you. Like an announcement bar to grab attention or a focus state on an input or the green new chip on a link. These are all semantic colors, which are colors that have meaning and provide signifiers to the user.
+
+Blue for trust, red for danger or urgency, yellow for warning, and green for success. Make sure you use color for purpose, not just for decoration. >> Now, designing in dark mode presents some pretty interesting challenges for us. First, this card is using a light border, which creates a bit too much contrast. So, we'll lower that down. In dark mode, we don't have shadows like light mode, so to create depth, we need to have a lighter card than the background.
+
+So, I'll make that adjustment. This chip is also far too bright, so we can dim down the saturation and brightness and flip that for the text to create some hierarchy. There's also a ton of flexibility for deep purples, reds, or greens, not just navy blue or gray. >> But, speaking of depth, shadows are a fantastic tool to use on light mode. This shadow, along with most, is too strong.
+
+So, reducing the opacity and dialing up the blur helps a lot. The strength you'll need depends on the foreground and background, but cards require less while content that sits above other content like popovers will need stronger shadows. We can even use these techniques with inner and outer shadows to create effects like raised tactile buttons. Just remember, if the shadow is the first thing you notice on a design, you're not using it right.
+
+>> Now, to create strong designs, you'll need icons. Most icons are generally too large, so the trick is to get the line height of your font, in this case 24 pixels, and make the icons the same size and then tighten up the text. Sidebar links like this are actually just buttons without a background until you hover, which are often called ghost buttons. And if we isolate one and center it, we've got a perfect standalone button.
+
+These are super common when you have a primary and secondary CTA side by side. And a good guideline for padding on these is to double the height for the width. And these can be done with or without icons, too. A good rule of design is when a user does anything, there should be a response. For example, every button needs at least four states: default, hovered, active or pressed, and disabled.
+
+Sometimes you'll need a loading state, too, with a spinner. Inputs are even more critical. You'll need a focus state when the user clicks in, error states with red borders and messages when something's wrong, and sometimes even warning states for optional issues. And this applies everywhere. Loading spinners when data is fetching, success messages when an action completes, even micro animations on scroll or swipe. Every interaction And that brings us wonderfully into micro interactions.
+
+Micro interactions are a form of feedback, but they step things up a notch. For example, this copy button has states and feedback when we hover and click, but we still don't know that we've copied anything. Instead, if we have this chip slide up, that's a micro interaction that confirms our action. And these can range from highly practical to much more fun and playful. Finally, overlays are really important because if you screw them up, you're going to ruin the image and the text, too.
+
+In this case, we can't leave it as is, so we could add in a full-screen overlay, but it doesn't do the image justice. So, instead, add in a linear gradient that'll display the image then smoothly converge into a text-readable background. Or, if we're going for extra fancy, we can add in a progressive blur on top of the gradient for an even more modern look. And that is more or less every UI UX concept all wrapped up in 10 minutes.
+
+If you want to check out Mobbin, it will be the first link down below and you can get the link to all of the Figma assets used in this video down there, too. Thank you so much for watching and I will see you in the next one.
+
+
+============================================================
+FILE: Transcript\08_This_UIUX_Redesign_Will_Teach_You_More_Than_100_Tutorials_Combined.txt
+============================================================
+Link: https://www.youtube.com/watch?v=GGg61sdEjeI&t=4s&pp=ygUJdWkgZGVzaWdu
+Title: This UI/UX Redesign Will Teach You More Than 100 Tutorials Combined
+
+Take a look at this ugly product page. I want you to look at it carefully. How many UX and UI mistakes can you spot? Pause the video. Write your number in Ready? If you found at least 10 mistakes, congratulations, you are a great designer. I can see at least 15 major mistakes. Some are obvious. Some are much easier to miss. My goal is that by the end of this video, you'll know how to design the best product pages that users absolutely love.
+
+So, let's apply some of our UX peek magic and fix it one by one. The difference will be huge, and I'll reveal a few cool surprises as well. Mistake one, icons lost in the image. The product image goes all the way to the edge, and the navigation icons sit directly on top of it. At first, this might seem fine. The icons are visible, but they're only visible because this specific image is dark enough.
+
+Now, watch what happens when we switch the product image to something brighter, like pineapple. The icons almost disappear. And this is a very common UI problem. Product pages don't have one image forever. They need to work with dark images, bright images, busy images, simple images, lifestyle photos, and clean product shots. So, the fix is simple. We add a subtle background container behind the icons. We give the icons enough contrast, and we add a thin outline so they stay readable on different backgrounds.
+
+Now, the icons work no matter what product image is used. This is the difference between designing for one screen and designing for a real product system. And one of the best ways to do that is to study how great products already solve similar problems. That's why I use Mobbin. With Mobbin, you can explore real product flows from some of the best apps in the world. So, if you are designing an e-commerce experience, you can look at product pages, checkout flows, order confirmations, saved items, and so many other patterns.
+
+It helps you see how strong products guide users through the full journey, from discovering a product to buying it and tracking the order afterwards. And because we partnered with Mobbin for this video, you can get 20% off your first year subscription using our link below. Mistake two, the product image. Product images are one of the most important parts of any e-commerce page. They create emotion. They build trust.
+
+And in many cases, they take up the largest part of the screen. Here we have six options. A, B, C, D, E, and F. Pause the video and pick the one you think works best. Okay, if you picked F, you're right. But not just because it looks clean. Here's why. Option A is too busy. The strawberries filled the entire frame. So, there's no clear focal point. Option B has a focal point, but the focus is the hands, not the product.
+
+It feels more like a lifestyle photo than a clean product image. Option C looks simple, but it shows one strawberry while the product is sold by weight. That creates a small mismatch in the user's mind. Option D is styled nicely, but the pink background feels a bit artificial. For fresh organic food, the image should feel natural, honest, and real. Option E is actually strong. The strawberries look fresh, natural, and high-quality.
+
+But there's one problem. This image will not live alone. It will sit inside a product grid next to many other products. If every product has a different background, different lighting, different props, and different colors, the full catalog starts to feel messy. That's why F wins. It keeps the natural feeling of the strawberries, places them on a clean background. The product becomes the focus, and the entire catalog can follow the same visual system.
+
+This is an important principle. A good product image is not just beautiful by itself. It also has to work inside the full shopping experience. Mistake three, alignment. This one is simple, but it makes a huge difference. In professional UI design, text, icons, prices, buttons, and sections should follow a clear layout grid. Right now, some elements are slightly too far left. Others are slightly too far right. And the spacing feels inconsistent.
+
+When alignment is off, users may not consciously notice it, but they feel it. The screen feels less calm, less structured, less trustworthy. So, we clean it up. We define consistent margins. For example, if the content starts 24 pixels from the left, it should follow the same structure across the screen. Once everything snaps into the same grid, the page instantly feels more balanced, more intentional, and more professional.
+
+Mistake four, color. The colors in this design are too bright, too saturated, and they emphasize the wrong things. That creates two problems. First, the screen becomes harder to read. Second, the hierarchy becomes weaker because too many elements are competing for attention. On a fresh organic food product page, the color should support the product. They should not overpower it. So, we switch to a softer, more natural palette.
+
+The interface now feels calmer, cleaner. This is what good color does. It sets the mood, supports the product, and helps users focus on what matters. Mistake five, typography. Fonts can completely change how a design feels. Right now, the screen uses too many font styles, and the type doesn't feel fully consistent. A good product page doesn't need many fonts. In most cases, one strong font family is enough.
+
+You can create hierarchy using size, weight, color, and line height. So, we simplify the typography. We use Lato, [music] a cleaner font. Now, the design has a much stronger foundation. Mistake six, labels. Now, let's look at the labels. The fruits label feels cramped because the letters are too close together. For small uppercase labels, adding a little letter spacing usually helps the text breathe. But, the bigger issue is the discount badge.
+
+Right now, it says 20% off discount and also includes an icon. That's too much for a small label. In UI design, badges should be quick to scan. The user should understand them instantly. Something like 20% off is enough. It still communicates the offer, but it's no longer stealing too much attention from the product itself. Mistake seven, the title. The title is one of the most important pieces of information on the page.
+
+It tells the user what they're buying, so it needs to be clear, readable, and easy to scan. Right now, the title feels slightly unbalanced. It's bold, but the size and weight do not create the right hierarchy. A product title should stand out without shouting. So, we adjust the size, we adjust the weight, and we make it feel more natural inside the layout. Now, the title is easier to read, easier to scan, and much better balanced with the rest of the page.
+
+Mistake eight, paragraph text. Now, let's fix the paragraph text. The lines are too close together, which makes the description feel tight and harder to read. Paragraph text should not fight for attention. It should help the user understand the product comfortably. So, we increase the line height, we slightly reduce the contrast of the body text. This will make the paragraph feel easier to scan. A simple typography rule is this, headlines attract attention, paragraphs support understanding.
+
+When the paragraph is easier to read, the whole page feels calmer and more trustworthy. Mistake nine, review placement. Now, we're getting deeper into UX thinking. The rating is currently too far away from the product title. That's a problem because reviews are one of the strongest trust signals in e-commerce. When users see the product name, they should also quickly see how well it's rated. What is it and can I trust it?
+
+So, we move the rating closer to the title. Now, users immediately understand three important things, what the product is, how it's rated, and whether other people trust it. This makes the buying decision feel easier. Good UI is not just about arranging elements. It's about placing information where the user needs it most. >> [music] >> We're still far from a great design, but if you compare it with where we started, you can already see a big improvement.
+
+And you'll love what's coming next. This is the part of design that most tutorials skip. They show you how to make the screen look nicer, but they don't always explain why one decision makes the product easier to use, easier to trust, or easier to buy from. And that's really the whole idea behind the UX Peak Plus platform. Inside UX Peak Plus, we break down real UX and UI decisions like this.
+
+Not just what looks great, but why it works, how it affects the user, and how you can apply the same thinking to your own designs to build the best websites, >> apps, or software application. If you want to grow as a designer or product person, you need to understand the thinking behind strong product design. So, if you want to go after this video, use code redesign 25 to get 25% off UX Peak Plus.
+
+You can find everything on our website. Now, let's continue with the redesign. Mistake 10, feature icons. At first glance, this section might seem fine. It communicates useful product benefits, but visually, there are several problems. There are too many colors. The icon styles are inconsistent. Some icons feel heavy, some feel light, some are filled, some are outlined. In good UI design, icons should share the same visual logic.
+
+So, we simplify the colors. We make the icon style more consistent, and we tighten the spacing. Now, the section still communicates the benefits, but it no longer dominates the screen. You can use different colors in UI design, but they need to be used intentionally. Mistake 11, divider lines. Now, let's look at the divider lines. They are extremely dark and heavy. They pull too much attention. Divider lines are meant to separate sections.
+
+When dividers are this strong, the page starts to feel divided into harsh blocks instead of one smooth experience. So, we soften them. Now, it feels subtle, clean, and more elegant. This is a small detail, but small details are often what make an interface feel premium. Mistake 12, spacing balance. The spacing between some sections is too large. White space is important, but too much white space in the wrong place can make the layout feel disconnected.
+
+So, we tighten the spacing slightly. Now, the sections sit closer together, the flow is easier to scan and the whole interface feels more cohesive. Good spacing is not just about adding more empty space. It's about creating the right relationship between elements. Mistake 13, redundant price label. Now let's move to the price area. We can see the word price before the number, but in this context, it's unnecessary.
+
+When users see a number with a currency symbol, they already understand that this is the price. And if you want to be super accessible and label the price, then logically we should also label the quantity selector next to it. Otherwise, the interface becomes inconsistent. So the cleaner solution is simple. Remove the label completely. Let the price speak for itself. Mistake 14, product quantity and price placement. The product title includes 1 kg, but this creates a problem.
+
+Why? Because the user can already change the quantity using the selector. So the product is no longer fixed to 1 kg. That makes the title misleading. Instead, the title should describe the product itself. The quantity should be handled separately in the buying area. There's also another improvement we can make. The price is currently placed quite far down the screen. There are different ways to handle pricing depending on the product, the audience, and the buying context.
+
+But in this case, users should see the price much earlier. Now when users see the product, they immediately understand what it is, how good it is, and how much it costs. Mistake 15, the purchase action. The add to cart button should be the most important action on the screen, but right now it feels too aggressive. The text is all caps, the size is large, the button feels like it's shouting.
+
+So, we soften it. We make it feel more refined. But there's another issue. The quantity selector is too far away from the add to cart button. When users buy something, they choose how much they want, then they add it to the cart. So, we place them next to each other. We also add the unit, kilograms, directly inside the selector. And finally, we add the total price inside the add to cart button.
+
+Now the user knows what they're about to pay before they click. That removes uncertainty. But, this is where many redesigns stop. The mistakes are fixed, the page looks cleaner, but strong product design is not just about fixing what is broken. It's about making the whole experience feel easier. Now, let's take this redesign one step further. Improvement one, turn the content into a scrollable card. First, we turn the content area into a soft scrollable card with rounded corners and a subtle shadow.
+
+The product image has its own space. The product details have their own space. As the user scrolls, the card slides up over the product image, keeping the product visible for the first part of the experience. Then, once the image is no longer the main focus, the product title transitions into the top navigation and stays sticky. So, even when the user scrolls deeper into the page, they never lose context.
+
+Improvement two, add a sticky bottom action area. Now, the quantity selector and add to cart buttons stay visible while the user scrolls. This is powerful because users don't always decide to buy at the top of the page. Sometimes, they scroll. They read more details. They look at related products. And when they finally feel ready, they can act immediately. And this is where the design becomes much stronger because we are no longer just making the screen look better.
+
+We are making the buying experience easier. Improvement three, add predefined quantity options. For example, 500 g, 1 kg, 2 kg. Instead of forcing users to tap the quantity selector multiple times, they can choose a common option with one tap. And these options can be based on real purchase data. If most customers buy 1 kg or 2 kg, those should be easy to select. We still keep the custom quantity selector for flexibility.
+
+This is a small UX improvement with a real business impact. And now, we have a design that scales beautifully across different products. The images feel consistent. The layout feels predictable. The product information is easy to scan. This is what strong UI design looks like. So, what do you think? Is this new version better than the original? How many of the 15 mistakes did you spot before I revealed them?
+
+Let me know in the comments. I'm genuinely curious to see how many you found. Thank you for
+
+
+============================================================
+FILE: Transcript\09_Top_5_UXUI_Design_Tips_and_Tricks_Everyone_Needs_to_Know_About,_Part_2.txt
+============================================================
+Link: https://www.youtube.com/watch?v=gG4urkinFQI&pp=ygUJdWkgZGVzaWdu
+Title: Top 5 UX/UI Design Tips and Tricks Everyone Needs to Know About, Part 2
+
+hello and welcome back because you loved our first video on top UI design tips we've created part two for you which will be even more exciting the truth is you don't need a design background special talents or a University degree to create beautiful UI designs by mastering the key principles tips and tricks anyone can create exceptional UI designs that people love whether you're a designer developer marketer
+
+or simply curious about UI design these tips are for you let's dive into today's tips and keep pushing ing Your Design skills to the next level tip number one experiment with creative layouts the traditional approach of a vertical list of text-based options can sometimes come across as Bland and unengaging the standard layout offers limited opportunities for visual differentiation and while it provides Clarity it doesn't always contribute
+
+to a memorable user experience what if we could break free from the constraints of the typical list of options layout an exciting alternative is to reimagine them as selectable cards this approach adds a new layer of interaction and visual appeal to the user interface each card can feature labels colors and even icons or images providing more context and richness to the options presented such an approach not
+
+only increases the aesthetic appeal but also AIDS in making the information more digestible and the interface more engaging tip number two reduce user barrier by exposing content directly imagine this you're scrolling through a new app and the first thing you see is a big banner saying discover 100 plus recipes selected by our chefs it sounds exciting but it's also an extra step you have to tap on
+
+it to see the actual recipes that's the interaction cost in action which we can Define as the cognitive physical and time effort a user has to exert to reach their goal in today's fast-paced world users are looking for immediate value by hiding content behind banners you're creating an unnecessary barrier between the user and the value your app provides this interaction cost may seem trivial but it can
+
+add up especially when the user is new to the app and unsure about investing time and effort in it instead imagine this you open the same app but this time you immediately see a curated list of top 10 recommended recipes no tapping needed the content is right there this does a couple of things it adds quick value the user instantly sees the value your app provides making
+
+them more likely to engage further it reduces friction the fewer steps a user has to take to reach their goal the better the user experience that means increased user attention and more interaction within your app it adds relevancy when you expose content directly you have the opportunity to showcase the most relevant or popular items making it more likely that the user will find something that interests them
+
+right away tip number three design for the thumb Zone mobile devices are often operated using just one hand and primarily the thumb therefore when you're designing a mobile interface it's important to keep the tum zones in mind this is the area of the screen easily reachable with the thumb placing key elements like buttons navigation links and calls to action within the thumb Zone makes it easier for
+
+users to interact with your Design Elements positioned outside of this area can be difficult to reach and could lead to user frustration or misclicks so when you're laying out your design make sure the most used features are easily accessible within the thumb Zone by doing so you enhance usability and make your interface more userfriendly let's have a look at two UI design examples in the first screen
+
+the CTA is located outside of the thumb Zone which means that users would need to stretch or adjust their grip to reach it this can cause frustration and inconvenience especially for users who are on the go or have limited mobility in the second screen the CTA is thoughtfully positioned within the thumb Zone which is a common area where users thumbs naturally rest when holding their mobile devices
+
+tip number four turn empty States into opportunities when a user encounters an empty State it's like hitting a roadblock an empty screen with no guidance or actionable steps can leave them feeling lost and frustrated it's a missed opportunity to guide and engage users a bare empty State such as a screen simply saying you have no projects fails to provide users with any value or Direction it's a
+
+dead end that can make users feel stuck and unsure of what to do next next conversely a well-designed empty State can be a powerful tool to educate engage and encourage users to take action it's a chance to turn a potential negative experience into a positive one for example an empty state that says start managing your projects and stay organized immediately offers a solution to the user's problem
+
+it doesn't stop there though with an accompanying illustration it becomes visually appealing and less daunting by adding actionable tips like invite team members to collaborate on a project for better communication and set deadlines for tasks to keep everyone on track it provides clear steps for the user to take finally a CTA button saying create new project gives them a direct way to take action last but not
+
+least tip number five use visual cues we could have presented all these tips in a Texton format but we chose to use visual examples why because visuals make your learning and any user's interaction with a design far more engaging and memorable visual cues do more than just add flare or personality to your designs they help users understand your message faster and enhance overall user experience by making
+
+information easier to grasp to show the impact visual cues can have compare the following designs the first one without the visual cues versus the second one with the visual cues a huge difference right now let's have a look at another example of using visual cues to design better UI for email messages in the first design you can see a UI that doesn't apply the principle of visual
+
+cues while this UI design is functional there are opportunities to enhance the user experience and improve the overall usability of the email inbox even more using icons with a set of colors and a first initial letter in the middle could be a creative and Visually appealing way to represent senders in an email inbox or messaging app a more effective way to represent senders is to use images
+
+of people and logos of companies with that users can easily identify the sender and quickly understand the context of the message love these tips then consider joining more than 8,000 amazing designers marketers and developers who have already downloaded the uiux design Playbook and unlocked more than 90 awesome UI design tips tricks and strategies let us know in the comment if you wanted to see part three that
+
+is all for today keep designing beautiful things and I will see you in the next
+

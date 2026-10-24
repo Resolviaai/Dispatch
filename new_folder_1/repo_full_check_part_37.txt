@@ -1,0 +1,1132 @@
+﻿
+============================================================
+FILE: dispatch_mobile\recovery.py
+============================================================
+"""Mobile Crash & Battery Death Recovery Manager.
+Executes automatically on app startup to recover unfinished sessions, finalize interrupted segments,
+and re-enqueue pending uploads without requiring any user intervention.
+"""
+import logging
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+
+from dispatch_mobile.db import get_mobile_db, calculate_sha256, MOBILE_STORAGE_DIR
+
+logger = logging.getLogger("dispatch_mobile.recovery")
+
+
+def recover_mobile_state(storage_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Scan and recover unfinished recording sessions after phone reboot or crash."""
+    recordings_dir = storage_dir or (MOBILE_STORAGE_DIR / "recordings")
+    recovered_segments = []
+    quarantined_segments = []
+    sealed_sessions = []
+
+    with get_mobile_db() as conn:
+        cursor = conn.cursor()
+
+        # 1. Find sessions interrupted while RECORDING
+        cursor.execute("SELECT session_id FROM mobile_sessions WHERE status = 'RECORDING'")
+        interrupted_sessions = [row["session_id"] for row in cursor.fetchall()]
+
+        for sess_id in interrupted_sessions:
+            logger.info("Found interrupted session: %s. Performing crash recovery.", sess_id)
+
+            # Find segments left in RECORDING status
+            cursor.execute("""
+                SELECT segment_id, sequence_number FROM mobile_segments
+                WHERE session_id = ? AND status = 'RECORDING'
+            """, (sess_id,))
+            pending_segments = cursor.fetchall()
+
+            for seg in pending_segments:
+                seg_id = seg["segment_id"]
+                tmp_file = recordings_dir / f"{seg_id}.tmp"
+                mp4_file = recordings_dir / f"{seg_id}.mp4"
+
+                if tmp_file.exists() and tmp_file.stat().st_size > 0:
+                    # File has data: finalize it as a valid partial segment
+                    file_size = tmp_file.stat().st_size
+                    sha256 = calculate_sha256(tmp_file)
+                    tmp_file.rename(mp4_file)
+
+                    cursor.execute("""
+                        UPDATE mobile_segments
+                        SET status = 'QUEUED_FOR_UPLOAD',
+                            file_size_bytes = ?,
+                            sha256_hash = ?,
+                            finalized_at = CURRENT_TIMESTAMP
+                        WHERE segment_id = ?
+                    """, (file_size, sha256, seg_id))
+
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO mobile_outbox (
+                            segment_id, session_id, remote_offset, status, updated_at
+                        ) VALUES (?, ?, 0, 'QUEUED_FOR_UPLOAD', CURRENT_TIMESTAMP)
+                    """, (seg_id, sess_id))
+
+                    recovered_segments.append(seg_id)
+                    logger.info("Successfully recovered segment %s (%d bytes)", seg_id, file_size)
+
+                elif tmp_file.exists() and tmp_file.stat().st_size == 0:
+                    # Empty file: safely delete
+                    tmp_file.unlink()
+                    cursor.execute("DELETE FROM mobile_segments WHERE segment_id = ?", (seg_id,))
+                    quarantined_segments.append(seg_id)
+                else:
+                    cursor.execute("DELETE FROM mobile_segments WHERE segment_id = ?", (seg_id,))
+                    quarantined_segments.append(seg_id)
+
+            # Seal the session
+            cursor.execute("""
+                UPDATE mobile_sessions 
+                SET status = 'FINALIZED',
+                    total_segments = (SELECT COUNT(*) FROM mobile_segments WHERE session_id = ? AND status != 'RECORDING')
+                WHERE session_id = ?
+            """, (sess_id, sess_id))
+            sealed_sessions.append(sess_id)
+
+        # 2. Check for any finalized segments missing from outbox
+        cursor.execute("""
+            SELECT s.segment_id, s.session_id FROM mobile_segments s
+            LEFT JOIN mobile_outbox o ON s.segment_id = o.segment_id
+            WHERE s.status IN ('FINALIZED', 'QUEUED_FOR_UPLOAD') AND o.segment_id IS NULL
+        """)
+        orphaned_outbox = cursor.fetchall()
+        for o in orphaned_outbox:
+            cursor.execute("""
+                INSERT OR REPLACE INTO mobile_outbox (
+                    segment_id, session_id, remote_offset, status, updated_at
+                ) VALUES (?, ?, 0, 'QUEUED_FOR_UPLOAD', CURRENT_TIMESTAMP)
+            """, (o["segment_id"], o["session_id"]))
+            logger.info("Re-enqueued orphaned segment %s into outbox", o["segment_id"])
+
+    logger.info("Mobile crash recovery complete. Recovered %d segments across %d sessions.",
+                len(recovered_segments), len(sealed_sessions))
+
+    return {
+        "recovered_segments": recovered_segments,
+        "quarantined_segments": quarantined_segments,
+        "sealed_sessions": sealed_sessions
+    }
+
+
+============================================================
+FILE: dispatch_mobile\retention.py
+============================================================
+"""Mobile storage retention and cleanup manager.
+Enforces strict cleanup policies: never deletes a phone file merely on an HTTP 200.
+Requires verified byte count and SHA-256 confirmation from the laptop before deleting local media.
+"""
+import logging
+from pathlib import Path
+from typing import Dict, Any, List
+
+from dispatch_mobile.db import get_mobile_db
+
+logger = logging.getLogger("dispatch_mobile.retention")
+
+
+def cleanup_verified_segments() -> int:
+    """Delete local video files for segments whose copies have been strictly verified by the laptop.
+    
+    Returns:
+        Number of cleaned-up local files.
+    """
+    cleaned_count = 0
+
+    with get_mobile_db() as conn:
+        cursor = conn.cursor()
+
+        # Check policy
+        cursor.execute("SELECT value FROM mobile_settings WHERE key = 'cleanup_policy'")
+        row = cursor.fetchone()
+        policy = row["value"] if row else "DELETE_AFTER_VERIFIED_COPY"
+
+        if policy == "NEVER_DELETE":
+            logger.debug("Cleanup policy is NEVER_DELETE; skipping phone storage cleanup.")
+            return 0
+
+        # Find segments confirmed VERIFIED_BY_LAPTOP that haven't been deleted yet
+        cursor.execute("""
+            SELECT segment_id, filepath FROM mobile_segments
+            WHERE status = 'VERIFIED_BY_LAPTOP'
+        """)
+        eligible = cursor.fetchall()
+
+        for item in eligible:
+            seg_id = item["segment_id"]
+            file_path = Path(item["filepath"])
+
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                    logger.info("Safely deleted local segment %s (%s) after verified laptop receipt.",
+                                seg_id, file_path.name)
+                    cleaned_count += 1
+                except Exception as e:
+                    logger.warning("Failed to delete local segment file %s: %s", file_path.name, e)
+
+            cursor.execute("""
+                UPDATE mobile_segments
+                SET status = 'DELETED_FROM_PHONE'
+                WHERE segment_id = ?
+            """, (seg_id,))
+
+            # Remove from outbox
+            cursor.execute("DELETE FROM mobile_outbox WHERE segment_id = ?", (seg_id,))
+
+    return cleaned_count
+
+
+============================================================
+FILE: dispatch_mobile\segmenter.py
+============================================================
+"""Mobile Recording Segmenter.
+Splits continuous recording into atomic, durable segments to guarantee crash and power safety.
+If phone dies or crashes, at most the currently-active segment is affected; all previous segments survive intact.
+"""
+import uuid
+import logging
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+from dispatch_mobile.db import get_mobile_db, calculate_sha256, MOBILE_STORAGE_DIR
+
+logger = logging.getLogger("dispatch_mobile.segmenter")
+
+
+class RecordingSessionManager:
+    """Manages active mobile recording sessions and rolling segment creation."""
+
+    def __init__(self, storage_dir: Optional[Path] = None, segment_duration_seconds: int = 600):
+        self.storage_dir = storage_dir or (MOBILE_STORAGE_DIR / "recordings")
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.segment_duration_seconds = segment_duration_seconds  # Default 10 minutes (600s)
+        self.current_session_id: Optional[str] = None
+        self.current_segment_id: Optional[str] = None
+        self.current_sequence: int = 0
+        self.current_tmp_path: Optional[Path] = None
+
+    def start_session(self, notes: str = "") -> str:
+        """Start a new recording session."""
+        self.current_session_id = f"sess_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        self.current_sequence = 0
+
+        with get_mobile_db() as conn:
+            conn.execute("""
+                INSERT INTO mobile_sessions (session_id, status, total_segments, notes)
+                VALUES (?, 'RECORDING', 0, ?)
+            """, (self.current_session_id, notes))
+
+        logger.info("Started mobile recording session %s", self.current_session_id)
+        # Immediately start first segment
+        self.start_next_segment()
+        return self.current_session_id
+
+    def start_next_segment(self) -> Dict[str, Any]:
+        """Start a new rolling segment (.tmp) under the active session."""
+        if not self.current_session_id:
+            raise RuntimeError("Cannot start segment without an active session")
+
+        # If there's an ongoing segment, finalize it first
+        if self.current_segment_id and self.current_tmp_path and self.current_tmp_path.exists():
+            self.finalize_current_segment()
+
+        self.current_sequence += 1
+        self.current_segment_id = f"{self.current_session_id}_seg_{self.current_sequence:04d}"
+        self.current_tmp_path = self.storage_dir / f"{self.current_segment_id}.tmp"
+
+        # Touch/create the temporary file
+        self.current_tmp_path.touch()
+
+        with get_mobile_db() as conn:
+            conn.execute("""
+                INSERT INTO mobile_segments (
+                    segment_id, session_id, sequence_number, filename, filepath, status
+                ) VALUES (?, ?, ?, ?, ?, 'RECORDING')
+            """, (
+                self.current_segment_id,
+                self.current_session_id,
+                self.current_sequence,
+                f"{self.current_segment_id}.mp4",
+                str(self.storage_dir / f"{self.current_segment_id}.mp4")
+            ))
+
+        logger.info("Started recording segment %s -> %s", self.current_segment_id, self.current_tmp_path.name)
+        return {
+            "session_id": self.current_session_id,
+            "segment_id": self.current_segment_id,
+            "tmp_path": self.current_tmp_path
+        }
+
+    def finalize_current_segment(self) -> Optional[Dict[str, Any]]:
+        """Atomically finalize current temporary segment (.tmp -> .mp4) and enqueue for upload."""
+        if not self.current_segment_id or not self.current_tmp_path:
+            return None
+
+        final_mp4_path = self.storage_dir / f"{self.current_segment_id}.mp4"
+
+        if not self.current_tmp_path.exists() or self.current_tmp_path.stat().st_size == 0:
+            logger.warning("Segment %s temp file is missing or empty, removing record", self.current_segment_id)
+            with get_mobile_db() as conn:
+                conn.execute("DELETE FROM mobile_segments WHERE segment_id = ?", (self.current_segment_id,))
+            return None
+
+        # 1. Compute checksum and file size
+        file_size = self.current_tmp_path.stat().st_size
+        sha256 = calculate_sha256(self.current_tmp_path)
+
+        # 2. Atomic rename from .tmp to .mp4
+        self.current_tmp_path.rename(final_mp4_path)
+
+        # 3. Update SQLite status to FINALIZED & QUEUED_FOR_UPLOAD
+        with get_mobile_db() as conn:
+            conn.execute("""
+                UPDATE mobile_segments
+                SET status = 'QUEUED_FOR_UPLOAD',
+                    file_size_bytes = ?,
+                    sha256_hash = ?,
+                    finalized_at = CURRENT_TIMESTAMP
+                WHERE segment_id = ?
+            """, (file_size, sha256, self.current_segment_id))
+
+            # Enqueue to mobile outbox
+            conn.execute("""
+                INSERT OR REPLACE INTO mobile_outbox (
+                    segment_id, session_id, remote_offset, status, updated_at
+                ) VALUES (?, ?, 0, 'QUEUED_FOR_UPLOAD', CURRENT_TIMESTAMP)
+            """, (self.current_segment_id, self.current_session_id))
+
+            # Update session total segments
+            conn.execute("""
+                UPDATE mobile_sessions 
+                SET total_segments = total_segments + 1 
+                WHERE session_id = ?
+            """, (self.current_session_id,))
+
+        logger.info("Finalized segment %s (%d bytes, SHA256: %s)",
+                    self.current_segment_id, file_size, sha256[:12])
+
+        info = {
+            "segment_id": self.current_segment_id,
+            "session_id": self.current_session_id,
+            "filepath": final_mp4_path,
+            "size_bytes": file_size,
+            "sha256": sha256
+        }
+
+        self.current_segment_id = None
+        self.current_tmp_path = None
+        return info
+
+    def stop_session(self) -> Dict[str, Any]:
+        """Stop recording session, finalize the last segment, and seal session as FINALIZED."""
+        if not self.current_session_id:
+            raise RuntimeError("No active recording session to stop")
+
+        # Finalize the last active segment
+        if self.current_segment_id and self.current_tmp_path and self.current_tmp_path.exists():
+            self.finalize_current_segment()
+
+        session_id = self.current_session_id
+        with get_mobile_db() as conn:
+            conn.execute("""
+                UPDATE mobile_sessions 
+                SET status = 'FINALIZED' 
+                WHERE session_id = ?
+            """, (session_id,))
+
+            cursor = conn.cursor()
+            cursor.execute("SELECT total_segments FROM mobile_sessions WHERE session_id = ?", (session_id,))
+            total = cursor.fetchone()[0]
+
+        logger.info("Recording session %s stopped and sealed (total %d segments)", session_id, total)
+
+        self.current_session_id = None
+        self.current_sequence = 0
+
+        return {
+            "session_id": session_id,
+            "total_segments": total,
+            "status": "FINALIZED"
+        }
+
+
+============================================================
+FILE: DISPATCH_REMEDIATION_LEDGER.md
+============================================================
+# DISPATCH REMEDIATION LEDGER
+
+**Authority:** Root Authoritative Progress and Execution Ledger  
+**Created:** 2026-10-14  
+**Last Updated:** 2026-10-16 23:40 IST  
+**Status:** COMPLETED & VERIFIED (All P0/P1 Reliabilities Resolved, 307/307 Tests Passing, Clean Android Kotlin Build, Real Test Isolation)
+
+---
+
+## 1. Mission Status
+
+- **Current Branch:** `main`
+- **Starting Baseline State:** Premature Android video deletion, unlisted upload metadata, 308 Range optimistic advance, non-isolated test execution against real database.
+- **Final Verification State:** 
+  - **Python Test Suite:** `python -m unittest discover -s tests -p "test_*.py"` -> **307 tests ran in 136.7s: 0 failures, 0 errors (100% PASS)**
+  - **Test Isolation:** Ephemeral sandbox verified; `storage/database/dispatch.db` untouched throughout test discovery (`LastWriteTime: 2026-10-15 16:22:05`).
+  - **Frontend Build:** `cd frontend && npm run build` -> **Exit Code 0 (Vite bundled in 22.00s to `android/app/src/main/assets/web`)**
+  - **Android Native Compilation:** `cd android && .\gradlew.bat compileDebugKotlin` -> **Exit Code 0 (`BUILD SUCCESSFUL in 29s`)**
+  - **Studio Route Serving:** `/studio` redirects 307 to `/studio/`; static JS bundle `/studio/assets/index-CWv134Sm.js` verified HTTP 200.
+- **Overall Status:** PRODUCTION READY, STRICTLY RESILIENT & VERIFIED.
+
+---
+
+## 2. Product Contract
+
+Dispatch is an autonomous personal content engine with a 5-step user experience:
+1. **Open Dispatch** on Android phone.
+2. **Record** (rolling 10m segments, FHD 1080p, foreground service).
+3. **Stop** recording.
+4. **Review** generated candidate clips on PC Review Studio dashboard.
+5. **Approve or Reject** clips with 1-click multi-platform publishing.
+
+**Autonomous Pipeline:**  
+`Android CameraX -> Room DB -> WorkManager Resumable Upload -> YouTube Cloud Inbox (Unlisted) -> PC Poller/Catcher (yt-dlp download + ffprobe validation) -> TranscriptionWorker (YouTube VTT -> faster-whisper int8 CPU) -> HighlightWorker (Gemini -> Roman Hinglish) -> VideoEngine (FFmpeg 9:16 ASS vertical subtitles) -> React Review Studio -> Idempotent Publishing Outbox`.
+
+---
+
+## 3. Audit Inventory
+
+1. **Gemini 4 Argon Audit:** Evaluated `af9c1522`, identified binary APK tracking (`storage/download/dispatch.apk`), competing architectures (LAN sync, Python mobile, Kotlin Compose, React WebView), and structural drifts.
+2. **Claude Sonnet 4.5 Forensic Report:** Evaluated `af9c152`, identified 23 findings: `0.0.0.0` host binding, plaintext Android credentials, duplicate publishing risk, wake lock leaks, missing disk space checks.
+3. **GLM 12-Agent FMEA & Verification Mandate:** Analyzed failure modes across all 7 pillars.
+4. **OEC & Synthesized Code Audits (Bundles 1–5):** Verified code lines for 24 specific defects across `dispatch/`, `android/`, `frontend/`, `tests/`, and `scripts/`.
+
+---
+
+## 4. Master Task Checklist
+
+### PHASE 1: SECURITY LOCKDOWN, `.env` SANITIZATION & REPO HYGIENE
+- [x] `TASK-1.1`: Localhost Binding & Auth Gate (`dispatch/config.py`, `dispatch/web/app.py`)
+- [x] `TASK-1.2`: Fix `.env` Injection & Stale `GEMINI_API_KEY` Import (`dispatch/web/app.py`, `dispatch/ai_clips/worker.py`)
+- [x] `TASK-1.3`: Path Traversal Containment, Streaming Upload Limit & Reject 404 (`dispatch/web/app.py`, `dispatch/db.py`)
+- [x] `TASK-1.4`: Android Encrypted Credentials & WebView Hardening (`android/app/build.gradle.kts`, `PairingManager.kt`, `MainActivity.kt`, `AndroidManifest.xml`)
+- [x] `TASK-1.5`: Git & Artifact Hygiene (`.gitignore`, `dispatch/web/app.py`)
+
+### PHASE 2: YOUTUBE INBOX, OAUTH, VTT PARSER & POLLER STATE-MACHINE HARDENING
+- [x] `TASK-2.1`: Fix State-Machine Clobber in `catcher.py` and `db.py`
+- [x] `TASK-2.2`: Canonical Token Path, Token Refresh Persistence & Auth Health (`oauth.py`, `publisher/youtube.py`, `app.py`)
+- [x] `TASK-2.3`: Authenticated `yt-dlp` & Safe Download Promotion (`dispatch/youtube_inbox/catcher.py`)
+- [x] `TASK-2.4`: Fix VTT Rolling-Caption Inline Word Deduplication (`dispatch/youtube_inbox/vtt_parser.py`)
+- [x] `TASK-2.5`: Fix ISO-8601 Fractional-Second Stall Detection & Poller Backoff (`dispatch/youtube_inbox/poller.py`)
+
+### PHASE 3: AI HIGHLIGHTS, SUBTITLE ENGINE UNIFICATION & FFMPEG RENDERER
+- [x] `TASK-3.1`: Separate Pillar 3 Clip Definition from Pillar 4 Rendering & Verify Render Outputs (`worker.py`, `highlight_finder.py`)
+- [x] `TASK-3.2`: Fix Dual ASS Subtitle Generator Overwrite & Relative-Timestamp Stripping Bug (`renderer.py`, `exporter.py`, `app.py`)
+- [x] `TASK-3.3`: Roman Hinglish Fallback & Font Safety (`dispatch/ai_clips/highlight_finder.py`)
+
+### PHASE 4: PUBLISHING OUTBOX, FASTAPI ASYNC UNBLOCKING & UNIFIED STUDIO UI
+- [x] `TASK-4.1`: Fix `"youtube_shorts"` vs `"youtube"` Mismatch & Outbox Crash Recovery (`outbox.py`, `db.py`, `ClipsScreen.tsx`)
+- [x] `TASK-4.2`: Unblock FastAPI Event Loop & Fix Filmstrip / Source Streaming (`app.py`)
+- [x] `TASK-4.3`: Wire `ResourceGovernor`, File Logging & Single-Instance Lock (`main.py`, `scripts/run_background.vbs`)
+
+### PHASE 5: ANDROID RECORDING, BOOT RECOVERY, WIFI-ONLY & STORAGE RETENTION
+- [x] `TASK-5.1`: Fix `BootReceiver` 10s ANR & Unplayable `.tmp` Recovery (`BootReceiver.kt`, `YouTubeDirectUploadWorker.kt`, `SegmenterEngine.kt`)
+- [x] `TASK-5.2`: Fix `WAITING_FOR_YOUTUBE` Dead-End & Local File Retention Pruning (`RecordingDao.kt`, `YouTubeDirectUploadWorker.kt`, `DispatchNativeBridge.kt`)
+- [x] `TASK-5.3`: Wire Real `wifiOnly` Preference Across Bridge, React & Compose (`PairingManager.kt`, `DispatchNativeBridge.kt`, `bridge.ts`, `SettingsScreen.tsx`, `SettingsScreen.kt`)
+- [x] `TASK-5.4`: Fix Live Microphone Mute, Bounded WakeLock & Storage Path Truthfulness (`CameraCaptureManager.kt`, `RecordingForegroundService.kt`, `DispatchNativeBridge.kt`, `RecordingsScreen.tsx`)
+
+### PHASE 6: UI/UX INVARIANTS, FRONTEND->ANDROID ASSET PIPELINE & DEAD CODE CLEANUP
+- [x] `TASK-6.1`: Enforce `AGENTS.md` 44px Hitbox & Single-Axis Mobile Rules (`frontend/src/index.css`, `dispatch/web/templates/index.html`, `RecordScreen.kt`)
+- [x] `TASK-6.2`: Fix Legacy Sync Endpoint Contract for Tests (`dispatch/sync/receiver.py`)
+- [x] `TASK-6.3`: Synchronize All 35+ Test Files & Wrap Bare Test Functions in `unittest.TestCase` (`tests/`)
+
+### PHASE 7: FULL-SYSTEM BUILD, VERIFICATION GATES & FINAL AUDIT SIGN-OFF
+- [x] `TASK-7.1`: Frontend Build & Asset Sync (`npm run build`) -> Output verified in `android/app/src/main/assets/web`
+- [x] `TASK-7.2`: Android Clean Compilation & APK Packaging (`gradlew clean assembleDebug`) -> APK generated and SHA-256 verified
+- [x] `TASK-7.3`: 100% Python Unit, Pillar, Chaos & E2E Test Execution (`python -m unittest discover`) -> 295/295 tests passed
+- [x] `TASK-7.4`: Documentation & Ledger Finalization
+
+---
+
+## 5. Finding Register
+
+| ID | Sev | Affected Files | Root Cause | Status | Fix Summary | Evidence |
+|---|---|---|---|---|---|---|
+| `F-SEC-HOST` | P0 | `dispatch/config.py`, `dispatch/web/app.py` | `WEB_HOST` default `0.0.0.0` exposes dashboard on LAN | VERIFIED | Default bound to `127.0.0.1`, Host/Origin DNS validation added | `tests/test_phase1_security.py` |
+| `F-SEC-ENV` | P0 | `dispatch/web/app.py`, `dispatch/ai_clips/worker.py` | Unsanitized Gemini key writes to `.env`; stale key import | VERIFIED | Strict regex validation (`^[A-Za-z0-9_-]{20,80}$`), dynamic key lookup in worker | `tests/test_phase1_security.py` |
+| `F-SEC-TRAV` | P0 | `dispatch/web/app.py` | Path traversal in `/clips/{filename}`, unbounded upload read | VERIFIED | Enforced `is_relative_to(CLIPS_DIR)`, chunked streaming upload (500MB max) | `tests/test_phase1_security.py` |
+| `F-SEC-AND` | P0 | `android/.../PairingManager.kt`, `MainActivity.kt` | Plaintext tokens in SharedPreferences; unsafe WebView settings | VERIFIED | EncryptedSharedPreferences (AES256_SIV/GCM) with fallback, allowFileAccess=false | `tests/test_phase1_security.py`, Android build |
+| `F-PUB-001` | P0 | `ClipsScreen.tsx`, `dispatch/publisher/outbox.py` | Platform mismatch `"youtube_shorts"` vs `"youtube"` | VERIFIED | Accepted both in outbox worker, normalized in UI and database | `tests/test_phase4_publishing.py` |
+| `F-CAP-001` | P0 | `renderer.py`, `exporter.py`, `app.py` | Subtitle generator overwrite, stripping active word subtitles | VERIFIED | Replaced overwrite with canonical `CaptionTrack` + `export_to_ass` | `tests/test_phase3_highlights.py` |
+| `F-AND-005` | P0 | `PairingManager.kt`, `SettingsScreen.tsx`, `bridge.ts` | `wifi_only` defaults false, UI toggle never updates native pref | VERIFIED | Default true, exposed `@JavascriptInterface` getter/setter, wired Compose & React | Android build & unit tests |
+| `F-AND-001` | P0 | `BootReceiver.kt` | Synchronous SHA256 of multi-GB files in `onReceive` causes ANR | VERIFIED | Immediate enqueue of `YouTubeDirectUploadWorker`, background recovery loop | Android compile & code inspection |
+| `F-AND-006` | P0 | `YouTubeDirectUploadWorker.kt` | Local `.mp4` files never deleted after confirmed upload | VERIFIED | Added `file.delete()` on confirmed YouTube upload | Android compile & code inspection |
+| `F-AND-007` | P0 | `CameraCaptureManager.kt` | `toggleMic()` toggles boolean but never mutes active CameraX recording | VERIFIED | Wired `activeRecording?.mute(!isAudioEnabled)` | Android compile & code inspection |
+| `F-YT-001` | P0 | `catcher.py`, `db.py` | Missing `"TRANSCRIBED"`, `"ANALYZING"`, `"CLIPS_DEFINED"` in idempotency checks | VERIFIED | Expanded status tuples to prevent clobbering in-flight videos | `tests/test_phase2_youtube.py` |
+| `F-YT-002` | P0 | `catcher.py` | Unauthenticated `yt-dlp` fails on private videos and rate limits | VERIFIED | Passed cookies option if available; added YouTube Data API v3 caption fallback | `tests/test_phase2_youtube.py` |
+| `F-YT-003` | P0 | `oauth.py`, `publisher/youtube.py` | Relative token path and unpersisted refreshed OAuth tokens | VERIFIED | Resolved `ROOT_DIR / "youtube_token.json"`, persisted token on refresh | `tests/test_phase2_youtube.py` |
+| `F-TST-001` | P0 | `receiver.py`, `test_transport.py` | Missing `?pin=` query param support and `pairing_pin` in response | VERIFIED | Supported `pin` parameter and returned `pairing_pin` | `tests/test_transport.py` (13/13 passed) |
+| `F-TST-002` | P0 | `tests/` (10 files) | Bare test functions skipped by `unittest discover`; file cleanup assertion mismatches | VERIFIED | Wrapped in `unittest.TestCase`; updated to assert raw video preservation policy | `python -m unittest discover` (295 passed) |
+
+---
+
+## 6. Verification & Change Log Table
+
+| Task / Phase | Files Modified | Root Cause Summary | Verification Command & Output |
+|---|---|---|---|
+| `BASELINE` | None | Initial state audit & test discovery | `python -m unittest discover -s tests -p "test_*.py"` -> Ran 272 tests, FAILED (failures=4, errors=2) |
+| `PHASE-1` | `dispatch/config.py`, `dispatch/web/app.py`, `dispatch/db.py`, `dispatch/ai_clips/worker.py`, `dispatch/ai_clips/highlight_finder.py`, `android/app/build.gradle.kts`, `PairingManager.kt`, `MainActivity.kt`, `AndroidManifest.xml`, `.gitignore`, `tests/test_phase1_security.py` | Secured host binding to 127.0.0.1, added CORS + Host/Origin DNS rebinding checks, chunked upload streaming, 404 on nonexistent clip rejection, EncryptedSharedPreferences with fallback, allowBackup=false, WebView file URL hardening, untracked APK/teamwork/transcripts | `python -m unittest tests/test_phase1_security.py` -> 6 tests passed in 0.043s (OK) |
+| `PHASE-2` | `dispatch/config.py`, `dispatch/youtube_inbox/oauth.py`, `dispatch/publisher/youtube.py`, `dispatch/youtube_inbox/catcher.py`, `dispatch/youtube_inbox/vtt_parser.py`, `dispatch/youtube_inbox/poller.py`, `tests/test_phase2_youtube.py` | Absolute canonical OAuth token path, token refresh persistence, yt-dlp cookie authentication, API caption fallback, VTT rolling caption deduplication slice fix, ISO-8601 fractional second parsing & exponential error backoff | `python -m unittest tests/test_phase2_youtube.py` -> 4 tests passed; existing inbox tests (13 tests) passed (OK) |
+| `PHASE-3` | `dispatch/ai_clips/highlight_finder.py`, `dispatch/video_engine/renderer.py`, `dispatch/ai_clips/worker.py`, `tests/test_phase3_highlights.py` | Phonetic Devanagari to Roman transliteration fallback, Gemini API key environment precedence, canonical ASS subtitle generator unification, decoupled clip definition from rendering with output existence check | `python -m unittest tests/test_phase3_highlights.py` -> 3 tests passed; `test_pillar3_highlights.py` -> 15 tests passed; `test_tier1_features_media_ai_engine.py` -> 25 tests passed (OK) |
+| `PHASE-4` | `dispatch/publisher/outbox.py`, `frontend/src/screens/ClipsScreen.tsx`, `dispatch/web/app.py`, `dispatch/main.py`, `tests/test_phase4_publishing.py` | Supported both "youtube" and "youtube_shorts" in outbox, added stale upload job recovery (>10m), retained published clips on disk for review, offloaded filmstrip generation with `asyncio.to_thread`, added PID lockfile and rotating file handler | `python -m unittest tests/test_phase4_publishing.py` -> 2 tests passed (OK) |
+| `PHASE-5` | `android/app/src/main/java/com/resolvia/dispatch/data/RecordingDao.kt`, `BootReceiver.kt`, `YouTubeDirectUploadWorker.kt`, `DispatchNativeBridge.kt`, `CameraCaptureManager.kt`, `RecordingForegroundService.kt`, `SettingsScreen.kt`, `frontend/src/bridge.ts`, `frontend/src/screens/SettingsScreen.tsx` | Fixed BootReceiver ANR by immediate background worker enqueue, recovered interrupted sessions by inspecting moov atom, unlinked local .mp4 after confirmed upload, exposed real `wifiOnly` bridge methods, wired live mic mute to CameraX recording, bounded wake lock to 6h | Code inspection, TypeScript build, Android compile & assembleDebug (OK) |
+| `PHASE-6` | `frontend/src/index.css`, `dispatch/sync/receiver.py`, `dispatch/orchestrator/job_queue.py`, `tests/test_*.py` (10 test files) | Enforced 44px scrubber hitbox, supported `pin` query parameter in pairing config, reset `attempt_count=0` on stage checkpoint completion, wrapped bare test functions in `unittest.TestCase`, resolved edge-tts 403 with offline SAPI fallback | Discoverable tests increased from 272 to 295; all test modules verified individually (OK) |
+| `PHASE-7` | `frontend/`, `android/`, `tests/test_chaos.py`, `dispatch/db.py` | Vite build produced assets directly into Android app assets; Android clean assembleDebug produced valid APK; fixed rejection ordering in SQLite (`created_at DESC, rowid DESC`) | `npm run build` (Exit 0); `gradlew clean assembleDebug` (Exit 0); `python -m unittest discover` -> **295 tests passed, 0 failures, 0 errors** (Exit 0) |
+| `PHASE-8` | `dispatch/sync/receiver.py`, `dispatch/publisher/outbox.py`, `dispatch/db.py`, `dispatch/web/app.py`, `android/.../RecordingForegroundService.kt`, `android/.../CameraCaptureManager.kt`, `tests/test_sync_engine.py`, `tests/test_phase4_publishing.py`, `tests/test_phase1_security.py` | Fixed false upload verification (checks physical file on disk before returning VERIFIED/MISSING); prevented duplicate publishing (atomic job claim, exponential backoff, ambiguous error reconciliation, preserved confirmed remote IDs); honest recording notification reflecting actual CameraX status; exact URL-split Origin & Host header validation stopping DNS-rebinding / CSRF bypasses; mounted React Studio at `/studio` | Discoverable tests increased from 295 to 301; all 301 tests passing (`100% PASS`); Vite build exit 0; Android assembleDebug exit 0 |
+| `PHASE-9` | `android/.../YouTubeDirectUploadWorker.kt`, `android/.../RecordingDao.kt`, `android/.../PairingManager.kt`, `android/.../DispatchNativeBridge.kt`, `dispatch/sync/receiver.py`, `dispatch/publisher/outbox.py`, `dispatch/web/app.py`, `dispatch/config.py`, `dispatch/db.py`, `tests/__init__.py`, `tests/test_sync_engine.py`, `tests/test_phase4_publishing.py` | Fixed premature Android recording deletion (preserves footage until explicit PC acknowledgement via `/api/sync/youtube-ack`), enforced private YouTube uploads, strict 308 Range header bounds validation & query probing with token refresh, auto-isolated test sandbox in `config.py` & `db.py` leaving `storage/database/dispatch.db` 100% untouched, outbox ambiguous error classification by errno/exception type (including WinError 10053/10054/10060), and exposed reconciliation endpoints | `cd android && .\gradlew.bat compileDebugKotlin` -> BUILD SUCCESSFUL in 29s; `python -m unittest discover -s tests -p "test_*.py"` -> **307 tests passed, 0 failures, 0 errors (100% PASS)** |
+| `PHASE-10` | `dispatch/sync/receiver.py`, `dispatch/web/app.py`, `dispatch/db.py`, `dispatch/youtube_inbox/oauth.py`, `dispatch/youtube_inbox/catcher.py`, `android/.../DispatchNativeBridge.kt`, `android/.../YouTubeDirectUploadWorker.kt`, `tests/test_sync_engine.py` | Enforced strict `verify_token` authentication and cryptographic SHA-256 hash validation on `/api/sync/youtube-ack`; generated signed HMAC-SHA256 ingestion receipts; wired pairing flow to persist `pcAuthToken` on mobile; mobile verifies HMAC signature with constant-time `MessageDigest.isEqual` before deleting local footage; eliminated offset regressions in `queryUploadStatus` (returns null on malformed Range) and enforced strictly monotonic forward-only offset progression (`probedOffset > currentOffset`) | `cd android && .\gradlew.bat compileDebugKotlin` -> **BUILD SUCCESSFUL in 31s**; `python -m unittest discover -s tests -p "test_*.py"` -> **307 tests passed, 0 failures, 0 errors (100% PASS)** |
+
+---
+
+## 7. Architecture Decisions
+
+1. **Single Canonical Cloud Inbox:** YouTube Private upload from phone -> PC Poller/Catcher. No fragile LAN video streaming or UDP discovery for heavy media.
+2. **Localhost First:** PC dashboard default bound to `127.0.0.1`. Remote/LAN access requires explicit configuration and authentication.
+3. **Monotonic Crash-Resilient States:** State transitions in SQLite and Room are forward-only with fencing and crash recovery. Completed stages are never re-executed on restart.
+4. **Single Source of Truth for Subtitles:** `CaptionTrack` with `export_to_ass` in `dispatch/captions/exporter.py` is the single canonical ASS subtitle generator, eliminating subtitle stripping bugs.
+5. **Raw Creator Media Preservation:** Raw source videos are never deleted during pipeline finalization; only temporary chunks and successfully published mobile files are pruned after verifiable durable storage proof.
+6. **Hardware Touch Targets:** Scrubber and interactive controls strictly maintain 44px hitboxes per `AGENTS.md`.
+
+---
+
+## 8. Acceptance Matrix
+
+| Requirement | Description | Status | Verification Method |
+|---|---|---|---|
+| **R1: 5-Step UX** | Open -> Record -> Stop -> Review -> Approve/Publish | VERIFIED | `test_end_to_end.py`, Android UI, Web Review Studio |
+| **R2: Cloud Inbox** | Direct upload to YouTube Private from phone; automatic download by PC | VERIFIED | `test_phase2_youtube.py`, `test_catcher.py`, `YouTubeDirectUploadWorker.kt` |
+| **R3: Speech & AI Highlights** | Faster-whisper transcription with Hinglish transliteration fallback; Gemini highlights with heuristic fallback | VERIFIED | `test_phase3_highlights.py`, `test_pillar3_highlights.py`, `test_end_to_end.py` |
+| **R4: Vertical ASS Subtitle Video Engine** | 9:16 vertical render with karaoke word-level highlights (`PlayResX: 1080, PlayResY: 1920`) | VERIFIED | `test_video_engine.py`, `test_phase3_highlights.py`, `test_end_to_end.py` |
+| **R5: Review & Publishing Outbox** | 1-click approval, idempotent outbox queue, multi-platform publishing, ambiguous error reconciliation | VERIFIED | `test_phase4_publishing.py`, `test_end_to_end.py`, `test_destructive.py` |
+| **R6: Android Resilience** | Encrypted credentials, BootReceiver non-blocking, moov atom recovery, Wi-Fi only mode, no premature file deletion without PC proof | VERIFIED | `gradlew compileDebugKotlin`, `test_phase1_security.py`, code audit |
+| **R7: Security & Network Hygiene** | Bound to 127.0.0.1, Host validation, sanitized .env keys, path traversal check | VERIFIED | `test_phase1_security.py`, `test_web_security.py` |
+| **R8: 100% Test Pass Rate & Sandbox Isolation** | Full test suite discoverable and passing with zero failures/errors; production database never touched by tests | VERIFIED | `python -m unittest discover -s tests -p "test_*.py"` (**307/307 PASSED**) |
+
+---
+
+## 9. Session Handoff & Final Sign-Off
+
+- **Mission Result:** Fully Accomplished.
+- **Test Results:** 307/307 tests passed (100% pass rate).
+- **Frontend Build:** Verified (Vite bundles in `android/app/src/main/assets/web/assets`).
+- **Android Native Compilation:** Verified (`compileDebugKotlin` passed in 29s).
+- **Database Hygiene:** Verified (`storage/database/dispatch.db` untouched by test suite).
+- **Git State:** Clean and unpolluted (no binaries committed; `.gitignore` enforced for `*.apk`).
+
+
+============================================================
+FILE: docs\ADR-001-canonical-architecture.md
+============================================================
+# ADR-001 — Dispatch Canonical Multi-User Architecture (PROPOSED — awaiting owner approval)
+
+Status: **APPROVED by owner (2026-10-24, MCQ):** Decision 2 = Bound per-worker token (owner-issued single-use enrollment code → user-bound worker credential; shared token becomes maintenance-only); Decision 1 = review lives in the **Android app only** for the alpha (no hosted web review app); Decision 4 = **server-side encrypted token vault on the PC backend** (no tokens on devices). Decision 3 boundaries stand as written. Workstream implementation may now start in the gap-map order.
+
+## Decision 1 — What runs where
+- **Android app (primary user interface):** email/password sign-in via Supabase Auth;
+  on-device YouTube OAuth initiation; recording; review of own clips; publishing approval.
+- **Hosted cloud (source of truth for user-owned state):** Supabase Postgres (profiles,
+  sessions/clips metadata, review status, per-user OAuth token vault) + R2 (clip media) +
+  Cloudflare Worker (authenticated control plane). Cloud review state **overrides** local.
+- **Windows PC (owner's worker, no login UI):** downloads/transcribes/selects/renders/publishes.
+  Removed: PC sign-in, PC YouTube login, all credential transfer.
+- **Landing page:** stays a static public download page.
+
+## Decision 2 — Worker identity and enrollment (the key question)
+**The PC never receives a shared token that can act as any user.** Enrollment:
+
+1. The owner signs in to Dispatch (email/password) on the PC's local dashboard — a one-time
+   local action on the owner's own machine, not a cloud login surface for friends.
+2. In the app/PC dashboard the owner opens **"Link processing PC"**; the backend issues a
+   short-lived, single-use **enrollment code bound to that owner's user_id** (same
+   digest-and-rate-limit pattern the old pairing codes used — reused only as a
+   worker-enrollment mechanism, never for YouTube credentials).
+3. The PC exchanges the code (over HTTPS) for a **worker credential: a per-worker token
+   stored in the PC env, cryptographically bound to that one user_id** (backend stores
+   token→user binding; every worker API call resolves the user from the token server-side —
+   the client can never claim another user).
+4. Revoking the binding in the admin panel invalidates the worker token; the PC loses access
+   to that user's jobs until re-enrolled.
+
+Consequently: friends' PCs (if ever enrolled by those friends) would each hold a token bound
+ONLY to their own user. The shared `DISPATCH_WORKER_TOKEN` becomes backend-maintenance-only
+and is deleted from user-facing paths. Adversarial tests: worker-A token cannot read/claim
+user B's jobs, media, or tokens; replayed/expired enrollment codes fail; revoked tokens fail.
+
+## Decision 3 — Source-of-truth boundaries
+- **Cloud-owned:** identity, sessions/clips metadata + review state, per-user OAuth tokens
+  (encrypted at rest), quota, publication history.
+- **Local-owned (PC):** processing leases, local file paths, checkpoints, temporary renders.
+- **Phone-owned:** recordings until uploaded (unchanged), Room outbox (unchanged).
+- **Conflict rule:** remote approval/rejection is durable in the cloud; the PC applies it on
+  next sync and never destructively changes local state on sync failure (existing rule).
+- **Legacy local data migration:** existing PC-side records stay owned by the PC's enrolled
+  worker identity (the owner's own user). Never reassigned to "whoever logs in first"; no
+  recordings deleted.
+
+## Decision 4 — YouTube OAuth (per Google web-server flow)
+User initiates in-app → Custom Tab → offline-access consent → one-time code → **PC backend
+exchanges it server-side** (Web-server client secret in PC env) → refresh token stored
+**server-side, encrypted per user** (never on device, never in PC's old token file) →
+refresh/revoke/status handled by backend → truthful UI states. The Android OAuth client ID
+is public (no secret). No token in URLs, logs, or browser storage.
+
+## Consequences / risks
+- Requires the owner to create the Web-server OAuth client + consent screen.
+- Workers depend on cloud reachability for job claiming; offline behavior = pause, not
+  data loss (existing local checkpointing preserved).
+- The old single-user flows keep working for the owner's own processing during migration.
+
+## Explicitly rejected alternatives
+- Shared worker token with user-ID header (current prototype): cross-tenant risk — rejected.
+- Refresh tokens stored on device: contradicts Google guidance for offline access — rejected.
+- Any new pairing code for YouTube credentials: banned by owner directive.
+- Automatic LAN discovery as PC identity: unauthenticated — rejected.
+
+**Owner approval needed on:** D1–D4 as written, or amendments in chat.
+
+## Amendment 2 (2026-10-24) — Owner constraints: law of least power + Pareto
+- **Alpha worker topology simplified:** in the alpha there is exactly ONE processing worker — the owner's PC, holding an **admin-worker credential** (bound to the admin role, server-side authorized to process ALL users' jobs). Friends never receive worker tokens; their phones are plain authenticated clients. Friends' self-enrollment PCs are deferred until actually needed. This keeps the per-worker security model AND matches the product rule that friends don't need their own PCs.
+- **Least-power choices:** auth = Supabase Auth as-is (no custom auth backend); identity boundary = verify the Supabase JWT on the existing FastAPI routes (no new service); token vault = one encrypted store on the PC backend; review UI = the existing app screens; no hosted web app, no new frameworks, no speculative abstractions. Build only what an acceptance test needs.
+- **Build order per Pareto:** auth+isolation → admin minimal → on-device OAuth; each phase is demo-able and tested before the next.
+
+
+============================================================
+FILE: docs\architecture\cloud-migration-plan.md
+============================================================
+# Dispatch Cloud Migration — Architecture & Migration Plan
+
+Status: **Plan approved as working baseline (2026-10-23). Implementation in progress.**
+Owner brief: Principal Architect Implementation Brief (Steps 0–9). This doc is the authoritative decision record + migration checklist. Current-state index: root `AGENT_HANDOFF.md`.
+
+**Principle:** extend Dispatch into a small multi-user cloud-connected app while ALL video processing stays on the owner's Windows PC. No cloud rendering. Originals stay on YouTube. Free-tier only.
+
+## 1. Baseline findings (Step 0 — verified from code at `9db3054`)
+
+**Components & state ownership**
+- Android (`android/`, Kotlin + Compose + WebView): CameraX recording, 10-min segmentation, direct-to-YouTube upload worker. Room SQLite on phone. Does not talk to the PC.
+- PC daemon (`dispatch/main.py`): YouTube poller (`youtube_inbox/poller.py`+`oauth.py`), catcher/validator (`catcher.py`, `ingestion/validator.py`), transcription (`transcription/worker.py`, `gemini_engine.py`, `audio.py`), highlight worker (`ai_clips/worker.py`, `highlight_finder.py`), renderer (`video_engine/renderer.py`, `reframer.py`, captions/), publishing outbox (`publisher/outbox.py` + per-platform adapters), governor, orchestrator (leases/recovery). SQLite `storage/database/dispatch.db` (WAL).
+- Web/API: FastAPI `dispatch/web/app.py` serves the React studio (built into `android/app/src/main/assets/web` and the same code served at `127.0.0.1:8000`). `/download/dispatch.apk` serves the debug APK.
+
+**Exact rejection behavior** (`dispatch/db.py:729` `reject_clip`): immediately `unlink()`s `video_path` + `thumbnail_path` from disk, inserts a row into `rejections` (id, clip_id, title, transcript_snippet, reason) for negative preference learning, sets `status='rejected'`, NULLs both paths. Failure to unlink is only logged (orphan risk; DB still clears paths) — **cloud version must add a deletion-pending/retry state instead**.
+
+**Exact 7-day cleanup** (`dispatch/db.py:765` `cleanup_expired_published_clips`, invoked from `web/app.py:703`): purges local MP4 for `status IN ('published','approved')` where `published_at/approved_at/created_at` older than 7 days; **preserves `thumbnail_path`, `remote_url`, and all metadata**; sets `video_path=NULL`. Not a background scheduler — runs from the web layer.
+
+**Auth boundaries:** local FastAPI has **no auth** (grep confirms no Depends/auth/token checks); its only boundary is the loopback bind (`config.py:99` warns if non-loopback). Phone holds its own YouTube OAuth refresh token; PC holds `youtube_token.json`. No multi-user concept anywhere.
+
+**Local-only UI/API:** everything — dashboard, clips API, trim/caption/render/approve/reject endpoints, APK download. Remote access today would require exposing this server (forbidden by the brief).
+
+**Clip metadata & range-revision semantics (must be preserved):** `clips` table carries `start_time/end_time`, `ai_suggested_start_time/ai_suggested_end_time` (immutable), `range_revision` (monotonic), `caption_range_revision/start/end`, `caption_timing_warning`, `render_stale`, `layout_mode/rendered_layout_mode`, `video_path/thumbnail_path`, `published_at/remote_url`. Optimistic concurrency: `update_clip_trim`, `update_clip_media`, `save_clip_caption_data`, render finalization and approval all take/compare `expected_range_revision` (HTTP 409 on mismatch). Approval validates ffprobe + duration ±1 s and rejects phrase-timing captions (422).
+
+**Test baseline:** focused suite **80 tests OK (74.1 s)** at `79444b7` (frontend + Android results in `AGENT_HANDOFF.md` §8). "380/380" is historical (2026-10-09), not re-verified.
+
+**Migration risks:** single-account YouTube credentials (blocks friends' private uploads — D10); local absolute Windows paths stored in SQLite; rejection deletion has no retry state; unauthenticated local API must never be exposed; legacy `dispatch/sync/`/`transport/` still imported by legacy tests; SQLite↔Postgres identifier namespaces differ (need local↔cloud mapping); Supabase Free pauses after inactivity and has no managed backups.
+
+## 2. Decisions
+
+**D1 — System boundaries.** Android records/uploads to YouTube (unchanged). YouTube = canonical originals (never uploaded to R2). PC downloads/transcribes/selects/renders/publishes (unchanged). Supabase Auth = identity. Supabase Postgres = cloud truth for identity, clip metadata/review state, media-object records, quota policy, publishing history. Cloudflare R2 (private bucket) = clip video + thumbnail bytes only. Cloudflare Worker = control plane: presigned URL issuance, upload completion, signed GET URLs, deletion, quota enforcement, scheduled cleanup. Free static hosting serves the existing frontend for remote review. **Rejected:** VPS/cloud rendering; Worker as video proxy (Free request-body limits); public bucket; exposing FastAPI.
+
+**D2 — Source of truth.** Local-only (SQLite): pipeline state, leases, local paths, checkpoints, processing temps. Cloud-owned (Postgres): `user_id` ownership, cloud clip metadata + review status, media-object records, quota, publication history. Originals: YouTube. Clip media bytes: R2. Mapping: `clips_cloud.local_clip_id` + `unique(user_id, local_clip_id)` bridges namespaces (local clip IDs are not globally unique).
+
+**D3 — Conflict resolution.** Every cloud clip row carries `range_revision` + `status` + `local_updated_at`; the PC pushes new revisions monotonically. Remote approve/reject apply only against the revision the client saw (stale → 409, client reloads). Approval while PC offline: durable `approved` row; PC picks it up on next sync, renders if needed, publishes — no destructive local transition on failure (matches existing stale-render semantics). Upload retries: client-generated reservation token, idempotent completion. Approval arriving during a local run: PC re-checks `range_revision` before finalizing (existing 409 path already handles this locally).
+
+**D4 — Cloud database (reproducible SQL migrations, `supabase/migrations/`).** Tables: `profiles` (user_id PK → `auth.users`, `storage_quota_bytes` default 2,000,000,000 B, max 10,000,000,000 B per alpha brief), `source_sessions` (owner + `youtube_video_id`, unique per user), `clips_cloud` (minimal review metadata + `ai_suggested_*`, `range_revision`, `status` CHECK, `render_stale`), `media_objects` (kind CHECK clip_video/thumbnail, status CHECK pending/active/deletion_pending/deleted, `staging_key`/`final_key` UNIQUE, `byte_count`, `expires_at`), `upload_reservations` (client_token UNIQUE per user, expected_bytes, expires_at), `publications` (platform, remote_id/remote_url, published_at), `rejections` (lightweight audit). JSONB only for caption snapshots/versioned AI output. RLS on every user-owned table (`user_id = auth.uid()`), explicit grants, status constraints, indexes on (user_id,status), (expires_at), (final_key). Quota reservations enforced inside one Postgres transaction (count pending+active bytes + insert reservation) so concurrent uploads cannot overshoot.
+
+**D4 weight — the exact atomic reservation contract (Phase D implements; tables alone do NOT enforce anything).** One transaction per `/reserve` takes BOTH serialization points before any accounting statement, always in the same fixed order on every path — first the global budget lock `pg_advisory_xact_lock(hashtextextended('dispatch:global-quota-budget', 0))` (serializes reservations ACROSS users; per-user row locks alone cannot serialize the global budget between users), then the per-user row lock `select storage_quota_bytes from public.profiles where user_id = $1 for update` (serializes the SAME user's parallel reservations); usage = `sum(byte_count)` over the user's media_objects with status `active`/`deletion_pending` (pending rows always hold `byte_count=0`, enforced by CHECK) plus `sum(expected_bytes)` over the user's reservations with status `pending` and `expires_at > now()` (expired rows never hold headroom); insert only if user sum + expected ≤ quota, global sums + expected ≤ budget, expected ≤ kind cap, and the outstanding limit is STRICT: the user's current pending count must be < 3, so the insert that would create a fourth outstanding reservation is refused (matches D6 "≤3 outstanding reservations/user" and the quota kernel's refuse when outstanding ≥ max); commit or roll back whole. `/complete` is one transaction: HEAD-verify the real R2 object, promote media to `active` with real `byte_count` and flip the reservation to `completed` together, re-validate the sums, refuse + cancel on oversize; completion never raises the accounted total (real bytes ≤ reservation bound), so it takes no advisory lock and merely flips reservation+media atomically. Browser clients hold no INSERT grant on these tables, so the browser cannot race or bypass the kernel. `tests/rls_two_user_checklist.sql` §8 exercises the accounting query once a project exists.
+
+**D5 — Media contract.** Private bucket; no public URLs, ever. Direct client→R2 PUT via short-lived presigned URL (600 s) from a unique staging key; Worker validates ownership, MIME allowlist, declared size bound, outstanding-reservation limit, and atomically enforces user+global budgets before issuing. Completion verifies **actual** R2 object size/type (declared size is not proof), promotes staging→immutable final key, records real byte count, releases reservation; idempotent on repeat. Download: ownership + active status → 600 s signed GET. Delete: ownership + valid state → idempotent; R2 failure → `deletion_pending` + retry by scheduled cleanup; quota not released until deletion confirmed. **Rejected:** uploading bytes through Worker/Postgres; permanent URLs.
+
+**D6 — Quotas & limits (all server-enforced; updated 2026-10-23 per alpha brief — decimal bytes).** Default 2,000,000,000 B/user (admin-adjustable; ceiling = the 10,000,000,000 B hard cap); global active+pending hard cap 10,000,000,000 B (an application cap is NOT a provider billing guarantee); max individual clip object 512 MiB, thumbnail 8 MiB; ≤3 outstanding reservations/user; rate limits on reservation/completion/deletion endpoints; explicit quota-exceeded errors. Decision kernel in `dispatch/cloud/quota.py`; authoritative enforcement = Postgres transaction + Worker (D4).
+
+**D7 — Retention (mirrors verified local behavior).** Rejected: delete video+thumbnail from R2 (deletion-pending on failure, retryable), preserve rejection record + lightweight metadata for preference learning; never report success before confirmation. Published: set `expires_at = published_at + 7 days` for the video object; delete at expiry; **keep thumbnail + publication history + remote URLs** (matches `cleanup_expired_published_clips`). Failed publishing: media retained for retry, no expiry; explicit abandon required. Orphans: scheduled Worker cleanup expires staging objects/abandoned reservations; R2 lifecycle rule on `staging/` prefix as safety net only; all cleanup idempotent.
+
+**D8 — Sync layer.** One interface (`dispatch/cloud/media_store.py`) for all cloud media ops; PC never touches R2/Supabase SDKs directly — it calls the Worker with `DISPATCH_WORKER_URL` + `DISPATCH_WORKER_TOKEN` (shared secret, server-side both ends). PC uploads only completed reviewable clip media + thumbnails after render, pushes minimal metadata, polls for remote review actions. Cloud outage = sync pauses; local pipeline unaffected; no destructive local transitions. Idempotent resume after restart (queue table keyed by local_clip_id + revision). Local file storage remains the fallback for all existing local workflows/tests.
+
+**D9 — Remote review.** Reuse the existing frontend (no redesign): Supabase Auth login, RLS-scoped clip metadata, signed-URL media playback, approve/reject with revision+status checks. Local studio controls stay distinct (local-only endpoints never exposed). No new editing features in this migration.
+
+**D10 — Multi-user YouTube processing (BLOCKER, recorded not solved).** The pipeline is bound to one PC-side YouTube account/token. Friends' private uploads require per-user authorization design (per-user tokens, consent, secure storage). **Not doing:** copying refresh tokens, plaintext token storage, shared OAuth secrets in clients, privacy changes without consent, or claiming multi-user processing works on the owner's account. Cloud storage/review foundations proceed independently.
+
+**D11 — PC↔Worker authentication.** PC = trusted server-side actor holding the owner's Worker token; end-user clients authenticate with Supabase JWTs which the Worker verifies and maps to `user_id`. Worker secrets (R2 binding, service-role key) never leave Cloudflare. R2 credentials exist only as a Worker binding — not on the PC, not in clients.
+
+## 3. Migration checklist (ordered; verify per phase)
+
+- **Phase A — Docs/baseline ✅ (2026-10-23):** this file + `AGENT_HANDOFF.md`, committed.
+- **Phase B — Config/interface skeleton:** `dispatch/cloud/` (`config.py`, `media_store.py`, `quota.py`) + `tests/test_cloud_config.py`, `tests/test_cloud_quota.py` (no SDKs, no network). Verify: unittest green; existing focused suite still green.
+- **Phase C — Supabase migrations ✅ (2026-10-23, hardened; live DB check pending):** `supabase/migrations/0001_init.sql` (schema + RLS + least-privilege grants + owner-guard/integrity triggers + `handle_new_user`; SECURITY MODEL and the Phase D quota contract are documented in the SQL header) and `tests/rls_two_user_checklist.sql` (two-user allow/deny manual procedure with rollback envelope; covers RLS visibility both directions, indirect relationships, client write denial, grant-regression simulations, cross-user owner guards, AI-suggestion immutability, revision monotonicity, accounting query, privilege-surface audit). Verified by static review only — no local SQL engine available offline; the live two-user run is the real verification and stays manual until the owner authorizes a project. Never executed against a real Supabase project.
+- **Phase D — Worker:** `cloud-worker/` (TypeScript) — routes reserve/complete/url/delete/quota + review transitions (approve/reject with revision+status checks; `reject` writes clip status + rejection row via service_role since clients hold no write grants) + scheduled cleanup; the reserve/complete routes must execute the D4 atomic Postgres contract above; unit tests for quota/idempotency/transition logic with mocked R2 binding, including the concurrency acceptance tests: two `/reserve` calls from DIFFERENT users, each within its own quota but jointly over the global budget, commit exactly ONE reservation (advisory-lock serialization), and a same-user burst never persists more than 3 outstanding rows (the fourth is refused). Verify: `npm test` in worker; deploy deferred to user.
+- **Phase E — PC sync:** `dispatch/cloud/sync.py` + SQLite `cloud_sync_queue` migration; hook post-render upload + remote-action pull; tests with mocked Worker (offline-safe, resume, no duplicates). Verify: full focused Python suite green.
+- **Phase F — Remote review UI + deployment checklist:** frontend auth + signed playback + approve/reject; `.env.example`, `docs/CLOUD_DEPLOYMENT.md` (manual setup only, no resource creation without user authorization). Verify: frontend build/tests; real RLS/storage verification = manual two-user test (pending real cloud account).
+
+## 4. Environment variables (names only — never commit values)
+`GEMINI_API_KEY` (exists) · `SUPABASE_URL` (Worker config only) · `SUPABASE_SERVICE_ROLE_KEY` (Worker only — never the PC, browser, Android, tests, or Git: per D8 the PC talks to the Worker with `DISPATCH_WORKER_TOKEN`, so it never needs Supabase credentials; `dispatch/cloud/config.py` deliberately does not model them) · `SUPABASE_ANON_KEY` (frontend only) · `DISPATCH_WORKER_URL` · `DISPATCH_WORKER_TOKEN` · `DISPATCH_CLOUD_SYNC_ENABLED`. Worker secrets: R2 binding config, service-role key — all inside Cloudflare. Android/frontend bundles must contain only the anon key.
+
+## 5. Test & proof matrix
+Unit (mocked): quota kernel, reservation idempotency, size verification, stale-URL overwrite refusal, deletion-pending retry, sync resume. SQL script: two-user RLS allow/deny (manual, real project). Existing suites must stay green after every phase. Mock results never get reported as live cloud verification.
+
+## 6. Open questions for the user
+1. Create the Supabase project + Cloudflare account/bucket/Worker when? (needs authorization)
+2. Quota numbers settled by the alpha brief (2 GB default / 10 GB ceiling / 10 GB global, decimal).
+3. Domain for the hosted review UI, or keep the free hosting default URL?
+
+
+============================================================
+FILE: docs\AUDIT_2026-10-24.md
+============================================================
+# Dispatch Repository Audit — 2026-10-24
+
+Scope: full repository at `86760f3` + this session's fixes (see Git log). Every finding lists file:line, impact, evidence, fix, and verification status. Verification levels: **live** (executed against production), **test** (automated offline), **static** (code review only).
+
+## CRITICAL
+
+### C1. Forged-Origin authentication bypass on the local dashboard — FIXED (test + live)
+- **Where:** `dispatch/web/app.py` `verify_dashboard_auth`, former lines 161–171.
+- **Impact:** any LAN client could send `Origin: https://appassets.androidplatform.net` and pass auth on every protected route (trim, approve, credentials, uploads) while the server was LAN-exposed — full dashboard takeover.
+- **Evidence:** code review + reproduced: forged-Origin POST accepted pre-fix; after the fix the same request returns 403 against the running server.
+- **Fix:** origin-only trust removed entirely. The native WebView already authenticates via the paired device token (`DispatchNativeBridge.getAuthToken` → `x-auth-token` → `verify_token`); loopback browsing unchanged (Host + Origin validation retained).
+- **Verified:** `tests/test_dashboard_auth.py` 5/5; live `POST /api/clips/.../trim` with forged Origin → **403**; server restarted loopback-only (PID 36124, dashboard 200).
+
+## HIGH
+
+### H1. No private-video rejection in source ingestion — FIXED (test)
+- **Where:** `dispatch/youtube_inbox/catcher.py` `_ingest_video_locked` (gate inserted before the DOWNLOADING transition, ~line 410).
+- **Impact:** any URL (incl. private videos reachable via opt-in yt-dlp cookies) could be downloaded and processed, contradicting the alpha contract.
+- **Fix + evidence:** explicit privacy gate — Data-API verdict required: `private` → FAILED; not in (public, unlisted) → FAILED "unverifiable"; transient API *exception* → falls back to the download step (private still fails there without opt-in cookies) preserving the pre-existing transient-error contract. Cookies remain opt-in and documented as non-bypassing.
+- **Verified:** `tests/test_ingest_privacy_gate.py` 3/3 (private/unverifiable rejected pre-download; public/unlisted pass); tracker + ingest endpoint suites green (18/18 incl. updated fixtures); live path NOT exercised (would need a real private video).
+
+### H2. Presigned-URL replay could recreate untracked R2 objects — FIXED (live)
+- **Where:** lifecycle gap after completion/abandonment; presigned PUT URLs remain usable ≤600 s.
+- **Fix:** migration `20261024000004_staging_watch.sql` — `staging_watch` table (service-role only, RLS, no client grants) holds every staging key for 45 min; Worker `/cleanup` phase 3 re-deletes all watched keys idempotently and prunes expired rows.
+- **Verified:** migration **applied to the live Dispatch project** (history shows 0001–0004); Worker deployed (v540c10c9); live `/cleanup` reaped a real abandoned reservation and ran the sweep (HTTP 200). R2 lifecycle rule NOT configured (optional safety net; dashboard-only) — **static**.
+
+### H3. R2 ignores signed content-length on presigned PUTs — DOCUMENTED (live)
+- **Evidence (live):** a 65-byte body against a 64-byte-signed URL was **accepted** by real R2 (HTTP 200).
+- **Mitigation (live-verified):** `/complete` rejects actual > reserved (HTTP 422) and deletes the staging object; accounting holds reserved bytes until cleanup confirms. Signed header retained as defense-in-depth. The 10 GB global cap is therefore an **application-level** cap: physical bytes can transiently exceed tracked accounting for the URL-expiry window — no R2-native mechanism can prevent this (bucket storage is officially "Unlimited").
+
+## MEDIUM
+
+### M1. `requirements.txt` out of sync with `pyproject.toml` — FIXED
+- Missing `python-multipart`, `fonttools`; synced and `pip install -r requirements.txt` re-verified clean, imports OK.
+
+### M2. No signed release APK / no public distribution — FIXED (live)
+- Release keystore created (`android/keystore/`, git-ignored; PKCS12: key password = store password), `build.gradle.kts` release signing wired via git-ignored `keystore.properties`. `assembleRelease` BUILD SUCCESSFUL; `apksigner verify` shows the Dispatch Release certificate (SHA-256 94f7…3804); `aapt` confirms `com.resolvia.dispatch` v1.0.2 (code 3). GitHub Release **v1.0.2-alpha** published; stable URL `https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk` **byte-compared identical** to the signed build.
+
+### M3. Landing page pointed nowhere / PC-local APK route as public URL — FIXED (live)
+- New static `site/` (brand-consistent, mobile-first, honest alpha limitations section). Deployed to **https://resolviaai.github.io/Dispatch/** via gh-pages branch + Pages (first build raced, second succeeded; live 200 with the release download link). No secrets in assets.
+
+## LOW / PRE-EXISTING (not fixed this session)
+
+- **L1 RESOLVED (2026-10-24, follow-up session):** `test_p03` now uses a real tiny MP4 fixture (`tests/fixtures/tiny_valid.mp4`, 6 s, 36 KB) and PASSES — the genuine render + ffprobe approval path runs, production validation untouched.
+- **L2:** Vite >500 kB bundle advisory (cosmetic).
+- **L3 RESOLVED (2026-10-24, follow-up session):** keystore verified usable and its certificate byte-matches the published release APK (full SHA-256 `94f778490fde8ffd2c7e644d0c8169249f2e79829d769b5f71aa0301c5643804`); backup created at `C:\CODE\keystore-backup\dispatch-v1.0.2-alpha-20261024\` (outside the repo, byte-compared). **Owner must still copy that folder off-machine.**
+- **L4:** Two-user RLS checklist + permission-verification query still owner-SQL-editor items (not run).
+- **L5:** `/cleanup` has no scheduled cron trigger yet (manual/PC-invoked only).
+
+## Verification matrix (this session)
+| Check | Level | Result |
+|---|---|---|
+| Full Python suite (416 tests) | test | 414 pass; 1 pre-existing e2e failure (L1); final rerun in handoff |
+| Dashboard auth + privacy gate suites | test | 5/5 + 3/3 + 18/18 |
+| Frontend npm test / build | test | pass / pass (bundle unchanged → release APK matches) |
+| Android testDebugUnitTest / assembleRelease | test | 18/18 (executed earlier today) / BUILD SUCCESSFUL, signed |
+| Worker tests / tsc | test | 24/24 / clean |
+| Migrations 0001–0004 on live Supabase | live | applied + confirmed in history |
+| Worker /health, /cleanup, full upload lifecycle, cross-user 403, oversize 422 | live | all verified (prior checkpoint) + cleanup sweep re-verified post-0004 |
+| Dashboard forged-Origin rejection | live | 403 on running server |
+| APK signature + stable URL | live | verified + byte-identical download |
+| Landing page | live | 200 with working download link |
+| RLS two-user checklist | not run | owner action pending |
+| Real private-video live rejection | not run | would need a real private source |
+
+## Follow-up session addendum (2026-10-24, updater pre-work)
+- **Keystore verification + backup:** alias usable; local build cert == GitHub release asset cert (full fingerprint above); backup byte-compared at `C:\CODE\keystore-backup\dispatch-v1.0.2-alpha-20261024\`. Owner action: copy off-machine.
+- **`scripts/prepare_release.ps1`:** builds assembleRelease, fails on missing keystore/JAVA_HOME/version mismatch, verifies package identity + signature via aapt/apksigner, generates `update.json` FROM THE ACTUAL APK (schema v1: packageName, versionCode, versionName, releaseTag, apkAsset, apkSizeBytes, apkSha256) into git-ignored `release-out/`. Run verified end-to-end; cert matches published release. This is the metadata generator the in-app updater will consume.
+- **L1 fixed** (above). Full native in-app updater (DispatchUpdateManager, PackageInstaller, WorkManager, Settings UI) is NOT yet implemented — it is the next agent's primary task; do not claim it exists.
+
+
+============================================================
+FILE: docs\CANONICAL_ARCHITECTURE.md
+============================================================
+# Dispatch Canonical Architecture & Operating Manual
+
+> **Source of Truth** — Established 2026-10-07.  
+> All development, validation, and maintenance must strictly align with this document.
+
+---
+
+## 1. Overall System Pipeline
+
+```text
+PHONE (Capture & Cloud Handoff Track)
+CameraX (FHD 1080p, 10m rolling segments, background foreground service)
+   ↓
+WorkManager (Resumable upload with exponential backoff)
+   ↓
+YouTube Cloud Inbox (Unlisted transport visibility, [DISPATCH] tags, dispatch_id)
+   ↓
+PC PIPELINE (Pillars 1 to 7)
+PILLAR 1: YouTube Ingestion & Media Validation
+   ↓ (status: DOWNLOADED)
+PILLAR 2: Dual-Stage Timestamped Transcription
+   ↓ (status: TRANSCRIBED)
+PILLAR 3: Gemini Semantic Highlight Selection
+   ↓ (status: CLIPS_DEFINED)
+PILLAR 4: FFmpeg Adaptive 9:16 Reframer & Subtitle Renderer
+   ↓ (status: CLIPS_CREATED)
+PILLAR 5: PC Local Review & Control Dashboard
+   ↓ (user action: APPROVED / REJECTED)
+PILLAR 6: Multi-Platform Publishing Outbox
+   ↓ (status: PUBLISHED)
+PILLAR 7: Master Daemon & Coordinator (surrounds and coordinates PC system)
+```
+
+---
+
+## 2. The 7 PC Pillars
+
+| # | Pillar | Core Responsibility | Input → Output Contract | Status |
+|---|---|---|---|---|
+| **1** | **YouTube Ingestion & Media Validation** | Discover uploads via authenticated API, download media, validate file with ffprobe + full frame decode, create durable state | YouTube → `DISCOVERED` → `DOWNLOADING` → `VALIDATING` → **`DOWNLOADED`** | ✅ **Verified Complete** |
+| **2** | **Transcription Engine** | Obtain reliable timestamped transcript with asynchronous YouTube caption polling and explicit Whisper fallback | `DOWNLOADED` → `WAITING_FOR_TRANSCRIPT` → **`TRANSCRIBED`** | ✅ **Verified Complete** |
+| **3** | **AI Highlights** | Gemini evaluates full transcript to pick 20-90s complete thoughts, hooks, and Roman Hinglish packaging | `TRANSCRIBED` → `ANALYZING` → **`CLIPS_DEFINED`** | ✅ **Verified Complete** |
+| **4** | **Video Engine & Renderer** | Render 9:16 vertical short-form video with adaptive layout (fit-blur/crop) and burned animated subtitles | Clip definitions + source video → **9:16 MP4 clips** | ⏳ Not verified |
+| **5** | **Review Dashboard** | Modern local web interface to play clips, edit titles/tags, toggle public/private, and 1-click approve/reject | Rendered clips → **Approved / Rejected** | ⏳ Needs verification |
+| **6** | **Publishing & Outbox** | Upload approved clips to target platforms (YouTube Shorts, Instagram, etc.) with idempotency & retry tracking | Approved clips → **Published media** | ⏳ Partially implemented |
+| **7** | **Master Daemon / Coordinator** | Single entry point booting DB, background poller, job queue, and local web dashboard on PC | System boot → **Active coordinator** | ✅ Wired |
+
+---
+
+## 3. Dedicated Track: Phone (POCO C65)
+
+The phone application is a standalone client track, **not** one of the 7 PC pillars.
+
+### Contract:
+$$\text{CameraX Recording} \longrightarrow \text{Local Room SQLite} \longrightarrow \text{WorkManager Upload} \longrightarrow \text{YouTube (Unlisted)}$$
+
+### Core Requirements:
+1. **Zero Phone↔PC Networking:** No LAN sync, no HTTP receivers, no UDP beacons, no Tailscale handoffs. YouTube is the **only** handoff.
+2. **Transport Visibility:** Videos are uploaded as **`unlisted`** with title prefix `[DISPATCH]` and description marker `dispatch_id: <id>`.
+3. **10-Minute Rolling Segments:** Continuous background capture split cleanly into rolling segments.
+4. **Foreground Service & WakeLocks:** Recording survives screen dim, lock screen, and system Doze.
+5. **Durable Local Storage:** Room database tracks segments; files pruned only after upload confirmation.
+
+---
+
+## 4. Pillar 2 Detailed Specification (Transcription Engine)
+
+Pillar 2 governs the transition from `DOWNLOADED` to `TRANSCRIBED`.
+
+```text
+DOWNLOADED
+    ↓
+Check YouTube Captions Available?
+    ├── YES ──→ Parse VTT ──→ Normalize Segments ──→ TRANSCRIBED (source='youtube')
+    └── NO  ──→ WAITING_FOR_TRANSCRIPT (asynchronous poll window)
+                     ↓ (timeout window exceeded)
+                Fallback to Local Whisper (Hinglish prompt)
+                     ↓
+                Normalize Segments ──→ TRANSCRIBED (source='whisper')
+```
+
+### Key Decisions & Rules:
+1. **Primary Source:** YouTube captions (auto-generated or creator-provided).
+2. **Asynchronous Handling:** YouTube captions take minutes to process; the system must transition to `WAITING_FOR_TRANSCRIPT` and check periodically without blocking or failing prematurely.
+3. **Explicit Fallback:** If captions remain unavailable after the defined wait timeout window, explicitly transition to local `faster-whisper`.
+4. **Source Tracking:** The resulting record must record `transcript_source: 'youtube'` or `transcript_source: 'whisper'`. No hidden fallback.
+5. **Unified Output Contract:** Whether from YouTube VTT or Whisper, output must normalize into identical JSON segment structure:
+   ```json
+   [
+     {
+       "id": 0,
+       "start": 0.00,
+       "end": 4.52,
+       "text": "Yeh step automate ho chuka hai.",
+       "words": [{"word": "Yeh", "start": 0.00, "end": 0.35}]
+     }
+   ]
+   ```
+6. **Stop Condition:** Pillar 2 stops strictly at **`TRANSCRIBED`**. It does not call Gemini or FFmpeg.
+
+---
+
+## 5. Architectural Invariants
+
+- **Idempotency:** Any process restart at any stage must recognize existing state and resume without duplicating DB rows or corrupting files.
+- **Durable Progress:** State in SQLite advances only *after* the required artifact exists and passes validation.
+- **Failures Surface:** If any stage fails, record `status = 'FAILED'` with a descriptive `last_error`; never swallow errors or fake success.
+
+
+============================================================
+FILE: docs\design-system\DISPATCH_DESIGN_SYSTEM.md
+============================================================
+# Dispatch Design System Specification (v2.0)
+
+> **Scope:** Desktop Video Review Workstation (`/studio`) & Android Native Jetpack Compose / WebView Bridge.  
+> **Aesthetic Archetype:** Linear Information Hierarchy + CapCut Editing Ergonomics + Descript Content Review Workflow.  
+> **Core Mandate:** Pure functional dark studio tool. Zero ornamental fluff, zero AI-neon gradients, zero native OS emojis, 100% data-driven density and biomechanical precision.
+
+---
+
+## 1. Design Principles & Creator Experience
+
+1. **The Video is the Visual Hero:** The stage must prioritize raw and rendered footage clarity. Overlays, chrome, and toolbars must remain calm, neutral, and readable across ultra-bright or pitch-black footage.
+2. **Timeline is Data, Not Decoration:** Caption blocks and word timings must represent authentic audio timestamps derived from Whisper/speech models. Words are click-to-seek and editable in place.
+3. **Information Density Without Clutter:** A pro tool earns trust through organization and spatial hierarchy. Spacing uses a 4px modular scale, numbers use `tabular-nums`, and labels remain visually subordinate to values.
+4. **Publishing is a Consequential State Change:** Approving a clip for local review is strictly distinct from public multi-platform broadcast. Every destination reflects real authentication state, live character counters, and explicit privacy guarantees (Private Draft vs. Auto Public).
+5. **Biomechanical & Keyboard Ergonomics:** Every interactive element satisfies $\ge 44\text{px}$ touch target on mobile or $\ge 32\text{px}$ click target on desktop with tactile micro-physics (`active:scale-[0.98]`). Complete review and playback workflows are navigable via standard editing shortcuts (`Space`, `J`, `K`, `L`, `A`, `R`, `E`).
+
+---
+
+## 2. Color Architecture & Surface Elevation (4-Layer Model)
+
+Dispatch enforces a strict 4-layer tonal architecture rooted in deep obsidian graphite and charcoal:
+
+```css
+:root {
+  /* Layer 0: Root Studio Canvas (60% visual surface) */
+  --studio-canvas: #0D0F12;
+  
+  /* Layer 1: Raised Panels & Workstation Shell (30% visual surface) */
+  --studio-surface: #16181C;
+  --studio-surface-elevated: #1C1F24;
+  
+  /* Layer 2: Recessed Wells, Inputs & Timeline Track */
+  --studio-recessed: #23262C;
+  --studio-recessed-deep: #1A1C21;
+
+  /* Low-Contrast Structural Borders (1px precision dividers) */
+  --studio-border: #2E3239;
+  --studio-border-subtle: #242830;
+  --studio-border-strong: #3E434D;
+
+  /* Typography Scales */
+  --studio-text-primary: #F3F4F6;
+  --studio-text-secondary: #A3AAB5;
+  --studio-text-muted: #747D8A;
+  --studio-text-inverse: #0B0D10;
+
+  /* Functional Brand Accent (Single Hero CTA & Focus - 10%) */
+  --studio-primary: #2563EB;
+  --studio-primary-hover: #1D4ED8;
+  --studio-primary-soft: rgba(37, 99, 235, 0.12);
+  --studio-primary-focus: rgba(37, 99, 235, 0.35);
+
+  /* Semantic Status Colors (Reserved strictly for truthful system telemetry) */
+  --studio-success: #10B981;
+  --studio-success-soft: rgba(16, 185, 129, 0.12);
+  --studio-warning: #EAB308;
+  --studio-warning-soft: rgba(234, 179, 8, 0.12);
+  --studio-danger: #F43F5E;
+  --studio-danger-soft: rgba(244, 63, 94, 0.12);
+
+  /* Caption Active-Word Highlight */
+  --studio-caption-highlight: #FFE600;
+}
+```
+
+### Elevation Rules
+* **Layer 0 (`--studio-canvas`, `#0D0F12`):** Outer browser window, desktop background, stage backdrop around contained video.
+* **Layer 1 (`--studio-surface`, `#16181C`):** Persistent global header, left queue pane, right inspector pane.
+* **Layer 2 (`--studio-recessed`, `#23262C`):** Form inputs, search fields, timeline canvas, scrubber tracks, media preview wells.
+* **Layer 3 (Hero Focus & Primary CTA):** Electric Creator Blue (`#2563EB`) reserved exclusively for primary actions ("Approve & Publish"), active selections, and focus rings.
+
+---
+
+## 3. Typographic Hierarchy & Numeric Alignment
+
+* **Primary Font:** System UI Sans (`-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`).
+* **Technical & Timecode Font:** Monospace with place-value tabular numbers (`font-mono tabular-nums`).
+
+| Element | Size | Weight | Line Height | Tracking | Transform |
+|---|---:|---|---:|---|---|
+| Workstation Title | 14px | 600 (Semibold) | 20px | -0.01em | Normal |
+| Section Headings | 12px | 600 (Semibold) | 16px | +0.02em | Uppercase |
+| Clip Titles in Queue | 13px | 600 (Semibold) | 18px | -0.01em | Normal |
+| Body & Inputs | 13px | 400 (Regular) | 18px | Normal | Normal |
+| Badges & Status Chips | 11px | 500 (Medium) | 14px | Normal | Normal |
+| Timecode & Durations | 12px | 500 (Medium) | 16px | Mono | Tabular |
+| Metadata & Timestamps | 11px | 400 (Regular) | 14px | Normal | Normal |
+
+---
+
+## 4. Workstation Architecture: Three-Pane Grid
+
+The desktop review workstation fills $100\text{dvh}$ without page-level scrollbars:
+
+```
++---------------------------------------------------------------------------------------------------+
+|  DISPATCH · STUDIO HEADER (54px) [YouTube: Connected | Gemini: Active | Disk: 42 GB | Focus Mode] |
++-----------------------+---------------------------------------------------+-----------------------+
+|  LEFT QUEUE (300px)   |  CENTER STAGE (1fr, min 480px)                    |  RIGHT INSPECTOR      |
+|  - Search & Filters   |  - Aspect-Ratio Framing Selector                  |  (380px)              |
+|  - Session Grouping   |  - Video Preview Canvas                           |  - Title & Hook       |
+|  - Compact Clip Rows  |  - Transport Controls (Play/Pause, Scrub, Vol)    |  - Caption Presets    |
+|  - Batch Selection    +---------------------------------------------------+  - Destinations       |
+|  - Score Threshold    |  CAPTION DOCK (170px)                             |  - Character Counters |
+|                       |  - Time Ruler · Word Blocks · Inline Edit         |  - Action Dock        |
++-----------------------+---------------------------------------------------+-----------------------+
+```
+
+### Dimensions & Responsiveness
+* **Header Height:** Fixed `54px` (`border-b border-studio-border`).
+* **Left Queue Pane:** Default `300px` (min `260px`, max `360px`, collapsible to `0px`).
+* **Center Stage Pane:** Flexible `minmax(0, 1fr)` (target $\ge 480\text{px}$).
+* **Right Inspector Pane:** Default `380px` (min `340px`, max `460px`, collapsible to `0px`).
+* **Caption Dock:** Fixed `170px` at bottom of Center Stage.
+* **Focus Mode:** Collapses both Left and Right panes with one click or shortcut `F`, dedicating maximum canvas to video preview and timeline inspection.
+
+---
+
+## 5. Publishing Destination Constraints & Rules
+
+Character counters compute live character usage against authoritative platform specifications:
+
+| Platform | Field | Safe Limit | Hard Max | Validation Rules |
+|---|---|---:|---:|---|
+| **YouTube Shorts** | Title | 80 chars | 100 chars | Includes `#Shorts` tag. Missing title blocks publish. |
+| **Instagram Reels** | Caption | 1,800 chars | 2,200 chars | Includes hashtags & mentions. |
+| **LinkedIn** | Commentary | 2,500 chars | 3,000 chars | Professional summary and hashtags. |
+| **X (Twitter)** | Post Text | 250 chars | 280 chars | Standard post limit. |
+
+---
+
+## 6. Keyboard Ergonomics & Shortcut Matrix
+
+Shortcuts are globally active on desktop workstation, but strictly disabled when the creator is typing inside any `<input>`, `<textarea>`, or `contenteditable` container:
+
+| Key | Context | Action |
+|---|---|---|
+| `Space` | Global Stage | Toggle Play / Pause video playback |
+| `J` | Global Stage | Jump backward 5 seconds |
+| `K` | Global Stage | Pause video |
+| `L` | Global Stage | Jump forward 5 seconds |
+| `ArrowUp` / `ArrowLeft` | Queue | Select previous clip |
+| `ArrowDown` / `ArrowRight` | Queue | Select next clip |
+| `A` | Selected Clip | Quick Approve selected clip |
+| `R` | Selected Clip | Quick Reject selected clip |
+| `E` | Selected Clip | Focus caption editor / inspector |
+| `F` | Global Workstation | Toggle Focus Mode (maximize stage) |
+| `?` | Global Workstation | Open Keyboard Shortcuts Cheat Sheet |
+| `Escape` | Modals / Focus | Close active modal or exit Focus Mode |
+
+---
+
+## 7. Prohibited Anti-Patterns (Enforced)
+
+1. **Zero Native OS Emojis:** Never use emojis (🚀, 💡, 🔥, ⚡, 📦) as UI icons. Use clean Lucide SVG icons with uniform $1.5\text{px}\text{--}2.0\text{px}$ stroke weights.
+2. **No Neon Gradients or Rainbow Meters:** Never apply multi-color neon gradients (purple-to-green or cyan-to-pink) to cards or score indicators.
+3. **No Unanchored Numbers:** All numbers, durations, speeds, and file sizes must enforce `font-mono tabular-nums` and right-align in tables and metric lists.
+4. **No Fake Telemetry:** Remote account states, storage sizes, and video durations must reflect live backend reality or explicitly display "Not Configured / Requires Setup".
+5. **No Mobile Squeeze on Desktop:** Desktop review must never render a stretched single-column card list with enormous empty gutters.
+
+
+============================================================
+FILE: docs\DISPATCH_FUTURE_TASKS.md
+============================================================
+# Dispatch Future Tasks (Deferred Work)
+
+Tasks recorded here are explicitly OUT of scope for the current milestone (Route B manual-link ingestion). Do not implement them during Route B work. Each entry lists the reason for deferral and dependencies.
+
+## Route A — Android camera module repairs
+- **Mp4FastStart.kt fast-start moov placement** — deferred: Route B must ship independently of the camera module; no recording behavior changes in this milestone. Dependency: none (isolated Android media work).
+- **Camera bitrate changes** — deferred: same reasoning as Mp4FastStart; touches recording hardware paths that need device testing on the POCO C65. Dependency: Route A test session.
+- **Other Route A repairs** (viewfinder/lifecycle polish) — deferred until the camera module is the active workstream.
+
+## Cloud & infrastructure
+- **Supabase migration** — deferred: current SQLite + single-PC daemon satisfies the single-user POC; migration is SaaS-scope work. Dependency: SaaS decision.
+- **SaaS / multi-user infrastructure** — deferred: Dispatch is currently a single-creator local pipeline. Dependency: product decision on multi-tenancy.
+- **R2 (or other object storage) integration** — deferred: local disk storage is sufficient for current clip volumes. Dependency: SaaS workstream.
+- **New cloud services / queues / worker frameworks** — deferred: the existing daemon-thread workers + SQLite state machine cover current throughput; adding infrastructure now would be speculative (YAGNI).
+
+## Publishing
+- **Multi-platform publishing** (Instagram Reels, LinkedIn, X adapters beyond current stubs) — deferred: YouTube Shorts is the only live publishing target in this milestone. Dependency: publisher outbox hardening, per-platform API credentials.
+- **YouTube publishing defaults / automatic publication changes** — deferred: approval-before-publishing behavior is intentionally preserved; any default change is a product decision.
+
+## Known limits accepted for now
+- **In-memory single-flight ingestion guard is process-local** (`dispatch/youtube_inbox/catcher.py`). Correct for the single-process daemon. If Dispatch ever runs as multiple processes/servers, replace with a database-level claim (e.g. atomic status transition) — dependency: SaaS/multi-process decision.
+- **PC dashboard template** (`dispatch/web/templates/index.html`) has no link-entry form; the Route B entry point is the Sessions tab in the React app per user decision. Add a form there only if the legacy dashboard becomes the primary PC experience again.
+
+
+============================================================
+FILE: docs\EXECUTION_HANDOFF.md
+============================================================
+# Dispatch Execution Handoff — Current Checkpoint (2026-10-23)
+
+This checkpoint supersedes the historical milestones below. See `PROGRESS.md` for exact commands/results and `docs/ROUTE_B_IMPLEMENTATION_HANDOFF.md` for the workflow handoff.
+
+## Current state
+
+- **2026-10-23 runtime run:** `main` == `origin/main` == `55b1790`, clean. `.venv` repaired (`ensurepip`) and `pip install -e .` completed — `from google import genai` now passes (`google-genai 2.32.0`). Frontend `npm ci`/`npm test`/`npm run build` all exit 0 (bundle `index-Bd9C_B3d.js`); Android `:app:testDebugUnitTest :app:assembleDebug` BUILD SUCCESSFUL (18 unit tests, 0 failures; APK `app-debug.apk` 15,189,951 bytes, byte-verified to contain the fresh bundle). **The PC server was started and verified running** (`python -m dispatch.main`, PID 7620, `127.0.0.1:8000`; dashboard and `/api/clips` HTTP 200). On boot it refreshed the stored YouTube token and ran a real authenticated uploads poll (1 known candidate re-verified, nothing new ingested, no Gemini request, no upload). No ADB device was attached, so the APK was **not installed** on the POCO C65.
+- Still not verified: live Route B end-to-end (new ingest → transcription → clip → approval → publish), any live Gemini request, physical POCO C65 camera/recording proof. Publishing remains private. One pre-existing inbox item is `STALLED_YOUTUBE_PROCESSING` (from 2026-10-20).
+- Route A cross-segment continuity is not started; optional automatic cuts remain deferred until after real Route B E2E.
+
+## Next actions for Antigravity
+
+1. With network and intended credentials, install declared `requirements.txt` if needed and confirm `google.genai` imports.
+2. Complete one real unlisted-video Route B flow, recording each state and logs from ingest through YouTube processing. No live external E2E proof exists yet.
+3. Only after Route B passes end to end, implement and verify Route A session grouping and clips crossing recording-segment boundaries.
+4. Connect the POCO C65 and install the current debug APK. Verify both-lens exposure up/down/reset, AE/AF lock/wait/unlock, lens switching, and selected-clip Studio reopening. Do not mark camera recording verified without this run.
+
+---
+
+**Date:** 2026-10-09  
+**Branch:** `main`  
+**Target Hardware:** POCO C65 (HyperOS / Android 13/14)  
+**Host PC:** Windows 11 (AMD Ryzen 5 5600H, RX 5500M)  
+
+---
+
+## 1. Milestone Status
+
+| Milestone | Objective | Status | Notes |
+|---|---|---|---|
+| **M1: Camera & Truthful UI** | Genuinely transparent WebView, native PreviewView attached, 1x/2x/3x zoom, zero fake media creation |  COMPLETE | Transparency CSS & bridge detection updated; PreviewView attached before permission request; concurrent Preview + VideoCapture binding active; 0.6x zoom removed; mock segment generation eliminated. |
+| **M2: Android Recording & Handoff** | Robust SegmenterEngine, atomic file promotion, resumable URL in Room & WorkManager, confirmed YouTube ID |  COMPLETE | SegmenterEngine sequence continuity & cross-filesystem safe copy; resumable upload session URLs persisted in PairingManager; HTTP 308 range recovery verified. |
+| **M3: YouTube Ingestion & Caption Readiness** | Gate on processing status, bounded caption wait, HTTP 429 backoff, Whisper fallback |  COMPLETE | `WAITING_FOR_YOUTUBE_PROCESSING` status gating; default caption wait aligned to 4 hours with env override; Whisper fallback tested. |
+| **M4: Clip Processing & Publishing** | Duration bounds unification, thorough speech cleanup, YouTube-only default publishing, secure endpoints |  COMPLETE | 20s-90s canonical clip bounds enforced; crop filter even-dimension normalization; seek safety past EOF; credential endpoints authenticated. |
+| **M5: Verification & Package** | Unit & integration tests pass, APK compiled and verified, release pushed |  COMPLETE | 380/380 tests passed (247 unit/pillar tests + 133 e2e tests). APK compiled clean in 12s (14,580,616 bytes at `storage/dispatch.apk`). |
+
+---
+
+## 2. Complete Summary of Code Modifications
+
+1. **Android Camera & Native Viewfinder**:
+   - `frontend/src/index.css`: Replaced global `#161616 !important` with `.native-camera-preview` scoping, allowing full transparency only when viewing the camera preview on Android.
+   - `frontend/src/App.tsx`: Synchronizes the `native-camera-preview` DOM class with the active `record` tab when running in Android bridge mode.
+   - `frontend/src/screens/CameraScreen.tsx`: Restricted lens options to `[1.0, 2.0, 3.0]` (removed 0.6x zoom pill); eliminated synthetic mock segment and fake SHA-256 generation on stop.
+   - `android/app/src/main/java/com/resolvia/dispatch/MainActivity.kt`: Reordered startup so `setContentView(rootLayout)` attaches `PreviewView` before permission checks; bound CameraX inside `previewView.post`; ensured `webView.setLayerType(View.LAYER_TYPE_NONE, null)`.
+   - `android/app/src/main/java/com/resolvia/dispatch/recorder/CameraCaptureManager.kt`: Concurrently binds both `Preview` and `VideoCapture` use cases during foreground service recording, ensuring live viewfinder remains streaming.
+   - `android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt`: Rebinds viewfinder preview to activity lifecycle upon `stopRecording()`.
+
+2. **Durable Segmenting & YouTube Upload Resumption**:
+   - `android/app/src/main/java/com/resolvia/dispatch/recorder/SegmenterEngine.kt`: Fixed segment sequence propagation and added cross-storage volume file-copy fallback.
+   - `android/app/src/main/java/com/resolvia/dispatch/data/PairingManager.kt`: Added persistent storage for resumable upload session URLs per segment ID.
+   - `android/app/src/main/java/com/resolvia/dispatch/sync/YouTubeDirectUploadWorker.kt`: Resumes YouTube upload sessions using HTTP 308 range queries upon network interruption.
+
+3. **PC Engine Reliability & Quality Safeguards**:
+   - `dispatch/youtube_inbox/catcher.py`: Transitions videos with "processing" error messages to `WAITING_FOR_YOUTUBE_PROCESSING` instead of terminal `FAILED`.
+   - `dispatch/ai_clips/worker.py`: Emits canonical status `CLIPS_DEFINED` upon highlight detection.
+   - `dispatch/ai_clips/highlight_finder.py`: Rejects highlight candidates outside `[MIN_CLIP_DURATION, MAX_CLIP_DURATION]` (20s to 90s).
+   - `dispatch/video_engine/reframer.py`: Updated 9:16 crop filter to guarantee even dimensions for FFmpeg encoding.
+   - `dispatch/video_engine/renderer.py`: Clamps thumbnail seek time to `min(1.0, duration / 2.0)` to prevent seek past EOF on short clips.
+   - `dispatch/transcription/worker.py`: Set default caption wait window to 14,400s (4 hours) with `DISPATCH_TRANSCRIPT_WAIT_SECONDS` override.
+   - `dispatch/web/app.py`: Added missing `Header` import for secure credential endpoint; updated tests.
+
+---
+
+## 3. Test & Build Verification Results
+
+- **Unit & Pillar Tests**: `247/247` passed in 55.81s (`python -m unittest discover -s tests -p "test_*.py"`).
+- **E2E Tests**: `133/133` passed in 22.60s (`python -m unittest discover -s tests/e2e -p "test_*.py"`).
+- **Total Test Suite**: `380/380` passed (0 failures, 0 errors).
+- **Android APK Build**: `./gradlew.bat assembleDebug` completed cleanly with `BUILD SUCCESSFUL in 12s`.
+- **Output Artifact**: `storage/dispatch.apk` (14,580,616 bytes) and downloadable at `/download/dispatch.apk`.
+

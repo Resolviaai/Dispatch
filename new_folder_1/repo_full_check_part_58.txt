@@ -1,0 +1,2044 @@
+﻿
+============================================================
+FILE: tests\test_transcription.py
+============================================================
+"""Unit test for audio extraction and transcription."""
+import unittest
+import subprocess
+from pathlib import Path
+from dispatch.config import PROCESSING_DIR
+from dispatch.transcription.audio import extract_audio
+from dispatch.db import init_db
+
+
+class TestTranscription(unittest.TestCase):
+    def setUp(self):
+        init_db()
+
+    def test_audio(self):
+        test_video = PROCESSING_DIR / "test_audio_vid.mp4"
+        
+        # Generate 1-second video with sine wave audio
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "1",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(test_video)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        
+        # 1. Test audio extraction
+        wav_path = extract_audio(test_video)
+        self.assertTrue(wav_path.exists(), "Extracted WAV does not exist")
+        self.assertGreater(wav_path.stat().st_size, 1000, "WAV size suspiciously small")
+        
+        # Clean up test artifacts
+        wav_path.unlink()
+        test_video.unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+============================================================
+FILE: tests\test_transport.py
+============================================================
+"""Unit test for Phase 6: Remote Connectivity & Transport Abstraction."""
+import unittest
+from unittest.mock import patch, MagicMock
+
+from dispatch.transport.transport_manager import (
+    TransportManager,
+    EndpointCandidate,
+    NetworkPolicy
+)
+
+
+class TestTransportManager(unittest.TestCase):
+    def setUp(self):
+        self.auth_token = "secret_paired_token_123"
+        self.manager = TransportManager(
+            auth_token=self.auth_token,
+            lan_url="http://192.168.1.50:8765",
+            tailscale_url="http://laptop.tailscale.net:8765"
+        )
+
+    def test_auth_headers(self):
+        headers = self.manager.get_auth_headers()
+        self.assertEqual(headers["X-Dispatch-Device-Token"], self.auth_token)
+        self.assertIn("X-Dispatch-Client", headers)
+
+    def test_network_policy_evaluation(self):
+        # 1. Disconnected
+        allowed, reason = self.manager.evaluate_network_policy("none")
+        self.assertFalse(allowed)
+
+        # 2. Wi-Fi allowed
+        allowed, reason = self.manager.evaluate_network_policy("wifi")
+        self.assertTrue(allowed)
+
+        # 3. Roaming blocked
+        allowed, reason = self.manager.evaluate_network_policy("wifi", is_roaming=True)
+        self.assertFalse(allowed)
+        self.assertIn("roaming", reason.lower())
+
+        # 4. Cellular disallowed by default
+        allowed, reason = self.manager.evaluate_network_policy("cellular")
+        self.assertFalse(allowed)
+        self.assertIn("cellular sync is disabled", reason.lower())
+
+        # 5. Cellular allowed if policy enables it
+        manager_cell = TransportManager(
+            auth_token=self.auth_token,
+            policy=NetworkPolicy(allow_cellular=True, wifi_only=False)
+        )
+        allowed, reason = manager_cell.evaluate_network_policy("cellular")
+        self.assertTrue(allowed)
+
+    def test_route_probing_and_failover(self):
+        # Case 1: Both LAN and Tailscale online -> LAN preferred (priority 1)
+        def mock_requests_get(url, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"status": "online"}
+            return mock_resp
+
+        with patch("requests.get", side_effect=mock_requests_get):
+            best = self.manager.select_best_endpoint()
+            self.assertIsNotNone(best)
+            self.assertEqual(best.name, "lan")
+            self.assertEqual(best.url, "http://192.168.1.50:8765")
+
+        # Case 2: LAN offline, Tailscale online -> Auto failover to Tailscale
+        def mock_lan_down_get(url, **kwargs):
+            if "192.168" in url:
+                raise ConnectionError("Host unreachable on local LAN")
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"status": "online"}
+            return mock_resp
+
+        with patch("requests.get", side_effect=mock_lan_down_get):
+            best = self.manager.select_best_endpoint()
+            self.assertIsNotNone(best)
+            self.assertEqual(best.name, "tailscale")
+            self.assertEqual(best.url, "http://laptop.tailscale.net:8765")
+
+        # Case 3: Both offline -> None returned (safe queue in phone outbox)
+        with patch("requests.get", side_effect=ConnectionError("All networks down")):
+            best = self.manager.select_best_endpoint()
+            self.assertIsNone(best)
+
+
+from fastapi.testclient import TestClient
+
+from dispatch.web.app import app
+from dispatch.sync.receiver import (
+    get_auth_token,
+    get_pairing_pin,
+    _FAILED_PIN_ATTEMPTS,
+    _PIN_LOCKOUTS,
+)
+from dispatch.transport.discovery import (
+    DiscoveryBeaconServer,
+    BEACON_MAGIC,
+    SERVICE_VERSION,
+)
+
+
+class TestDiscoveryAndPairingSecurity(unittest.TestCase):
+    def setUp(self):
+        # Client simulating a remote phone / LAN device
+        self.lan_client = TestClient(app, client=("192.168.1.100", 50000))
+        # Client simulating laptop localhost
+        self.local_client = TestClient(app, client=("127.0.0.1", 50000))
+        self.expected_token = get_auth_token()
+        self.expected_pin = get_pairing_pin()
+        _FAILED_PIN_ATTEMPTS.clear()
+        _PIN_LOCKOUTS.clear()
+
+    def test_udp_discovery_beacon_does_not_leak_auth_token(self):
+        """Milestone 1 Acceptance: UDP discovery beacon must NOT broadcast master auth token."""
+        server = DiscoveryBeaconServer()
+        payload = server._get_payload()
+        self.assertEqual(payload["magic"], BEACON_MAGIC)
+        self.assertEqual(payload["service"], "dispatch")
+        self.assertEqual(payload["version"], SERVICE_VERSION)
+        self.assertTrue(payload.get("pairing_required"))
+        self.assertIn("lan_url", payload)
+        self.assertIn("ip", payload)
+        self.assertIn("port", payload)
+        self.assertIn("hostname", payload)
+        # CRITICAL: auth_token must NOT be present in LAN UDP broadcast
+        self.assertNotIn("auth_token", payload, "UDP discovery beacon must not leak auth_token to LAN sniffers")
+        self.assertNotIn("token", payload)
+        self.assertNotIn(self.expected_token, str(payload))
+
+    def test_pairing_config_unauthenticated_lan_request_rejected(self):
+        """Milestone 1 Acceptance: Unauthenticated LAN requests return 401 without tokens."""
+        resp = self.lan_client.get("/api/sync/pairing/config")
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("WWW-Authenticate", resp.headers)
+        resp_data = resp.json()
+
+        # Absolute guarantee: no secrets in payload
+        self.assertNotIn("auth_token", resp_data)
+        self.assertNotIn("connection_string", resp_data)
+        self.assertNotIn("yt_token", resp_data)
+        self.assertNotIn("yt_refresh", resp_data)
+        self.assertNotIn("yt_client_id", resp_data)
+        self.assertNotIn("yt_client_secret", resp_data)
+        self.assertNotIn(self.expected_token, resp.text)
+
+    def test_pairing_config_masked_discovery_returns_200_without_secrets(self):
+        """Masked discovery mode returns 200 OK with null secrets for safe network probing."""
+        resp = self.lan_client.get("/api/sync/pairing/config?mask=true")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIsNone(data["auth_token"])
+        self.assertIsNone(data["pairing_pin"])
+        self.assertIsNone(data["connection_string"])
+        self.assertIsNone(data["yt_token"])
+        self.assertFalse(data["authenticated"])
+        self.assertTrue(data["requires_pairing"])
+        self.assertIn("lan_url", data)
+
+    def test_pairing_config_localhost_exemption_for_web_dashboard(self):
+        """Localhost web dashboard is exempt and receives pairing credentials."""
+        resp = self.local_client.get("/api/sync/pairing/config")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["auth_token"], self.expected_token)
+        self.assertEqual(data["pairing_pin"], self.expected_pin)
+        self.assertTrue(data["authenticated"])
+        self.assertIn("lan_url", data)
+        self.assertIn("connection_string", data)
+
+    def test_pairing_config_invalid_pin_or_token_rejected_with_401(self):
+        """Invalid PIN or invalid token from LAN must be rejected with 401."""
+        # Wrong PIN via header
+        resp_bad_pin = self.lan_client.get("/api/sync/pairing/config", headers={"x-pairing-pin": "000000"})
+        self.assertEqual(resp_bad_pin.status_code, 401)
+        self.assertIn("Invalid pairing PIN", resp_bad_pin.text)
+        self.assertIn("WWW-Authenticate", resp_bad_pin.headers)
+
+        # Wrong PIN via query param
+        resp_bad_pin_q = self.lan_client.get("/api/sync/pairing/config?pin=000000")
+        self.assertEqual(resp_bad_pin_q.status_code, 401)
+
+        # Wrong Auth Token
+        resp_bad_tok = self.lan_client.get("/api/sync/pairing/config", headers={"x-auth-token": "bad_token_123"})
+        self.assertEqual(resp_bad_tok.status_code, 401)
+        self.assertIn("Invalid authentication token", resp_bad_tok.text)
+
+    def test_pairing_config_authenticated_with_pin(self):
+        """Client providing valid 6-digit pairing PIN successfully authenticates and receives tokens."""
+        # Query parameter
+        resp_query = self.lan_client.get(f"/api/sync/pairing/config?pin={self.expected_pin}")
+        self.assertEqual(resp_query.status_code, 200)
+        self.assertEqual(resp_query.json()["auth_token"], self.expected_token)
+        self.assertIn("lan_url", resp_query.json())
+        self.assertTrue(resp_query.json()["authenticated"])
+
+        # Header parameter
+        resp_hdr = self.lan_client.get("/api/sync/pairing/config", headers={"x-pairing-pin": self.expected_pin})
+        self.assertEqual(resp_hdr.status_code, 200)
+        self.assertEqual(resp_hdr.json()["auth_token"], self.expected_token)
+
+    def test_pairing_config_authenticated_with_device_token(self):
+        """Previously paired client providing x-auth-token successfully retrieves current config."""
+        resp = self.lan_client.get("/api/sync/pairing/config", headers={"x-auth-token": self.expected_token})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["auth_token"], self.expected_token)
+
+    def test_pin_brute_force_lockout_returns_429(self):
+        """Brute-force protection: 5 failed PIN attempts results in 300s lockout returning 429."""
+        ip = "192.168.1.222"
+        attacker_client = TestClient(app, client=(ip, 50000))
+
+        # First 5 attempts return 401
+        for i in range(5):
+            res = attacker_client.get("/api/sync/pairing/config?pin=000000")
+            self.assertEqual(res.status_code, 401)
+
+        # 6th attempt must be locked out with 429 Too Many Requests
+        res_lockout = attacker_client.get("/api/sync/pairing/config?pin=000000")
+        self.assertEqual(res_lockout.status_code, 429)
+        self.assertIn("Too many failed pairing attempts", res_lockout.text)
+
+        # Even if attacker now supplies correct PIN, they remain locked out
+        res_locked_valid = attacker_client.get(f"/api/sync/pairing/config?pin={self.expected_pin}")
+        self.assertEqual(res_locked_valid.status_code, 429)
+
+    def test_pairing_handshake_endpoint(self):
+        """Explicit POST /api/sync/pairing/handshake endpoint."""
+        # Failure with wrong PIN
+        res_fail = self.lan_client.post("/api/sync/pairing/handshake", json={"pin": "wrong_pin", "client_name": "POCO C65"})
+        self.assertEqual(res_fail.status_code, 401)
+        self.assertIn("Invalid pairing PIN", res_fail.text)
+
+        # Success with valid PIN
+        res_ok = self.lan_client.post("/api/sync/pairing/handshake", json={"pin": self.expected_pin, "client_name": "POCO C65"})
+        self.assertEqual(res_ok.status_code, 200)
+        data = res_ok.json()
+        self.assertEqual(data["status"], "paired")
+        self.assertEqual(data["auth_token"], self.expected_token)
+        self.assertIn("lan_url", data)
+        self.assertIn("connection_string", data)
+
+    def test_simulated_android_discovery_and_handshake_flow(self):
+        """Simulate complete Android discovery & pairing flow."""
+        server = DiscoveryBeaconServer()
+        payload = server._get_payload()
+        discovered_ip = payload["ip"]
+        discovered_port = payload["port"]
+        discovered_url = payload["lan_url"]
+        self.assertTrue(discovered_ip and discovered_port)
+        self.assertTrue(payload.get("pairing_required"))
+
+        # Step 1: Android tests reachability on ping endpoint
+        ping_resp = self.lan_client.get("/api/sync/ping")
+        self.assertEqual(ping_resp.status_code, 200)
+        self.assertEqual(ping_resp.json()["status"], "online")
+
+        # Step 2: Unauthenticated probe fails with 401 (no leak)
+        unauth_resp = self.lan_client.get("/api/sync/pairing/config")
+        self.assertEqual(unauth_resp.status_code, 401)
+        self.assertNotIn("auth_token", unauth_resp.text)
+
+        # Step 3: Phone submits pairing PIN entered by user
+        pair_resp = self.lan_client.post("/api/sync/pairing/handshake", json={
+            "pin": self.expected_pin,
+            "client_name": "POCO C65"
+        })
+        self.assertEqual(pair_resp.status_code, 200)
+        acquired_token = pair_resp.json()["auth_token"]
+        self.assertEqual(acquired_token, self.expected_token)
+
+        # Step 4: Phone can now perform authenticated operations
+        auth_check = self.lan_client.get(
+            "/api/sync/verify-chunk?segment_id=dummy&sha256=none",
+            headers={"x-auth-token": acquired_token}
+        )
+        self.assertEqual(auth_check.status_code, 200)
+        self.assertFalse(auth_check.json()["verified"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_video_engine.py
+============================================================
+"""Unit test for video reframing, subtitle generation, and rendering."""
+import unittest
+import subprocess
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+from dispatch.config import PROCESSING_DIR, CLIPS_DIR
+from dispatch.video_engine.subtitle_generator import generate_ass_subtitles
+from dispatch.video_engine.reframer import build_filter_complex, escape_ffmpeg_filter_path
+from dispatch.video_engine.renderer import render_clip
+from dispatch.ingestion.validator import probe_video
+from dispatch.db import init_db, save_clip
+
+
+class TestVideoEngine(unittest.TestCase):
+    def setUp(self):
+        init_db()
+
+    def test_video_engine(self):
+        # 1. Generate 7-second 16:9 test video (1280x720) with audio
+        test_src = PROCESSING_DIR / "unit_test_render_src.mp4"
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "7",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(test_src)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        # 2. Mock transcript segments
+        mock_segments = [
+            {
+                "id": 0, "start": 0.5, "end": 5.5,
+                "text": "Yeh Dispatch automation test hai jo video engine ko verify karta hai",
+                "words": [
+                    {"word": "Yeh", "start": 0.5, "end": 0.8},
+                    {"word": "Dispatch", "start": 0.9, "end": 1.4},
+                    {"word": "automation", "start": 1.5, "end": 2.0},
+                    {"word": "test", "start": 2.1, "end": 2.4},
+                    {"word": "hai", "start": 2.5, "end": 3.0},
+                ]
+            }
+        ]
+
+        # Save mock clip in DB
+        clip_id = save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.5,
+            end_time=6.0,
+            title="Yeh Dispatch automation test hai",
+            hook="Opening test",
+            description="Description",
+            hashtags="#Test",
+            virality_score=88,
+            layout_mode="fit_blur"
+        )
+
+        # 3. Render clip
+        render_result = render_clip(
+            source_video=test_src,
+            clip_id=clip_id,
+            start_time=0.5,
+            end_time=6.0,
+            aspect_ratio="16:9",
+            layout_mode="fit_blur",
+            segments=mock_segments
+        )
+
+        out_video = render_result["video_path"]
+        out_thumb = render_result["thumbnail_path"]
+
+        self.assertTrue(out_video.exists(), f"Rendered video does not exist: {out_video}")
+        self.assertTrue(out_thumb.exists(), f"Thumbnail does not exist: {out_thumb}")
+
+        # 4. Probe rendered vertical video
+        valid, meta, err = probe_video(out_video)
+        self.assertTrue(valid, f"Rendered video is invalid: {err}")
+        self.assertEqual(meta["width"], 1080, f"Expected width 1080, got {meta['width']}")
+        self.assertEqual(meta["height"], 1920, f"Expected height 1920, got {meta['height']}")
+        self.assertEqual(meta["aspect_ratio"], "9:16", f"Expected 9:16, got {meta['aspect_ratio']}")
+
+        # Clean up test artifacts
+        test_src.unlink()
+        out_video.unlink()
+        out_thumb.unlink()
+
+    def test_final_caption_export_failure_stops_render(self):
+        from dispatch.captions import CaptionTrack
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.mp4"
+            source.write_bytes(b"source")
+            track = CaptionTrack(clip_id="caption_export_failure")
+
+            with patch("dispatch.ingestion.validator.inspect_video_orientation", return_value={
+                "valid": True,
+                "orientation": "landscape",
+                "has_audio": True,
+            }), patch("dispatch.captions.exporter.export_to_ass", side_effect=OSError("disk full")), \
+                 patch("dispatch.video_engine.renderer.subprocess.run") as ffmpeg:
+                with self.assertRaisesRegex(RuntimeError, "Final caption export failed"):
+                    render_clip(
+                        source_video=source,
+                        clip_id="caption_export_failure",
+                        start_time=0,
+                        end_time=10,
+                        layout_mode="fit_blur",
+                        subtitle_options={
+                            "enabled": True,
+                            "caption_track": track.to_dict(),
+                            "preserve_timing": True,
+                        },
+                    )
+
+            ffmpeg.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+============================================================
+FILE: tests\test_web.py
+============================================================
+import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+from dispatch.web.app import app
+from dispatch.db import init_db, save_clip, update_clip_media
+
+client = TestClient(app)
+
+class TestWebDashboard(unittest.TestCase):
+    def test_web_dashboard(self):
+        init_db()
+
+        # 1. Test homepage
+        res = client.get("/")
+        self.assertEqual(res.status_code, 200, f"Expected 200, got {res.status_code}")
+        self.assertIn("Dispatch", res.text)
+
+        # 2. Test status endpoint
+        res = client.get("/api/status")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("disk_free_gb", data)
+        self.assertIn("ready_clips", data)
+
+        # 3. Create a test clip and verify list endpoint
+        clip_id = save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=1.0,
+            end_time=25.0,
+            title="Web test clip title",
+            hook="Opening test",
+            description="Description",
+            hashtags="#Test",
+            virality_score=85,
+            layout_mode="fit_blur"
+        )
+
+        res = client.get("/api/clips")
+        self.assertEqual(res.status_code, 200)
+        clips_data = res.json()
+        clip_ids = [c["id"] for c in clips_data["ready"]]
+        self.assertIn(clip_id, clip_ids, f"Clip {clip_id} not found in ready list")
+
+        # 4. Test approval
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp4"
+            output = Path(tmp) / "rendered.mp4"
+            source.write_bytes(b"test source")
+
+            def render_for_test(**kwargs):
+                output.write_bytes(b"test rendered media")
+                update_clip_media(kwargs["clip_id"], str(output), None, kwargs["layout_mode"])
+                return {"video_path": str(output)}
+
+            with patch("dispatch.web.app.resolve_clip_source_path", return_value=source), \
+                 patch("dispatch.web.app.render_clip", side_effect=render_for_test), \
+                 patch("dispatch.ingestion.validator.probe_video", return_value=(True, {"duration": 24.0}, None)):
+                res = client.post(f"/api/clips/{clip_id}/approve", json={
+                    "title": "Approved Title",
+                    "hashtags": "#Approved",
+                    "publish_mode": "private",
+                    "platforms": "youtube,instagram"
+                })
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "success")
+
+        # 5. Test pipeline jobs endpoint
+        res = client.get("/api/pipeline/jobs")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("jobs", res.json())
+
+        # 6. Test integrations status endpoint
+        res = client.get("/api/integrations/status")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("youtube", res.json())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_youtube_auth_pairing.py
+============================================================
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from dispatch.sync.pairing_codes import (
+    PairingCodeError,
+    consume_pairing_code,
+    issue_pairing_code,
+    reset_pairing_codes_for_tests,
+)
+from scripts import auth_youtube
+
+
+class YouTubeAuthTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent)
+        self.root = Path(self.temp_dir.name)
+        (self.root / "client_secrets.json").write_text("{}", encoding="utf-8")
+        self.token_file = self.root / "youtube_token.json"
+        self.token_file.write_text("old-token", encoding="utf-8")
+        self.credentials = MagicMock(refresh_token="refresh", to_json=lambda: '{"token":"new"}')
+        self.flow = MagicMock()
+        self.flow.run_local_server.return_value = self.credentials
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _run_auth(self, channels_result):
+        service = MagicMock()
+        service.channels.return_value.list.return_value.execute.return_value = channels_result
+        with patch.object(auth_youtube, "ROOT_DIR", self.root), \
+             patch.object(auth_youtube, "CLIENT_SECRETS_FILE", self.root / "client_secrets.json"), \
+             patch.object(auth_youtube, "TOKEN_FILE", self.token_file), \
+             patch("google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file", return_value=self.flow), \
+             patch("googleapiclient.discovery.build", return_value=service):
+            return auth_youtube.run_authentication()
+
+    def test_token_is_saved_only_after_channel_verification(self):
+        with self.assertRaises(RuntimeError):
+            self._run_auth({"items": []})
+        self.assertEqual(self.token_file.read_text(encoding="utf-8"), "old-token")
+
+        channel = self._run_auth({"items": [{"id": "channel-id", "snippet": {"title": "Channel"}}]})
+        self.assertEqual(channel["channel_id"], "channel-id")
+        self.assertEqual(json.loads(self.token_file.read_text(encoding="utf-8")), {"token": "new"})
+
+
+class PairingCodeTests(unittest.TestCase):
+    def setUp(self):
+        reset_pairing_codes_for_tests()
+
+    def tearDown(self):
+        reset_pairing_codes_for_tests()
+
+    def test_generated_code_is_strictly_four_numeric_digits(self):
+        """Verify that every generated code contains exactly four numeric digits."""
+        for _ in range(50):
+            code, expiry = issue_pairing_code()
+            self.assertEqual(len(code), 4, f"Generated code {code} is not 4 digits")
+            self.assertTrue(code.isdigit(), f"Generated code {code} is not all digits")
+            self.assertEqual(expiry, 300)
+
+    def test_code_with_leading_zeros_accepted(self):
+        """Verify codes with leading zeros, such as '0047', are properly accepted."""
+        with patch("secrets.randbelow", return_value=47):
+            code, _ = issue_pairing_code()
+            self.assertEqual(code, "0047")
+            # Should consume without error
+            consume_pairing_code("0047", "192.168.1.50")
+
+    def test_invalid_length_and_non_numeric_codes_rejected(self):
+        """Reject 3-digit, 5-digit, and non-numeric codes."""
+        code, _ = issue_pairing_code()
+        
+        # 3 digits
+        with self.assertRaises(PairingCodeError):
+            consume_pairing_code("123", "192.168.1.50")
+        
+        # 5 digits
+        with self.assertRaises(PairingCodeError):
+            consume_pairing_code("12345", "192.168.1.50")
+            
+        # Non-numeric
+        with self.assertRaises(PairingCodeError):
+            consume_pairing_code("abcd", "192.168.1.50")
+        with self.assertRaises(PairingCodeError):
+            consume_pairing_code("12a4", "192.168.1.50")
+
+    def test_code_is_single_use(self):
+        """Verify single-use behavior."""
+        code, expiry = issue_pairing_code()
+        self.assertEqual(expiry, 300)
+        consume_pairing_code(code, "192.168.1.20")
+        with self.assertRaises(PairingCodeError):
+            consume_pairing_code(code, "192.168.1.20")
+
+    def test_code_expiry(self):
+        """Verify code expires after TTL."""
+        import dispatch.sync.pairing_codes as pc
+        code, _ = issue_pairing_code()
+        # Simulate time passing past TTL
+        with patch("time.monotonic", return_value=pc._active_code_expires_at + 1):
+            with self.assertRaises(PairingCodeError) as ctx:
+                consume_pairing_code(code, "192.168.1.20")
+            self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_lockout_protection_after_five_failed_attempts(self):
+        """Verify IP lockout after 5 consecutive invalid attempts."""
+        code, _ = issue_pairing_code()
+        client_ip = "192.168.1.99"
+        
+        # 4 failed attempts
+        for _ in range(4):
+            with self.assertRaises(PairingCodeError) as ctx:
+                consume_pairing_code("0000" if code != "0000" else "9999", client_ip)
+            self.assertEqual(ctx.exception.status_code, 401)
+            
+        # 5th failed attempt triggers lockout
+        with self.assertRaises(PairingCodeError) as ctx:
+            consume_pairing_code("0000" if code != "0000" else "9999", client_ip)
+        self.assertEqual(ctx.exception.status_code, 401)
+        
+        # Subsequent attempt (even with valid code!) is locked out with 429
+        with self.assertRaises(PairingCodeError) as ctx:
+            consume_pairing_code(code, client_ip)
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertIn("Too many incorrect pairing attempts", str(ctx.exception))
+
+    def test_complete_pc_generation_to_phone_pairing_flow(self):
+        """REMOVED-FLOW CONTRACT (2026-10-24 pivot): PC->phone credential pairing no
+        longer exists; on-device OAuth replaces it. Both routes fail closed with 410
+        and NEVER return credential material under any input."""
+        from fastapi.testclient import TestClient
+        from dispatch.web.app import app
+        client = TestClient(app)
+        pc_resp = client.post(
+            "/api/integrations/youtube/pairing-code",
+            json={"understands_http_risk": True},
+            headers={"host": "localhost:8000"}
+        )
+        self.assertEqual(pc_resp.status_code, 410)
+        phone_resp = client.post(
+            "/api/youtube/credentials",
+            json={"pairing_code": "1234"},
+        )
+        self.assertEqual(phone_resp.status_code, 410)
+        for body in (pc_resp.text, phone_resp.text):
+            for marker in ("refresh_token", "client_secret", "mock-refresh-token"):
+                self.assertNotIn(marker, body)
+
+
+============================================================
+FILE: tests\test_youtube_caption_timing_fix.py
+============================================================
+"""Acceptance Test Suite for YouTube Caption Timing & Karaoke Grouping.
+Validates:
+1. Word-timed VTT preserves real word boundaries through export.
+2. Phrase-only VTT does not produce fabricated exact word timings.
+3. Three-word caption grouping does not alter source timestamps.
+4. Clip trimming does not introduce a constant timing offset.
+5. Preview and rendered output stay synchronized.
+6. Missing YouTube captions never trigger local Whisper.
+7. Existing caption editing and Apply to All styling continue to work.
+"""
+import unittest
+import tempfile
+import json
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+from datetime import datetime, timezone, timedelta
+
+from dispatch.youtube_inbox.vtt_parser import parse_vtt_content
+from dispatch.captions.model import CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig
+from dispatch.captions.grouper import group_words_into_captions
+from dispatch.captions.exporter import export_to_ass
+from dispatch.transcription.worker import TranscriptionWorker
+from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
+from dispatch import db
+
+
+class TestYouTubeCaptionTimingFix(unittest.TestCase):
+
+    def setUp(self):
+        # Configure test database in-memory or isolated
+        pass
+
+    def test_1_word_timed_vtt_preserves_real_word_boundaries_through_export(self):
+        """1. Word-timed VTT preserves the real word boundaries through export."""
+        vtt_content = """WEBVTT
+
+00:00:01.000 --> 00:00:03.500
+<00:00:01.000><c> Hello</c><00:00:01.500><c> world</c><00:00:02.000><c> welcome</c>
+"""
+        segments = parse_vtt_content(vtt_content)
+        self.assertEqual(len(segments), 1)
+        seg = segments[0]
+        self.assertTrue(seg.get("has_word_timestamps"))
+        self.assertEqual(len(seg["words"]), 3)
+
+        # Check real boundaries from VTT tags
+        w0 = seg["words"][0]
+        w1 = seg["words"][1]
+        w2 = seg["words"][2]
+
+        self.assertEqual(w0["word"], "Hello")
+        self.assertEqual(w0["start"], 1.000)
+        self.assertEqual(w0["end"], 1.500)
+        self.assertTrue(w0["is_exact"])
+
+        self.assertEqual(w1["word"], "world")
+        self.assertEqual(w1["start"], 1.500)
+        self.assertEqual(w1["end"], 2.000)
+        self.assertTrue(w1["is_exact"])
+
+        self.assertEqual(w2["word"], "welcome")
+        self.assertEqual(w2["start"], 2.000)
+        self.assertEqual(w2["end"], 3.500)
+        self.assertTrue(w2["is_exact"])
+
+        # Group words into captions
+        track = group_words_into_captions(segments, clip_start=0.0, clip_end=5.0)
+        self.assertEqual(len(track.groups), 1)
+        grp = track.groups[0]
+        self.assertTrue(grp.has_word_timing)
+        self.assertEqual(grp.timing_mode, "word")
+
+        # Export to ASS
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ass_path = Path(tmpdir) / "test.ass"
+            export_to_ass(track, ass_path)
+            content = ass_path.read_text(encoding="utf-8")
+
+            # Dialogue events must reflect authentic word boundaries:
+            # Word 0: 1.00s -> 1.50s (0:00:01.00 -> 0:00:01.50)
+            self.assertIn("Dialogue: 0,0:00:01.00,0:00:01.50", content)
+            # Word 1: 1.50s -> 2.00s (0:00:01.50 -> 0:00:02.00)
+            self.assertIn("Dialogue: 0,0:00:01.50,0:00:02.00", content)
+            # Word 2: 2.00s -> 3.50s (0:00:02.00 -> 0:00:03.50)
+            self.assertIn("Dialogue: 0,0:00:02.00,0:00:03.50", content)
+
+    def test_2_phrase_only_vtt_does_not_produce_fabricated_exact_word_timings(self):
+        """2. Phrase-only VTT does not produce fabricated exact word timings."""
+        vtt_content = """WEBVTT
+
+00:00:01.000 --> 00:00:04.000
+This is a standard YouTube manual caption.
+"""
+        segments = parse_vtt_content(vtt_content)
+        self.assertEqual(len(segments), 1)
+        seg = segments[0]
+        # Must NOT be marked as having authentic word timestamps
+        self.assertFalse(seg.get("has_word_timestamps"))
+
+        # Words must have is_exact=False and NOT have divided progressive timestamps
+        words = seg["words"]
+        for w in words:
+            self.assertFalse(w["is_exact"])
+            # Duration must not be linearly divided (e.g. 1.0 -> 1.57, 1.57 -> 2.14)
+            self.assertEqual(w["start"], 1.000)
+            self.assertEqual(w["end"], 4.000)
+
+        # Group words into captions
+        track = group_words_into_captions(segments, clip_start=0.0, clip_end=5.0)
+        self.assertEqual(len(track.groups), 1)
+        grp = track.groups[0]
+        self.assertFalse(grp.has_word_timing)
+        self.assertEqual(grp.timing_mode, "phrase")
+
+        # Export to ASS must render as single phrase dialogue without karaoke flashing
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ass_path = Path(tmpdir) / "phrase.ass"
+            export_to_ass(track, ass_path)
+            content = ass_path.read_text(encoding="utf-8")
+            dialogue_lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
+            # Exactly 1 dialogue event for the phrase, not 7 events for each word
+            self.assertEqual(len(dialogue_lines), 1)
+            self.assertIn("0:00:01.00,0:00:04.00", dialogue_lines[0])
+            # ASS uses \N as an explicit visual line break; normalize it when
+            # asserting that phrase-mode text is preserved in one dialogue event.
+            dialogue_text = dialogue_lines[0].replace(r"\N", " ")
+            self.assertIn("THIS IS A STANDARD YOUTUBE MANUAL CAPTION.", dialogue_text)
+
+    def test_3_three_word_caption_grouping_does_not_alter_source_timestamps(self):
+        """3. Three-word caption grouping does not alter source timestamps."""
+        raw_segments = [
+            {
+                "start": 1.0,
+                "end": 2.1,
+                "words": [
+                    {"word": "One", "start": 1.000, "end": 1.300, "is_exact": True},
+                    {"word": "Two", "start": 1.400, "end": 1.700, "is_exact": True},
+                    {"word": "Three", "start": 1.800, "end": 2.100, "is_exact": True},
+                ]
+            },
+            {
+                "start": 2.25,
+                "end": 3.0,
+                "words": [
+                    {"word": "Next", "start": 2.250, "end": 2.800, "is_exact": True}
+                ]
+            }
+        ]
+
+        # Group into captions (gap between 2.100 and 2.250 is 0.15s < 0.25s, so card end will stretch)
+        track = group_words_into_captions(raw_segments, clip_start=0.0, clip_end=5.0, words_per_group=3)
+        self.assertEqual(len(track.groups), 2)
+
+        grp0 = track.groups[0]
+        # Card end was stretched to 2.25 to prevent visual gap flicker
+        self.assertEqual(grp0.end, 2.250)
+
+        # BUT the 3rd word's authentic source timestamp MUST remain untouched!
+        w_last = grp0.words[2]
+        self.assertEqual(w_last.text, "Three")
+        self.assertEqual(w_last.start, 1.800)
+        self.assertEqual(w_last.end, 2.100, "Source word timestamp must NOT be mutated by gap closure!")
+
+    def test_4_clip_trimming_does_not_introduce_constant_timing_offset(self):
+        """4. Clip trimming does not introduce a constant timing offset."""
+        # Absolute source video timestamps: 45.0s to 50.0s
+        raw_segments = [
+            {
+                "start": 45.0,
+                "end": 47.0,
+                "words": [
+                    {"word": "Highlight", "start": 45.200, "end": 45.800, "is_exact": True},
+                    {"word": "moment", "start": 46.000, "end": 46.700, "is_exact": True}
+                ]
+            }
+        ]
+
+        # Clip trimmed with clip_start=40.0s
+        track = group_words_into_captions(raw_segments, clip_start=40.0, clip_end=55.0)
+        self.assertEqual(len(track.groups), 1)
+        w0 = track.groups[0].words[0]
+        w1 = track.groups[0].words[1]
+
+        # Converted to clip-relative time exactly once: 45.2 - 40.0 = 5.2s
+        self.assertAlmostEqual(w0.start, 5.200, places=3)
+        self.assertAlmostEqual(w0.end, 5.800, places=3)
+        self.assertAlmostEqual(w1.start, 6.000, places=3)
+        self.assertAlmostEqual(w1.end, 6.700, places=3)
+
+        # Check rolling cue deduplication does not introduce constant offset
+        rolling_vtt = """WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+First line
+
+00:00:02.000 --> 00:00:04.500
+First line second line
+"""
+        deduped = parse_vtt_content(rolling_vtt)
+        self.assertEqual(len(deduped), 2)
+        # First cue ends at 3.000s
+        self.assertEqual(deduped[0]["end"], 3.000)
+        # Second deduped cue "second line" must start at 3.000s, NOT at 2.000s (which would be 1.0s too early!)
+        self.assertEqual(deduped[1]["text"], "second line")
+        self.assertEqual(deduped[1]["start"], 3.000)
+
+    def test_5_preview_and_rendered_output_stay_synchronized(self):
+        """5. Preview and rendered output stay synchronized."""
+        raw_segments = [
+            {
+                "start": 10.0,
+                "end": 12.0,
+                "words": [
+                    {"word": "Sync", "start": 10.200, "end": 10.600, "is_exact": True},
+                    {"word": "test", "start": 10.700, "end": 11.200, "is_exact": True}
+                ]
+            }
+        ]
+        track = group_words_into_captions(raw_segments, clip_start=10.0, clip_end=15.0)
+        w0 = track.groups[0].words[0]
+        w1 = track.groups[0].words[1]
+
+        # Frontend preview uses currentTime >= w.start && currentTime <= w.end
+        # Preview active window for w0: [0.200, 0.600]
+        # Preview active window for w1: [0.700, 1.200]
+        self.assertEqual(w0.start, 0.200)
+        self.assertEqual(w0.end, 0.600)
+        self.assertEqual(w1.start, 0.700)
+        self.assertEqual(w1.end, 1.200)
+
+        # Exported ASS must have exact same timecodes
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ass_path = Path(tmpdir) / "sync.ass"
+            export_to_ass(track, ass_path)
+            content = ass_path.read_text(encoding="utf-8")
+
+            # Dialogue for w0 active illumination: 0:00:00.20 to 0:00:00.60
+            self.assertIn("Dialogue: 0,0:00:00.20,0:00:00.60", content)
+            # Dialogue for w1 active illumination: 0:00:00.70 to 0:00:01.20
+            self.assertIn("Dialogue: 0,0:00:00.70,0:00:01.20", content)
+
+    def test_6_missing_youtube_captions_never_trigger_local_whisper(self):
+        """6. Missing YouTube captions never trigger local Whisper."""
+        video_id = "test_no_whisper_yt"
+        db.register_youtube_video(video_id=video_id, title="No Whisper Video", duration=120.0)
+        past_deadline = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+        db.update_youtube_video(
+            video_id=video_id,
+            status="WAITING_FOR_TRANSCRIPT",
+            transcript_wait_deadline=past_deadline
+        )
+
+        mock_catcher = MagicMock()
+        mock_catcher.fetch_youtube_captions.return_value = None
+
+        with patch("dispatch.transcription.worker.transcribe_video") as mock_whisper:
+            worker = TranscriptionWorker(caption_wait_seconds=60, catcher=mock_catcher)
+            res = worker.process_pending()
+
+            # Whisper must NEVER be invoked!
+            mock_whisper.assert_not_called()
+
+            # Result must be CAPTIONS_UNAVAILABLE
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["status"], "CAPTIONS_UNAVAILABLE")
+
+        # Database record must reflect CAPTIONS_UNAVAILABLE
+        yt_rec = db.get_youtube_video(video_id)
+        self.assertEqual(yt_rec["status"], "CAPTIONS_UNAVAILABLE")
+        self.assertIn("unavailable", yt_rec["last_error"].lower())
+
+    def test_7_existing_caption_editing_and_apply_to_all_styling_continue_to_work(self):
+        """7. Existing caption editing and Apply to All styling continue to work."""
+        # Build multi-group track
+        g1 = CaptionGroup(
+            id="grp_1",
+            start=0.0,
+            end=2.0,
+            words=[Word(id="w1", text="First", start=0.0, end=1.0), Word(id="w2", text="card", start=1.0, end=2.0)],
+            style=StyleConfig(font_family="Impact", font_size=54, primary_color="#FFFFFF")
+        )
+        g2 = CaptionGroup(
+            id="grp_2",
+            start=2.5,
+            end=4.5,
+            words=[Word(id="w3", text="Second", start=2.5, end=3.5), Word(id="w4", text="card", start=3.5, end=4.5)],
+            style=StyleConfig(font_family="Roboto", font_size=42, primary_color="#00FF00")
+        )
+        track = CaptionTrack(clip_id="clip_apply_all", groups=[g1, g2])
+
+        # Test JSON round-trip
+        data = track.to_dict()
+        reconstituted = CaptionTrack.from_dict(data)
+
+        self.assertEqual(len(reconstituted.groups), 2)
+        self.assertEqual(reconstituted.groups[0].style.font_family, "Impact")
+        self.assertEqual(reconstituted.groups[1].style.font_family, "Roboto")
+        self.assertTrue(reconstituted.groups[0].has_word_timing)
+
+        # Simulate editing caption text
+        reconstituted.groups[0].words[0].text = "EditedFirst"
+        self.assertEqual(reconstituted.groups[0].words[0].text, "EditedFirst")
+
+        # Export to ASS works with custom styles
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ass_path = Path(tmpdir) / "edited.ass"
+            export_to_ass(reconstituted, ass_path)
+            content = ass_path.read_text(encoding="utf-8")
+            self.assertIn("EDITEDFIRST", content)
+            self.assertIn("SECOND", content)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_youtube_inbox.py
+============================================================
+"""Unit and Integration Tests for YouTube Cloud Inbox & Catcher Architecture.
+Verifies WebVTT subtitle parsing, database idempotency, video ID extraction,
+and end-to-end pipeline execution with YouTube captions and Whisper fallback.
+"""
+import unittest
+import tempfile
+import json
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from dispatch.youtube_inbox.vtt_parser import (
+    parse_timestamp_to_seconds,
+    clean_vtt_text,
+    parse_vtt_content,
+    parse_vtt_file
+)
+from dispatch.youtube_inbox.catcher import (
+    extract_youtube_video_id,
+    YouTubeInboxCatcher
+)
+from dispatch import db
+
+# Privacy-gate fixture: ingestion requires an allowed visibility verdict.
+patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
+
+class TestVTTParser(unittest.TestCase):
+    """Test WebVTT subtitle parsing and normalization."""
+
+    def test_parse_timestamp_to_seconds(self):
+        self.assertEqual(parse_timestamp_to_seconds("00", "01", "23", "456"), 83.456)
+        self.assertEqual(parse_timestamp_to_seconds(None, "02", "15", "500"), 135.5)
+        self.assertEqual(parse_timestamp_to_seconds("01", "00", "00", "000"), 3600.0)
+
+    def test_clean_vtt_text(self):
+        raw = "<c>Hello</c> &amp; <00:00:01.200>welcome align:start position:50%"
+        cleaned = clean_vtt_text(raw)
+        self.assertEqual(cleaned, "Hello & welcome")
+
+    def test_parse_vtt_content_deduplication_and_merging(self):
+        sample_vtt = """WEBVTT
+Kind: captions
+Language: en
+
+00:00:01.000 --> 00:00:03.000
+Here is the biggest mistake
+
+00:00:03.100 --> 00:00:05.500
+Here is the biggest mistake founders make
+
+00:00:06.000 --> 00:00:09.000
+They build before talking to users.
+"""
+        segments = parse_vtt_content(sample_vtt)
+        self.assertGreater(len(segments), 0)
+
+        # Ensure deduplicated: "founders make" should not repeat the whole prefix
+        full_text = " ".join(s["text"] for s in segments)
+        self.assertIn("biggest mistake", full_text)
+        self.assertIn("founders make", full_text)
+        self.assertIn("talking to users", full_text)
+
+        # Check word-level timestamps generated
+        for seg in segments:
+            self.assertIn("start", seg)
+            self.assertIn("end", seg)
+            self.assertIn("words", seg)
+            self.assertGreater(len(seg["words"]), 0)
+
+
+class TestYouTubeInboxDatabase(unittest.TestCase):
+    """Test SQLite database operations and idempotency for YouTube inbox."""
+
+    def setUp(self):
+        db.init_db()
+        with db.get_db_connection() as conn:
+            conn.execute("DELETE FROM youtube_inbox WHERE video_id LIKE 'test_vid_%'")
+            conn.execute("DELETE FROM youtube_inbox WHERE video_id LIKE 'mock_vid_%'")
+            conn.commit()
+
+    def test_idempotent_registration(self):
+        test_id = "test_vid_001"
+        # First registration should succeed
+        is_new = db.register_youtube_video(
+            video_id=test_id,
+            title="[DISPATCH] Test Video 1",
+            channel_id="UC12345",
+            upload_time="2026-10-06",
+            duration=45.0
+        )
+        self.assertTrue(is_new)
+
+        # Duplicate registration should return False (idempotent)
+        is_dup = db.register_youtube_video(
+            video_id=test_id,
+            title="[DISPATCH] Test Video 1 Duplicate",
+            channel_id="UC12345"
+        )
+        self.assertFalse(is_dup)
+
+        # Fetch and verify fields
+        record = db.get_youtube_video(test_id)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["title"], "[DISPATCH] Test Video 1")
+        self.assertEqual(record["status"], "DISCOVERED")
+
+        # Update status and check
+        db.update_youtube_video(test_id, status="CLIPS_CREATED", transcript_source="youtube")
+        updated = db.get_youtube_video(test_id)
+        self.assertEqual(updated["status"], "CLIPS_CREATED")
+        self.assertEqual(updated["transcript_source"], "youtube")
+        self.assertTrue(db.is_youtube_video_processed(test_id))
+
+
+class TestYouTubeCatcher(unittest.TestCase):
+    """Test video ID parsing, catcher methods, and mock end-to-end execution."""
+
+    def setUp(self):
+        db.init_db()
+        with db.get_db_connection() as conn:
+            conn.execute("DELETE FROM youtube_inbox WHERE video_id LIKE 'mock_vid_%'")
+            conn.commit()
+
+    def test_extract_youtube_video_id(self):
+        # Full URL
+        self.assertEqual(
+            extract_youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            "dQw4w9WgXcQ"
+        )
+        # Short URL
+        self.assertEqual(
+            extract_youtube_video_id("https://youtu.be/dQw4w9WgXcQ"),
+            "dQw4w9WgXcQ"
+        )
+        # Shorts URL
+        self.assertEqual(
+            extract_youtube_video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+            "dQw4w9WgXcQ"
+        )
+        # Raw 11-char ID
+        self.assertEqual(
+            extract_youtube_video_id("dQw4w9WgXcQ"),
+            "dQw4w9WgXcQ"
+        )
+        # Invalid URL
+        self.assertIsNone(extract_youtube_video_id("invalid-link"))
+
+    @patch("dispatch.youtube_inbox.catcher.identify_and_save_highlights")
+    @patch("dispatch.youtube_inbox.catcher.render_clip")
+    def test_process_video_mock_pipeline(self, mock_render, mock_highlights):
+        catcher = YouTubeInboxCatcher()
+        test_id = "mock_vid_99"
+
+        # Mock dependencies
+        catcher.fetch_video_info = MagicMock(return_value={
+            "id": test_id,
+            "title": "[DISPATCH] 2026-10-06 14:30 Work Session",
+            "channel_id": "UC_TEST",
+            "channel": "Test Channel",
+            "duration": 40.0,
+            "upload_date": "2026-10-06",
+            "description": "Autonomous Dispatch test"
+        })
+
+        # Mock download returning a dummy file
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            dummy_video_path = Path(f.name)
+        catcher.download_video = MagicMock(return_value=dummy_video_path)
+
+        # Mock captions returning structured segments
+        mock_segments = [
+            {"start": 0.0, "end": 15.0, "text": "Basically here is the trick to automate video production.", "words": []},
+            {"start": 15.0, "end": 35.0, "text": "You record on your phone, upload to YouTube private, and laptop catches it.", "words": []}
+        ]
+        catcher.fetch_youtube_captions = MagicMock(return_value=mock_segments)
+
+        # Mock highlight finder to register real clip in database
+        def fake_identify(chunk_id, session_id, segments, total_duration, publish_mode="private"):
+            cid = db.save_clip(
+                session_id=session_id,
+                chunk_id=chunk_id,
+                start_time=0.0,
+                end_time=15.0,
+                title="Mock Clip",
+                hook="Hook",
+                description="Desc",
+                hashtags="#Shorts",
+                virality_score=80,
+                layout_mode="fit_blur"
+            )
+            return [cid]
+
+        mock_highlights.side_effect = fake_identify
+
+        # Mock renderer
+        mock_render.return_value = {
+            "video_path": dummy_video_path,
+            "thumbnail_path": dummy_video_path.with_suffix(".jpg"),
+            "duration": 20.0
+        }
+
+        # Run process_video
+        result = catcher.process_video(f"https://youtu.be/{test_id}")
+
+        self.assertEqual(result["video_id"], test_id)
+        self.assertEqual(result["status"], "CLIPS_CREATED")
+        self.assertEqual(result["transcript_source"], "youtube")
+        self.assertEqual(result["clips_count"], 1)
+
+        # Verify database record updated
+        rec = db.get_youtube_video(test_id)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["status"], "CLIPS_CREATED")
+
+        # Verify idempotency on second call
+        second_result = catcher.process_video(f"https://youtu.be/{test_id}")
+        self.assertEqual(second_result["status"], "ALREADY_PROCESSED")
+
+        # Cleanup
+        try:
+            dummy_video_path.unlink()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_youtube_ingest_endpoint.py
+============================================================
+"""Route B regression tests: manual YouTube link ingestion via the real dashboard endpoint.
+
+Covers:
+  1. Invalid URL -> HTTP 400 and no ingestion started.
+  2. Valid submission -> HTTP 200 processing_queued and the real ingestion runs with the submitted URL.
+  3. Concurrent duplicate submission -> exactly one ingestion run (real single-flight guard,
+     exercised at both the catcher level and through the endpoint).
+  4. Download failure -> FAILED status with last_error visible via GET /api/youtube/inbox.
+  5. Re-submission of a video already processed by downstream workers (COMPLETED) -> no re-download.
+
+Only the network boundary (yt-dlp metadata/download, YouTube Data API status) is mocked;
+the endpoint, background threading, single-flight guard, DB state machine, and inbox API are real.
+"""
+import shutil
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+from dispatch import db
+from dispatch.web.app import app
+from dispatch.youtube_inbox.catcher import (
+    YouTubeInboxCatcher,
+    _INGEST_INFLIGHT,
+    is_ingestion_in_flight,
+)
+
+client = TestClient(app)
+
+
+class TestYouTubeIngestEndpoint(unittest.TestCase):
+
+    def setUp(self):
+        db.init_db()
+        self.temp_dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        with db.get_db_connection() as conn:
+            conn.execute("DELETE FROM youtube_inbox WHERE video_id LIKE 'tt_ep%'")
+        with _INGEST_INFLIGHT_LOCK_SAFE():
+            _INGEST_INFLIGHT.clear()
+
+    def test_01_invalid_url_rejected_with_400(self):
+        """1. An invalid URL is rejected with HTTP 400 and no ingestion is started."""
+        with patch.object(YouTubeInboxCatcher, "ingest_video") as mock_ingest:
+            res = client.post("/api/youtube/ingest", json={"url": "definitely not a youtube link"})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Invalid", res.json()["detail"])
+        mock_ingest.assert_not_called()
+
+    def test_02_valid_url_accepted_and_ingestion_started(self):
+        """2. A valid submission returns processing_queued and starts the real ingestion thread."""
+        vid = "tt_ep_20001"
+        started = threading.Event()
+        release = threading.Event()
+        captured = {}
+
+        def fake_ingest(self, url_or_id, **kwargs):
+            captured["url"] = url_or_id
+            started.set()
+            release.wait(timeout=5)
+            return {"video_id": vid, "status": "DOWNLOADED", "verified": True}
+
+        with patch.object(YouTubeInboxCatcher, "ingest_video", fake_ingest):
+            res = client.post("/api/youtube/ingest", json={"url": f"https://youtu.be/{vid}"})
+
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "processing_queued")
+        self.assertEqual(data["video_id"], vid)
+
+        self.assertTrue(started.wait(timeout=5), "Background ingestion thread did not start")
+        self.assertEqual(captured["url"], f"https://youtu.be/{vid}")
+        release.set()
+
+    def test_03_catcher_guard_allows_only_one_concurrent_run(self):
+        """3a. Two concurrent ingest_video calls for the same video: the second is refused
+        by the real single-flight guard and only one download runs."""
+        vid = "tt_ep_30001"
+        entered_fetch = threading.Event()
+        release_fetch = threading.Event()
+        download_calls = []
+
+        def fake_fetch_info(self, video_id):
+            entered_fetch.set()
+            release_fetch.wait(timeout=5)
+            return {"id": vid, "title": "Guard Test", "channel_id": "", "channel": "",
+                    "duration": 10.0, "upload_date": "", "description": ""}
+
+        def fake_download(self, video_id):
+            download_calls.append(video_id)
+            f = self.storage_dir / f"{video_id}.mp4"
+            f.write_bytes(b"x" * 2048)
+            return f
+
+        catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
+        results = {}
+
+        def run_once(key):
+            results[key] = catcher.ingest_video(vid)
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}), \
+             patch.object(YouTubeInboxCatcher, "fetch_video_info", fake_fetch_info), \
+             patch.object(YouTubeInboxCatcher, "download_video", fake_download), \
+             patch("dispatch.ingestion.validator.probe_video",
+                   return_value=(True, {"duration": 10.0, "width": 1080, "height": 1920}, None)):
+
+            t1 = threading.Thread(target=run_once, args=("first",))
+            t1.start()
+            self.assertTrue(entered_fetch.wait(timeout=5), "First ingestion never reached metadata fetch")
+            self.assertTrue(is_ingestion_in_flight(vid), "In-flight flag must be set during a run")
+
+            t2 = threading.Thread(target=run_once, args=("second",))
+            t2.start()
+            t2.join(timeout=5)
+            self.assertFalse(t2.is_alive())
+
+            self.assertEqual(results["second"]["status"], "ALREADY_INGESTING")
+            self.assertTrue(results["second"].get("duplicate"))
+
+            release_fetch.set()
+            t1.join(timeout=5)
+
+            self.assertEqual(results["first"]["status"], "DOWNLOADED")
+            self.assertEqual(download_calls, [vid], "Exactly one download run must occur")
+
+        self.assertFalse(is_ingestion_in_flight(vid), "Guard slot must be released in finally after completion")
+
+    def test_04_endpoint_reports_already_processing_for_in_flight_video(self):
+        """3b. A repeat POST while a real ingestion is in flight returns a distinct
+        already_processing status, not a second processing_queued run."""
+        vid = "tt_ep_40001"
+        entered_fetch = threading.Event()
+        release_fetch = threading.Event()
+
+        def fake_fetch_info(self, video_id):
+            entered_fetch.set()
+            release_fetch.wait(timeout=5)
+            return {"id": vid, "title": "Endpoint Guard Test", "channel_id": "", "channel": "",
+                    "duration": 10.0, "upload_date": "", "description": ""}
+
+        def fake_download(self, video_id):
+            f = self.storage_dir / f"{video_id}.mp4"
+            f.write_bytes(b"x" * 2048)
+            return f
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}), \
+             patch.object(YouTubeInboxCatcher, "fetch_video_info", fake_fetch_info), \
+             patch.object(YouTubeInboxCatcher, "download_video", fake_download), \
+             patch("dispatch.ingestion.validator.probe_video",
+                   return_value=(True, {"duration": 10.0, "width": 1080, "height": 1920}, None)):
+
+            first = client.post("/api/youtube/ingest", json={"url": f"https://youtu.be/{vid}"})
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["status"], "processing_queued")
+
+            self.assertTrue(entered_fetch.wait(timeout=5), "First ingestion never started")
+
+            second = client.post("/api/youtube/ingest", json={"url": f"https://youtu.be/{vid}"})
+            self.assertEqual(second.status_code, 200)
+            body = second.json()
+            self.assertEqual(body["status"], "already_processing")
+            self.assertTrue(body.get("duplicate"))
+            self.assertEqual(body["video_id"], vid)
+
+            release_fetch.set()
+
+            # Let the first ingestion thread finish inside this patch context so it
+            # cannot leak its download call into a later test's mocks.
+            deadline = time.time() + 5
+            while time.time() < deadline and is_ingestion_in_flight(vid):
+                time.sleep(0.05)
+            self.assertFalse(is_ingestion_in_flight(vid), "First ingestion thread did not finish")
+
+    def test_05_download_failure_recorded_and_visible_in_inbox(self):
+        """4. A failed download leaves a visible FAILED record with last_error via the inbox API."""
+        vid = "tt_ep_50001"
+        done = threading.Event()
+
+        def fake_fetch_info(self, video_id):
+            raise RuntimeError("unavailable")
+
+        def failing_download(self, video_id):
+            raise RuntimeError("ERROR: requested format not available")
+
+        real_ingest = YouTubeInboxCatcher.ingest_video
+
+        def wrapped_ingest(self, url_or_id, **kwargs):
+            try:
+                return real_ingest(self, url_or_id, **kwargs)
+            finally:
+                done.set()
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}), \
+             patch.object(YouTubeInboxCatcher, "fetch_video_info", fake_fetch_info), \
+             patch.object(YouTubeInboxCatcher, "download_video", failing_download), \
+             patch.object(YouTubeInboxCatcher, "ingest_video", wrapped_ingest):
+
+            res = client.post("/api/youtube/ingest", json={"url": f"https://youtu.be/{vid}"})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["status"], "processing_queued")
+
+            self.assertTrue(done.wait(timeout=10), "Background ingestion did not finish")
+
+        res = client.get("/api/youtube/inbox")
+        self.assertEqual(res.status_code, 200)
+        items = {i["video_id"]: i for i in res.json()["items"]}
+        self.assertIn(vid, items)
+        record = items[vid]
+        self.assertEqual(record["status"], "FAILED")
+        self.assertIn("Download failed", record["last_error"])
+        self.assertIn("requested format not available", record["last_error"])
+
+    def test_06_resubmitting_downstream_completed_video_does_not_redownload(self):
+        """5. A video already fully processed by downstream workers (COMPLETED) with a valid
+        local file is not downloaded again on re-import."""
+        vid = "tt_ep_60001"
+        fake_file = self.temp_dir / f"{vid}.mp4"
+        fake_file.write_bytes(b"v" * 2048)
+        db.register_youtube_video(video_id=vid, title="Downstream Completed")
+        db.update_youtube_video(vid, status="COMPLETED", local_video_path=str(fake_file))
+
+        with patch.object(YouTubeInboxCatcher, "download_video") as mock_download, \
+             patch("dispatch.ingestion.validator.probe_video",
+                   return_value=(True, {"duration": 10.0, "width": 1080, "height": 1920}, None)):
+            res = client.post("/api/youtube/ingest", json={"url": f"https://youtu.be/{vid}"})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["video_id"], vid)
+            # Give the background thread time to run the real ingest_video path.
+            deadline = time.time() + 2.0
+            while time.time() < deadline and not mock_download.called:
+                time.sleep(0.05)
+            time.sleep(0.3)
+            mock_download.assert_not_called()
+
+        record = db.get_youtube_video(vid)
+        self.assertEqual(record["status"], "COMPLETED")
+
+
+def _INGEST_INFLIGHT_LOCK_SAFE():
+    from dispatch.youtube_inbox.catcher import _INGEST_INFLIGHT_LOCK
+    return _INGEST_INFLIGHT_LOCK
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_youtube_processing_tracker.py
+============================================================
+"""Focused tests for YouTube Processing Status Tracking, Deferred Ingestion, and Stall Detection.
+Verifies:
+  1. A video reported as processing is deferred without repeated media downloads.
+  2. A video whose processing later succeeds is automatically ingested.
+  3. A permanent processing failure is recorded with useful diagnostic information.
+  4. Transient API or download errors are handled without corrupting video state.
+  5. A video waiting for processing is surfaced as stalled when exceeding timeout without false completion.
+  6. Batch status query handles multiple video IDs accurately.
+"""
+import unittest
+import tempfile
+import shutil
+import os
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from dispatch import db
+from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
+from dispatch.youtube_inbox.poller import YouTubeInboxPoller
+from dispatch.youtube_inbox.oauth import get_youtube_processing_status
+
+
+class TestYouTubeProcessingTracker(unittest.TestCase):
+
+    def setUp(self):
+        db.init_db()
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
+        self.poller = YouTubeInboxPoller(catcher=self.catcher)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        with db.get_db_connection() as conn:
+            conn.execute("DELETE FROM youtube_inbox WHERE video_id LIKE 'tt_%'")
+
+    def test_01_processing_video_is_deferred_without_download(self):
+        """1. A video reported as processing is deferred without calling download_video."""
+        vid = "tt_proc0001"
+        mock_status = {
+            vid: {
+                "video_id": vid,
+                "privacy_status": "unlisted",
+                "upload_status": "uploaded",
+                "processing_status": "processing",
+                "failure_reason": None,
+                "duration": "P0D",
+                "title": "[DISPATCH] Processing Test",
+                "published_at": "2026-10-09T18:00:00Z"
+            }
+        }
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=mock_status), \
+             patch.object(self.catcher, "download_video") as mock_download:
+
+            result = self.catcher.ingest_video(url_or_id=vid)
+
+            # Assert download was NEVER called
+            mock_download.assert_not_called()
+
+            # Assert returned deferred status
+            self.assertEqual(result["status"], "WAITING_FOR_YOUTUBE_PROCESSING")
+            self.assertTrue(result["processing"])
+            self.assertFalse(result["verified"])
+
+            # Assert database state
+            record = db.get_youtube_video(vid)
+            self.assertIsNotNone(record)
+            self.assertEqual(record["status"], "WAITING_FOR_YOUTUBE_PROCESSING")
+
+    def test_02_processing_succeeded_advances_to_download_and_ingestion(self):
+        """2. A video whose processing succeeds proceeds to download and completes ingestion."""
+        vid = "tt_succ0002"
+        mock_status = {
+            vid: {
+                "video_id": vid,
+                "privacy_status": "unlisted",
+                "upload_status": "processed",
+                "processing_status": "succeeded",
+                "failure_reason": None,
+                "duration": "PT45S",
+                "title": "[DISPATCH] Succeeded Test",
+                "published_at": "2026-10-09T18:00:00Z"
+            }
+        }
+
+        fake_video_file = self.temp_dir / f"{vid}.mp4"
+        fake_video_file.write_bytes(b"dummy_content")
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=mock_status), \
+             patch.object(self.catcher, "download_video", return_value=fake_video_file) as mock_download, \
+             patch("dispatch.ingestion.validator.probe_video", return_value=(True, {"duration": 45.0, "width": 1080, "height": 1920}, None)):
+
+            result = self.catcher.ingest_video(url_or_id=vid)
+
+            mock_download.assert_called_once_with(vid)
+            self.assertEqual(result["status"], "DOWNLOADED")
+            self.assertTrue(result["verified"])
+
+            record = db.get_youtube_video(vid)
+            self.assertEqual(record["status"], "DOWNLOADED")
+            self.assertEqual(record["duration"], 45.0)
+
+    def test_03_processing_failed_records_diagnostic_information(self):
+        """3. A permanent processing failure records failure reason and transitions to FAILED."""
+        vid = "tt_fail0003"
+        mock_status = {
+            vid: {
+                "video_id": vid,
+                "privacy_status": "unlisted",
+                "upload_status": "failed",
+                "processing_status": "failed",
+                "failure_reason": "transcodingFailed",
+                "duration": "P0D",
+                "title": "[DISPATCH] Failed Video",
+                "published_at": "2026-10-09T18:00:00Z"
+            }
+        }
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=mock_status), \
+             patch.object(self.catcher, "download_video") as mock_download:
+
+            result = self.catcher.ingest_video(url_or_id=vid)
+
+            mock_download.assert_not_called()
+            self.assertEqual(result["status"], "FAILED")
+            self.assertIn("transcodingFailed", result["error"])
+
+            record = db.get_youtube_video(vid)
+            self.assertEqual(record["status"], "FAILED")
+            self.assertIn("transcodingFailed", record["last_error"])
+
+    def test_04_poller_waiting_video_staleness_detection(self):
+        """4. Poller marks video stalled when elapsed processing time exceeds threshold without false completion."""
+        vid = "tt_stal0004"
+        # 2 hours before utcnow
+        old_pub_time = "2026-10-09T18:00:00Z"
+
+        db.register_youtube_video(
+            video_id=vid,
+            title="[DISPATCH] Stalled Video",
+            upload_time=old_pub_time,
+            dispatch_id="dsp_test_stall"
+        )
+        db.update_youtube_video(vid, status="WAITING_FOR_YOUTUBE_PROCESSING")
+
+        mock_auth_uploads = [
+            {
+                "video_id": vid,
+                "privacy_status": "unlisted",
+                "title": "[DISPATCH] Stalled Video",
+                "published_at": old_pub_time,
+                "dispatch_id": "dsp_test_stall"
+            }
+        ]
+
+        mock_status = {
+            vid: {
+                "video_id": vid,
+                "privacy_status": "unlisted",
+                "upload_status": "uploaded",
+                "processing_status": "processing",
+                "failure_reason": None,
+                "duration": "P0D",
+                "title": "[DISPATCH] Stalled Video",
+                "published_at": old_pub_time
+            }
+        }
+
+        with patch("dispatch.youtube_inbox.poller.list_authenticated_user_uploads", return_value=mock_auth_uploads), \
+             patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=mock_status), \
+             patch.object(self.catcher, "ingest_video") as mock_ingest:
+
+            # Set timeout threshold to 60 minutes
+            with patch.dict(os.environ, {"DISPATCH_YOUTUBE_PROCESSING_TIMEOUT_MINUTES": "60"}):
+                self.poller.poll_once()
+
+            # Assert ingest / download was NOT called
+            mock_ingest.assert_not_called()
+
+            # Mark it actionable without treating YouTube's delay as a permanent failure.
+            record = db.get_youtube_video(vid)
+            self.assertEqual(record["status"], "STALLED_YOUTUBE_PROCESSING")
+            self.assertIn("[STALLED_YOUTUBE_PROCESSING]", record["last_error"])
+
+            # A later successful YouTube result must revisit this same video ID and resume ingestion.
+            mock_status[vid]["processing_status"] = "succeeded"
+            mock_status[vid]["upload_status"] = "processed"
+            self.poller.poll_once()
+            mock_ingest.assert_called_once_with(
+                url_or_id=vid,
+                dispatch_id="dsp_test_stall",
+                session_id=None,
+                sequence_number=None
+            )
+
+    def test_05_batch_status_query_parses_responses_correctly(self):
+        """5. get_youtube_processing_status parses multiple items from service."""
+        mock_service = MagicMock()
+        mock_videos = MagicMock()
+        mock_service.videos.return_value = mock_videos
+
+        mock_resp = {
+            "items": [
+                {
+                    "id": "vid_1",
+                    "status": {"uploadStatus": "uploaded", "privacyStatus": "unlisted"},
+                    "processingDetails": {"processingStatus": "processing"},
+                    "contentDetails": {"duration": "P0D"},
+                    "snippet": {"title": "Vid 1", "publishedAt": "2026-10-10T01:00:00Z"}
+                },
+                {
+                    "id": "vid_2",
+                    "status": {"uploadStatus": "processed", "privacyStatus": "unlisted"},
+                    "processingDetails": {"processingStatus": "succeeded"},
+                    "contentDetails": {"duration": "PT1M"},
+                    "snippet": {"title": "Vid 2", "publishedAt": "2026-10-10T01:05:00Z"}
+                }
+            ]
+        }
+        mock_videos.list.return_value.execute.return_value = mock_resp
+
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_service", return_value=mock_service):
+            res = get_youtube_processing_status(["vid_1", "vid_2"])
+
+            self.assertEqual(len(res), 2)
+            self.assertEqual(res["vid_1"]["processing_status"], "processing")
+            self.assertEqual(res["vid_1"]["upload_status"], "uploaded")
+            self.assertEqual(res["vid_2"]["processing_status"], "succeeded")
+            self.assertEqual(res["vid_2"]["duration"], "PT1M")
+
+    def test_06_transient_api_error_does_not_corrupt_state(self):
+        """6. Transient visibility-API errors DEFER without downloading (fail-closed),
+        keep a durable non-terminal record, and retry succeeds once the API recovers."""
+        vid = "tt_tran0006"
+        downloads = []
+        def fake_download(catcher_self, v):
+            downloads.append(v)
+            raise Exception("download must not be reached on defer")
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", side_effect=RuntimeError("Network timeout")),              patch.object(self.catcher, "download_video", fake_download):
+
+            result = self.catcher.ingest_video(url_or_id=vid)
+
+            self.assertEqual(result["status"], "WAITING_FOR_VISIBILITY_CHECK")
+            self.assertEqual(downloads, [])  # invariant: no download before verified visibility
+            record = db.get_youtube_video(vid)
+            self.assertIsNotNone(record)
+            self.assertEqual(record["status"], "WAITING_FOR_VISIBILITY_CHECK")
+            self.assertIn("deferred", record["last_error"] or "")
+
+        # Retry once the visibility service recovers: the SAME video proceeds (not
+        # permanently poisoned, not marked private/failed).
+        import tempfile as _tf, shutil as _sh
+        from pathlib import Path as _P
+        tmp = _P(_tf.mkdtemp(prefix="t06_retry_"))
+        (tmp / f"{vid}.mp4").write_bytes(b"x")
+        try:
+            with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}),                  patch("dispatch.ingestion.validator.probe_video",
+                       lambda f: (True, {"duration": 10.0, "width": 720, "height": 1280}, None)),                  patch.object(self.catcher, "fetch_video_info",
+                              lambda self_, v: {"id": v, "title": "t", "duration": 10}),                  patch.object(self.catcher, "download_video", lambda self_, v: tmp / f"{v}.mp4"):
+                retried = self.catcher.ingest_video(url_or_id=vid)
+            self.assertNotEqual(retried["status"], "WAITING_FOR_VISIBILITY_CHECK")
+            self.assertNotEqual(retried["status"], "FAILED")
+        finally:
+            _sh.rmtree(tmp, ignore_errors=True)
+
+
+    def test_07_already_downloaded_video_skipped_idempotently(self):
+        """7. An already-downloaded valid video returns immediately without re-downloading."""
+        vid = "tt_done0007"
+        fake_file = self.temp_dir / f"{vid}.mp4"
+        fake_file.write_bytes(b"existing_video_bytes")
+
+        db.register_youtube_video(video_id=vid, title="Already Downloaded")
+        db.update_youtube_video(vid, status="DOWNLOADED", local_video_path=str(fake_file))
+
+        with patch.object(self.catcher, "download_video") as mock_download, \
+             patch("dispatch.ingestion.validator.probe_video", return_value=(True, {"duration": 30.0}, None)):
+
+            result = self.catcher.ingest_video(url_or_id=vid)
+
+            mock_download.assert_not_called()
+            self.assertEqual(result["status"], "DOWNLOADED")
+            self.assertTrue(result["verified"])
+
+    def test_08_terminal_failure_wins_over_uploaded_status(self):
+        """A failed processing state must not be mislabeled as still processing."""
+        vid = "tt_failupl08"
+        db.register_youtube_video(video_id=vid, title="Failed upload-status fixture")
+        db.update_youtube_video(vid, status="WAITING_FOR_YOUTUBE_PROCESSING")
+        status = {
+            vid: {
+                "video_id": vid,
+                "privacy_status": "unlisted",
+                "upload_status": "uploaded",
+                "processing_status": "failed",
+                "failure_reason": "transcodingFailed",
+                "duration": "P0D",
+            }
+        }
+
+        with patch("dispatch.youtube_inbox.poller.list_authenticated_user_uploads", return_value=[{"video_id": vid}]), \
+             patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=status), \
+             patch.object(self.catcher, "ingest_video") as mock_ingest:
+            self.poller.poll_once()
+
+        mock_ingest.assert_not_called()
+        record = db.get_youtube_video(vid)
+        self.assertEqual(record["status"], "FAILED")
+        self.assertIn("transcodingFailed", record["last_error"])
+        self.assertIn("upload_status=uploaded", record["last_error"])
+
+        terminal_error = record["last_error"]
+        status[vid]["processing_status"] = None
+        with patch("dispatch.youtube_inbox.poller.list_authenticated_user_uploads", return_value=[{"video_id": vid}]), \
+             patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", return_value=status), \
+             patch.object(self.catcher, "ingest_video") as mock_ingest:
+            self.poller.poll_once()
+        mock_ingest.assert_not_called()
+        record = db.get_youtube_video(vid)
+        self.assertEqual(record["status"], "FAILED")
+        self.assertEqual(record["last_error"], terminal_error)
+
+    def test_09_status_api_error_preserves_existing_state_and_does_not_download(self):
+        """A status API outage is visible and cannot trigger an unverified media download."""
+        vid = "tt_apierr09"
+        db.register_youtube_video(video_id=vid, title="Status API outage fixture")
+        db.update_youtube_video(vid, status="STALLED_YOUTUBE_PROCESSING", last_error="previous status")
+
+        with patch("dispatch.youtube_inbox.poller.list_authenticated_user_uploads", return_value=[{"video_id": vid}]), \
+             patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", side_effect=RuntimeError("network timeout")), \
+             patch.object(self.catcher, "ingest_video") as mock_ingest:
+            self.poller.poll_once()
+
+        mock_ingest.assert_not_called()
+        record = db.get_youtube_video(vid)
+        self.assertEqual(record["status"], "STALLED_YOUTUBE_PROCESSING")
+        self.assertIn("YOUTUBE_STATUS_UNAVAILABLE", record["last_error"])
+        self.assertIn("network timeout", record["last_error"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tools\seed_creator_clip.py
+============================================================
+import sqlite3
+import json
+import os
+
+db_path = 'storage/database/dispatch.db'
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+# Remove ephemeral test entries with temp paths
+cur.execute("DELETE FROM clips WHERE video_path LIKE '%Temp%' OR video_path LIKE '%temp%'")
+
+# Caption track matching the authentic creator speech in yi36qQWVSyM
+caption_track = {
+    "clip_id": "clip_20261006_161405_09dd9c",
+    "duration": 28.9,
+    "default_style": {
+        "font_family": "Montserrat",
+        "font_size": 44,
+        "font_weight": "900",
+        "color": "#FFFF00",
+        "stroke_color": "#000000",
+        "stroke_width": 3,
+        "has_background": False,
+        "background_color": "#000000",
+        "background_opacity": 0.8,
+        "has_shadow": True,
+        "shadow_color": "#000000",
+        "shadow_blur": 6,
+        "alignment": "center"
+    },
+    "default_animation": {
+        "entrance_animation": "scale_up",
+        "active_word_effect": "pop",
+        "exit_animation": "none"
+    },
+    "groups": [
+        {
+            "id": "grp_1",
+            "start": 0.8,
+            "end": 4.5,
+            "text": "SO WE WILL TEST IT NOW",
+            "words": [
+                {"word": "SO", "start": 0.8, "end": 1.4},
+                {"word": "WE", "start": 1.4, "end": 2.0},
+                {"word": "WILL", "start": 2.0, "end": 2.8},
+                {"word": "TEST", "start": 2.8, "end": 3.6},
+                {"word": "IT", "start": 3.6, "end": 4.0},
+                {"word": "NOW", "start": 4.0, "end": 4.5}
+            ],
+            "layout": {"position_y": 78, "position_x": 50, "rotation": 0, "scale": 1.0},
+            "style": {
+                "font_family": "Montserrat",
+                "font_size": 46,
+                "font_weight": "900",
+                "color": "#FFFF00",
+                "stroke_color": "#000000",
+                "stroke_width": 3,
+                "has_background": False,
+                "has_shadow": True,
+                "alignment": "center"
+            },
+            "animation": {"entrance_animation": "scale_up", "active_word_effect": "pop", "exit_animation": "none"}
+        },
+        {
+            "id": "grp_2",
+            "start": 5.0,
+            "end": 15.5,
+            "text": "Everything runs automatically in Dispatch",
+            "words": [
+                {"word": "Everything", "start": 5.0, "end": 6.8},
+                {"word": "runs", "start": 6.8, "end": 8.0},
+                {"word": "automatically", "start": 8.0, "end": 11.5},
+                {"word": "in", "start": 11.5, "end": 12.8},
+                {"word": "Dispatch", "start": 12.8, "end": 15.5}
+            ],
+            "layout": {"position_y": 78, "position_x": 50, "rotation": 0, "scale": 1.0},
+            "style": {
+                "font_family": "Montserrat",
+                "font_size": 42,
+                "font_weight": "900",
+                "color": "#FFFFFF",
+                "stroke_color": "#000000",
+                "stroke_width": 3,
+                "has_background": False,
+                "has_shadow": True,
+                "alignment": "center"
+            },
+            "animation": {"entrance_animation": "fade_in", "active_word_effect": "highlight", "exit_animation": "none"}
+        },
+        {
+            "id": "grp_3",
+            "start": 16.0,
+            "end": 28.0,
+            "text": "From video capture to final vertical shorts",
+            "words": [
+                {"word": "From", "start": 16.0, "end": 17.5},
+                {"word": "video", "start": 17.5, "end": 19.5},
+                {"word": "capture", "start": 19.5, "end": 22.0},
+                {"word": "to", "start": 22.0, "end": 23.5},
+                {"word": "final", "start": 23.5, "end": 25.5},
+                {"word": "vertical", "start": 25.5, "end": 27.0},
+                {"word": "shorts", "start": 27.0, "end": 28.0}
+            ],
+            "layout": {"position_y": 78, "position_x": 50, "rotation": 0, "scale": 1.0},
+            "style": {
+                "font_family": "Montserrat",
+                "font_size": 42,
+                "font_weight": "900",
+                "color": "#00F0FF",
+                "stroke_color": "#000000",
+                "stroke_width": 3,
+                "has_background": False,
+                "has_shadow": True,
+                "alignment": "center"
+            },
+            "animation": {"entrance_animation": "slide_up", "active_word_effect": "karaoke", "exit_animation": "none"}
+        }
+    ]
+}
+
+video_path = os.path.abspath("storage/clips/clip_20261006_161405_09dd9c.mp4")
+thumb_path = os.path.abspath("storage/clips/clip_20261006_161405_09dd9c.jpg")
+
+# Ensure session exists
+cur.execute("""
+INSERT OR IGNORE INTO sessions (id, status, notes)
+VALUES ('sess_creator_01', 'completed', 'Creator Workflow Session')
+""")
+
+# Ensure source chunk exists (authentic 608x1080 28.9s creator recording)
+chunk_source_path = os.path.abspath("storage/processing/chk_creator_01.mp4")
+cur.execute("""
+INSERT OR REPLACE INTO chunks (
+    id, session_id, filename, filepath, duration, width, height, aspect_ratio, status
+) VALUES (
+    'chk_creator_01', 'sess_creator_01', 'chk_creator_01.mp4', ?, 28.9, 608, 1080, '9:16', 'ready_for_pipeline'
+)
+""", (chunk_source_path,))
+
+cur.execute("""
+INSERT OR REPLACE INTO clips (
+    id, session_id, chunk_id, start_time, end_time, duration,
+    title, hook, description, hashtags, virality_score,
+    layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
+    video_path, thumbnail_path, created_at, approved_at, published_at, caption_data
+) VALUES (
+    ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?
+)
+""", (
+    "clip_20261006_161405_09dd9c", "sess_creator_01", "chk_creator_01", 0.0, 28.9, 28.9,
+    "How I Automated My Content Workflow",
+    "THIS CHANGED EVERYTHING",
+    "Full automated solo creator pipeline built on Dispatch.",
+    "#creator #automation #buildinpublic #dispatch",
+    96,
+    "crop_follow",
+    "crop_follow",
+    "ready_review",
+    "public",
+    "youtube_shorts,instagram,linkedin",
+    video_path,
+    thumb_path,
+    "2026-10-08 16:00:00",
+    None,
+    None,
+    json.dumps(caption_track)
+))
+
+conn.commit()
+conn.close()
+print("Successfully registered creator clip and source chunk in dispatch.db!")
+

@@ -1,0 +1,1059 @@
+﻿
+============================================================
+FILE: dispatch\web\templates\index.html
+============================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dispatch | Autonomous Personal Content Engine</title>
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <meta name="theme-color" content="#070A0F">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <style>
+    body {
+      background-color: #070A0F;
+      color: #F1F5F9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .surface { background-color: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .surface-input { background-color: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); }
+    .surface-nested { background-color: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.05); }
+    @keyframes pulse-subtle {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .pulse-indicator { animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+  </style>
+</head>
+<body class="min-h-screen antialiased flex flex-col">
+
+  <!-- Header -->
+  <header class="border-b border-white/10 bg-[#070A0F]/95 backdrop-blur sticky top-0 z-50 px-4 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+    <!-- Brand -->
+    <div class="flex items-center space-x-3">
+      <div class="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center p-1.5 shadow-sm">
+        <svg class="w-full h-full text-indigo-400" viewBox="0 0 256 256" fill="currentColor">
+          <path fill-rule="evenodd" d="M 60 44 L 136 44 C 178 44 212 78 212 128 C 212 178 178 212 136 212 L 60 212 A 16 16 0 0 1 44 196 L 44 60 A 16 16 0 0 1 60 44 Z M 96 91.05 L 160 128 L 96 164.95 Z"/>
+        </svg>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <h1 class="text-sm font-semibold tracking-wider uppercase text-white font-mono">DISPATCH</h1>
+          <span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-700/40">V1 AUTONOMOUS</span>
+        </div>
+        <p class="text-[10px] text-slate-400 font-mono">PHONE ➔ YOUTUBE ➔ PC</p>
+      </div>
+    </div>
+
+    <!-- Top Status Bar & Quick Actions -->
+    <div class="flex items-center flex-wrap gap-2 text-xs">
+      
+      <!-- YouTube Account Status Pill (Clickable) -->
+      <button onclick="openIntegrationsModal('youtube')" id="header-yt-pill" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] transition text-[11px] text-slate-300 border border-white/10" title="Manage YouTube Connection">
+        <span id="header-yt-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+        <span id="header-yt-text" class="font-mono">YouTube: Checking...</span>
+      </button>
+
+      <!-- Gemini AI Status Pill (Clickable) -->
+      <button onclick="openIntegrationsModal('gemini')" id="header-gemini-pill" class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded surface hover:bg-white/[0.06] transition text-[11px] text-slate-300 border border-white/10" title="Manage Gemini API Key">
+        <span id="header-gemini-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+        <span id="header-gemini-text" class="font-mono">Gemini AI: Checking...</span>
+      </button>
+
+      <!-- Download Compiled APK Button -->
+      <a href="/download/dispatch.apk" class="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-emerald-950/50 border border-emerald-500/40 hover:bg-emerald-900/50 text-emerald-300 transition text-[11px] font-mono font-semibold">
+        <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+        <span>Download APK (v1.0)</span>
+      </a>
+
+      <!-- Pair Mobile App Button -->
+      <button onclick="openPairingModal()" class="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-blue-950/50 border border-blue-500/40 hover:bg-blue-900/50 text-blue-300 transition text-[11px] font-mono font-semibold" title="Pair Mobile App">
+        <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+        </svg>
+        <span>Pair Phone</span>
+      </button>
+
+      <!-- Disk Health -->
+      <div class="hidden md:flex items-center space-x-2 px-2.5 py-1.5 rounded surface text-slate-300">
+        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <span id="disk-info" class="font-mono text-[11px]">Disk: -- GB free</span>
+      </div>
+
+      <!-- Publish Mode Toggle -->
+      <div class="flex items-center bg-black/50 border border-white/10 rounded p-0.5">
+        <button id="mode-private-btn" onclick="setPublishMode('private')" class="px-2 py-1 text-[11px] font-mono rounded transition">
+          Private Draft
+        </button>
+        <button id="mode-public-btn" onclick="setPublishMode('public')" class="px-2 py-1 text-[11px] font-mono rounded transition">
+          Auto Public
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-5 space-y-6">
+
+    <!-- KPI Metrics Grid (Jensen Huang Precision Grid) -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Ready For Review</span>
+        <span id="stat-ready" class="text-2xl font-semibold tracking-tight text-white mt-1 text-right">0</span>
+      </div>
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Approved & Queued</span>
+        <span id="stat-approved" class="text-2xl font-semibold tracking-tight text-indigo-400 mt-1 text-right">0</span>
+      </div>
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Published Shorts</span>
+        <span id="stat-published" class="text-2xl font-semibold tracking-tight text-emerald-400 mt-1 text-right">0</span>
+      </div>
+      <div class="surface rounded-xl p-3.5 flex flex-col justify-between">
+        <span class="text-[11px] uppercase font-mono tracking-wider text-slate-400 font-medium">Storage Health</span>
+        <span id="stat-storage" class="text-2xl font-semibold tracking-tight text-slate-200 mt-1 text-right">--%</span>
+      </div>
+    </div>
+
+    <!-- Autonomous Pipeline Stages & Live Status Visualizer -->
+    <div class="surface rounded-xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <div class="w-2 h-2 rounded-full bg-indigo-500 pulse-indicator"></div>
+          <h2 class="text-xs uppercase font-mono tracking-wider font-semibold text-white">Autonomous Pipeline Engine</h2>
+          <span id="active-jobs-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-700/50">0 active</span>
+        </div>
+        <button onclick="fetchPipelineJobs()" class="text-[11px] font-mono text-slate-400 hover:text-slate-200 flex items-center space-x-1">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          <span>Refresh Engine</span>
+        </button>
+      </div>
+
+      <!-- Pipeline Progression Diagram -->
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] font-mono text-slate-400 py-1 border-y border-white/5">
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">1</span>
+          <span>YouTube Download</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">2</span>
+          <span>YouTube Captions / Whisper</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">3</span>
+          <span>Gemini AI Score</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested">
+          <span class="w-4 h-4 rounded-full bg-indigo-600/30 text-indigo-300 flex items-center justify-center font-bold">4</span>
+          <span>Karaoke Render</span>
+        </div>
+        <div class="flex items-center space-x-1.5 p-1.5 rounded surface-nested col-span-2 sm:col-span-1">
+          <span class="w-4 h-4 rounded-full bg-emerald-600/30 text-emerald-300 flex items-center justify-center font-bold">5</span>
+          <span>Creator Review</span>
+        </div>
+      </div>
+
+      <!-- Pipeline Jobs List -->
+      <div id="pipeline-jobs-container" class="space-y-2">
+        <div id="pipeline-idle-placeholder" class="surface-nested rounded-lg p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <span class="font-mono">Waiting for a new Dispatch upload on YouTube</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- YouTube Cloud Inbox & Remote Catching Hub -->
+    <div class="surface rounded-xl p-4 space-y-3">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div class="flex items-center space-x-2">
+          <div class="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
+          <h2 class="text-xs uppercase font-mono tracking-wider font-semibold text-white">YouTube Cloud Inbox</h2>
+          <span class="text-[10px] text-slate-400 font-mono">Zero-touch cloud transport</span>
+        </div>
+        <span id="yt-inbox-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-600/40">Checking YouTube account</span>
+      </div>
+
+      <!-- YouTube Inbox Queue / History Table -->
+      <div id="yt-inbox-container" class="space-y-1.5 pt-1">
+        <!-- Dynamic YouTube inbox items rendered here -->
+      </div>
+    </div>
+
+    <!-- Review Section Header & Tabs -->
+    <div class="space-y-3 pt-1">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 class="text-base font-semibold text-white">Content Review Station</h2>
+          <p class="text-xs text-slate-400 mt-0.5">Review vertical short-form candidate clips with active-word karaoke subtitles, edit titles, and approve for publishing.</p>
+        </div>
+
+        <div class="flex items-center space-x-2">
+          <button onclick="fetchClips()" class="text-xs px-3 py-1.5 rounded-lg surface hover:bg-white/[0.06] text-slate-300 flex items-center space-x-1.5 transition font-mono">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Section Navigation Tabs -->
+      <div class="flex items-center space-x-2 border-b border-white/10 pb-2">
+        <button id="tab-ready-btn" onclick="switchClipsTab('ready')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm font-mono">
+          <span>Awaiting Approval</span>
+          <span id="tab-ready-count" class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-white/20">0</span>
+        </button>
+        <button id="tab-approved-btn" onclick="switchClipsTab('approved')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition font-mono">
+          <span>Approved & Published</span>
+          <span id="tab-approved-count" class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-white/10">0</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Clips Grid (Awaiting Approval View) -->
+    <div id="clips-ready-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- Dynamic Candidate Clip Cards injected here -->
+    </div>
+
+    <!-- Clips Grid (Approved & Published View) -->
+    <div id="clips-approved-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 hidden">
+      <!-- Dynamic Approved/Published Cards injected here -->
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden surface rounded-xl p-12 text-center">
+      <svg class="w-10 h-10 mx-auto text-slate-500 mb-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+      </svg>
+      <h3 id="empty-state-title" class="text-sm font-medium text-slate-200">No clips pending review</h3>
+      <p id="empty-state-desc" class="text-xs text-slate-400 mt-1 max-w-sm mx-auto">When Dispatch finishes processing a YouTube upload, rendered clips appear here for review.</p>
+    </div>
+
+    <!-- Cloud Integrations & API Keys Modal -->
+    <div id="integrations-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="surface rounded-2xl max-w-xl w-full p-6 space-y-5 border border-white/10 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-white/10 pb-3">
+          <div class="flex items-center space-x-2">
+            <div class="w-2.5 h-2.5 rounded-full bg-indigo-500"></div>
+            <h3 class="text-sm font-semibold uppercase tracking-wider font-mono text-white">Cloud Integrations & API Keys</h3>
+          </div>
+          <button onclick="closeIntegrationsModal()" class="text-slate-400 hover:text-white p-1 rounded">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <!-- 1. YouTube Data API v3 OAuth Section -->
+        <div class="bg-black/30 border border-white/10 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <div class="w-7 h-7 rounded-lg bg-rose-600/20 border border-rose-500/40 flex items-center justify-center text-rose-400 font-bold text-xs font-mono">
+                YT
+              </div>
+              <div>
+                <h4 class="text-xs font-semibold text-white">YouTube Data API v3 (Cloud Inbox & Shorts)</h4>
+                <p id="modal-yt-status-text" class="text-[11px] text-slate-400 font-mono">Checking connection...</p>
+              </div>
+            </div>
+            <span id="modal-yt-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300">
+              Checking
+            </span>
+          </div>
+
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            Allows Dispatch to automatically discover private video recordings from your phone and publish approved clips to YouTube Shorts.
+          </p>
+
+          <div id="modal-yt-action-area" class="pt-2 flex items-center space-x-2">
+            <button onclick="triggerYouTubeAuth()" id="btn-modal-yt-connect" class="px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-xs font-semibold text-white transition flex items-center space-x-1.5 shadow">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/>
+              </svg>
+              <span>Connect YouTube Account</span>
+            </button>
+            <button onclick="disconnectYouTube()" id="btn-modal-yt-disconnect" class="hidden px-3 py-1.5 rounded-lg surface hover:bg-rose-950/40 text-rose-300 border border-rose-600/30 text-xs font-mono transition">
+              Disconnect
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. Google Gemini 2.5 Flash API Key Section -->
+        <div class="bg-black/30 border border-white/10 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <div class="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 font-bold text-xs font-mono">
+                AI
+              </div>
+              <div>
+                <h4 class="text-xs font-semibold text-white">Google Gemini 2.5 Flash (Hooks & Scoring)</h4>
+                <p id="modal-gemini-status-text" class="text-[11px] text-slate-400 font-mono">Checking status...</p>
+              </div>
+            </div>
+            <span id="modal-gemini-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300">
+              Checking
+            </span>
+          </div>
+
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            Evaluates timestamps for viral hooks, complete arguments, and title generation. Free key available at <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-indigo-400 underline">aistudio.google.com</a>.
+          </p>
+
+          <div class="space-y-1.5">
+            <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block">Gemini API Key</label>
+            <div class="flex items-center space-x-2">
+              <input type="password" id="input-gemini-key" placeholder="AIzaSy..." class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-white focus:outline-none focus:border-indigo-500">
+              <button onclick="saveGeminiKey()" id="btn-save-gemini" class="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-xs font-semibold text-white transition shrink-0 font-mono">
+                Save Key
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2 flex justify-end">
+          <button onclick="closeIntegrationsModal()" class="px-4 py-2 text-xs font-medium rounded-lg surface hover:bg-white/[0.08] text-slate-300 font-mono">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phone Pairing Code Modal -->
+    <div id="pairing-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="surface rounded-2xl max-w-md w-full p-6 space-y-5 border border-white/10 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-white/10 pb-3">
+          <div class="flex items-center space-x-2">
+            <div class="w-2.5 h-2.5 rounded-full bg-blue-500"></div>
+            <h3 class="text-sm font-semibold uppercase tracking-wider font-mono text-white">Pair Android Phone</h3>
+          </div>
+          <button onclick="closePairingModal()" class="text-slate-400 hover:text-white p-1 rounded">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="text-center space-y-4 py-2">
+          <p class="text-xs text-slate-300 leading-relaxed">
+            Open the Dispatch app on your phone, navigate to <strong>Settings</strong>, and enter this one-time pairing code:
+          </p>
+
+          <div class="bg-black/50 border border-blue-500/30 rounded-xl p-4 flex flex-col items-center justify-center space-y-2">
+            <span id="pairing-code-display" class="text-3xl font-mono font-bold tracking-widest text-blue-400 select-all">
+              ----
+            </span>
+            <span id="pairing-code-timer" class="text-[11px] font-mono text-slate-400">
+              Requesting code...
+            </span>
+          </div>
+
+          <p class="text-[11px] text-slate-400 font-mono">
+            PC Address on phone: <code class="text-blue-300 bg-white/5 px-2 py-0.5 rounded border border-white/10">192.168.0.102:8000</code>
+          </p>
+        </div>
+
+        <div class="pt-2 flex items-center justify-between border-t border-white/10">
+          <button onclick="generateNewPairingCode()" class="px-3 py-1.5 text-xs font-mono rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold transition active:scale-95 flex items-center space-x-1.5 shadow">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span>Generate New Code</span>
+          </button>
+          <button onclick="closePairingModal()" class="px-4 py-1.5 text-xs font-mono rounded-lg surface hover:bg-white/[0.08] text-slate-300">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    const STAGES = ["INGESTION", "TRANSCRIPTION", "HIGHLIGHT_EXTRACTION", "RENDERING", "COMPLETED"];
+    let currentPublishMode = "private";
+    let activeTab = "ready";
+    let cachedClipsData = { ready: [], recent_approved: [] };
+    let pairingTimerInterval = null;
+
+    async function openPairingModal() {
+      document.getElementById("pairing-modal").classList.remove("hidden");
+      await generateNewPairingCode();
+    }
+
+    function closePairingModal() {
+      document.getElementById("pairing-modal").classList.add("hidden");
+      if (pairingTimerInterval) clearInterval(pairingTimerInterval);
+    }
+
+    async function generateNewPairingCode() {
+      const display = document.getElementById("pairing-code-display");
+      const timer = document.getElementById("pairing-code-timer");
+      display.textContent = "••••••••";
+      timer.textContent = "Requesting fresh code...";
+      if (pairingTimerInterval) clearInterval(pairingTimerInterval);
+
+      try {
+        const res = await fetch("/api/integrations/youtube/pairing-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ understands_http_risk: true })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          display.textContent = "Error";
+          timer.textContent = err.detail || "Failed to generate code.";
+          return;
+        }
+        const data = await res.json();
+        display.textContent = data.code;
+        let remaining = data.expires_in_seconds || 300;
+        const updateTimer = () => {
+          const mins = Math.floor(remaining / 60);
+          const secs = remaining % 60;
+          timer.textContent = `Valid for ${mins}:${secs < 10 ? '0' : ''}${secs}`;
+          if (remaining <= 0) {
+            clearInterval(pairingTimerInterval);
+            display.textContent = "EXPIRED";
+            timer.textContent = "Code expired. Click 'Generate New Code'.";
+          }
+          remaining--;
+        };
+        updateTimer();
+        pairingTimerInterval = setInterval(updateTimer, 1000);
+      } catch (e) {
+        display.textContent = "Error";
+        timer.textContent = "Network error connecting to PC.";
+      }
+    }
+
+    function safeCopyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+      } else {
+        fallbackCopy(text);
+      }
+    }
+
+    function fallbackCopy(text) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (e) { console.error("Copy failed", e); }
+      document.body.removeChild(ta);
+    }
+
+    // --- Integrations Status Logic ---
+    async function loadIntegrationsStatus() {
+      try {
+        const res = await fetch("/api/integrations/status");
+        const data = await res.json();
+
+        // 1. YouTube Header Pill
+        const ytDot = document.getElementById("header-yt-dot");
+        const ytText = document.getElementById("header-yt-text");
+        const modalYtBadge = document.getElementById("modal-yt-badge");
+        const modalYtStatusText = document.getElementById("modal-yt-status-text");
+        const btnYtConnect = document.getElementById("btn-modal-yt-connect");
+        const btnYtDisconnect = document.getElementById("btn-modal-yt-disconnect");
+        const ytInboxStatusBadge = document.getElementById("yt-inbox-status-badge");
+
+        if (data.youtube && data.youtube.connected) {
+          const chName = data.youtube.channel_title || "Resolvia ai";
+          ytDot.className = "w-2 h-2 rounded-full bg-emerald-400";
+          ytText.innerText = `YouTube: ${chName}`;
+          modalYtBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/30";
+          modalYtBadge.innerText = "CONNECTED";
+          modalYtStatusText.innerText = `Connected: ${chName} (ID: ${data.youtube.channel_id || ''})`;
+          btnYtConnect.classList.add("hidden");
+          btnYtDisconnect.classList.remove("hidden");
+          if (ytInboxStatusBadge) {
+            ytInboxStatusBadge.innerText = `Connected: ${chName}`;
+            ytInboxStatusBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-600/40";
+          }
+        } else {
+          ytDot.className = "w-2 h-2 rounded-full bg-amber-400";
+          ytText.innerText = "YouTube: Disconnected";
+          modalYtBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/80 text-amber-300 border border-amber-500/30";
+          modalYtBadge.innerText = "DISCONNECTED";
+          modalYtStatusText.innerText = "Not authenticated with Google OAuth";
+          btnYtConnect.classList.remove("hidden");
+          btnYtDisconnect.classList.add("hidden");
+        }
+
+        // 2. Gemini AI Pill
+        const geminiDot = document.getElementById("header-gemini-dot");
+        const geminiText = document.getElementById("header-gemini-text");
+        const modalGeminiBadge = document.getElementById("modal-gemini-badge");
+        const modalGeminiStatusText = document.getElementById("modal-gemini-status-text");
+
+        if (data.gemini && data.gemini.configured) {
+          geminiDot.className = "w-2 h-2 rounded-full bg-emerald-400";
+          geminiText.innerText = "Gemini AI: Active";
+          modalGeminiBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/30";
+          modalGeminiBadge.innerText = "ACTIVE";
+          modalGeminiStatusText.innerText = "Active: Google Gemini 2.5 Flash Tier";
+        } else {
+          geminiDot.className = "w-2 h-2 rounded-full bg-amber-400";
+          geminiText.innerText = "Gemini AI: Unset";
+          modalGeminiBadge.className = "px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/80 text-amber-300 border border-amber-500/30";
+          modalGeminiBadge.innerText = "UNSET";
+          modalGeminiStatusText.innerText = "Missing live API Key (Using Local Heuristic)";
+        }
+      } catch (e) {
+        console.error("Failed to load integrations status", e);
+      }
+    }
+
+    function openIntegrationsModal(focusSection) {
+      document.getElementById("integrations-modal").classList.remove("hidden");
+      loadIntegrationsStatus();
+      if (focusSection === "gemini") {
+        document.getElementById("input-gemini-key").focus();
+      }
+    }
+
+    function closeIntegrationsModal() {
+      document.getElementById("integrations-modal").classList.add("hidden");
+    }
+
+    async function triggerYouTubeAuth() {
+      const btn = document.getElementById("btn-modal-yt-connect");
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+      try {
+        const res = await fetch("/api/integrations/youtube/start-auth", { method: "POST" });
+        alert("Google Authentication started! A browser window is opening for you to authorize.");
+        let pollCount = 0;
+        const interval = setInterval(async () => {
+          pollCount++;
+          const checkRes = await fetch("/api/integrations/status");
+          const checkData = await checkRes.json();
+          if (checkData.youtube && checkData.youtube.connected) {
+            clearInterval(interval);
+            loadIntegrationsStatus();
+            alert("YouTube Account successfully connected!");
+          }
+          if (pollCount > 30) clearInterval(interval);
+        }, 3000);
+      } catch (e) {
+        alert("Auth start failed: " + e);
+      } finally {
+        btn.disabled = false;
+        btn.style.opacity = "1";
+      }
+    }
+
+    async function disconnectYouTube() {
+      if (!confirm("Are you sure you want to disconnect YouTube?")) return;
+      try {
+        await fetch("/api/integrations/youtube/disconnect", { method: "POST" });
+        loadIntegrationsStatus();
+      } catch (e) {
+        alert("Disconnect failed: " + e);
+      }
+    }
+
+    async function saveGeminiKey() {
+      const input = document.getElementById("input-gemini-key");
+      const btn = document.getElementById("btn-save-gemini");
+      const key = input.value.trim();
+
+      if (!key) {
+        alert("Please enter a valid Gemini API key (starts with AIzaSy...)");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+
+      try {
+        const res = await fetch("/api/integrations/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: key })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          input.value = "";
+          alert("Gemini API Key saved and activated successfully!");
+          loadIntegrationsStatus();
+        } else {
+          alert("Error: " + (data.detail || "Failed to save key"));
+        }
+      } catch (e) {
+        alert("Request error: " + e);
+      } finally {
+        btn.disabled = false;
+        btn.style.opacity = "1";
+      }
+    }
+
+    // --- Core Dashboard Functions ---
+    async function loadStatus() {
+      try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
+        document.getElementById("stat-ready").innerText = data.ready_clips;
+        document.getElementById("stat-approved").innerText = data.approved_clips;
+        document.getElementById("stat-published").innerText = data.published_clips;
+        document.getElementById("stat-storage").innerText = data.disk_percent_used + "%";
+        document.getElementById("disk-info").innerText = `Disk: ${data.disk_free_gb} GB free`;
+        currentPublishMode = data.publish_mode;
+        updateModeUI();
+      } catch (e) {
+        console.error("Status load failed", e);
+      }
+    }
+
+    function updateModeUI() {
+      const privBtn = document.getElementById("mode-private-btn");
+      const pubBtn = document.getElementById("mode-public-btn");
+      if (currentPublishMode === "public") {
+        pubBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded bg-indigo-600 text-white shadow";
+        privBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded text-slate-400 hover:text-white";
+      } else {
+        privBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded bg-slate-700 text-white shadow";
+        pubBtn.className = "px-2.5 py-1 text-[11px] font-mono font-medium rounded text-slate-400 hover:text-white";
+      }
+    }
+
+    async function setPublishMode(mode) {
+      currentPublishMode = mode;
+      updateModeUI();
+      await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publish_mode: mode })
+      });
+    }
+
+    function switchClipsTab(tab) {
+      activeTab = tab;
+      const readyBtn = document.getElementById("tab-ready-btn");
+      const approvedBtn = document.getElementById("tab-approved-btn");
+      const readyContainer = document.getElementById("clips-ready-container");
+      const approvedContainer = document.getElementById("clips-approved-container");
+
+      if (tab === "ready") {
+        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm font-mono";
+        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition font-mono";
+        readyContainer.classList.remove("hidden");
+        approvedContainer.classList.add("hidden");
+        renderReadyClips(cachedClipsData.ready);
+      } else {
+        approvedBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 bg-indigo-600 text-white transition shadow-sm font-mono";
+        readyBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-2 text-slate-400 hover:text-white surface transition font-mono";
+        readyContainer.classList.add("hidden");
+        approvedContainer.classList.remove("hidden");
+        renderApprovedClips(cachedClipsData.recent_approved);
+      }
+    }
+
+    async function fetchPipelineJobs() {
+      try {
+        const res = await fetch("/api/pipeline/jobs");
+        const data = await res.json();
+        const container = document.getElementById("pipeline-jobs-container");
+        const badge = document.getElementById("active-jobs-badge");
+        const jobs = data.jobs || [];
+
+        const visibleJobs = jobs.filter(j => j.status !== 'COMPLETED');
+        const activeCount = visibleJobs.filter(j => j.status !== 'FAILED').length;
+        const failedCount = visibleJobs.length - activeCount;
+        badge.innerText = failedCount > 0 ? `${activeCount} active · ${failedCount} failed` : `${activeCount} active`;
+
+        if (visibleJobs.length === 0) {
+          container.innerHTML = `
+            <div id="pipeline-idle-placeholder" class="surface-nested rounded-lg p-3 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <span class="font-mono">Waiting for a new Dispatch upload on YouTube</span>
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = "";
+        visibleJobs.forEach(job => {
+          const card = document.createElement("div");
+          card.className = "surface-nested rounded-lg p-3 space-y-2 border border-white/5";
+
+          let statusBadgeClass = "bg-slate-800 text-slate-300 border-slate-700";
+          let statusLabel = job.status;
+          if (job.status === "PROCESSING") {
+            statusBadgeClass = "bg-indigo-900/80 text-indigo-200 border-indigo-700 pulse-indicator";
+          } else if (job.status === "WAITING_FOR_AI") {
+            statusBadgeClass = "bg-amber-950/80 text-amber-300 border-amber-700";
+            statusLabel = "Waiting for AI";
+          } else if (job.status === "RETRY_PENDING") {
+            statusBadgeClass = "bg-amber-900/80 text-amber-200 border-amber-600";
+            statusLabel = `Retry Pending (#${job.retry_count})`;
+          } else if (job.status === "STALLED") {
+            statusBadgeClass = "bg-red-950/80 text-red-300 border-red-700";
+            statusLabel = "Stalled — check YouTube processing";
+          } else if (job.status === "FAILED") {
+            statusBadgeClass = "bg-red-950/80 text-red-300 border-red-700";
+            statusLabel = "Processing failed";
+          }
+
+          const currentStageIdx = STAGES.indexOf(job.current_stage);
+          const stageStepsHtml = STAGES.map((s, idx) => {
+            let stepClass = "text-slate-600 border-slate-800 bg-black/20";
+            let iconHtml = `<span class="w-3.5 h-3.5 flex items-center justify-center text-[9px] font-mono">${idx + 1}</span>`;
+
+            if (idx < currentStageIdx) {
+              stepClass = "text-emerald-400 border-emerald-500/30 bg-emerald-950/30 font-medium";
+              iconHtml = `<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`;
+            } else if (idx === currentStageIdx) {
+              stepClass = "text-indigo-300 border-indigo-500/50 bg-indigo-950/50 font-semibold shadow-sm";
+              iconHtml = `<span class="w-1.5 h-1.5 rounded-full bg-indigo-400 pulse-indicator"></span>`;
+            }
+
+            return `
+              <div class="flex items-center space-x-1 px-2 py-0.5 rounded border text-[10px] ${stepClass}">
+                ${iconHtml}
+                <span>${s}</span>
+              </div>
+            `;
+          }).join("");
+
+          card.innerHTML = `
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div class="flex items-center space-x-2">
+                <span class="font-mono text-xs text-white font-medium">${job.filename || job.chunk_id || job.id}</span>
+                ${job.duration ? `<span class="text-[10px] text-slate-400 font-mono">(${job.duration.toFixed(1)}s, ${job.aspect_ratio || '9:16'})</span>` : ''}
+              </div>
+              <div class="flex items-center space-x-2">
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono border ${statusBadgeClass}">${statusLabel}</span>
+              </div>
+            </div>
+
+            <div class="flex items-center space-x-1.5 overflow-x-auto py-1">
+              ${stageStepsHtml}
+            </div>
+          `;
+
+          container.appendChild(card);
+          if (job.last_error) {
+            const diagnostic = document.createElement("p");
+            diagnostic.className = "text-[10px] leading-relaxed text-red-300 break-words";
+            diagnostic.textContent = job.last_error;
+            card.appendChild(diagnostic);
+          }
+        });
+
+      } catch (e) {
+        console.error("Fetch pipeline jobs error", e);
+      }
+    }
+
+    async function fetchClips() {
+      loadStatus();
+      try {
+        const res = await fetch("/api/clips");
+        const data = await res.json();
+        cachedClipsData = data;
+
+        document.getElementById("tab-ready-count").innerText = (data.ready || []).length;
+        document.getElementById("tab-approved-count").innerText = (data.recent_approved || []).length;
+
+        if (activeTab === "ready") {
+          renderReadyClips(data.ready || []);
+        } else {
+          renderApprovedClips(data.recent_approved || []);
+        }
+      } catch (e) {
+        console.error("Fetch clips error", e);
+      }
+    }
+
+    function renderReadyClips(clips) {
+      const container = document.getElementById("clips-ready-container");
+      const emptyState = document.getElementById("empty-state");
+      container.innerHTML = "";
+
+      if (!clips || clips.length === 0) {
+        emptyState.classList.remove("hidden");
+        document.getElementById("empty-state-title").innerText = "No clips pending review";
+        document.getElementById("empty-state-desc").innerText = "When Dispatch finishes processing a YouTube upload, rendered clips appear here for review.";
+        return;
+      }
+      emptyState.classList.add("hidden");
+
+      clips.forEach(clip => {
+        const card = document.createElement("div");
+        card.className = "surface rounded-2xl overflow-hidden flex flex-col justify-between border border-white/10 hover:border-white/20 transition";
+        card.id = `clip-card-${clip.id}`;
+
+        const videoSrc = clip.video_url || "";
+        const thumbSrc = clip.thumbnail_url || "";
+
+        card.innerHTML = `
+          <!-- 9:16 Vertical Video Preview Player -->
+          <div class="relative bg-black aspect-[9/16] max-h-[420px] w-full overflow-hidden flex items-center justify-center border-b border-white/10">
+            <video src="${videoSrc}" poster="${thumbSrc}" controls playsinline preload="metadata" class="w-full h-full object-contain"></video>
+            <div class="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur border border-white/15 text-[11px] font-mono text-emerald-400 font-bold shadow-lg">
+              Score: ${clip.virality_score || 0}/100
+            </div>
+            <div class="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-full bg-black/80 backdrop-blur border border-white/15 text-[10px] font-mono text-slate-300">
+              9:16 SHORT
+            </div>
+          </div>
+
+          <div class="p-4 space-y-3.5 flex-1 flex flex-col justify-between">
+            <div class="space-y-2.5">
+              <div>
+                <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-semibold block mb-1">Title (Roman Hinglish / English)</label>
+                <input type="text" id="title-${clip.id}" value="${(clip.title || '').replace(/"/g, '&quot;')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-white focus:outline-none focus:border-indigo-500">
+              </div>
+
+              <div>
+                <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-semibold block mb-1">Hashtags</label>
+                <input type="text" id="tags-${clip.id}" value="${(clip.hashtags || '').replace(/"/g, '&quot;')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-indigo-300 focus:outline-none focus:border-indigo-500">
+              </div>
+
+              <!-- Active-word Karaoke Subtitle Indicator -->
+              <div class="surface-nested rounded-lg p-2.5 flex items-center space-x-2 border border-white/5">
+                <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span>
+                <span class="text-[10px] font-mono text-yellow-300">Dynamic Active-Word Karaoke Subtitles Burned In</span>
+              </div>
+
+              <!-- Destination Platforms Selector -->
+              <div class="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-300 pt-1">
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
+                  <input type="checkbox" checked id="yt-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>YouTube Shorts</span>
+                </label>
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
+                  <input type="checkbox" checked id="ig-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>Instagram Reels</span>
+                </label>
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
+                  <input type="checkbox" checked id="li-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>LinkedIn</span>
+                </label>
+                <label class="flex items-center space-x-1.5 cursor-pointer surface-nested p-1.5 rounded">
+                  <input type="checkbox" checked id="x-${clip.id}" class="rounded border-white/20 text-indigo-600 focus:ring-0">
+                  <span>X (Twitter)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Action Buttons Grid -->
+            <div class="grid grid-cols-3 gap-2 pt-2 border-t border-white/10">
+              <button onclick="approveClip('${clip.id}')" class="col-span-2 h-10 text-xs font-mono font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white transition flex items-center justify-center space-x-1.5 shadow-lg">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span>Approve & Dispatch</span>
+              </button>
+              <button onclick="rejectClip('${clip.id}')" class="h-10 text-xs font-mono font-semibold rounded-lg bg-rose-600/20 hover:bg-rose-600/30 active:scale-95 text-rose-300 border border-rose-500/30 transition flex items-center justify-center space-x-1">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                <span>Reject</span>
+              </button>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function renderApprovedClips(clips) {
+      const container = document.getElementById("clips-approved-container");
+      const emptyState = document.getElementById("empty-state");
+      container.innerHTML = "";
+
+      if (!clips || clips.length === 0) {
+        emptyState.classList.remove("hidden");
+        document.getElementById("empty-state-title").innerText = "No approved or published clips yet";
+        document.getElementById("empty-state-desc").innerText = "When you approve clips from the review queue, they will appear here with live publishing tracking.";
+        return;
+      }
+      emptyState.classList.add("hidden");
+
+      clips.forEach(clip => {
+        const card = document.createElement("div");
+        card.className = "surface rounded-2xl overflow-hidden flex flex-col justify-between border border-white/10";
+        card.id = `approved-clip-${clip.id}`;
+
+        const videoSrc = clip.video_url || "";
+        const thumbSrc = clip.thumbnail_url || "";
+        const isPublished = clip.status === "published";
+
+        const statusPill = isPublished 
+          ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-bold">PUBLISHED</span>`
+          : `<span class="px-2.5 py-1 rounded-full text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-500/40 font-bold">QUEUED FOR PUBLISH</span>`;
+
+        card.innerHTML = `
+          <div class="relative bg-black aspect-[9/16] max-h-[380px] w-full overflow-hidden flex items-center justify-center">
+            <video src="${videoSrc}" poster="${thumbSrc}" controls playsinline preload="metadata" class="w-full h-full object-contain"></video>
+            <div class="absolute top-2.5 right-2.5">
+              ${statusPill}
+            </div>
+          </div>
+
+          <div class="p-4 space-y-3 flex-1 flex flex-col justify-between">
+            <div class="space-y-2">
+              <div>
+                <h4 class="text-xs font-semibold text-white leading-snug line-clamp-2">${clip.title || 'Untitled Clip'}</h4>
+                <p class="text-[11px] font-mono text-indigo-400 mt-1">${clip.hashtags || ''}</p>
+              </div>
+
+              <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-2 border-t border-white/5">
+                <span>Virality: ${clip.virality_score || 0}/100</span>
+                <span>${clip.platforms || 'youtube,instagram'}</span>
+              </div>
+            </div>
+
+            <div class="pt-2 flex items-center justify-between text-[10px] font-mono text-slate-500">
+              <span>ID: ${clip.id}</span>
+              <a href="${videoSrc}" download="${clip.title || clip.id}.mp4" class="text-indigo-400 hover:underline">Download MP4</a>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    async function approveClip(clipId) {
+      const title = document.getElementById(`title-${clipId}`).value;
+      const tags = document.getElementById(`tags-${clipId}`).value;
+      const yt = document.getElementById(`yt-${clipId}`)?.checked;
+      const ig = document.getElementById(`ig-${clipId}`)?.checked;
+      const li = document.getElementById(`li-${clipId}`)?.checked;
+      const x = document.getElementById(`x-${clipId}`)?.checked;
+
+      const platforms = [];
+      if (yt) platforms.push("youtube");
+      if (ig) platforms.push("instagram");
+      if (li) platforms.push("linkedin");
+      if (x) platforms.push("x");
+
+      const card = document.getElementById(`clip-card-${clipId}`);
+      if (card) card.style.opacity = "0.4";
+
+      try {
+        await fetch(`/api/clips/${clipId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title,
+            hashtags: tags,
+            publish_mode: currentPublishMode,
+            platforms: platforms.join(",")
+          })
+        });
+        if (card) card.remove();
+        fetchClips();
+      } catch (e) {
+        alert("Approve failed: " + e);
+        if (card) card.style.opacity = "1";
+      }
+    }
+
+    async function rejectClip(clipId) {
+      const card = document.getElementById(`clip-card-${clipId}`);
+      if (card) card.style.opacity = "0.4";
+
+      try {
+        await fetch(`/api/clips/${clipId}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "User tapped reject" })
+        });
+        if (card) card.remove();
+        fetchClips();
+      } catch (e) {
+        alert("Reject failed: " + e);
+        if (card) card.style.opacity = "1";
+      }
+    }
+
+    // --- YouTube Cloud Inbox Client Logic ---
+    async function fetchYouTubeInbox() {
+      const container = document.getElementById("yt-inbox-container");
+      if (!container) return;
+
+      try {
+        const res = await fetch("/api/youtube/inbox");
+        const data = await res.json();
+        const items = data.items || [];
+
+        if (items.length === 0) {
+          container.innerHTML = `
+            <div class="surface-nested rounded-lg p-2.5 text-center text-[11px] font-mono text-slate-400">
+              Waiting for Dispatch uploads in the connected YouTube account.
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = "";
+        items.slice(0, 5).forEach(item => {
+          const row = document.createElement("div");
+          row.className = "surface-nested rounded-lg p-2.5 flex items-center justify-between text-xs";
+
+          let statusBadge = "";
+          if (item.status === "CLIPS_CREATED" || item.status === "COMPLETED") {
+            statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">CLIPS READY</span>`;
+          } else if (item.status === "FAILED") {
+            statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-rose-950/80 text-rose-300 border border-rose-500/30">FAILED</span>`;
+          } else {
+            statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-500/30 pulse-indicator">${item.status}</span>`;
+          }
+
+          const srcBadge = item.transcript_source 
+            ? `<span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-black/50 text-slate-400 uppercase">${item.transcript_source}</span>`
+            : "";
+
+          row.innerHTML = `
+            <div class="flex items-center space-x-2.5 overflow-hidden pr-2">
+              <span class="w-1.5 h-1.5 rounded-full ${item.status === 'CLIPS_CREATED' ? 'bg-emerald-400' : 'bg-indigo-400'}"></span>
+              <div class="truncate">
+                <div class="flex items-center space-x-2">
+                  <span class="text-white font-medium truncate font-mono text-xs">${item.title || item.video_id}</span>
+                  ${srcBadge}
+                </div>
+                <div class="text-[10px] font-mono text-slate-500">ID: ${item.video_id} • ${item.discovered_at ? item.discovered_at.slice(0, 16) : ''}</div>
+              </div>
+            </div>
+            <div class="flex items-center space-x-2 shrink-0">
+              ${statusBadge}
+            </div>
+          `;
+          container.appendChild(row);
+        });
+      } catch (e) {
+        console.error("Failed to fetch YouTube inbox", e);
+      }
+    }
+
+    // Auto-refresh loops
+    setInterval(fetchClips, 8000);
+    setInterval(fetchPipelineJobs, 3000);
+    setInterval(fetchYouTubeInbox, 10000);
+    setInterval(loadIntegrationsStatus, 15000);
+
+    // Initial loads
+    fetchClips();
+    fetchPipelineJobs();
+    fetchYouTubeInbox();
+    loadIntegrationsStatus();
+  </script>
+</body>
+</html>
+

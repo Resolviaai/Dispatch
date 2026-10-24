@@ -26,7 +26,7 @@ class DispatchApplication : Application() {
             .build()
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "dispatch_youtube_uploads",
+            "dispatch_youtube_uploads_periodic",
             ExistingPeriodicWorkPolicy.KEEP,
             periodicUpload
         )

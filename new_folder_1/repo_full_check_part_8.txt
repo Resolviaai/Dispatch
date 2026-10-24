@@ -1,0 +1,2398 @@
+﻿
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestApiDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestApiDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("androidTestApiDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestApiDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestApiDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestApiDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestApiDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestApiDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestApiDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestApiDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestApiDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestApiDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestApiDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestApiDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestApiDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("androidTestApiDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestApiDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestApiDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestCompileOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnly`(dependencyNotation: Any): Dependency? =
+    add("androidTestCompileOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestCompileOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestCompileOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestCompileOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestCompileOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestCompileOnly`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestCompileOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestCompileOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestCompileOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestCompileOnly`(artifactNotation: Any): PublishArtifact =
+    add("androidTestCompileOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestCompileOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestCompileOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestCompileOnlyDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnlyDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("androidTestCompileOnlyDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnlyDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnlyDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnlyDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestCompileOnlyDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestCompileOnlyDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestCompileOnlyDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestCompileOnlyDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestCompileOnlyDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestCompileOnlyDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestCompileOnlyDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestCompileOnlyDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestCompileOnlyDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("androidTestCompileOnlyDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestCompileOnlyDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestCompileOnlyDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugAnnotationProcessorConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugAnnotationProcessor`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugAnnotationProcessor", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugAnnotationProcessor`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugAnnotationProcessor", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugAnnotationProcessor`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugAnnotationProcessor", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugAnnotationProcessor`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugAnnotationProcessor", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugAnnotationProcessor`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugAnnotationProcessor", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugAnnotationProcessor`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugAnnotationProcessor", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugAnnotationProcessor`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugAnnotationProcessor", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugAnnotationProcessor`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugAnnotationProcessor", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugAnnotationProcessor`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugAnnotationProcessor", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugAnnotationProcessor' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugAnnotationProcessor`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugAnnotationProcessor", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugApiConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApi`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugApi", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApi`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugApi", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApi`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugApi", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApi' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApi`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugApi", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApi' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApi`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugApi", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApi' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugApi`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugApi", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugApi' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugApi`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugApi", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugApi' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugApi`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugApi", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugApi' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugApi`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugApi", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugApi' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugApi`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugApi", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugApiDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApiDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugApiDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApiDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApiDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApiDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugApiDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugApiDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugApiDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugApiDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugApiDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugApiDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugApiDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugApiDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugApiDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugApiDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugApiDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugApiDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugApiDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugApiDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugCompileOnlyConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnly`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugCompileOnly", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnly`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugCompileOnly", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnly`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnly`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugCompileOnly", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnly`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugCompileOnly", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugCompileOnly`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugCompileOnly", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugCompileOnly`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugCompileOnly", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugCompileOnly`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugCompileOnly", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugCompileOnly`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugCompileOnly", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugCompileOnly' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugCompileOnly`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugCompileOnly", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugCompileOnlyDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugCompileOnlyDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugCompileOnlyDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugCompileOnlyDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugCompileOnlyDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugCompileOnlyDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugCompileOnlyDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugCompileOnlyDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugCompileOnlyDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugCompileOnlyDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugCompileOnlyDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugImplementationConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementation`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugImplementation", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementation`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugImplementation", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementation`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementation`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugImplementation", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementation`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugImplementation", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugImplementation`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugImplementation", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugImplementation`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugImplementation", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugImplementation`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugImplementation", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugImplementation`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugImplementation", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugImplementation' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugImplementation`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugImplementation", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugImplementationDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementationDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugImplementationDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementationDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementationDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementationDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugImplementationDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugImplementationDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugImplementationDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugImplementationDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugImplementationDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugImplementationDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugImplementationDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugImplementationDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugImplementationDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugImplementationDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugImplementationDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugImplementationDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugImplementationDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugImplementationDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+
+
+============================================================
+FILE: .gradle\caches\8.13\kotlin-dsl\accessors\b8d74d20f6eeab5eb4157920174b8ab7\sources\org\gradle\kotlin\dsl\AndroidTestDebugIntransitiveDependenciesMetadataConfigurationAccessors.kt
+============================================================
+
+/*
+ * Copyright 2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:Suppress(
+    "unused",
+    "nothing_to_inline",
+    "useless_cast",
+    "unchecked_cast",
+    "extension_shadowed_by_member",
+    "redundant_projection",
+    "RemoveRedundantBackticks",
+    "ObjectPropertyName",
+    "deprecation",
+    "detekt:all"
+)
+@file:org.gradle.api.Generated
+
+package org.gradle.kotlin.dsl
+
+
+import org.gradle.api.Action
+import org.gradle.api.Incubating
+import org.gradle.api.NamedDomainObjectProvider
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ConfigurablePublishArtifact
+import org.gradle.api.artifacts.ConfigurationContainer
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.artifacts.dsl.ArtifactHandler
+import org.gradle.api.artifacts.dsl.DependencyConstraintHandler
+import org.gradle.api.artifacts.dsl.DependencyHandler
+import org.gradle.api.initialization.SharedModelDefaults
+import org.gradle.api.provider.Provider
+import org.gradle.api.provider.ProviderConvertible
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+import org.gradle.kotlin.dsl.accessors.runtime.*
+
+
+/**
+ * Adds a dependency to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugIntransitiveDependenciesMetadata`(dependencyNotation: Any): Dependency? =
+    add("androidTestDebugIntransitiveDependenciesMetadata", dependencyNotation)
+
+/**
+ * Adds a dependency to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugIntransitiveDependenciesMetadata`(
+    dependencyNotation: String,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): ExternalModuleDependency = addDependencyTo(
+    this, "androidTestDebugIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+) as ExternalModuleDependency
+
+/**
+ * Adds a dependency to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugIntransitiveDependenciesMetadata`(
+    dependencyNotation: Provider<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependencyNotation notation for the dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugIntransitiveDependenciesMetadata`(
+    dependencyNotation: ProviderConvertible<*>,
+    dependencyConfiguration: Action<ExternalModuleDependency>
+): Unit = addConfiguredDependencyTo(
+    this, "androidTestDebugIntransitiveDependenciesMetadata", dependencyNotation, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param group the group of the module to be added as a dependency.
+ * @param name the name of the module to be added as a dependency.
+ * @param version the optional version of the module to be added as a dependency.
+ * @param configuration the optional configuration of the module to be added as a dependency.
+ * @param classifier the optional classifier of the module artifact to be added as a dependency.
+ * @param ext the optional extension of the module artifact to be added as a dependency.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.create]
+ * @see [DependencyHandler.add]
+ */
+fun DependencyHandler.`androidTestDebugIntransitiveDependenciesMetadata`(
+    group: String,
+    name: String,
+    version: String? = null,
+    configuration: String? = null,
+    classifier: String? = null,
+    ext: String? = null,
+    dependencyConfiguration: Action<ExternalModuleDependency>? = null
+): ExternalModuleDependency = addExternalModuleDependencyTo(
+    this, "androidTestDebugIntransitiveDependenciesMetadata", group, name, version, configuration, classifier, ext, dependencyConfiguration
+)
+
+/**
+ * Adds a dependency to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param dependency dependency to be added.
+ * @param dependencyConfiguration expression to use to configure the dependency.
+ * @return The dependency.
+ *
+ * @see [DependencyHandler.add]
+ */
+fun <T : ModuleDependency> DependencyHandler.`androidTestDebugIntransitiveDependenciesMetadata`(
+    dependency: T,
+    dependencyConfiguration: T.() -> Unit
+): T = add("androidTestDebugIntransitiveDependenciesMetadata", dependency, dependencyConfiguration)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugIntransitiveDependenciesMetadata`(constraintNotation: Any): DependencyConstraint =
+    add("androidTestDebugIntransitiveDependenciesMetadata", constraintNotation)
+
+/**
+ * Adds a dependency constraint to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param constraintNotation the dependency constraint notation
+ * @param block the block to use to configure the dependency constraint
+ *
+ * @return the added dependency constraint
+ *
+ * @see [DependencyConstraintHandler.add]
+ */
+fun DependencyConstraintHandler.`androidTestDebugIntransitiveDependenciesMetadata`(constraintNotation: Any, block: DependencyConstraint.() -> Unit): DependencyConstraint =
+    add("androidTestDebugIntransitiveDependenciesMetadata", constraintNotation, block)
+
+/**
+ * Adds an artifact to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugIntransitiveDependenciesMetadata`(artifactNotation: Any): PublishArtifact =
+    add("androidTestDebugIntransitiveDependenciesMetadata", artifactNotation)
+
+/**
+ * Adds an artifact to the 'androidTestDebugIntransitiveDependenciesMetadata' configuration.
+ *
+ * @param artifactNotation the group of the module to be added as a dependency.
+ * @param configureAction The action to execute to configure the artifact.
+ * @return The artifact.
+ *
+ * @see [ArtifactHandler.add]
+ */
+fun ArtifactHandler.`androidTestDebugIntransitiveDependenciesMetadata`(
+    artifactNotation: Any,
+    configureAction:  ConfigurablePublishArtifact.() -> Unit
+): PublishArtifact =
+    add("androidTestDebugIntransitiveDependenciesMetadata", artifactNotation, configureAction)
+
+
+
+

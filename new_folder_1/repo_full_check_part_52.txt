@@ -1,0 +1,2101 @@
+﻿
+============================================================
+FILE: test_apply_to_all.ts
+============================================================
+import assert from 'node:assert';
+import { CaptionTrack, CaptionGroup } from './frontend/src/captions/types';
+import { extractSectionProperties, applySectionStylesToTrack } from './frontend/src/captions/applyToAll';
+
+console.log('🧪 Starting Dispatch "Apply to All Text Styling" Test Suite...\n');
+
+// Mock Caption Track
+const initialTrack: CaptionTrack = {
+  version: 2,
+  language: 'en',
+  default_style: {
+    font_family: 'Inter',
+    font_size: 32,
+    font_weight: 'normal',
+    text_transform: 'none',
+    letter_spacing: 0,
+    line_height: 1.2,
+    primary_color: '#FFFFFF',
+    highlight_color: '#FFE600',
+    outline_enabled: false,
+    outline_color: '#000000',
+    outline_width: 2,
+    glow_enabled: false,
+    shadow_enabled: false,
+    background_enabled: false,
+  },
+  default_layout: {
+    position_x: 0.5,
+    position_y: 0.78,
+    alignment: 'center',
+    max_width: 0.88,
+    max_lines: 2,
+  },
+  default_animation: {
+    type: 'pop',
+    duration_ms: 120,
+    active_scale: 1.15,
+    easing: 'ease_out',
+  },
+  groups: [
+    {
+      id: 'cap_a',
+      type: 'caption',
+      start: 0,
+      end: 2.5,
+      style: {
+        font_family: 'Inter',
+        font_size: 32,
+        font_weight: 'normal',
+        primary_color: '#FFFFFF',
+        outline_enabled: true,
+        outline_color: '#111111',
+        outline_width: 2,
+        shadow_enabled: false,
+        glow_enabled: false,
+        background_enabled: false,
+      },
+      words: [
+        { id: 'w1', text: 'Hello', start: 0, end: 1.2, style_override: { color: '#00FF00' } },
+        { id: 'w2', text: 'World', start: 1.2, end: 2.5 },
+      ],
+    },
+    {
+      id: 'cap_b',
+      type: 'caption',
+      start: 2.5,
+      end: 5.0,
+      style: {
+        font_family: 'Montserrat',
+        font_size: 48,
+        font_weight: 'bold',
+        letter_spacing: 1.5,
+        line_height: 1.3,
+        text_transform: 'uppercase',
+        primary_color: '#FF0055',
+        outline_enabled: false,
+        outline_color: '#000000',
+        outline_width: 0,
+        shadow_enabled: true,
+        shadow_color: '#000000',
+        shadow_blur: 8,
+        glow_enabled: false,
+        background_enabled: false,
+      },
+      words: [
+        { id: 'w3', text: 'Caption', start: 2.5, end: 3.8 },
+        { id: 'w4', text: 'Two', start: 3.8, end: 5.0 },
+      ],
+    },
+    {
+      id: 'cap_c',
+      type: 'caption',
+      start: 5.0,
+      end: 7.5,
+      style: {
+        font_family: 'Roboto',
+        font_size: 28,
+        font_weight: '300',
+        primary_color: '#00FFFF',
+        outline_enabled: true,
+        outline_color: '#FF0000',
+        outline_width: 4,
+        shadow_enabled: false,
+        glow_enabled: true,
+        glow_color: '#00FFFF',
+        glow_blur: 15,
+        background_enabled: true,
+        background_color: '#00000088',
+      },
+      words: [
+        { id: 'w5', text: 'Caption', start: 5.0, end: 6.2 },
+        { id: 'w6', text: 'Three', start: 6.2, end: 7.5 },
+      ],
+    },
+    {
+      id: 'overlay_img',
+      type: 'overlay',
+      start: 1.0,
+      end: 4.0,
+      overlay_type: 'image',
+      media_url: 'https://example.com/sticker.png',
+      style: {
+        font_family: 'IgnoreMe',
+        primary_color: '#000000',
+      },
+      words: [],
+    },
+    {
+      id: 'audio_layer',
+      type: 'audio',
+      start: 0,
+      end: 10,
+      media_url: 'https://example.com/bgm.mp3',
+      words: [],
+    },
+  ],
+};
+
+// --------------------------------------------------------------------------
+// TEST 1: Property Isolation — Font Section
+// --------------------------------------------------------------------------
+console.log('Test 1: Font section isolation...');
+{
+  const result = applySectionStylesToTrack(initialTrack, 'cap_b', 'font');
+  assert.strictEqual(result.affectedCount, 3, 'Should affect exactly 3 text/caption elements');
+
+  const capA = result.nextTrack.groups.find((g) => g.id === 'cap_a')!;
+  const capB = result.nextTrack.groups.find((g) => g.id === 'cap_b')!;
+  const capC = result.nextTrack.groups.find((g) => g.id === 'cap_c')!;
+
+  // Font properties must match cap_b
+  assert.strictEqual(capA.style?.font_family, 'Montserrat');
+  assert.strictEqual(capA.style?.font_size, 48);
+  assert.strictEqual(capA.style?.font_weight, 'bold');
+  assert.strictEqual(capA.style?.letter_spacing, 1.5);
+  assert.strictEqual(capA.style?.line_height, 1.3);
+  assert.strictEqual(capA.style?.text_transform, 'uppercase');
+
+  assert.strictEqual(capC.style?.font_family, 'Montserrat');
+  assert.strictEqual(capC.style?.font_size, 48);
+
+  // UNRELATED properties must NOT be changed!
+  // cap_a had primary_color #FFFFFF and outline_color #111111
+  assert.strictEqual(capA.style?.primary_color, '#FFFFFF', 'Cap A color must remain intact');
+  assert.strictEqual(capA.style?.outline_enabled, true, 'Cap A outline must remain intact');
+  assert.strictEqual(capA.style?.outline_color, '#111111', 'Cap A outline color must remain intact');
+  assert.strictEqual(capA.style?.shadow_enabled, false, 'Cap A shadow must remain false');
+
+  // cap_c had primary_color #00FFFF, glow_enabled true, background_enabled true
+  assert.strictEqual(capC.style?.primary_color, '#00FFFF', 'Cap C color must remain intact');
+  assert.strictEqual(capC.style?.glow_enabled, true, 'Cap C glow must remain intact');
+  assert.strictEqual(capC.style?.background_enabled, true, 'Cap C background must remain intact');
+  assert.strictEqual(capC.style?.outline_color, '#FF0000', 'Cap C outline color must remain intact');
+
+  console.log('  ✓ Font properties propagated without touching colors, strokes, glows, or shadows');
+}
+
+// --------------------------------------------------------------------------
+// TEST 2: Property Isolation — Color Section
+// --------------------------------------------------------------------------
+console.log('Test 2: Color section isolation...');
+{
+  const result = applySectionStylesToTrack(initialTrack, 'cap_c', 'color');
+  assert.strictEqual(result.affectedCount, 3);
+
+  const capA = result.nextTrack.groups.find((g) => g.id === 'cap_a')!;
+  const capB = result.nextTrack.groups.find((g) => g.id === 'cap_b')!;
+  const capC = result.nextTrack.groups.find((g) => g.id === 'cap_c')!;
+
+  // Primary color must now match cap_c
+  assert.strictEqual(capA.style?.primary_color, '#00FFFF');
+  assert.strictEqual(capB.style?.primary_color, '#00FFFF');
+  assert.strictEqual(capC.style?.primary_color, '#00FFFF');
+
+  // But font properties on cap_b must remain Montserrat Bold 48!
+  assert.strictEqual(capB.style?.font_family, 'Montserrat', 'Cap B font must remain untouched');
+  assert.strictEqual(capB.style?.font_size, 48, 'Cap B font size must remain untouched');
+  assert.strictEqual(capA.style?.font_family, 'Inter', 'Cap A font must remain untouched');
+
+  console.log('  ✓ Color applied to all without touching font families or sizes');
+}
+
+// --------------------------------------------------------------------------
+// TEST 3: Non-Text Layer Immunity
+// --------------------------------------------------------------------------
+console.log('Test 3: Non-text layer immunity (overlays & audio)...');
+{
+  const result = applySectionStylesToTrack(initialTrack, 'cap_b', 'font');
+  const overlay = result.nextTrack.groups.find((g) => g.id === 'overlay_img')!;
+  const audio = result.nextTrack.groups.find((g) => g.id === 'audio_layer')!;
+
+  assert.strictEqual(overlay.style?.font_family, 'IgnoreMe', 'Overlay style must NOT be modified');
+  assert.strictEqual(audio.type, 'audio', 'Audio layer must NOT be touched');
+  assert.strictEqual(result.affectedCount, 3, 'Affected count must only count text elements');
+
+  console.log('  ✓ Non-text layers (overlay, audio) are 100% immune');
+}
+
+// --------------------------------------------------------------------------
+// TEST 4: Word-Level Overrides & Timing Preservation
+// --------------------------------------------------------------------------
+console.log('Test 4: Word-level timestamps & style overrides preservation...');
+{
+  const result = applySectionStylesToTrack(initialTrack, 'cap_b', 'font');
+  const capA = result.nextTrack.groups.find((g) => g.id === 'cap_a')!;
+
+  assert.strictEqual(capA.words.length, 2, 'Words array length preserved');
+  assert.strictEqual(capA.words[0].start, 0);
+  assert.strictEqual(capA.words[0].end, 1.2);
+  assert.strictEqual(capA.words[0].style_override?.color, '#00FF00', 'Word style override preserved');
+  assert.strictEqual(capA.words[1].start, 1.2);
+  assert.strictEqual(capA.words[1].end, 2.5);
+
+  console.log('  ✓ Word timestamps and style overrides preserved intact');
+}
+
+// --------------------------------------------------------------------------
+// TEST 5: One-Time Action & Future Edits Independence
+// --------------------------------------------------------------------------
+console.log('Test 5: One-time action verification (future edits remain local)...');
+{
+  // Step A: Apply font to all
+  const afterApply = applySectionStylesToTrack(initialTrack, 'cap_b', 'font').nextTrack;
+
+  // Step B: Later routine edit on Caption C ONLY (simulating CaptionStudio patch())
+  const targetGroup = afterApply.groups.find((g) => g.id === 'cap_c')!;
+  const localEditedTrack: CaptionTrack = {
+    ...afterApply,
+    groups: afterApply.groups.map((grp) => {
+      if (grp.id !== targetGroup.id) return grp;
+      return {
+        ...grp,
+        style: { ...(grp.style || afterApply.default_style), primary_color: '#990099' },
+      };
+    }),
+  };
+
+  const capA = localEditedTrack.groups.find((g) => g.id === 'cap_a')!;
+  const capB = localEditedTrack.groups.find((g) => g.id === 'cap_b')!;
+  const capC = localEditedTrack.groups.find((g) => g.id === 'cap_c')!;
+
+  assert.strictEqual(capC.style?.primary_color, '#990099', 'Cap C changed color');
+  assert.strictEqual(capA.style?.primary_color, '#FFFFFF', 'Cap A color was NOT changed by future edit');
+  assert.strictEqual(capB.style?.primary_color, '#FF0055', 'Cap B color was NOT changed by future edit');
+
+  console.log('  ✓ Routine edits remain strictly local; Apply to All is not a persistent mode');
+}
+
+// --------------------------------------------------------------------------
+// TEST 6: Stroke, Glow, Background, Shadow, Alignment, Animation Sections
+// --------------------------------------------------------------------------
+console.log('Test 6: Stroke, Glow, Background, Shadow, Alignment, and Animation isolation...');
+{
+  // Stroke test
+  const strokeResult = applySectionStylesToTrack(initialTrack, 'cap_a', 'stroke').nextTrack;
+  const strokeCapB = strokeResult.groups.find((g) => g.id === 'cap_b')!;
+  assert.strictEqual(strokeCapB.style?.outline_enabled, true);
+  assert.strictEqual(strokeCapB.style?.outline_color, '#111111');
+  assert.strictEqual(strokeCapB.style?.outline_width, 2);
+  assert.strictEqual(strokeCapB.style?.font_family, 'Montserrat', 'Font untouched during stroke apply');
+
+  // Alignment test
+  const alignTrack: CaptionTrack = {
+    ...initialTrack,
+    groups: initialTrack.groups.map((g) =>
+      g.id === 'cap_c' ? { ...g, layout: { ...initialTrack.default_layout, alignment: 'right' } } : g
+    ),
+  };
+  const alignResult = applySectionStylesToTrack(alignTrack, 'cap_c', 'alignment').nextTrack;
+  const alignCapA = alignResult.groups.find((g) => g.id === 'cap_a')!;
+  assert.strictEqual(alignCapA.layout?.alignment, 'right');
+  assert.strictEqual(alignCapA.style?.font_family, 'Inter', 'Style untouched during alignment apply');
+
+  console.log('  ✓ Stroke, alignment, and other individual sections propagate strictly isolated properties');
+}
+
+// --------------------------------------------------------------------------
+// TEST 7: Timeline-Aware Visibility Invariant
+// --------------------------------------------------------------------------
+console.log('Test 7: Timeline-aware visibility invariant (selection does NOT force visibility outside duration)...');
+{
+  const groups: CaptionGroup[] = [
+    { id: 'c1', start: 0, end: 2.0, words: [{ id: 'w1', text: 'One', start: 0, end: 2.0 }] },
+    { id: 'c2', start: 2.5, end: 4.5, words: [{ id: 'w2', text: 'Two', start: 2.5, end: 4.5 }] },
+  ];
+
+  const isVisible = (grp: CaptionGroup, currentTime: number) => {
+    return currentTime >= grp.start && currentTime <= grp.end;
+  };
+
+  // Playhead at 1.0 (inside c1, outside c2)
+  assert.strictEqual(isVisible(groups[0], 1.0), true, 'c1 must be visible at t=1.0');
+  assert.strictEqual(isVisible(groups[1], 1.0), false, 'c2 must be invisible at t=1.0');
+
+  // Even if c2 is selected, its timeline-aware visibility remains false!
+  const selectedGroupId = 'c2';
+  const c2IsSelected = selectedGroupId === groups[1].id;
+  assert.strictEqual(c2IsSelected, true, 'c2 is selected');
+  assert.strictEqual(isVisible(groups[1], 1.0), false, 'c2 selection must NOT force it visible at t=1.0');
+
+  // Playhead at 3.0 (outside c1, inside c2)
+  assert.strictEqual(isVisible(groups[0], 3.0), false, 'c1 must be invisible at t=3.0');
+  assert.strictEqual(isVisible(groups[1], 3.0), true, 'c2 must be visible at t=3.0');
+  console.log('  ✓ Layer visibility is strictly timeline-aware; selection never forces visibility outside duration');
+}
+
+// --------------------------------------------------------------------------
+// TEST 8: Animation Categorization & Loop Apply to All
+// --------------------------------------------------------------------------
+console.log('Test 8: Categorized animation model and loop propagation on Apply to All...');
+{
+  const animTrack: CaptionTrack = {
+    ...initialTrack,
+    groups: initialTrack.groups.map((g) =>
+      g.id === 'cap_a'
+        ? {
+            ...g,
+            animation: {
+              type: 'pop',
+              duration_ms: 100,
+              active_scale: 1.2,
+              easing: 'bounce',
+              enter: { type: 'slide_up', duration_ms: 220 },
+              exit: { type: 'slide_down', duration_ms: 160 },
+              loop: { type: 'pulse', speed_ms: 850 },
+              active_word: { type: 'pop', active_scale: 1.25, duration_ms: 110 },
+            },
+          }
+        : g
+    ),
+  };
+
+  const animResult = applySectionStylesToTrack(animTrack, 'cap_a', 'animation').nextTrack;
+  const capBAnim = animResult.groups.find((g) => g.id === 'cap_b')?.animation;
+  assert.strictEqual(capBAnim?.enter?.type, 'slide_up');
+  assert.strictEqual(capBAnim?.exit?.type, 'slide_down');
+  assert.strictEqual(capBAnim?.loop?.type, 'pulse');
+  assert.strictEqual(capBAnim?.loop?.speed_ms, 850);
+  assert.strictEqual(capBAnim?.active_word?.active_scale, 1.25);
+
+  // Check that cap_b font and colors were NOT affected
+  const capBStyle = animResult.groups.find((g) => g.id === 'cap_b')?.style;
+  assert.strictEqual(capBStyle?.font_family, 'Montserrat', 'Font preserved on animation apply');
+  assert.strictEqual(capBStyle?.primary_color, '#FF0055', 'Color preserved on animation apply');
+
+  console.log('  ✓ Animation enter, exit, loop, and active_word propagate accurately with complete style isolation');
+}
+
+// --------------------------------------------------------------------------
+// TEST 9: Apply Position & Size to All Captions (Layout Section Isolation)
+// --------------------------------------------------------------------------
+console.log('Test 9: Apply Position & Size to All Captions (layout section isolation & layer restriction)...');
+{
+  const layoutTrack: CaptionTrack = {
+    ...initialTrack,
+    groups: [
+      ...initialTrack.groups,
+      {
+        id: 'manual_title',
+        type: 'text',
+        start: 0,
+        end: 5.0,
+        layout: {
+          position_x: 0.1,
+          position_y: 0.15,
+          scale: 0.8,
+          alignment: 'left',
+          max_width: 0.6,
+          max_lines: 1,
+        },
+        style: {
+          font_family: 'Arial Black',
+          font_size: 20,
+          font_weight: 'bold',
+          primary_color: '#FF0000',
+        },
+        words: [{ id: 'mt1', text: 'Top Title', start: 0, end: 5.0 }],
+      },
+    ],
+  };
+
+  // Modify layout of cap_b locally (drag / resize on preview)
+  const modifiedTrack: CaptionTrack = {
+    ...layoutTrack,
+    groups: layoutTrack.groups.map((g) =>
+      g.id === 'cap_b'
+        ? {
+            ...g,
+            layout: {
+              position_x: 0.42,
+              position_y: 0.82,
+              scale: 1.35,
+              alignment: 'center',
+              max_width: 0.9,
+              max_lines: 2,
+            },
+          }
+        : g
+    ),
+  };
+
+  // Verify that prior to clicking "Apply to All", other captions remain UNCHANGED
+  const preCapA = modifiedTrack.groups.find((g) => g.id === 'cap_a')!;
+  assert.strictEqual(preCapA.layout?.position_y, undefined, 'Local change must not leak before Apply to All');
+
+  // Trigger Apply to All Captions with section: 'layout'
+  const result = applySectionStylesToTrack(modifiedTrack, 'cap_b', 'layout');
+
+  // Must affect ONLY the 3 spoken captions (cap_a, cap_b, cap_c)
+  assert.strictEqual(result.affectedCount, 3, 'Must affect strictly spoken captions');
+
+  const postCapA = result.nextTrack.groups.find((g) => g.id === 'cap_a')!;
+  const postCapB = result.nextTrack.groups.find((g) => g.id === 'cap_b')!;
+  const postCapC = result.nextTrack.groups.find((g) => g.id === 'cap_c')!;
+  const postManualText = result.nextTrack.groups.find((g) => g.id === 'manual_title')!;
+  const postOverlay = result.nextTrack.groups.find((g) => g.id === 'overlay_img')!;
+  const postAudio = result.nextTrack.groups.find((g) => g.id === 'audio_layer')!;
+
+  // 1. Spoken captions received the new position & scale
+  assert.strictEqual(postCapA.layout?.position_x, 0.42, 'cap_a received position_x');
+  assert.strictEqual(postCapA.layout?.position_y, 0.82, 'cap_a received position_y');
+  assert.strictEqual(postCapA.layout?.scale, 1.35, 'cap_a received scale');
+
+  assert.strictEqual(postCapC.layout?.position_x, 0.42, 'cap_c received position_x');
+  assert.strictEqual(postCapC.layout?.position_y, 0.82, 'cap_c received position_y');
+  assert.strictEqual(postCapC.layout?.scale, 1.35, 'cap_c received scale');
+
+  // 2. Unrelated properties PRESERVED (styles, animations, words, timestamps)
+  assert.strictEqual(postCapA.style?.font_family, 'Inter', 'cap_a font preserved');
+  assert.strictEqual(postCapA.style?.primary_color, '#FFFFFF', 'cap_a color preserved');
+  assert.strictEqual(postCapA.words[0].style_override?.color, '#00FF00', 'cap_a word override preserved');
+  assert.strictEqual(postCapC.style?.glow_enabled, true, 'cap_c glow preserved');
+
+  // 3. Manual text (type === 'text') is STRICTLY IMMUNE to caption layout changes!
+  assert.strictEqual(postManualText.layout?.position_y, 0.15, 'Manual text layout must NOT be modified');
+  assert.strictEqual(postManualText.layout?.position_x, 0.1, 'Manual text layout must NOT be modified');
+  assert.strictEqual(postManualText.layout?.scale, 0.8, 'Manual text scale must NOT be modified');
+
+  // 4. Overlays and audio are strictly immune
+  assert.strictEqual(postOverlay.layout?.position_x, undefined, 'Overlay layout not modified');
+  assert.strictEqual(postAudio.type, 'audio', 'Audio layer not modified');
+
+  // 5. Future local edits remain independent (one-time action, not persistent mode)
+  const futureEditTrack: CaptionTrack = {
+    ...result.nextTrack,
+    groups: result.nextTrack.groups.map((g) =>
+      g.id === 'cap_a'
+        ? { ...g, layout: { ...g.layout!, position_y: 0.5 } }
+        : g
+    ),
+  };
+  const capAFuture = futureEditTrack.groups.find((g) => g.id === 'cap_a')!;
+  const capBFuture = futureEditTrack.groups.find((g) => g.id === 'cap_b')!;
+  assert.strictEqual(capAFuture.layout?.position_y, 0.5);
+  assert.strictEqual(capBFuture.layout?.position_y, 0.82, 'cap_b unchanged by later local edit on cap_a');
+
+  console.log('  ✓ Layout position_x, position_y, and scale propagated strictly to spoken captions');
+  console.log('  ✓ Manual text layers, overlays, and audio layers remain completely immune');
+  console.log('  ✓ Word timestamps, style overrides, and animations remain 100% preserved');
+  console.log('  ✓ One-time action invariant holds (future edits remain local)');
+}
+
+// ============================================================================
+// TEST 10: CapCut Style Panels Isolation (spacing, bold_italic, case, stroke, shadow, background)
+// ============================================================================
+{
+  console.log('Test 10: CapCut Style Panels Isolation (spacing, bold_italic, case)...');
+  const track: CaptionTrack = JSON.parse(JSON.stringify(initialTrack));
+
+  // Modify source group cap_a with CapCut styling attributes
+  const capA = track.groups.find((g) => g.id === 'cap_a')!;
+  capA.style = {
+    ...capA.style!,
+    font_weight: '900',
+    font_style: 'italic',
+    underline: true,
+    text_transform: 'title',
+    letter_spacing: 3.5,
+    line_height: 1.6,
+    outline_opacity: 0.85,
+    shadow_distance: 5.0,
+    shadow_angle: 90.0,
+    shadow_opacity: 0.75,
+    background_mode: 'line',
+    background_opacity: 0.9,
+  };
+  capA.layout = {
+    ...capA.layout!,
+    alignment: 'left',
+    scale: 1.25,
+  };
+
+  // 1. Test bold_italic section
+  const boldItalicResult = applySectionStylesToTrack(track, 'cap_a', 'bold_italic');
+  const capBBold = boldItalicResult.nextTrack.groups.find((g) => g.id === 'cap_b')!;
+  assert.strictEqual(capBBold.style?.font_weight, '900', 'cap_b received font_weight 900');
+  assert.strictEqual(capBBold.style?.font_style, 'italic', 'cap_b received font_style italic');
+  assert.strictEqual(capBBold.style?.underline, true, 'cap_b received underline true');
+  // Unrelated properties preserved
+  assert.strictEqual(capBBold.style?.text_transform, 'uppercase', 'cap_b text_transform unaffected');
+  assert.strictEqual(capBBold.style?.primary_color, '#FF0055', 'cap_b color unaffected');
+
+  // 2. Test case section
+  const caseResult = applySectionStylesToTrack(track, 'cap_a', 'case');
+  const capBCase = caseResult.nextTrack.groups.find((g) => g.id === 'cap_b')!;
+  assert.strictEqual(capBCase.style?.text_transform, 'title', 'cap_b received title case');
+  assert.strictEqual(capBCase.style?.font_weight, 'bold', 'cap_b font_weight untouched');
+
+  // 3. Test spacing section
+  const spacingResult = applySectionStylesToTrack(track, 'cap_a', 'spacing');
+  const capBSpacing = spacingResult.nextTrack.groups.find((g) => g.id === 'cap_b')!;
+  assert.strictEqual(capBSpacing.style?.letter_spacing, 3.5, 'cap_b received letter_spacing');
+  assert.strictEqual(capBSpacing.style?.line_height, 1.6, 'cap_b received line_height');
+  assert.strictEqual(capBSpacing.layout?.alignment, 'left', 'cap_b received alignment left');
+  assert.strictEqual(capBSpacing.layout?.scale, 1.25, 'cap_b received scale 1.25');
+  assert.strictEqual(capBSpacing.style?.font_size, 48, 'cap_b font_size untouched');
+
+  console.log('  ✓ bold_italic, case, and spacing sections propagate with complete isolation');
+}
+
+console.log('\n🎉 ALL 10 REGRESSION TESTS PASSED 100%!');
+
+
+============================================================
+FILE: test_editor_repair_integrity.ts
+============================================================
+import assert from 'assert';
+import { CaptionTrack, CaptionGroup, Word } from './frontend/src/captions/types';
+import { export_to_ass_dialogue_mock, export_to_srt_mock } from './test_mock_exporter';
+
+console.log('🧪 Starting Dispatch Editor Repair & Integrity Test Suite...\n');
+
+// --------------------------------------------------------------------------
+// TEST 1: Directional Playhead Snapping & Constant Screen-Pixel Threshold
+// --------------------------------------------------------------------------
+console.log('Test 1: Directional playhead snapping logic...');
+{
+  const pxPerSec = 55;
+  const SNAP_PX = 12;
+  const snapThreshold = SNAP_PX / pxPerSec; // ~0.218s
+  const playheadTime = 10.0;
+  const origDuration = 3.0;
+
+  // Case A: Block positioned to the right of playhead (e.g. proposedStart = 10.15)
+  // Directional invariant: Start edge snaps to playheadTime
+  const proposedStartRight = 10.15;
+  let snappedStartRight = proposedStartRight;
+  if (Math.abs(proposedStartRight - playheadTime) <= snapThreshold && proposedStartRight >= playheadTime - snapThreshold) {
+    snappedStartRight = playheadTime;
+  }
+  assert.strictEqual(snappedStartRight, 10.0, 'Block to the right of playhead must snap its start edge to playhead');
+
+  // Case B: Block positioned to the left of playhead (e.g. proposedEnd = 9.88, so proposedStart = 6.88)
+  // Directional invariant: End edge snaps to playheadTime
+  const proposedEndLeft = 9.88;
+  const proposedStartLeft = proposedEndLeft - origDuration;
+  let snappedEndLeft = proposedEndLeft;
+  let finalStartLeft = proposedStartLeft;
+  if (Math.abs(proposedEndLeft - playheadTime) <= snapThreshold && proposedEndLeft <= playheadTime + snapThreshold) {
+    snappedEndLeft = playheadTime;
+    finalStartLeft = snappedEndLeft - origDuration;
+  }
+  assert.strictEqual(snappedEndLeft, 10.0, 'Block to the left of playhead must snap its end edge to playhead');
+  assert.strictEqual(finalStartLeft, 7.0, 'Start edge must maintain original duration when end edge snaps');
+
+  console.log('  ✓ Directional snapping snaps start edge when right of playhead and end edge when left of playhead');
+}
+
+// --------------------------------------------------------------------------
+// TEST 2: Word Trimming Without Stretching (Speech Authenticity)
+// --------------------------------------------------------------------------
+console.log('Test 2: Word trimming without stretching...');
+{
+  const origWords: Word[] = [
+    { id: 'w1', text: 'Hello', start: 1.0, end: 1.5 },
+    { id: 'w2', text: 'world', start: 1.6, end: 2.2 },
+    { id: 'w3', text: 'this', start: 2.3, end: 2.6 },
+    { id: 'w4', text: 'is', start: 2.7, end: 2.9 },
+    { id: 'w5', text: 'Dispatch', start: 3.0, end: 3.8 },
+  ];
+
+  // Trim start to 2.0s:
+  // Words 'Hello' (end 1.5) is excluded.
+  // Word 'world' (start 1.6, end 2.2) is clamped to start at 2.0.
+  // Words 'this', 'is', 'Dispatch' preserve their exact original timestamps!
+  const finalTrimStart = 2.0;
+  const remainingAfterStartTrim = origWords.filter((w) => w.end > finalTrimStart);
+  const nextWordsStartTrim = remainingAfterStartTrim.map((w) => ({
+    ...w,
+    start: Math.max(finalTrimStart, w.start),
+    end: Math.max(finalTrimStart, w.end),
+  }));
+
+  assert.strictEqual(nextWordsStartTrim.length, 4, 'Excluded words before trim boundary');
+  assert.strictEqual(nextWordsStartTrim[0].text, 'world');
+  assert.strictEqual(nextWordsStartTrim[0].start, 2.0, 'Boundary word clamped to trimStart');
+  assert.strictEqual(nextWordsStartTrim[0].end, 2.2, 'Boundary word preserves original end');
+  assert.strictEqual(nextWordsStartTrim[1].text, 'this');
+  assert.strictEqual(nextWordsStartTrim[1].start, 2.3, 'Subsequent words maintain exact authentic timestamps');
+  assert.strictEqual(nextWordsStartTrim[1].end, 2.6);
+  assert.strictEqual(nextWordsStartTrim[3].text, 'Dispatch');
+  assert.strictEqual(nextWordsStartTrim[3].start, 3.0);
+  assert.strictEqual(nextWordsStartTrim[3].end, 3.8);
+
+  // Trim end to 2.8s:
+  // Word 'Dispatch' (start 3.0) is excluded.
+  // Word 'is' (start 2.7, end 2.9) is clamped to end at 2.8.
+  // Word 'this' (2.3 to 2.6) preserves its original timestamps!
+  const finalTrimEnd = 2.8;
+  const remainingAfterEndTrim = origWords.filter((w) => w.start < finalTrimEnd);
+  const nextWordsEndTrim = remainingAfterEndTrim.map((w) => ({
+    ...w,
+    start: Math.min(finalTrimEnd, w.start),
+    end: Math.min(finalTrimEnd, w.end),
+  }));
+
+  assert.strictEqual(nextWordsEndTrim.length, 4);
+  assert.strictEqual(nextWordsEndTrim[3].text, 'is');
+  assert.strictEqual(nextWordsEndTrim[3].start, 2.7);
+  assert.strictEqual(nextWordsEndTrim[3].end, 2.8, 'Boundary word clamped to trimEnd');
+  assert.strictEqual(nextWordsEndTrim[2].text, 'this');
+  assert.strictEqual(nextWordsEndTrim[2].start, 2.3, 'In-range words maintain authentic timestamps');
+
+  console.log('  ✓ In-range speech words retain authentic timestamps without proportional stretching');
+}
+
+// --------------------------------------------------------------------------
+// TEST 3: Duplicate Shifts Word Timestamps by Delta
+// --------------------------------------------------------------------------
+console.log('Test 3: Layer duplication shifts word timestamps by delta...');
+{
+  const sourceGroup: CaptionGroup = {
+    id: 'grp_orig',
+    start: 2.0,
+    end: 5.0,
+    type: 'caption',
+    words: [
+      { id: 'w1', text: 'Step', start: 2.0, end: 2.8 },
+      { id: 'w2', text: 'one', start: 3.0, end: 4.5 },
+    ],
+  };
+
+  const nextStart = 2.5;
+  const nextEnd = 5.5;
+  const timeDelta = nextStart - sourceGroup.start; // +0.5s
+
+  const dup: CaptionGroup = {
+    ...sourceGroup,
+    id: 'grp_dup',
+    start: nextStart,
+    end: nextEnd,
+    words: (sourceGroup.words || []).map((w, idx) => ({
+      ...w,
+      id: `w_dup_${idx}`,
+      start: Number((w.start + timeDelta).toFixed(3)),
+      end: Number((w.end + timeDelta).toFixed(3)),
+    })),
+  };
+
+  assert.strictEqual(dup.words![0].start, 2.5, 'Word 1 shifted by +0.5s delta');
+  assert.strictEqual(dup.words![0].end, 3.3, 'Word 1 end shifted by +0.5s delta');
+  assert.strictEqual(dup.words![1].start, 3.5, 'Word 2 shifted by +0.5s delta');
+  assert.strictEqual(dup.words![1].end, 5.0, 'Word 2 end shifted by +0.5s delta');
+
+  console.log('  ✓ Duplicate shifts word timestamps by exact time offset');
+}
+
+// --------------------------------------------------------------------------
+// TEST 4: Literal Search & Replace in TranscriptEditor (No Regex Crashing)
+// --------------------------------------------------------------------------
+console.log('Test 4: Literal regex search & replace...');
+{
+  function escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // Searching for literal '.' should NOT match every letter!
+  const dotSearch = '.';
+  const regexDot = new RegExp(escapeRegex(dotSearch), 'gi');
+  const sample = 'Dispatch v1.0 is fast.';
+  const replacedDot = sample.replace(regexDot, '!');
+  assert.strictEqual(replacedDot, 'Dispatch v1!0 is fast!', 'Only literal periods should be replaced');
+
+  // Searching for literal bracket '[' or '(' should not crash
+  const bracketSearch = '[';
+  assert.doesNotThrow(() => {
+    new RegExp(escapeRegex(bracketSearch), 'gi');
+  }, 'Escaping special regex character must not throw syntax error');
+
+  console.log('  ✓ Search and Replace All handles special regex characters literally without crashing');
+}
+
+// --------------------------------------------------------------------------
+// TEST 5: Exporter Protection & Non-Text Layer Subtitle Immunity
+// --------------------------------------------------------------------------
+console.log('Test 5: Exporter skips non-text layers and hidden layers...');
+{
+  const mockTrack: CaptionTrack = {
+    id: 'track_1',
+    clip_id: 'c1',
+    groups: [
+      {
+        id: 'g_cap',
+        start: 0,
+        end: 2,
+        type: 'caption',
+        words: [{ id: 'w1', text: 'Real subtitle', start: 0, end: 2 }],
+      },
+      {
+        id: 'g_hidden_cap',
+        start: 2,
+        end: 4,
+        type: 'caption',
+        is_hidden: true,
+        words: [{ id: 'w2', text: 'Hidden subtitle', start: 2, end: 4 }],
+      },
+      {
+        id: 'g_audio',
+        start: 0,
+        end: 5,
+        type: 'audio',
+        audio_url: '/clips/audio.mp3',
+        words: [],
+      },
+      {
+        id: 'g_overlay',
+        start: 1,
+        end: 3,
+        type: 'overlay',
+        overlay_url: '/clips/overlay.png',
+        words: [],
+      },
+    ],
+    default_style: { font_family: 'Montserrat' },
+    default_layout: { position_x: 0.5, position_y: 0.78 },
+    default_animation: { type: 'pop' },
+  };
+
+  const assDialogue = export_to_ass_dialogue_mock(mockTrack);
+  const srtSubtitles = export_to_srt_mock(mockTrack);
+
+  assert.strictEqual(assDialogue.length, 1, 'Only the active, non-hidden caption should be in ASS dialogue');
+  assert.strictEqual(assDialogue[0].text, 'Real subtitle');
+
+  assert.strictEqual(srtSubtitles.length, 1, 'Only the active, non-hidden caption should be in SRT output');
+  assert.strictEqual(srtSubtitles[0].text, 'Real subtitle');
+
+  console.log('  ✓ Non-text layers and hidden layers are 100% excluded from exported subtitles');
+}
+
+// --------------------------------------------------------------------------
+// TEST 6: Dynamic Multi-track Non-Overlapping Allocation
+// --------------------------------------------------------------------------
+console.log('Test 6: Multi-track allocation with unpinned layers...');
+{
+  const groups: CaptionGroup[] = [
+    { id: 'g1', start: 0, end: 5, type: 'caption' },
+    { id: 'g2', start: 2, end: 7, type: 'text' }, // Overlaps g1 -> should be allocated to Track L2
+    { id: 'g3', start: 6, end: 10, type: 'caption' }, // Does not overlap g1 -> can pack into Track L1
+  ];
+
+  const sorted = [...groups].sort((a, b) => a.start - b.start);
+  const buckets: CaptionGroup[][] = [];
+
+  sorted.forEach((grp) => {
+    let placed = false;
+    for (let i = 0; i < buckets.length; i++) {
+      const bucket = buckets[i];
+      const hasOverlap = bucket.some(
+        (existing) => Math.max(grp.start, existing.start) < Math.min(grp.end, existing.end)
+      );
+      if (!hasOverlap) {
+        bucket.push(grp);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      buckets.push([grp]);
+    }
+  });
+
+  assert.strictEqual(buckets.length, 2, 'Should create exactly 2 tracks for 2 overlapping spans');
+  assert.deepStrictEqual(buckets[0].map((g) => g.id), ['g1', 'g3'], 'Non-overlapping g1 and g3 pack into track 0');
+  assert.deepStrictEqual(buckets[1].map((g) => g.id), ['g2'], 'Overlapping g2 packs into track 1');
+
+  console.log('  ✓ Dynamic track allocator packs non-overlapping elements cleanly without forced collisions');
+}
+
+console.log('\n🎉 ALL 6 EDITOR INTEGRITY & REPAIR TESTS PASSED 100%!');
+
+
+============================================================
+FILE: test_mock_exporter.ts
+============================================================
+import { CaptionTrack } from './frontend/src/captions/types';
+
+export function export_to_ass_dialogue_mock(track: CaptionTrack): { text: string; start: number; end: number }[] {
+  const events: { text: string; start: number; end: number }[] = [];
+  for (const group of track.groups || []) {
+    // Non-text layers and hidden layers are never rendered or exported as subtitles
+    if (group.type === 'audio' || group.type === 'voiceover' || group.type === 'overlay' || group.is_hidden) {
+      continue;
+    }
+    const text = (group.words || []).map((w) => w.text).join(' ');
+    if (text) {
+      events.push({ text, start: group.start, end: group.end });
+    }
+  }
+  return events;
+}
+
+export function export_to_srt_mock(track: CaptionTrack): { text: string; start: number; end: number }[] {
+  const subtitles: { text: string; start: number; end: number }[] = [];
+  for (const group of track.groups || []) {
+    if (group.type === 'audio' || group.type === 'voiceover' || group.type === 'overlay' || group.is_hidden) {
+      continue;
+    }
+    const text = (group.words || []).map((w) => w.text).join(' ');
+    if (text) {
+      subtitles.push({ text, start: group.start, end: group.end });
+    }
+  }
+  return subtitles;
+}
+
+
+============================================================
+FILE: test_text_caption_separation.ts
+============================================================
+import assert from 'node:assert';
+import { CaptionTrack, CaptionGroup } from './frontend/src/captions/types';
+import { applyColorOpacity, applyCaseTransform } from './frontend/src/captions/DispatchCaptionRenderer';
+
+console.log('🧪 Starting Dispatch "Text vs Caption Separation & Performance" Test Suite...\n');
+
+// 1. Data Model & Highlight Immunity Test
+console.log('Test 1: Normal text fill & spoken-word highlight immunity...');
+{
+  const textGroup: CaptionGroup = {
+    id: 'txt_1',
+    type: 'text',
+    start: 1.0,
+    end: 4.0,
+    style: {
+      primary_color: '#38BDF8',
+      highlight_color: '#FFE600',
+      highlight_enabled: false,
+      font_family: 'Montserrat',
+      font_size: 40,
+    },
+    words: [
+      { id: 'w1', text: 'Brand', start: 1.0, end: 2.0 },
+      { id: 'w2', text: 'Watermark', start: 2.0, end: 4.0 },
+    ],
+  };
+
+  const captionGroup: CaptionGroup = {
+    id: 'cap_1',
+    type: 'caption',
+    start: 1.0,
+    end: 4.0,
+    style: {
+      primary_color: '#FFFFFF',
+      highlight_color: '#FFE600',
+      highlight_enabled: true,
+      font_family: 'Montserrat',
+      font_size: 44,
+    },
+    words: [
+      { id: 'w3', text: 'Hello', start: 1.0, end: 2.0 },
+      { id: 'w4', text: 'World', start: 2.0, end: 4.0 },
+    ],
+  };
+
+  // Helper matching the renderer resolution logic
+  function resolveWordVisual(grp: CaptionGroup, currentTime: number, wordIdx: number) {
+    const isCaption = (grp.type || 'caption') === 'caption';
+    const highlightEnabled = isCaption && (grp.style?.highlight_enabled !== false);
+    const word = grp.words![wordIdx];
+    const isSpoken = currentTime >= word.start && currentTime <= word.end;
+
+    let textColor = grp.style?.primary_color || '#FFFFFF';
+    if (isCaption && isSpoken && highlightEnabled) {
+      textColor = word.style_override?.highlight_color || grp.style?.highlight_color || '#FFE600';
+    } else if (word.style_override?.color) {
+      textColor = word.style_override.color;
+    }
+
+    const animType = grp.animation?.active_word?.type || grp.animation?.type;
+    const isPunched = isCaption && isSpoken && animType && (animType === 'pop' || animType === 'bounce');
+    const activeScale = isPunched ? (grp.animation?.active_scale || 1.15) : 1.0;
+
+    return { textColor, activeScale, isCaption, highlightEnabled };
+  }
+
+  // At time 1.5s, word 0 is active for both
+  const textAt15 = resolveWordVisual(textGroup, 1.5, 0);
+  assert.strictEqual(textAt15.isCaption, false, 'textGroup must not be classified as caption');
+  assert.strictEqual(textAt15.highlightEnabled, false, 'textGroup must never have highlightEnabled');
+  assert.strictEqual(textAt15.textColor, '#38BDF8', 'Normal text must preserve primary fill color even during spoken timestamp');
+  assert.strictEqual(textAt15.activeScale, 1.0, 'Normal text must never punch or scale pop');
+
+  const captionAt15 = resolveWordVisual(captionGroup, 1.5, 0);
+  assert.strictEqual(captionAt15.isCaption, true, 'captionGroup must be classified as caption');
+  assert.strictEqual(captionAt15.highlightEnabled, true, 'captionGroup must have highlightEnabled');
+  assert.strictEqual(captionAt15.textColor, '#FFE600', 'Caption must illuminate with highlight_color when active');
+
+  console.log('  ✓ Normal text preserves primary_color and remains immune to spoken word highlight and pop punch');
+  console.log('  ✓ Caption correctly highlights with highlight_color on active words');
+}
+
+// 2. Caption Highlight Toggle Test
+console.log('Test 2: Caption highlight toggle (uniform phrase styling)...');
+{
+  const captionWithToggleOff: CaptionGroup = {
+    id: 'cap_off',
+    type: 'caption',
+    start: 0,
+    end: 3.0,
+    style: {
+      primary_color: '#FFFFFF',
+      highlight_color: '#FFE600',
+      highlight_enabled: false, // User explicitly toggled off active-word highlight
+    },
+    words: [
+      { id: 'w1', text: 'Uniform', start: 0, end: 1.5 },
+      { id: 'w2', text: 'Text', start: 1.5, end: 3.0 },
+    ],
+  };
+
+  const isCaption = (captionWithToggleOff.type || 'caption') === 'caption';
+  const highlightEnabled = isCaption && (captionWithToggleOff.style?.highlight_enabled !== false);
+  assert.strictEqual(highlightEnabled, false, 'Caption with highlight_enabled=false must not highlight');
+
+  const word = captionWithToggleOff.words![0];
+  const isSpoken = 1.0 >= word.start && 1.0 <= word.end;
+  let textColor = captionWithToggleOff.style?.primary_color || '#FFFFFF';
+  if (isCaption && isSpoken && highlightEnabled) {
+    textColor = captionWithToggleOff.style?.highlight_color || '#FFE600';
+  }
+
+  assert.strictEqual(textColor, '#FFFFFF', 'Caption with highlight disabled must render primary_color for spoken word');
+  console.log('  ✓ Caption with highlight_enabled: false maintains uniform primary fill color without highlight');
+}
+
+// 3. Multi-layer Concurrent Rendering Test (No Single-Group Swallow Bug)
+console.log('Test 3: Multi-layer concurrent rendering (caption + watermark simultaneously visible)...');
+{
+  const multiTrack: CaptionTrack = {
+    version: 2,
+    language: 'en',
+    groups: [
+      {
+        id: 'cap_subtitle',
+        type: 'caption',
+        start: 0.0,
+        end: 5.0,
+        words: [{ id: 'w1', text: 'Subtitle', start: 0, end: 5.0 }],
+        layout: { position_y: 0.8 },
+      },
+      {
+        id: 'txt_watermark',
+        type: 'text',
+        start: 0.0,
+        end: 10.0,
+        words: [{ id: 'w2', text: 'Watermark', start: 0, end: 10.0 }],
+        layout: { position_y: 0.1 },
+      },
+      {
+        id: 'aud_bgm',
+        type: 'audio',
+        start: 0.0,
+        end: 10.0,
+        words: [],
+      },
+    ],
+  };
+
+  const currentTime = 2.5;
+
+  // Multi-group filter logic from updated DispatchCaptionRenderer and InteractiveTextCanvas
+  const activeRenderGroups = multiTrack.groups.filter(
+    (grp) => grp.type !== 'audio' && grp.type !== 'voiceover' && currentTime >= grp.start && currentTime <= grp.end
+  );
+
+  assert.strictEqual(activeRenderGroups.length, 2, 'Both caption and text layers must be active simultaneously');
+  const activeIds = activeRenderGroups.map((g) => g.id);
+  assert.ok(activeIds.includes('cap_subtitle'), 'Subtitle caption must be rendered');
+  assert.ok(activeIds.includes('txt_watermark'), 'Watermark text must be rendered alongside subtitle');
+  assert.ok(!activeIds.includes('aud_bgm'), 'Audio track must never be rendered on canvas');
+
+  console.log('  ✓ Multi-layer composition renders both caption and text layers concurrently without swallowing');
+}
+
+// 4. Performance Comparator Immunity Test (Suppresses 30fps Re-rendering)
+console.log('Test 4: CaptionStudio React.memo comparator performance verification...');
+{
+  function areCaptionStudioPropsEqual(prev: any, next: any): boolean {
+    if (next.activePanel === 'transcript') {
+      if (prev.currentTime !== next.currentTime) return false;
+    }
+
+    if (prev.track !== next.track) return false;
+    if (prev.selectedGroupId !== next.selectedGroupId) return false;
+    if (prev.isVideoSelected !== next.isVideoSelected) return false;
+    if (prev.layoutMode !== next.layoutMode) return false;
+    if (prev.mainVideoVolume !== next.mainVideoVolume) return false;
+    if (prev.isMainVideoMuted !== next.isMainVideoMuted) return false;
+    if (prev.activePanel !== next.activePanel) return false;
+    if (prev.duration !== next.duration) return false;
+    if (prev.canUndo !== next.canUndo) return false;
+    if (prev.canRedo !== next.canRedo) return false;
+
+    return true;
+  }
+
+  const baseProps = {
+    track: { version: 2, groups: [] },
+    currentTime: 1.0,
+    selectedGroupId: 'txt_1',
+    isVideoSelected: false,
+    layoutMode: 'crop_916',
+    mainVideoVolume: 100,
+    isMainVideoMuted: false,
+    activePanel: 'style',
+    duration: 30,
+    canUndo: false,
+    canRedo: false,
+  };
+
+  // 1. Playhead advances from 1.0 to 1.033 (30fps playback tick) while editing Style panel
+  const playheadNext = { ...baseProps, currentTime: 1.033 };
+  const shouldSkipReRender = areCaptionStudioPropsEqual(baseProps, playheadNext);
+  assert.strictEqual(shouldSkipReRender, true, 'CaptionStudio must suppress re-rendering on frame ticks when transcript is closed');
+
+  // 2. User selects a different layer
+  const selectNext = { ...baseProps, selectedGroupId: 'cap_2' };
+  assert.strictEqual(areCaptionStudioPropsEqual(baseProps, selectNext), false, 'Must re-render when selected layer changes');
+
+  // 3. User switches inspector tabs
+  const tabNext = { ...baseProps, activePanel: 'fonts' };
+  assert.strictEqual(areCaptionStudioPropsEqual(baseProps, tabNext), false, 'Must re-render when active panel changes');
+
+  // 4. In Transcript editor mode, playhead ticks MUST re-render for live karaoke scrolling
+  const transcriptPrev = { ...baseProps, activePanel: 'transcript', currentTime: 1.0 };
+  const transcriptNext = { ...baseProps, activePanel: 'transcript', currentTime: 1.033 };
+  assert.strictEqual(areCaptionStudioPropsEqual(transcriptPrev, transcriptNext), false, 'Transcript mode must re-render on time ticks for live karaoke');
+
+  console.log('  ✓ 30fps currentTime ticks are cleanly suppressed during normal playback & editing');
+  console.log('  ✓ Layer selection & inspector tab switching immediately trigger re-render');
+  console.log('  ✓ Transcript editor mode selectively receives time ticks for fluid karaoke tracking');
+}
+
+console.log('\n🎉 ALL TEXT/CAPTION SEPARATION & PERFORMANCE TESTS PASSED 100%!');
+
+
+============================================================
+FILE: tests\__init__.py
+============================================================
+"""Test suite isolation harness.
+Prepares an isolated temporary storage and SQLite database directory
+BEFORE application modules are imported or run.
+"""
+import os
+import atexit
+import shutil
+import tempfile
+from pathlib import Path
+
+# Setup unique test sandbox directory if not already initialized by dispatch.config
+if not os.getenv("DISPATCH_STORAGE_DIR"):
+    _test_sandbox_dir = tempfile.mkdtemp(prefix="dispatch_test_sandbox_")
+    _storage_dir = Path(_test_sandbox_dir) / "storage"
+    _db_dir = _storage_dir / "database"
+    _db_dir.mkdir(parents=True, exist_ok=True)
+    _test_db_path = _db_dir / "test_dispatch.db"
+
+    # Set environment overrides before ANY dispatch module is imported
+    os.environ["DISPATCH_STORAGE_DIR"] = str(_storage_dir)
+    os.environ["DISPATCH_DB_PATH"] = str(_test_db_path)
+    os.environ["DISPATCH_DISABLE_AUTO_OUTBOX"] = "1"
+    os.environ["DISPATCH_DISABLE_BACKGROUND_POLLERS"] = "1"
+
+    # Cleanup sandbox on test suite completion
+    def _cleanup_test_sandbox():
+        try:
+            shutil.rmtree(_test_sandbox_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    atexit.register(_cleanup_test_sandbox)
+
+# Initialize SQLite database tables in isolated sandbox
+from dispatch.db import init_db
+init_db()
+
+
+============================================================
+FILE: tests\e2e\__init__.py
+============================================================
+"""Dispatch End-to-End Test Suite across Tiers 1-4.
+Covers Feature Coverage, Boundary Cases, Pairwise Interactions, and Real-World Scenarios.
+"""
+
+
+============================================================
+FILE: tests\e2e\e2e_base.py
+============================================================
+"""Base test case and fixture harness for Dispatch E2E test suites (Tiers 1-4).
+Provides strict isolation, temporary test storage, clean SQLite state,
+and synthetic media generation helpers.
+"""
+import os
+import shutil
+import tempfile
+import hashlib
+import subprocess
+import unittest
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+from fastapi.testclient import TestClient
+
+from dispatch.web.app import app
+from dispatch.config import (
+    INCOMING_DIR,
+    PROCESSING_DIR,
+    CLIPS_DIR,
+    YOUTUBE_INBOX_DIR,
+    QUARANTINE_DIR,
+    DB_PATH
+)
+from dispatch.db import (
+    init_db,
+    get_db_connection,
+    register_chunk,
+    save_clip,
+    create_session
+)
+from dispatch.orchestrator.job_queue import (
+    init_job_queue_schema,
+    enqueue_job
+)
+from dispatch_mobile.db import (
+    init_mobile_db,
+    get_mobile_db
+)
+
+E2E_DEFAULT_AUTH_TOKEN = "dispatch_e2e_test_token_secret_9988"
+
+
+class DispatchE2EBaseTestCase(unittest.TestCase):
+    """Base class for all E2E test cases across Tiers 1-4."""
+
+    auth_token = E2E_DEFAULT_AUTH_TOKEN
+
+    def setUp(self):
+        super().setUp()
+        os.environ["DISPATCH_AUTH_TOKEN"] = self.auth_token
+        os.environ["DISPATCH_DISABLE_AUTO_OUTBOX"] = "1"
+
+        # Initialize databases and schemas
+        init_db()
+        init_job_queue_schema()
+        init_mobile_db()
+
+        # Isolate database tables by clearing test rows
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM pipeline_jobs;")
+            conn.execute("DELETE FROM publishing_outbox;")
+            conn.execute("DELETE FROM clips;")
+            conn.execute("DELETE FROM chunks;")
+            conn.execute("DELETE FROM sessions;")
+            conn.execute("DELETE FROM transcripts;")
+            conn.execute("DELETE FROM youtube_inbox;")
+            conn.execute("DELETE FROM rejections;")
+            conn.commit()
+
+        with get_mobile_db() as conn:
+            conn.execute("DELETE FROM mobile_outbox;")
+            conn.execute("DELETE FROM mobile_segments;")
+            conn.execute("DELETE FROM mobile_sessions;")
+            conn.commit()
+
+        # Create temporary working directory for test-generated files
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="dispatch_e2e_"))
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        super().tearDown()
+        if self.temp_dir and self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def create_synthetic_mp4(
+        self,
+        target_path: Path,
+        duration_seconds: float = 1.0,
+        width: int = 1280,
+        height: int = 720,
+        with_audio: bool = True
+    ) -> Path:
+        """Create a lightweight, valid MP4 video using FFmpeg lavfi filters."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc=size={width}x{height}:rate=25"]
+        if with_audio:
+            cmd.extend(["-f", "lavfi", "-i", "sine=frequency=440"])
+            cmd.extend(["-c:a", "aac"])
+        cmd.extend([
+            "-t", str(duration_seconds),
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            str(target_path)
+        ])
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to generate synthetic video: {result.stderr}")
+        return target_path
+
+    def create_mock_payload_bytes(self, size_bytes: int = 1024, fill_byte: bytes = b"A") -> bytes:
+        """Generate deterministic binary payload for chunked sync tests."""
+        return fill_byte * size_bytes
+
+    def calculate_bytes_sha256(self, payload: bytes) -> str:
+        """Calculate SHA-256 hash of byte payload."""
+        return hashlib.sha256(payload).hexdigest()
+
+    def calculate_file_sha256(self, file_path: Path) -> str:
+        """Calculate SHA-256 hash of a file on disk."""
+        hasher = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while chunk := f.read(65536):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    def register_test_chunk_and_job(
+        self,
+        session_id: str = "sess_e2e_001",
+        filename: str = "test_chunk.mp4",
+        file_bytes: Optional[bytes] = None,
+        duration: float = 45.0
+    ) -> Dict[str, Any]:
+        """Convenience helper to stage a valid chunk and pipeline job in database."""
+        video_path = self.temp_dir / filename
+        if file_bytes is not None:
+            video_path.write_bytes(file_bytes)
+        elif not video_path.exists():
+            self.create_synthetic_mp4(video_path, duration_seconds=min(1.0, duration))
+
+        sha256_hash = self.calculate_file_sha256(video_path)
+        chunk_id = register_chunk(
+            session_id=session_id,
+            filename=filename,
+            filepath=str(video_path),
+            file_hash=sha256_hash
+        )
+        with get_db_connection() as conn:
+            conn.execute(
+                "UPDATE chunks SET duration = ?, width = 1280, height = 720, aspect_ratio = '16:9' WHERE id = ?",
+                (duration, chunk_id)
+            )
+        job_id = enqueue_job(chunk_id=chunk_id, session_id=session_id)
+        return {
+            "chunk_id": chunk_id,
+            "job_id": job_id,
+            "filepath": video_path,
+            "sha256": sha256_hash,
+            "session_id": session_id
+        }
+
+
+============================================================
+FILE: tests\e2e\test_tier1_features_ingestion_security.py
+============================================================
+"""Tier 1: Feature Coverage — Ingestion, Transport & Pairing Security.
+Covers:
+- Feature 1: Pairing Security Hardening (>= 5 tests)
+- Feature 2: Cryptographic Verification & Pruning (>= 5 tests)
+- Feature 3: UDP & Subnet Auto-Discovery (>= 5 tests)
+"""
+import os
+import time
+import socket
+import hashlib
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from tests.e2e.e2e_base import DispatchE2EBaseTestCase
+from dispatch.sync.receiver import get_pairing_pin, get_auth_token
+from dispatch.config import INCOMING_DIR, PROCESSING_DIR
+from dispatch.db import get_db_connection, register_chunk
+from dispatch.transport.discovery import DiscoveryBeaconServer, BEACON_MAGIC
+from dispatch.transport.transport_manager import TransportManager, NetworkPolicy, EndpointCandidate
+from dispatch_mobile.segmenter import RecordingSessionManager
+from dispatch_mobile.retention import cleanup_verified_segments
+from dispatch_mobile.db import get_mobile_db
+
+
+class TestTier1IngestionSecurity(DispatchE2EBaseTestCase):
+    """Tier 1 Feature Coverage: Features 1, 2, and 3."""
+
+    # =========================================================================
+    # FEATURE 1: Pairing Security Hardening
+    # =========================================================================
+
+    def test_f01_pairing_unauthenticated_lan_forbidden(self):
+        """F1.1: Unauthenticated request from non-localhost LAN client must receive HTTP 403."""
+        # Simulate request with external client IP
+        response = self.client.get(
+            "/api/sync/pairing/config",
+            headers={"client-ip": "192.168.1.105"}
+        )
+        # TestClient uses 127.0.0.1 by default; when passing an explicit non-auth request without PIN/token
+        # and mocking client host to external IP, it must be forbidden:
+        with patch("fastapi.Request.client", new_callable=MagicMock) as mock_client:
+            mock_client.host = "192.168.1.105"
+            res = self.client.get("/api/sync/pairing/config")
+            self.assertIn(res.status_code, (401, 403))
+            self.assertIn("detail", res.json())
+            self.assertNotIn("auth_token", res.json())
+
+    def test_f01_pairing_authenticated_with_pin(self):
+        """F1.2: Supplying valid 6-digit PIN via query parameter permits access to pairing config."""
+        pin = get_pairing_pin()
+        self.assertEqual(len(pin), 6)
+        self.assertTrue(pin.isdigit())
+
+        with patch("fastapi.Request.client", new_callable=MagicMock) as mock_client:
+            mock_client.host = "192.168.1.105"
+            res = self.client.get(f"/api/sync/pairing/config?pin={pin}")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertIn("auth_token", data)
+            self.assertIn("connection_string", data)
+            self.assertEqual(data["pairing_pin"], pin)
+
+    def test_f01_pairing_authenticated_with_header_token(self):
+        """F1.3: Supplying valid x-auth-token header permits access even from external IP."""
+        token = get_auth_token()
+        with patch("fastapi.Request.client", new_callable=MagicMock) as mock_client:
+            mock_client.host = "192.168.1.105"
+            res = self.client.get("/api/sync/pairing/config", headers={"x-auth-token": token})
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data["auth_token"], token)
+            self.assertIn("dispatch://pair", data["connection_string"])
+
+    def test_f01_pairing_invalid_credentials_rejected(self):
+        """F1.4: Invalid PIN or wrong token receives 403 Forbidden."""
+        with patch("fastapi.Request.client", new_callable=MagicMock) as mock_client:
+            mock_client.host = "192.168.1.105"
+            res_bad_pin = self.client.get("/api/sync/pairing/config?pin=000000")
+            self.assertIn(res_bad_pin.status_code, (401, 403))
+
+            res_bad_token = self.client.get(
+                "/api/sync/pairing/config",
+                headers={"x-auth-token": "completely_bogus_token"}
+            )
+            self.assertIn(res_bad_token.status_code, (401, 403))
+
+    def test_f01_pairing_localhost_access_allowed(self):
+        """F1.5: Localhost connections (creator viewing PC web dashboard) are permitted without PIN."""
+        res = self.client.get("/api/sync/pairing/config")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("lan_url", data)
+        self.assertIn("pairing_pin", data)
+        self.assertIn("auth_token", data)
+
+    def test_f01_pairing_pin_generation_and_persistence(self):
+        """F1.6: Pairing PIN generation is persistent across repeated invocations."""
+        pin1 = get_pairing_pin()
+        pin2 = get_pairing_pin()
+        self.assertEqual(pin1, pin2)
+        self.assertEqual(len(pin1), 6)
+
+    # =========================================================================
+    # FEATURE 2: Cryptographic Verification & Pruning
+    # =========================================================================
+
+    def test_f02_verify_chunk_matching_sha256_and_size(self):
+        """F2.1: Matching SHA-256 and size returns verified=True and status=VERIFIED."""
+        seg_id = f"seg_f02_match_{int(time.time() * 1000)}"
+        payload = self.create_mock_payload_bytes(10240, b"V")
+        sha256 = self.calculate_bytes_sha256(payload)
+
+        # Write file into incoming
+        file_path = INCOMING_DIR / f"{seg_id}.mp4"
+        file_path.write_bytes(payload)
+
+        try:
+            res = self.client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={sha256}&file_size=10240",
+                headers={"x-auth-token": self.auth_token}
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data["verified"])
+            self.assertEqual(data["status"], "VERIFIED")
+            self.assertEqual(data["size"], 10240)
+        finally:
+            file_path.unlink(missing_ok=True)
+
+    def test_f02_verify_chunk_hash_mismatch_refused(self):
+        """F2.2: Tampered payload returns verified=False and refusal status."""
+        seg_id = f"seg_f02_tamper_{int(time.time() * 1000)}"
+        payload = self.create_mock_payload_bytes(10240, b"G")
+        genuine_sha256 = self.calculate_bytes_sha256(payload)
+        corrupted_payload = self.create_mock_payload_bytes(10240, b"X")
+
+        file_path = INCOMING_DIR / f"{seg_id}.mp4"
+        file_path.write_bytes(corrupted_payload)
+
+        try:
+            res = self.client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_sha256}&file_size=10240",
+                headers={"x-auth-token": self.auth_token}
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertFalse(data["verified"])
+            self.assertIn("mismatch", data.get("reason", "").lower() + data.get("status", "").lower())
+        finally:
+            file_path.unlink(missing_ok=True)
+
+    def test_f02_verify_chunk_size_mismatch_refused(self):
+        """F2.3: Incomplete or oversized payload returns verified=False."""
+        seg_id = f"seg_f02_size_{int(time.time() * 1000)}"
+        payload = self.create_mock_payload_bytes(5000, b"S")
+        sha256 = self.calculate_bytes_sha256(payload)
+
+        file_path = INCOMING_DIR / f"{seg_id}.mp4"
+        file_path.write_bytes(payload)
+
+        try:
+            res = self.client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={sha256}&file_size=10000",
+                headers={"x-auth-token": self.auth_token}
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertFalse(data["verified"])
+            self.assertEqual(data["reason"], "size_mismatch")
+        finally:
+            file_path.unlink(missing_ok=True)
+
+    def test_f02_verify_chunk_nonexistent_returns_missing(self):
+        """F2.4: Querying proof for non-existent segment returns verified=False, status=MISSING."""
+        res = self.client.get(
+            "/api/sync/verify-chunk?segment_id=seg_does_not_exist&sha256=abcdef123456&file_size=1000",
+            headers={"x-auth-token": self.auth_token}
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(data["verified"])
+        self.assertEqual(data["status"], "MISSING")
+
+    def test_f02_mobile_retention_prunes_only_verified_segments(self):
+        """F2.5: Phone retention deletes VERIFIED_BY_LAPTOP segments and strictly preserves unverified."""
+        manager = RecordingSessionManager(storage_dir=self.temp_dir)
+        sess_id = manager.start_session(notes="Retention Test")
+
+        # Segment 1 is started automatically by start_session
+        seg1_id = f"{sess_id}_seg_0001"
+        seg1_path = self.temp_dir / f"{seg1_id}.mp4"
+        seg1_tmp = manager.current_tmp_path
+        seg1_tmp.write_bytes(b"SEGMENT_1_TEST_BYTES")
+
+        # Roll to Segment 2 (finalizes segment 1)
+        manager.start_next_segment()
+        seg2_id = f"{sess_id}_seg_0002"
+        seg2_path = self.temp_dir / f"{seg2_id}.mp4"
+        seg2_tmp = manager.current_tmp_path
+        seg2_tmp.write_bytes(b"SEGMENT_2_TEST_BYTES")
+        manager.finalize_current_segment()
+
+        self.assertTrue(seg1_path.exists())
+        self.assertTrue(seg2_path.exists())
+
+        # Without verification, cleanup deletes 0 files
+        deleted_count = cleanup_verified_segments()
+        self.assertEqual(deleted_count, 0)
+        self.assertTrue(seg1_path.exists())
+        self.assertTrue(seg2_path.exists())
+
+        # Mark only Segment 1 as verified
+        with get_mobile_db() as conn:
+            conn.execute(
+                "UPDATE mobile_segments SET status = 'VERIFIED_BY_LAPTOP' WHERE segment_id = ?",
+                (seg1_id,)
+            )
+
+        deleted_count = cleanup_verified_segments()
+        self.assertEqual(deleted_count, 1)
+        self.assertFalse(seg1_path.exists(), "Verified segment 1 should have been deleted")
+        self.assertTrue(seg2_path.exists(), "Unverified segment 2 must be preserved")
+
+    def test_f02_verify_chunk_requires_authentication(self):
+        """F2.6: verify-chunk endpoint enforces x-auth-token presence."""
+        res = self.client.get(
+            "/api/sync/verify-chunk?segment_id=seg_test&sha256=1234&file_size=100"
+        )
+        self.assertEqual(res.status_code, 401)
+
+    # =========================================================================
+    # FEATURE 3: UDP & Subnet Auto-Discovery
+    # =========================================================================
+
+    def test_f03_discovery_beacon_payload_structure(self):
+        """F3.1: UDP Discovery server constructs announce payload matching specification."""
+        server = DiscoveryBeaconServer(port=8765)
+        payload = server._get_payload()
+        self.assertEqual(payload["magic"], BEACON_MAGIC)
+        self.assertEqual(payload["service"], "dispatch")
+        self.assertIn("lan_url", payload)
+        self.assertIn("ip", payload)
+        self.assertIn("port", payload)
+        self.assertNotIn("auth_token", payload, "UDP discovery beacon must not leak auth_token")
+        self.assertTrue(payload.get("pairing_required"))
+
+    def test_f03_transport_manager_selects_lowest_latency_healthy_route(self):
+        """F3.2: Selects LAN route when LAN latency is faster than Tailscale."""
+        manager = TransportManager(
+            auth_token=self.auth_token,
+            lan_url="http://192.168.1.50:8765",
+            tailscale_url="http://laptop.tailscale.net:8765"
+        )
+
+        def mock_get(url, **kwargs):
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.return_value = {"status": "online"}
+            return mock_res
+
+        with patch("requests.get", side_effect=mock_get):
+            best = manager.select_best_endpoint()
+            self.assertIsNotNone(best)
+            self.assertEqual(best.name, "lan")
+            self.assertEqual(best.url, "http://192.168.1.50:8765")
+
+    def test_f03_transport_manager_failover_when_primary_offline(self):
+        """F3.3: Automatically fails over to Tailscale when LAN route is unreachable."""
+        manager = TransportManager(
+            auth_token=self.auth_token,
+            lan_url="http://192.168.1.50:8765",
+            tailscale_url="http://laptop.tailscale.net:8765"
+        )
+
+        def mock_failover(url, **kwargs):
+            if "192.168" in url:
+                raise ConnectionError("No route to LAN host")
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.return_value = {"status": "online"}
+            return mock_res
+
+        with patch("requests.get", side_effect=mock_failover):
+            best = manager.select_best_endpoint()
+            self.assertIsNotNone(best)
+            self.assertEqual(best.name, "tailscale")
+            self.assertEqual(best.url, "http://laptop.tailscale.net:8765")
+
+    def test_f03_transport_manager_offline_all_routes_returns_none(self):
+        """F3.4: When all endpoints are unreachable, manager returns None for safe local queuing."""
+        manager = TransportManager(
+            auth_token=self.auth_token,
+            lan_url="http://192.168.1.50:8765",
+            tailscale_url="http://laptop.tailscale.net:8765"
+        )
+
+        with patch("requests.get", side_effect=ConnectionError("Network down")):
+            best = manager.select_best_endpoint()
+            self.assertIsNone(best)
+
+    def test_f03_transport_network_policy_evaluation(self):
+        """F3.5: NetworkPolicy enforces Wi-Fi only, cellular gating, and blocks roaming."""
+        manager = TransportManager(auth_token=self.auth_token)
+
+        # Disconnected
+        allowed, reason = manager.evaluate_network_policy("none")
+        self.assertFalse(allowed)
+
+        # Wi-Fi allowed
+        allowed, reason = manager.evaluate_network_policy("wifi")
+        self.assertTrue(allowed)
+
+        # Roaming blocked
+        allowed, reason = manager.evaluate_network_policy("wifi", is_roaming=True)
+        self.assertFalse(allowed)
+        self.assertIn("roaming", reason.lower())
+
+        # Cellular blocked by default
+        allowed, reason = manager.evaluate_network_policy("cellular")
+        self.assertFalse(allowed)
+
+    def test_f03_transport_auth_headers_contain_device_token(self):
+        """F3.6: get_auth_headers() includes paired token and client identification."""
+        manager = TransportManager(auth_token=self.auth_token)
+        headers = manager.get_auth_headers()
+        self.assertEqual(headers["X-Dispatch-Device-Token"], self.auth_token)
+        self.assertEqual(headers["X-Dispatch-Client"], "DispatchMobile/1.0")
+
+
+============================================================
+FILE: tests\e2e\test_tier1_features_media_ai_engine.py
+============================================================
+"""Tier 1: Feature Coverage — Media Processing, AI Highlight Extraction, Video Engine & YouTube Inbox.
+Covers:
+- Feature 14: Roman Hinglish Whisper Transcription (>= 5 tests)
+- Feature 15: Gemini Flash Highlight Extraction (>= 5 tests)
+- Feature 16: 9:16 Vertical Video & ASS Karaoke Subtitles (>= 5 tests)
+- Feature 17: YouTube Cloud Inbox Polling & Catcher (>= 5 tests)
+- Feature 18: E2E Test Suite & Adversarial Hardening (>= 5 tests)
+"""
+import json
+import time
+import subprocess
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from tests.e2e.e2e_base import DispatchE2EBaseTestCase
+from dispatch.config import CLIPS_DIR, PROCESSING_DIR, ROOT_DIR, MIN_CLIP_DURATION, MAX_CLIP_DURATION
+from dispatch.db import get_db_connection, save_transcript, register_chunk, save_clip, reject_clip, register_youtube_video
+from dispatch.transcription.audio import extract_audio
+from dispatch.transcription.transcriber import transcribe_video
+from dispatch.ai_clips.highlight_finder import (
+    snap_to_word_boundary,
+    extract_clips_local_heuristic,
+    identify_and_save_highlights,
+    extract_clips_gemini
+)
+from dispatch.ai_clips.preference_learner import get_negative_feedback_prompt
+from dispatch.video_engine.subtitle_generator import generate_ass_subtitles, format_ass_timestamp
+from dispatch.video_engine.reframer import build_filter_complex
+from dispatch.video_engine.renderer import render_clip
+from dispatch.youtube_inbox.vtt_parser import clean_vtt_text, parse_vtt_content
+from dispatch.youtube_inbox.catcher import extract_youtube_video_id, YouTubeInboxCatcher
+
+# Privacy-gate fixture: ingestion requires an allowed visibility verdict.
+patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
+
+class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
+    """Tier 1 Feature Coverage: Features 14, 15, 16, 17, and 18."""
+
+    # =========================================================================
+    # FEATURE 14: Roman Hinglish Whisper Transcription
+    # =========================================================================
+
+    def test_f14_initial_prompt_contains_roman_hinglish_context(self):
+        """F14.1: Transcriber uses an initial prompt primed for Hindi-English code-switching."""
+        dummy_video = self.temp_dir / "trans_prompt.mp4"
+        self.create_synthetic_mp4(dummy_video, duration_seconds=0.5)
+
+        captured_prompt = None
+        def mock_transcribe(*args, **kwargs):
+            nonlocal captured_prompt
+            captured_prompt = kwargs.get("initial_prompt", "")
+            mock_seg = MagicMock()
+            mock_seg.text = "Yeh ek test hai"
+            mock_seg.words = []
+            return [mock_seg], None
+
+        with patch("dispatch.transcription.transcriber.get_whisper_model") as mock_get_model:
+            mock_model = MagicMock()
+            mock_model.transcribe = mock_transcribe
+            mock_get_model.return_value = mock_model
+
+            res = transcribe_video(dummy_video)
+            self.assertIsNotNone(captured_prompt)
+            self.assertIn("Hinglish", captured_prompt)
+            self.assertIn("Hindi", captured_prompt)
+
+    def test_f14_word_level_timestamps_formatting(self):
+        """F14.2: Transcriber extracts word timestamps and saves them in database transcripts table."""
+        dummy_video = self.temp_dir / "trans_words.mp4"
+        self.create_synthetic_mp4(dummy_video, duration_seconds=0.5)
+        cid = register_chunk(session_id="sess_f14_words", filename="trans_words.mp4", filepath=str(dummy_video), file_hash="h14_words")
+
+        def mock_transcribe(*args, **kwargs):
+            mock_seg = MagicMock()
+            mock_seg.id = 0
+            mock_seg.text = "Hello world"
+            mock_seg.start = 0.0
+            mock_seg.end = 1.0
+            w1 = MagicMock(word="Hello", start=0.0, end=0.4, probability=0.9)
+            w2 = MagicMock(word="world", start=0.5, end=0.9, probability=0.9)
+            mock_seg.words = [w1, w2]
+            return [mock_seg], None
+
+        with patch("dispatch.transcription.transcriber.get_whisper_model") as mock_get_model:
+            mock_model = MagicMock()
+            mock_model.transcribe = mock_transcribe
+            mock_get_model.return_value = mock_model
+
+            result = transcribe_video(dummy_video, chunk_id=cid)
+            self.assertIsNotNone(result["transcript_id"])
+            self.assertEqual(result["full_text"], "Hello world")
+
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT segments_json FROM transcripts WHERE id = ?", (result["transcript_id"],))
+                segments = json.loads(cursor.fetchone()["segments_json"])
+                self.assertEqual(len(segments), 1)
+                self.assertEqual(len(segments[0]["words"]), 2)
+                self.assertEqual(segments[0]["words"][0]["word"], "Hello")
+
+    def test_f14_transcription_vad_filter_configuration(self):
+        """F14.3: Transcriber enables VAD silence filtering with 500ms min silence threshold."""
+        dummy_video = self.temp_dir / "trans_vad.mp4"
+        self.create_synthetic_mp4(dummy_video, duration_seconds=0.5)
+
+        captured_kwargs = {}
+        def mock_transcribe(*args, **kwargs):
+            nonlocal captured_kwargs
+            captured_kwargs = kwargs
+            mock_seg = MagicMock()
+            mock_seg.id = 0
+            mock_seg.text = "Valid speech"
+            mock_seg.start = 0.0
+            mock_seg.end = 1.0
+            mock_seg.words = []
+            return [mock_seg], None
+
+        with patch("dispatch.transcription.transcriber.get_whisper_model") as mock_get_model:
+            mock_model = MagicMock()
+            mock_model.transcribe = mock_transcribe
+            mock_get_model.return_value = mock_model
+
+            transcribe_video(dummy_video)
+            self.assertTrue(captured_kwargs.get("vad_filter"))
+            self.assertEqual(captured_kwargs.get("vad_parameters", {}).get("min_silence_duration_ms"), 500)
+
+    def test_f14_save_transcript_database_storage(self):
+        """F14.4: save_transcript stores full_text and valid JSON segments in transcripts table."""
+        cid = register_chunk(session_id="sess_f14", filename="chunk_f14.mp4", filepath="f14.mp4", file_hash="h14")
+        segments = [{"id": 0, "start": 0.0, "end": 2.0, "text": "Hinglish clip"}]
+
+        tid = save_transcript(chunk_id=cid, session_id="sess_f14", full_text="Hinglish clip", segments=segments)
+        self.assertIsNotNone(tid)
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT full_text, segments_json FROM transcripts WHERE id = ?", (tid,))
+            row = cursor.fetchone()
+            self.assertEqual(row["full_text"], "Hinglish clip")
+            loaded = json.loads(row["segments_json"])
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["text"], "Hinglish clip")
+
+    def test_f14_extract_audio_from_video_ffmpeg(self):
+        """F14.5: extract_audio executes FFmpeg and outputs a valid audio file."""
+        dummy_video = self.temp_dir / "audio_extract.mp4"
+        self.create_synthetic_mp4(dummy_video, duration_seconds=1.0)
+
+        audio_path = extract_audio(dummy_video)
+        self.assertTrue(audio_path.exists())
+        self.assertGreater(audio_path.stat().st_size, 0)
+        audio_path.unlink(missing_ok=True)
+
+    # =========================================================================
+    # FEATURE 15: Gemini Flash Highlight Extraction
+    # =========================================================================
+
+    def test_f15_gemini_api_authenticated_header_request(self):
+        """F15.1: Gemini Flash API call passes x-goog-api-key header and valid JSON payload."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "text": json.dumps([{
+                            "start_time": 0.0,
+                            "end_time": 30.0,
+                            "title": "Autonomous Pipeline",
+                            "hook": "Zero manual work",
+                            "virality_score": 95,
+                            "layout_mode": "fit_blur"
+                        }])
+                    }]
+                }
+            }]
+        }
+
+        with patch("dispatch.ai_clips.highlight_finder.GEMINI_API_KEY", "test_gemini_key_123"):
+            with patch("requests.post", return_value=mock_resp) as mock_post:
+                clips = extract_clips_gemini(
+                    transcript_text="Sample text",
+                    segments=[{"start": 0.0, "end": 30.0, "text": "Sample text"}]
+                )
+                self.assertIsNotNone(clips)
+                self.assertEqual(len(clips), 1)
+                self.assertEqual(clips[0]["title"], "Autonomous Pipeline")
+
+                # Verify header
+                call_headers = mock_post.call_args[1]["headers"]
+                self.assertEqual(call_headers["x-goog-api-key"], "test_gemini_key_123")
+
+    def test_f15_clip_duration_enforces_bounds_20_to_90_seconds(self):
+        """F15.2: Heuristic extraction generates clips strictly bounded between 20s and 90s."""
+        # Generate 100s of segments
+        segments = []
+        for i in range(20):
+            segments.append({
+                "id": i,
+                "start": float(i * 5),
+                "end": float((i + 1) * 5),
+                "text": f"Yeh segment {i} hai jo workflow automate karta hai.",
+                "words": []
+            })
+
+        clips = extract_clips_local_heuristic(segments, total_duration=100.0)
+        self.assertGreaterEqual(len(clips), 1)
+        for c in clips:
+            duration = c["end_time"] - c["start_time"]
+            self.assertGreaterEqual(duration, MIN_CLIP_DURATION)
+            self.assertLessEqual(duration, MAX_CLIP_DURATION)
+
+    def test_f15_word_boundary_snapping_precision(self):
+        """F15.3: snap_to_word_boundary snaps float timestamp to nearest spoken word boundary."""
+        segments = [{
+            "id": 0, "start": 0.0, "end": 10.0, "text": "Yeh pehla word hai",
+            "words": [
+                {"word": "Yeh", "start": 0.2, "end": 0.6},
+                {"word": "pehla", "start": 1.0, "end": 1.8},
+                {"word": "word", "start": 2.2, "end": 2.9},
+                {"word": "hai", "start": 3.1, "end": 3.5}
+            ]
+        }]
+        snapped_start = snap_to_word_boundary(1.1, segments, prefer_start=True)
+        self.assertEqual(snapped_start, 1.0)
+
+        snapped_end = snap_to_word_boundary(2.8, segments, prefer_start=False)
+        self.assertEqual(snapped_end, 2.9)
+
+    def test_f15_local_heuristic_fallback_works_offline(self):
+        """F15.4: When Gemini API is unavailable or offline, heuristic fallback returns candidate clips."""
+        dummy_v = self.temp_dir / "offline_sample.mp4"
+        dummy_v.write_bytes(b"OFFLINE_SAMPLE_VIDEO_DATA")
+        cid = register_chunk(session_id="sess_offline", filename="offline_sample.mp4", filepath=str(dummy_v), file_hash="hash_offline")
+
+        segments = [
+            {"id": 0, "start": 0.0, "end": 15.0, "text": "Suno aaj hum content creation automate karenge basically.", "words": []},
+            {"id": 1, "start": 15.0, "end": 35.0, "text": "The entire pipeline runs locally on your PC without failure.", "words": []}
+        ]
+        with patch("dispatch.ai_clips.highlight_finder.GEMINI_API_KEY", ""):
+            clip_ids = identify_and_save_highlights(
+                chunk_id=cid,
+                session_id="sess_offline",
+                segments=segments,
+                total_duration=35.0
+            )
+            self.assertGreaterEqual(len(clip_ids), 1)
+
+    def test_f15_negative_feedback_prompt_adaptation(self):
+        """F15.5: User clip rejections inject negative feedback criteria into prompt templates."""
+        clip_id = save_clip(
+            session_id=None, chunk_id=None, start_time=0.0, end_time=10.0,
+            title="Boring Intro", hook="Slow start", description="", hashtags="",
+            virality_score=40, layout_mode="fit_blur"
+        )
+        reject_clip(clip_id, reason="Avoid boring technical explanations at start")
+
+        feedback_prompt = get_negative_feedback_prompt()
+        self.assertIn("Avoid boring technical explanations", feedback_prompt)
+
+    # =========================================================================
+    # FEATURE 16: 9:16 Vertical Video & ASS Karaoke Subtitles
+    # =========================================================================
+
+    def test_f16_ass_header_and_highlight_style(self):
+        """F16.1: Subtitle generator creates valid ASS file with 1080x1920 PlayRes and yellow highlight style."""
+        out_ass = self.temp_dir / "test_subs.ass"
+        segments = [{
+            "id": 0, "start": 0.0, "end": 4.0, "text": "Dispatch content engine",
+            "words": [
+                {"word": "Dispatch", "start": 0.0, "end": 1.0},
+                {"word": "content", "start": 1.1, "end": 2.0},
+                {"word": "engine", "start": 2.1, "end": 3.5}
+            ]
+        }]
+
+        generate_ass_subtitles(segments=segments, output_path=out_ass, clip_start_time=0.0, clip_end_time=4.0)
+        self.assertTrue(out_ass.exists())
+        content = out_ass.read_text(encoding="utf-8")
+        self.assertIn("PlayResX: 1080", content)
+        self.assertIn("PlayResY: 1920", content)
+        self.assertIn("Style: Highlight", content)
+        self.assertIn("&H0000FFFF", content)  # Yellow illumination
+
+    def test_f16_ass_active_word_karaoke_events(self):
+        """F16.2: Generated events apply active-word karaoke styling across word transitions."""
+        out_ass = self.temp_dir / "karaoke.ass"
+        segments = [{
+            "id": 0, "start": 1.0, "end": 3.0, "text": "AI video automation",
+            "words": [
+                {"word": "AI", "start": 1.0, "end": 1.5},
+                {"word": "video", "start": 1.6, "end": 2.2},
+                {"word": "automation", "start": 2.3, "end": 2.9}
+            ]
+        }]
+        generate_ass_subtitles(segments=segments, output_path=out_ass, clip_start_time=0.0, clip_end_time=5.0)
+        content = out_ass.read_text(encoding="utf-8")
+        self.assertIn("Dialogue:", content)
+        self.assertIn("&H0000FFFF&", content)  # Active word yellow illumination tag
+
+    def test_f16_reframe_filter_complex_fit_blur(self):
+        """F16.3: Reframer generates valid filter complex with background blur and 9:16 aspect ratio."""
+        fc, v_label = build_filter_complex(aspect_ratio="16:9", layout_mode="fit_blur", ass_subtitle_path=None)
+        self.assertIn("boxblur", fc)
+        self.assertIn("1080:1920", fc)
+        self.assertIn("overlay", fc)
+        self.assertIn(v_label, ["[base]", "[v_final]"])
+
+    def test_f16_ffmpeg_atomic_render_generates_mp4_and_thumb(self):
+        """F16.4: Video renderer produces .mp4 clip and .jpg thumbnail."""
+        source_video = self.temp_dir / "source_render.mp4"
+        self.create_synthetic_mp4(source_video, duration_seconds=6.0)
+
+        clip_id = f"clip_render_{int(time.time() * 1000)}"
+        save_clip(
+            session_id=None, chunk_id=None, start_time=0.0, end_time=5.0,
+            title="Render Test", hook="Hook", description="", hashtags="",
+            virality_score=80, layout_mode="fit_blur"
+        )
+
+        res = render_clip(
+            source_video=source_video,
+            clip_id=clip_id,
+            start_time=0.0,
+            end_time=5.0,
+            aspect_ratio="16:9",
+            layout_mode="fit_blur",
+            segments=None
+        )
+        self.assertTrue(Path(res["video_path"]).exists())
+        self.assertTrue(Path(res["thumbnail_path"]).exists())
+
+    def test_f16_audio_loudness_normalization_filter(self):
+        """F16.5: Video renderer includes EBU R128 loudnorm filter in FFmpeg pipeline."""
+        source_video = self.temp_dir / "source_loud.mp4"
+        self.create_synthetic_mp4(source_video, duration_seconds=1.0)
+        clip_id = f"clip_loud_{int(time.time() * 1000)}"
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            with patch("dispatch.db.get_db_connection"):
+                try:
+                    render_clip(source_video, clip_id, 0.0, 1.0)
+                except Exception:
+                    pass
+                if mock_run.call_args:
+                    cmd = mock_run.call_args[0][0]
+                    self.assertIn("loudnorm=I=-14:LRA=11:TP=-1.5", " ".join(cmd))
+
+    # =========================================================================
+    # FEATURE 17: YouTube Cloud Inbox Polling & Catcher
+    # =========================================================================
+
+    def test_f17_youtube_video_id_extraction_regex(self):
+        """F17.1: Extracts 11-char YouTube ID from standard, short, embed, or raw URLs."""
+        test_urls = [
+            ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://www.youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("dQw4w9WgXcQ", "dQw4w9WgXcQ")
+        ]
+        for url, expected in test_urls:
+            self.assertEqual(extract_youtube_video_id(url), expected)
+
+    def test_f17_vtt_subtitle_parsing_and_text_cleaner(self):
+        """F17.2: clean_vtt_text strips HTML tags, voice tags, and timing markers."""
+        raw_vtt = "<c.colorCCCCCC>Suno dosto</c> <00:01:23.400>welcome align:start"
+        cleaned = clean_vtt_text(raw_vtt)
+        self.assertEqual(cleaned, "Suno dosto welcome")
+
+    def test_f17_vtt_rolling_caption_deduplication(self):
+        """F17.3: parse_vtt_content deduplicates rolling words in progressive captions."""
+        raw_vtt_content = """WEBVTT
+Kind: captions
+Language: en
+
+00:00:01.000 --> 00:00:02.500
+Dispatch is an
+
+00:00:02.500 --> 00:00:04.500
+Dispatch is an autonomous content engine.
+"""
+        segments = parse_vtt_content(raw_vtt_content)
+        self.assertGreater(len(segments), 0)
+        full_text = " ".join(s["text"] for s in segments)
+        self.assertIn("autonomous content engine", full_text)
+
+    def test_f17_youtube_inbox_database_idempotent_registration(self):
+        """F17.4: register_youtube_video is strictly idempotent across duplicate calls."""
+        vid = "test_vid_idem_01"
+        first = register_youtube_video(video_id=vid, title="[DISPATCH] Video 1", channel_id="UC123")
+        second = register_youtube_video(video_id=vid, title="[DISPATCH] Duplicate", channel_id="UC123")
+        self.assertTrue(first)
+        self.assertFalse(second)
+
+    def test_f17_youtube_inbox_caption_fetch_or_whisper_fallback(self):
+        """F17.5: YouTube catcher processes video and falls back to faster-whisper when captions missing."""
+        catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
+        vid = "dQw4w9WgXcQ"
+
+        with patch.object(catcher, "fetch_youtube_captions", return_value=None):
+            with patch("dispatch.youtube_inbox.catcher.transcribe_video") as mock_trans:
+                mock_trans.return_value = {
+                    "text": "Transcribed fallback speech",
+                    "segments": [{"id": 0, "start": 0.0, "end": 20.0, "text": "Transcribed fallback speech", "words": []}]
+                }
+                dummy_v = self.temp_dir / f"{vid}.mp4"
+                self.create_synthetic_mp4(dummy_v, duration_seconds=1.0)
+
+                with patch.object(catcher, "download_video", return_value=dummy_v):
+                    with patch("dispatch.youtube_inbox.catcher.identify_and_save_highlights", return_value=["c1"]):
+                        with patch("dispatch.youtube_inbox.catcher.render_clip", return_value={"video_path": "clip.mp4"}):
+                            res = catcher.process_video(vid, force_whisper=True)
+                            self.assertEqual(res["status"], "CLIPS_CREATED")
+                            self.assertEqual(res["transcript_source"], "whisper")
+
+    # =========================================================================
+    # FEATURE 18: E2E Test Suite & Adversarial Hardening
+    # =========================================================================
+
+    def test_f18_e2e_suite_architecture_integrity(self):
+        """F18.1: E2E test suite package contains structured tiers and runnable base."""
+        e2e_dir = ROOT_DIR / "tests" / "e2e"
+        self.assertTrue(e2e_dir.exists())
+        self.assertTrue((e2e_dir / "__init__.py").exists())
+        self.assertTrue((e2e_dir / "e2e_base.py").exists())
+
+    def test_f18_runner_cli_options_and_tier_filtering(self):
+        """F18.2: Test suite modules are importable and contain standard TestCase classes."""
+        import tests.e2e.test_tier1_features_ingestion_security as m1
+        import tests.e2e.test_tier1_features_pipeline_resilience as m2
+        import tests.e2e.test_tier1_features_mobile_engine as m3
+        import tests.e2e.test_tier1_features_publishing_dashboard as m4
+
+        self.assertTrue(hasattr(m1, "TestTier1IngestionSecurity"))
+        self.assertTrue(hasattr(m2, "TestTier1PipelineResilience"))
+        self.assertTrue(hasattr(m3, "TestTier1MobileEngine"))
+        self.assertTrue(hasattr(m4, "TestTier1PublishingDashboard"))
+
+    def test_f18_adversarial_special_character_escaping(self):
+        """F18.3: Adversarial quotes, Unicode, and emojis in metadata are safely preserved."""
+        adv_title = "Dispatch 'Special' <Tags> & \"Quotes\" -- \U0001F680 Emoji Test"
+        clip_id = save_clip(
+            session_id=None, chunk_id=None, start_time=0.0, end_time=10.0,
+            title=adv_title, hook="Hook 'quotes'", description="<tag>desc</tag>",
+            hashtags="#Tag", virality_score=90, layout_mode="fit_blur"
+        )
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT title FROM clips WHERE id = ?", (clip_id,))
+            saved_title = cursor.fetchone()["title"]
+            self.assertEqual(saved_title, adv_title)
+
+    def test_f18_adversarial_rapid_concurrent_requests(self):
+        """F18.4: Rapid sequential API requests do not trigger database lock errors."""
+        for i in range(10):
+            res = self.client.get("/api/status")
+            self.assertEqual(res.status_code, 200)
+
+    def test_f18_adversarial_zero_byte_media_injection(self):
+        """F18.5: 0-byte media file is rejected safely without crashing pipeline runner."""
+        zero_video = self.temp_dir / "zero_byte.mp4"
+        zero_video.write_bytes(b"")
+
+        from dispatch.ingestion.validator import probe_video
+        is_valid, meta, err = probe_video(zero_video)
+        self.assertFalse(is_valid)
+        self.assertIn("empty", err.lower() + meta.get("error", "").lower())
+

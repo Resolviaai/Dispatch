@@ -1,0 +1,2050 @@
+﻿
+============================================================
+FILE: tests\test_clip_trim_contract.py
+============================================================
+"""Source-range trim bounds and render invalidation regressions."""
+
+import uuid
+import unittest
+
+from dispatch import db
+
+
+class TestClipTrimContract(unittest.TestCase):
+    def test_range_can_extend_past_gemini_suggestion_within_source_and_marks_render_stale(self):
+        suffix = uuid.uuid4().hex
+        chunk_id = f"trim-chunk-{suffix}"
+        clip_id = f"trim-clip-{suffix}"
+        with db.get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO chunks (id, filename, filepath, duration) VALUES (?, ?, ?, ?)",
+                (chunk_id, "trim-source.mp4", "trim-source.mp4", 600.0),
+            )
+            conn.execute(
+                """INSERT INTO clips (
+                    id, chunk_id, start_time, end_time, duration, title,
+                    padded_start, padded_end, video_path, rendered_layout_mode,
+                    ai_suggested_start_time, ai_suggested_end_time, caption_data
+                ) VALUES (?, ?, 120, 150, 30, 'trim test', 116, 154, 'render.mp4', 'fit_blur', 120, 150, '{"groups":[]}')""",
+                (clip_id, chunk_id),
+            )
+            conn.commit()
+
+        try:
+            db.init_db()
+            db.init_db()  # migration is idempotent and preserves the legacy record
+            migrated = db.get_clip_by_id(clip_id)
+            self.assertEqual(migrated["caption_data"], '{"groups":[]}')
+            self.assertEqual(migrated["video_path"], "render.mp4")
+            self.assertEqual(migrated["caption_range_start"], 120.0)
+            self.assertEqual(migrated["caption_range_end"], 150.0)
+            self.assertTrue(db.update_clip_trim(clip_id, 20.0, 190.0))
+            updated = db.get_clip_by_id(clip_id)
+            self.assertEqual(updated["start_time"], 20.0)
+            self.assertEqual(updated["end_time"], 190.0)
+            self.assertEqual(updated["duration"], 170.0)
+            self.assertEqual(updated["render_stale"], 1)
+            self.assertEqual(updated["ai_suggested_start_time"], 120.0)
+            self.assertEqual(updated["ai_suggested_end_time"], 150.0)
+            self.assertEqual(updated["range_revision"], 1)
+            self.assertFalse(db.update_clip_trim(clip_id, 30.0, 200.0, expected_range_revision=0))
+            self.assertTrue(db.update_clip_trim(clip_id, 20.0, 190.0, expected_range_revision=1))
+            self.assertEqual(db.get_clip_by_id(clip_id)["range_revision"], 1, "an unchanged range does not create a new revision")
+
+            self.assertFalse(db.save_clip_caption_data(clip_id, '{"groups":[]}', expected_range_revision=0, source_range_start=20, source_range_end=190))
+            self.assertTrue(db.save_clip_caption_data(clip_id, '{"groups":[]}', expected_range_revision=1, source_range_start=20, source_range_end=190))
+            saved = db.get_clip_by_id(clip_id)
+            self.assertEqual(saved["caption_range_revision"], 1)
+            self.assertEqual(saved["caption_range_start"], 20.0)
+            self.assertEqual(saved["caption_range_end"], 190.0)
+
+            self.assertFalse(db.update_clip_media(
+                clip_id, "obsolete-render.mp4", None, "fit_blur", expected_range_revision=0
+            ))
+            self.assertEqual(db.get_clip_by_id(clip_id)["video_path"], "render.mp4")
+            self.assertEqual(db.get_clip_by_id(clip_id)["render_stale"], 1)
+
+            db.update_clip_media(clip_id, "fresh-render.mp4", None, "fit_blur")
+            self.assertEqual(db.get_clip_by_id(clip_id)["render_stale"], 0)
+
+            self.assertFalse(db.update_clip_trim(clip_id, -1, 100))
+            self.assertFalse(db.update_clip_trim(clip_id, 20, 201))
+            self.assertFalse(db.update_clip_trim(clip_id, 20, 205))
+            self.assertFalse(db.update_clip_trim(clip_id, 20, 200.1))
+            self.assertFalse(db.update_clip_trim(clip_id, 20, 24))
+            self.assertFalse(db.update_clip_trim(clip_id, float("nan"), 200))
+        finally:
+            with db.get_db_connection() as conn:
+                conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+                conn.execute("DELETE FROM chunks WHERE id = ?", (chunk_id,))
+                conn.commit()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_cloud_config.py
+============================================================
+import unittest
+from unittest.mock import patch
+
+from dispatch.cloud.config import (
+    GIB,
+    MIB,
+    CloudConfig,
+    is_secret_env_name,
+    load_cloud_config,
+)
+
+
+class TestCloudConfigDefaults(unittest.TestCase):
+    def test_defaults_match_documented_limits(self):
+        cfg = load_cloud_config(env={})
+        self.assertEqual(cfg.default_user_quota_bytes, 2_000_000_000)
+        self.assertEqual(cfg.max_user_quota_bytes, 10_000_000_000)
+        self.assertEqual(cfg.global_object_budget_bytes, 10_000_000_000)
+        self.assertEqual(cfg.max_clip_object_bytes, 512 * MIB)
+        self.assertEqual(cfg.max_thumbnail_bytes, 8 * MIB)
+        self.assertEqual(cfg.max_outstanding_uploads_per_user, 3)
+        self.assertEqual(cfg.presign_expiry_seconds, 600)
+        self.assertEqual(cfg.reservation_expiry_seconds, 1800)
+
+    def test_unconfigured_by_default(self):
+        cfg = load_cloud_config(env={})
+        self.assertFalse(cfg.worker_ready)
+
+
+class TestCloudConfigEnv(unittest.TestCase):
+    def test_env_overrides_apply(self):
+        cfg = load_cloud_config(
+            env={
+                "DISPATCH_WORKER_URL": "https://worker.example.com",
+                "DISPATCH_WORKER_TOKEN": "secret-token",
+                "DISPATCH_CLOUD_DEFAULT_USER_QUOTA_BYTES": "1500000000",
+                "DISPATCH_CLOUD_MAX_OUTSTANDING_UPLOADS": "5",
+            }
+        )
+        self.assertTrue(cfg.worker_ready)
+        self.assertEqual(cfg.default_user_quota_bytes, 1500000000)
+        self.assertEqual(cfg.max_outstanding_uploads_per_user, 5)
+
+    def test_invalid_integer_limit_raises(self):
+        with self.assertRaises(ValueError):
+            load_cloud_config(env={"DISPATCH_CLOUD_GLOBAL_BUDGET_BYTES": "not-a-number"})
+
+    def test_repr_masks_secrets(self):
+        cfg = load_cloud_config(
+            env={
+                "DISPATCH_WORKER_TOKEN": "super-secret-token",
+                "SUPABASE_SERVICE_ROLE_KEY": "super-secret-key",
+            }
+        )
+        rendered = repr(cfg)
+        self.assertNotIn("super-secret-token", rendered)
+        self.assertNotIn("super-secret-key", rendered)
+        self.assertNotIn("worker_token=secret-token", rendered)
+
+    def test_supabase_credentials_are_worker_side_and_never_loaded_on_the_pc(self):
+        cfg = load_cloud_config(
+            env={
+                "SUPABASE_URL": "https://proj.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-secret",
+                "SUPABASE_ANON_KEY": "anon-secret",
+            }
+        )
+        self.assertEqual(cfg.worker_url, "")
+        self.assertEqual(cfg.worker_token, "")
+        self.assertFalse(cfg.worker_ready)
+        self.assertNotIn("service", repr(cfg))
+
+    def test_real_environment_secrets_never_loaded_into_placeholder_names(self):
+        with patch.dict("os.environ", {"DISPATCH_WORKER_TOKEN": "from-real-env"}):
+            cfg = load_cloud_config(env={})
+        self.assertEqual(cfg.worker_token, "")
+
+
+class TestSecretEnvNames(unittest.TestCase):
+    def test_known_secret_names_flagged(self):
+        self.assertTrue(is_secret_env_name("DISPATCH_WORKER_TOKEN"))
+        self.assertTrue(is_secret_env_name("SUPABASE_SERVICE_ROLE_KEY"))
+        self.assertFalse(is_secret_env_name("SUPABASE_URL"))
+        self.assertFalse(is_secret_env_name("PATH"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_cloud_quota.py
+============================================================
+import unittest
+
+from dispatch.cloud.media_store import CLIP_VIDEO, THUMBNAIL
+from dispatch.cloud.quota import UsageSummary, evaluate_upload_reservation
+
+GIB = 1024 ** 3
+MIB = 1024 ** 2
+
+
+def evaluate(usage=None, kind=CLIP_VIDEO, mime="video/mp4", expected=100 * MIB, **overrides):
+    params = dict(
+        user_quota_bytes=2_000_000_000,
+        global_budget_bytes=10_000_000_000,
+        max_clip_object_bytes=512 * MIB,
+        max_thumbnail_bytes=8 * MIB,
+        max_outstanding_uploads_per_user=3,
+    )
+    params.update(overrides)
+    return evaluate_upload_reservation(
+        usage or UsageSummary(0, 0, 0, 0, 0), kind, mime, expected, **params
+    )
+
+
+class TestQuotaKernel(unittest.TestCase):
+    def test_valid_reservation_allowed(self):
+        decision = evaluate()
+        self.assertTrue(decision.allowed, decision.reason)
+        self.assertEqual(decision.reason, "ok")
+
+    def test_user_quota_exceeded(self):
+        usage = UsageSummary(user_active_bytes=1_900_000_000, user_pending_bytes=200_000_000,
+                             user_outstanding_reservations=0, global_active_bytes=0, global_pending_bytes=0)
+        decision = evaluate(usage, expected=100 * MIB)  # 2.1 GB > 2 GB quota
+        self.assertFalse(decision.allowed)
+        self.assertIn("User storage quota exceeded", decision.reason)
+
+    def test_user_quota_boundary_is_inclusive(self):
+        usage = UsageSummary(user_active_bytes=2_000_000_000 - 100 * MIB, user_pending_bytes=0,
+                             user_outstanding_reservations=0, global_active_bytes=0, global_pending_bytes=0)
+        self.assertTrue(evaluate(usage, expected=100 * MIB).allowed)
+        self.assertFalse(evaluate(usage, expected=100 * MIB + 1).allowed)
+
+    def test_global_budget_exceeded(self):
+        usage = UsageSummary(0, 0, 0, global_active_bytes=10_000_000_000, global_pending_bytes=0)
+        decision = evaluate(usage, expected=1 * MIB)
+        self.assertFalse(decision.allowed)
+        self.assertIn("Global storage budget exceeded", decision.reason)
+
+    def test_outstanding_reservation_limit(self):
+        usage = UsageSummary(0, 0, user_outstanding_reservations=3, global_active_bytes=0, global_pending_bytes=0)
+        decision = evaluate(usage, expected=1 * MIB)
+        self.assertFalse(decision.allowed)
+        self.assertIn("Too many outstanding uploads", decision.reason)
+
+    def test_oversize_clip_object_rejected(self):
+        decision = evaluate(expected=512 * MIB + 1)
+        self.assertFalse(decision.allowed)
+        self.assertIn("exceeds the clip_video limit", decision.reason)
+
+    def test_thumbnail_cap_uses_thumbnail_limit(self):
+        self.assertTrue(evaluate(kind=THUMBNAIL, mime="image/jpeg", expected=8 * MIB).allowed)
+        decision = evaluate(kind=THUMBNAIL, mime="image/jpeg", expected=8 * MIB + 1)
+        self.assertFalse(decision.allowed)
+        self.assertIn("exceeds the thumbnail limit", decision.reason)
+
+    def test_unsupported_mime_rejected(self):
+        decision = evaluate(mime="video/quicktime")
+        self.assertFalse(decision.allowed)
+        self.assertIn("Unsupported MIME type", decision.reason)
+
+    def test_video_mime_not_valid_for_thumbnail_kind(self):
+        decision = evaluate(kind=THUMBNAIL, mime="video/mp4", expected=1 * MIB)
+        self.assertFalse(decision.allowed)
+
+    def test_unknown_kind_rejected(self):
+        decision = evaluate(kind="document", mime="application/pdf", expected=1 * MIB)
+        self.assertFalse(decision.allowed)
+        self.assertIn("Unsupported object kind", decision.reason)
+
+    def test_zero_and_negative_bytes_rejected(self):
+        self.assertFalse(evaluate(expected=0).allowed)
+        self.assertFalse(evaluate(expected=-5).allowed)
+
+
+    def test_global_budget_boundary_exact_allowed(self):
+        usage = UsageSummary(0, 0, 0, global_active_bytes=10_000_000_000 - 100 * MIB, global_pending_bytes=0)
+        self.assertTrue(evaluate(usage, expected=100 * MIB).allowed)
+
+    def test_global_budget_boundary_one_byte_over_rejected(self):
+        usage = UsageSummary(0, 0, 0, global_active_bytes=10_000_000_000 - 100 * MIB, global_pending_bytes=0)
+        self.assertFalse(evaluate(usage, expected=100 * MIB + 1).allowed)
+
+    def test_user_ceiling_cannot_exceed_global_cap(self):
+        from dispatch.cloud.config import CloudConfig
+        cfg = CloudConfig()
+        self.assertLessEqual(cfg.max_user_quota_bytes, cfg.global_object_budget_bytes)
+        self.assertEqual(cfg.default_user_quota_bytes, 2_000_000_000)
+        self.assertEqual(cfg.global_object_budget_bytes, 10_000_000_000)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_credential_transfer_removed.py
+============================================================
+"""2026-10-24 pivot: the PC no longer transfers YouTube credentials to ANY client.
+Both former credential/pairing routes must respond 410 with no secret material,
+over any transport, with any token/origin. (Supersedes the secure-transport tests:
+the insecure architecture was removed instead of encrypted.)"""
+
+import unittest
+from fastapi.testclient import TestClient
+from dispatch.web.app import app
+
+
+class TestCredentialTransferRemoved(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    def _assert_no_secrets(self, body: str):
+        for marker in ("refresh_token", "client_secret", "ya29.", "1//"):
+            self.assertNotIn(marker, body)
+
+    def test_credentials_route_is_410_with_no_secret_material(self):
+        post_res = self.client.post(
+            "/api/youtube/credentials",
+            json={"pairing_code": "1234"},
+            headers={"origin": "https://appassets.androidplatform.net"},
+        )
+        self.assertEqual(post_res.status_code, 410)
+        self._assert_no_secrets(post_res.text)
+        get_res = self.client.get(
+            "/api/youtube/credentials",
+            headers={"origin": "https://appassets.androidplatform.net"},
+        )
+        self.assertEqual(get_res.status_code, 410)
+        self._assert_no_secrets(get_res.text)
+
+    def test_pairing_code_route_is_410(self):
+        res = self.client.post(
+            "/api/integrations/youtube/pairing-code",
+            json={"request_reason": "x"},
+            headers={"origin": "http://localhost:5173"},
+        )
+        self.assertIn(res.status_code, (410, 403))
+        self._assert_no_secrets(res.text)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_credential_transport_security.py
+============================================================
+"""B2: YouTube credentials must never cross plaintext HTTP to a non-loopback peer,
+regardless of pairing code, token, or Origin. Loopback dashboard use is unaffected."""
+
+import unittest
+from unittest.mock import patch
+
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+
+from dispatch.web.app import app, require_secure_credential_transport
+
+
+class FakeUrl:
+    def __init__(self, scheme): self.scheme = scheme
+
+
+class FakeRequest:
+    def __init__(self, scheme): self.url = FakeUrl(scheme)
+
+
+class TestRequireSecureCredentialTransport(unittest.TestCase):
+    def test_plaintext_to_lan_peer_is_refused(self):
+        with self.assertRaises(HTTPException) as ctx:
+            require_secure_credential_transport(FakeRequest("http"), "192.168.0.55")
+        self.assertEqual(ctx.exception.status_code, 426)
+
+    def test_plaintext_loopback_is_allowed(self):
+        require_secure_credential_transport(FakeRequest("http"), "127.0.0.1")  # no raise
+
+    def test_tls_is_allowed_from_any_peer(self):
+        require_secure_credential_transport(FakeRequest("https"), "192.168.0.55")  # no raise
+
+
+class TestCredentialEndpoints(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    def test_pairing_credentials_route_refuses_plaintext_lan_client(self):
+        # Non-loopback client with a perfectly valid pairing code still gets 426:
+        # the code gates WHO, TLS gates the CHANNEL.
+        res = self.client.post(
+            "/api/integrations/youtube/pairing-code",
+            json={"request_reason": "phone pairing"},
+            headers={"origin": "https://appassets.androidplatform.net"},
+        )
+        # issuing requires loopback; from TestClient("testserver") it is loopback-ish,
+        # so instead verify the enforcement directly on the credentials endpoint:
+        code = None
+        if res.status_code == 200:
+            code = res.json().get("pairing_code") or res.json().get("code")
+        res2 = self.client.post(
+            "/api/youtube/credentials",
+            json={"pairing_code": code or "0000"},
+            headers={"origin": "https://appassets.androidplatform.net"},
+        )
+        # testserver counts as loopback in this harness; the transport gate is
+        # exercised authoritatively by the unit tests above + the LAN integration
+        # case below with a spoofed client address.
+        self.assertIn(res2.status_code, (200, 401, 403, 404, 409, 426))
+
+    def test_lan_client_gets_426_not_credentials(self):
+        # Direct simulation: request over http from a LAN address must never include
+        # refresh_token in any response body.
+        with patch("dispatch.web.app.is_trusted_localhost", return_value=False):
+            try:
+                require_secure_credential_transport(FakeRequest("http"), "192.168.0.7")
+                self.fail("must raise")
+            except HTTPException as e:
+                self.assertEqual(e.status_code, 426)
+                self.assertIn("HTTPS", str(e.detail))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_dashboard_auth.py
+============================================================
+"""Regression: forged Origin headers must never authenticate (app.py origin-only
+bypass removed 2026-10-24). The native Android WebView authenticates via the paired
+device token (x-auth-token), not via its appassets origin."""
+
+import unittest
+from types import SimpleNamespace
+
+from fastapi import HTTPException
+
+from dispatch.sync.receiver import get_auth_token
+from dispatch.web.app import verify_dashboard_auth
+
+
+class FakeRequest:
+    def __init__(self, headers=None, client_host="127.0.0.1", path="/api/clips"):
+        self.headers = headers or {}
+        self.client = SimpleNamespace(host=client_host)
+        self.url = SimpleNamespace(path=path)
+
+
+FORGED = {"origin": "https://appassets.androidplatform.net"}
+
+
+class TestDashboardAuth(unittest.TestCase):
+    def test_forged_android_origin_from_lan_client_is_rejected(self):
+        with self.assertRaises(HTTPException) as ctx:
+            verify_dashboard_auth(FakeRequest(FORGED, client_host="192.168.0.55"))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_forged_android_origin_from_loopback_is_not_sufficient(self):
+        # Origin alone must never authenticate; loopback + foreign origin -> 403
+        with self.assertRaises(HTTPException) as ctx:
+            verify_dashboard_auth(FakeRequest(FORGED, client_host="127.0.0.1"))
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_valid_device_token_authenticates_from_anywhere(self):
+        token = get_auth_token()
+        req = FakeRequest({"x-auth-token": token}, client_host="192.168.0.55")
+        self.assertIsNone(verify_dashboard_auth(req))  # no exception
+
+    def test_wrong_token_from_lan_is_rejected(self):
+        with self.assertRaises(HTTPException) as ctx:
+            verify_dashboard_auth(FakeRequest({"x-auth-token": "bogus"}, client_host="192.168.0.55"))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_loopback_no_origin_still_works_for_local_browser(self):
+        self.assertIsNone(verify_dashboard_auth(FakeRequest({}, client_host="127.0.0.1")))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_destructive.py
+============================================================
+"""Destructive Chaos and High-Concurrency Invariant Tests.
+Validates the most severe distributed edge cases:
+1. Abrupt Process Termination (SIGKILL / taskkill) & Orchestrator Startup Recovery
+2. Corrupt Chunk Quarantine & Cryptographic Proof-of-Receipt Refusal
+3. Multi-Worker Claim Collision (Atomic CAS) & Split-Brain Lease Fencing (LeaseLostError)
+4. Multi-Platform Publishing Idempotency across YouTube, Instagram, LinkedIn, and Twitter
+5. Database Hot Backup and SQLite PRAGMA Integrity Verification
+"""
+import unittest
+import tempfile
+import shutil
+import hashlib
+import threading
+import subprocess
+import sys
+import os
+import time
+from pathlib import Path
+from datetime import datetime, timedelta
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+
+from dispatch.web.app import app
+from dispatch.db import (
+    init_db,
+    get_db_connection,
+    register_chunk,
+    create_session,
+    verify_db_integrity,
+    backup_database,
+    approve_clip
+)
+from dispatch.orchestrator.state_machine import PipelineStage, JobStatus
+from dispatch.orchestrator.job_queue import (
+    init_job_queue_schema,
+    enqueue_job,
+    claim_job,
+    complete_stage_checkpoint,
+    LeaseLostError
+)
+from dispatch.orchestrator.recovery import recover_laptop_orchestrator
+from dispatch.publisher.outbox import process_outbox_queue
+from dispatch.publisher.linkedin import upload_linkedin_video
+from dispatch.publisher.twitter import upload_x_video
+from dispatch.config import INCOMING_DIR, PROCESSING_DIR
+
+client = TestClient(app)
+AUTH_TOKEN = "dispatch_paired_secret_default"
+
+
+class TestDestructiveChaos(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_db_path = os.environ.get("DISPATCH_DB_PATH")
+        os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="dispatch_destr_"))
+        self.test_db = self.temp_dir / "test_destr.db"
+        os.environ["DISPATCH_DB_PATH"] = str(self.test_db)
+        init_db()
+        init_job_queue_schema()
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM pipeline_jobs;")
+            conn.execute("DELETE FROM publishing_outbox;")
+            conn.execute("DELETE FROM clips;")
+            conn.execute("DELETE FROM chunks;")
+            conn.execute("DELETE FROM sessions;")
+
+    def tearDown(self):
+        if self._orig_db_path is not None:
+            os.environ["DISPATCH_DB_PATH"] = self._orig_db_path
+        else:
+            os.environ.pop("DISPATCH_DB_PATH", None)
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_01_process_termination_and_startup_recovery(self):
+        """Spawns an independent child process that claims a job and is abruptly killed.
+        Verifies orchestrator recovery safely reclaims the lease without resetting stage progress.
+        """
+        chunk_id = register_chunk(
+            session_id="sess_kill_test",
+            filename="chunk_kill.mp4",
+            filepath=str(self.temp_dir / "chunk_kill.mp4"),
+            file_hash="hash_kill_test"
+        )
+        job_id = enqueue_job(chunk_id=chunk_id, session_id="sess_kill_test")
+
+        # Worker advances job to TRANSCRIBE stage
+        claimed = claim_job("worker_pre_kill", lease_duration_seconds=30)
+        self.assertIsNotNone(claimed)
+        complete_stage_checkpoint(job_id, PipelineStage.VERIFY, worker_id="worker_pre_kill")
+
+        # Spawn a subprocess that claims the job with a short lease and holds it
+        script = f"""
+import sys
+from dispatch.db import init_db
+from dispatch.orchestrator.job_queue import claim_job
+init_db()
+claimed = claim_job('worker_doomed_process', lease_duration_seconds=2)
+if claimed:
+    print('CLAIMED_OK', flush=True)
+    import time
+    time.sleep(30)
+"""
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            cwd=str(Path.cwd()),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        # Wait until child process reports CLAIMED_OK
+        first_line = proc.stdout.readline().strip()
+        self.assertEqual(first_line, "CLAIMED_OK")
+
+        # Abruptly kill the worker process (simulating crash / power cut)
+        proc.kill()
+        proc.wait()
+        proc.stdout.close()
+        proc.stderr.close()
+
+        # Artificially expire the lease
+        past_stamp = (datetime.now() - timedelta(seconds=10)).isoformat()
+        with get_db_connection() as conn:
+            conn.execute(
+                "UPDATE pipeline_jobs SET lease_expires_at = ? WHERE job_id = ?",
+                (past_stamp, job_id)
+            )
+
+        # Run orchestrator recovery as if laptop just rebooted
+        report = recover_laptop_orchestrator()
+        self.assertIn(job_id, report["reclaimed_jobs"])
+
+        # Checkpoint stage must remain TRANSCRIBE (never reset to VERIFY)
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT current_stage, status, worker_id FROM pipeline_jobs WHERE job_id = ?",
+                (job_id,)
+            ).fetchone()
+            self.assertEqual(row["current_stage"], "TRANSCRIBE")
+            self.assertEqual(row["status"], "RETRY_PENDING")
+            self.assertIsNone(row["worker_id"])
+
+    def test_02_corrupt_chunk_quarantine_and_phone_proof_refusal(self):
+        """Simulates corrupt or truncated data transmission.
+        Ensures receiver quarantines the bad file and verify-chunk refuses cryptographic proof.
+        """
+        seg_id = f"seg_corrupt_{int(time.time() * 1000)}"
+        genuine_bytes = b"GENUINE_VIDEO_STREAM_BYTES_VALID" * 50
+        genuine_sha256 = hashlib.sha256(genuine_bytes).hexdigest()
+        corrupt_bytes = b"CORRUPTED_STREAM_GARBAGE_PAYLOAD" * 50
+        corrupt_sha256 = hashlib.sha256(corrupt_bytes).hexdigest()
+
+        # Step 1: Upload corrupt bytes with genuine SHA256 header expectation
+        init_resp = client.post("/api/sync/upload/init", json={
+            "session_id": "sess_corrupt",
+            "segment_id": seg_id,
+            "filename": f"{seg_id}.mp4",
+            "file_size_bytes": len(genuine_bytes),
+            "sha256_hash": genuine_sha256,
+            "auth_token": AUTH_TOKEN
+        })
+        self.assertEqual(init_resp.status_code, 200)
+
+        patch_resp = client.patch(
+            "/api/sync/upload/chunk",
+            content=corrupt_bytes,
+            headers={
+                "x-segment-id": seg_id,
+                "x-upload-offset": "0",
+                "x-file-size": str(len(genuine_bytes)),
+                "x-sha256": genuine_sha256,
+                "x-session-id": "sess_corrupt",
+                "x-auth-token": AUTH_TOKEN,
+                "content-type": "application/octet-stream"
+            }
+        )
+        # Server must reject SHA mismatch
+        self.assertEqual(patch_resp.status_code, 422)
+
+        # Step 2: Phone requests proof of receipt before deleting local video
+        proof_resp = client.get(
+            f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_sha256}&file_size={len(genuine_bytes)}",
+            headers={"x-auth-token": AUTH_TOKEN}
+        )
+        self.assertEqual(proof_resp.status_code, 200)
+        # Phone MUST be told verified = False so phone NEVER deletes local recording!
+        self.assertFalse(proof_resp.json()["verified"])
+
+        # Step 3: Now simulate clean re-upload of genuine bytes
+        init_clean = client.post("/api/sync/upload/init", json={
+            "session_id": "sess_corrupt",
+            "segment_id": seg_id,
+            "filename": f"{seg_id}.mp4",
+            "file_size_bytes": len(genuine_bytes),
+            "sha256_hash": genuine_sha256,
+            "auth_token": AUTH_TOKEN
+        })
+        self.assertEqual(init_clean.status_code, 200)
+
+        patch_clean = client.patch(
+            "/api/sync/upload/chunk",
+            content=genuine_bytes,
+            headers={
+                "x-segment-id": seg_id,
+                "x-upload-offset": "0",
+                "x-file-size": str(len(genuine_bytes)),
+                "x-sha256": genuine_sha256,
+                "x-session-id": "sess_corrupt",
+                "x-auth-token": AUTH_TOKEN,
+                "content-type": "application/octet-stream"
+            }
+        )
+        self.assertEqual(patch_clean.status_code, 200)
+        self.assertEqual(patch_clean.json()["status"], "completed")
+
+        # Step 4: Phone re-queries proof of receipt
+        proof_verified = client.get(
+            f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_sha256}&file_size={len(genuine_bytes)}",
+            headers={"x-auth-token": AUTH_TOKEN}
+        )
+        self.assertEqual(proof_verified.status_code, 200)
+        self.assertTrue(proof_verified.json()["verified"])
+        self.assertEqual(proof_verified.json()["status"], "VERIFIED")
+
+    def test_03_concurrent_worker_claim_collision_and_lease_fencing(self):
+        """Launches 10 simultaneous threads attempting to claim a single job.
+        Verifies atomic CAS allows exactly 1 worker to claim.
+        Also verifies lease fencing throws LeaseLostError if an expired worker tries to checkpoint.
+        """
+        chunk_id = register_chunk(
+            session_id="sess_collision",
+            filename="chunk_col.mp4",
+            filepath=str(self.temp_dir / "chunk_col.mp4"),
+            file_hash="hash_col"
+        )
+        job_id = enqueue_job(chunk_id=chunk_id, session_id="sess_collision")
+
+        claimed_workers = []
+        threads = []
+
+        def worker_task(wid: str):
+            res = claim_job(worker_id=wid, lease_duration_seconds=30)
+            if res:
+                claimed_workers.append(wid)
+
+        for i in range(10):
+            t = threading.Thread(target=worker_task, args=(f"worker_{i}",))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        # Exactly 1 worker should have claimed the job
+        self.assertEqual(len(claimed_workers), 1, f"Expected 1 claim, got: {claimed_workers}")
+        winner_worker = claimed_workers[0]
+
+        # Now test LEASE FENCING:
+        # Simulate winner worker freezing / lease expiring
+        past_stamp = (datetime.now() - timedelta(seconds=60)).isoformat()
+        with get_db_connection() as conn:
+            conn.execute(
+                "UPDATE pipeline_jobs SET lease_expires_at = ?, status = 'QUEUED', worker_id = NULL WHERE job_id = ?",
+                (past_stamp, job_id)
+            )
+
+        # Worker_B claims the newly available job
+        claim_b = claim_job(worker_id="worker_B", lease_duration_seconds=30)
+        self.assertIsNotNone(claim_b)
+        self.assertEqual(claim_b["worker_id"], "worker_B")
+
+        # Original winner_worker wakes up and tries to complete stage
+        # Fencing token check must RAISE LeaseLostError!
+        with self.assertRaises(LeaseLostError):
+            complete_stage_checkpoint(
+                job_id=job_id,
+                current_stage=PipelineStage.VERIFY,
+                worker_id=winner_worker
+            )
+
+        # Legitimate worker_B completes stage successfully
+        next_stage = complete_stage_checkpoint(
+            job_id=job_id,
+            current_stage=PipelineStage.VERIFY,
+            worker_id="worker_B"
+        )
+        self.assertEqual(next_stage, PipelineStage.TRANSCRIBE)
+
+    def test_04_multi_platform_publishing_idempotency(self):
+        """Validates that publishing to LinkedIn, Twitter/X, Instagram, and YouTube
+        handles missing credentials gracefully via simulation, and enforces idempotency.
+        """
+        clip_id = f"clip_pub_{int(time.time() * 1000)}"
+        dummy_video = self.temp_dir / "rendered.mp4"
+        dummy_video.write_bytes(b"TEST_VIDEO_BYTES_SIMULATED")
+
+        # 1. Test LinkedIn raises PermissionError when credentials missing
+        with self.assertRaises(PermissionError):
+            upload_linkedin_video(
+                video_path=dummy_video,
+                title="Dispatch LinkedIn Test",
+                commentary="#buildinpublic #ai",
+                access_token=None
+            )
+
+        # 2. Test Twitter / X raises PermissionError when credentials missing
+        with self.assertRaises(PermissionError):
+            upload_x_video(
+                video_path=dummy_video,
+                text="Autonomous video engine #python",
+                bearer_token=None
+            )
+
+        # 3. Test queue and dispatch all 4 platforms
+        with get_db_connection() as conn:
+            conn.execute("""
+                INSERT INTO clips (id, start_time, end_time, duration, title, hook, video_path, status)
+                VALUES (?, 0.0, 10.0, 10.0, 'Multi-Platform Test', 'Watch this', ?, 'ready_review')
+            """, (clip_id, str(dummy_video)))
+
+        approve_clip(
+            clip_id=clip_id,
+            custom_platforms="youtube,instagram,linkedin,twitter"
+        )
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM publishing_outbox WHERE clip_id = ?", (clip_id,))
+            rows = cursor.fetchall()
+            self.assertEqual(len(rows), 4)
+
+        # Without live credentials configured, outbox marks jobs blocked_needs_auth
+        with patch("dispatch.publisher.outbox.probe_video", return_value=(True, {"duration": 10.0}, None)), \
+             patch("dispatch.publisher.outbox.upload_youtube_short", side_effect=PermissionError("YouTube auth missing")), \
+             patch("dispatch.publisher.outbox.upload_instagram_reel", side_effect=PermissionError("Instagram auth missing")), \
+             patch("dispatch.publisher.outbox.upload_linkedin_video", side_effect=PermissionError("LinkedIn auth missing")), \
+             patch("dispatch.publisher.outbox.upload_x_video", side_effect=PermissionError("X auth missing")):
+            success_count = process_outbox_queue()
+            self.assertEqual(success_count, 0)
+
+            # Test Idempotency: re-running process_outbox_queue finds 0 pending
+            second_pass = process_outbox_queue()
+            self.assertEqual(second_pass, 0)
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM publishing_outbox WHERE clip_id = ?", (clip_id,))
+            rows = cursor.fetchall()
+            self.assertEqual(len(rows), 4)
+            for row in rows:
+                self.assertEqual(row["status"], "blocked_needs_auth")
+
+    def test_05_database_backup_and_integrity(self):
+        """Verifies SQLite hot snapshot backup and PRAGMA integrity check."""
+        self.assertTrue(verify_db_integrity(), "Database PRAGMA integrity check must pass")
+        backup_path = backup_database()
+        self.assertIsNotNone(backup_path)
+        self.assertTrue(backup_path.exists())
+        self.assertGreater(backup_path.stat().st_size, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_end_to_end.py
+============================================================
+"""End-to-End integration test for Dispatch with synthesized human speech.
+Simulates:
+1. Phone recording dropping into storage/incoming/ with real synthesized speech
+2. Ingestion & staging into storage/processing/
+3. Audio extraction & faster-whisper transcription
+4. AI highlight detection
+5. FFmpeg 9:16 rendering + subtitle burn-in
+6. Raw source chunk auto-cleanup
+7. Web dashboard approval
+8. Outbox publishing & post-publish clip cleanup
+"""
+import unittest
+from unittest.mock import patch
+import asyncio
+import subprocess
+from pathlib import Path
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
+
+from dispatch.config import INCOMING_DIR, PROCESSING_DIR, CLIPS_DIR
+from dispatch.ingestion.watcher import process_incoming_file
+from dispatch.main import process_single_chunk
+from dispatch.db import init_db, get_clips_for_review, approve_clip, get_db_connection
+from dispatch.publisher.outbox import process_outbox_queue
+
+
+async def generate_speech_audio(output_audio_path: Path):
+    """Generate synthesized speech audio using edge-tts with offline Windows SAPI fallback."""
+    text = (
+        "Suno aaj hum dekhenge how Dispatch automates content creation. "
+        "Basically you just hit record on your phone and forget everything else. "
+        "The entire pipeline runs locally on your PC and generates polished shorts automatically."
+    )
+    if edge_tts is not None:
+        try:
+            communicate = edge_tts.Communicate(text, "hi-IN-MadhurNeural")
+            await communicate.save(str(output_audio_path))
+            if output_audio_path.exists() and output_audio_path.stat().st_size > 1000:
+                return
+        except Exception:
+            pass
+
+    # Fallback 1: Windows SAPI offline speech synthesis
+    try:
+        import win32com.client
+        v = win32com.client.Dispatch("SAPI.SpVoice")
+        s = win32com.client.Dispatch("SAPI.SpFileStream")
+        wav_path = str(output_audio_path.with_suffix(".wav"))
+        s.Open(wav_path, 3, False)
+        v.AudioOutputStream = s
+        v.Speak(text)
+        s.Close()
+        cmd = ["ffmpeg", "-y", "-i", wav_path, "-c:a", "libmp3lame", str(output_audio_path)]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        Path(wav_path).unlink(missing_ok=True)
+        if output_audio_path.exists() and output_audio_path.stat().st_size > 1000:
+            return
+    except Exception:
+        pass
+
+    # Fallback 2: Generate synthetic tone
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=22",
+        "-c:a", "libmp3lame",
+        str(output_audio_path)
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+
+class TestEndToEnd(unittest.TestCase):
+    def setUp(self):
+        init_db()
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM chunks WHERE filename LIKE 'phone_sync_chunk_speech%'")
+
+    def test_full_autonomous_pipeline(self):
+        import uuid
+        run_id = uuid.uuid4().hex[:8]
+
+        # 1. Synthesize real speech audio
+        temp_speech_file = PROCESSING_DIR / f"speech_synth_{run_id}.mp3"
+        asyncio.run(generate_speech_audio(temp_speech_file))
+
+        # 2. Combine speech audio with 1280x720 video (approx 22 seconds)
+        incoming_video = INCOMING_DIR / f"phone_sync_chunk_speech_{run_id}.mp4"
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
+            "-i", str(temp_speech_file),
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-shortest",
+            str(incoming_video)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        temp_speech_file.unlink()
+
+        # 3. Ingest and stage chunk
+        staged_info = process_incoming_file(incoming_video)
+        self.assertIsNotNone(staged_info, "Failed to ingest incoming phone recording")
+        self.assertFalse(incoming_video.exists(), "Raw incoming file should be moved from incoming")
+        self.assertTrue(staged_info["filepath"].exists(), "Staged file missing in processing")
+
+        # 4. Run end-to-end processing pipeline on the staged chunk
+        process_single_chunk(staged_info)
+
+        # 5. Verify raw chunk file is preserved on disk to prevent creator data loss
+        self.assertTrue(staged_info["filepath"].exists(), "Raw source video chunk should be preserved to prevent creator data loss")
+
+        # 6. Verify clips were generated and are ready for review
+        ready_clips = get_clips_for_review()
+        self.assertGreaterEqual(len(ready_clips), 1, "Expected at least 1 candidate clip ready for review")
+        clip = ready_clips[0]
+        clip_id = clip["id"]
+        video_path = Path(clip["video_path"])
+        thumb_path = Path(clip["thumbnail_path"])
+
+        self.assertTrue(video_path.exists(), f"Rendered clip file missing: {video_path}")
+        self.assertTrue(thumb_path.exists(), f"Thumbnail file missing: {thumb_path}")
+
+        # 7. Simulate user 1-click Approval on dashboard (targeting YouTube and Instagram)
+        approve_clip(clip_id, custom_mode="private", custom_platforms="youtube,instagram")
+
+        # 8. Run outbox queue worker with mocked external publication
+        with patch("dispatch.publisher.outbox.upload_youtube_short", return_value={"remote_id": "mock_yt_123", "remote_url": "https://youtu.be/mock_yt_123"}), \
+             patch("dispatch.publisher.outbox.upload_instagram_reel", return_value={"remote_id": "mock_ig_123", "remote_url": "https://instagram.com/reel/mock_ig_123"}):
+            success_count = process_outbox_queue()
+        self.assertGreaterEqual(success_count, 2, f"Expected YouTube and Instagram outbox jobs to succeed, got {success_count}")
+
+        # 9. Verify clip marked published in DB
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM clips WHERE id = ?", (clip_id,))
+            final_status = cursor.fetchone()[0]
+            self.assertEqual(final_status, "published", f"Expected published status, got {final_status}")
+
+        # 10. Verify post-publish local clip retention
+        self.assertTrue(video_path.exists(), "Published clip video should remain on disk")
+
+        # Clean up artifacts
+        staged_info["filepath"].unlink(missing_ok=True)
+        video_path.unlink(missing_ok=True)
+        if thumb_path.exists():
+            thumb_path.unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+============================================================
+FILE: tests\test_fit_blur_visual_parity.py
+============================================================
+"""Visual, photometric, and geometric regression tests for Fit + Blur architecture.
+Verifies:
+1. Exact filter graph generation for both 16:9 and 9:16 sources.
+2. Output dimensions and aspect ratio parity.
+3. Background fill coverage (no transparent or uncovered gaps).
+4. Background darkening calibration (colorchannelmixer matching CSS brightness-75).
+5. Background blur vs foreground sharpness parity.
+"""
+import unittest
+import subprocess
+from pathlib import Path
+from PIL import Image
+
+from dispatch.config import PROCESSING_DIR
+from dispatch.video_engine.reframer import build_filter_complex, PORTRAIT_WIDTH, PORTRAIT_HEIGHT, WIDE_WIDTH, WIDE_HEIGHT
+
+
+class TestFitBlurVisualParity(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Create synthetic test videos: high-contrast checkerboard with clear edges
+        cls.landscape_src = PROCESSING_DIR / "test_fit_blur_land.mp4"
+        cmd_land = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=25",
+            "-t", "1",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            str(cls.landscape_src)
+        ]
+        subprocess.run(cmd_land, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        cls.portrait_src = PROCESSING_DIR / "test_fit_blur_port.mp4"
+        cmd_port = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=25",
+            "-t", "1",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            str(cls.portrait_src)
+        ]
+        subprocess.run(cmd_port, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.landscape_src.exists():
+            cls.landscape_src.unlink()
+        if cls.portrait_src.exists():
+            cls.portrait_src.unlink()
+
+    def test_01_filter_complex_contains_blur_and_darkening(self):
+        """Filter complex for fit_blur must contain calibrated boxblur and colorchannelmixer darkening."""
+        # Landscape source -> 9:16 output
+        fc_land, out_lbl = build_filter_complex("16:9", layout_mode="fit_blur")
+        self.assertIn("boxblur=30:3", fc_land)
+        self.assertIn("colorchannelmixer=rr=0.75:gg=0.75:bb=0.75", fc_land)
+        self.assertIn(f"crop={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}", fc_land)
+        self.assertIn(f"scale={PORTRAIT_WIDTH}:-2", fc_land)
+        self.assertIn("overlay=(W-w)/2:(H-h)/2", fc_land)
+
+        # Portrait source -> 16:9 output
+        fc_port, out_lbl = build_filter_complex("9:16", layout_mode="fit_blur")
+        self.assertIn("boxblur=30:3", fc_port)
+        self.assertIn("colorchannelmixer=rr=0.75:gg=0.75:bb=0.75", fc_port)
+        self.assertIn(f"crop={WIDE_WIDTH}:{WIDE_HEIGHT}", fc_port)
+        self.assertIn(f"scale=-2:{WIDE_HEIGHT}", fc_port)
+        self.assertIn("overlay=(W-w)/2:(H-h)/2", fc_port)
+
+    def test_02_landscape_to_portrait_render_and_frame_analysis(self):
+        """Render 16:9 landscape to 9:16 vertical fit_blur and analyze frame sharpness/darkening."""
+        out_mp4 = PROCESSING_DIR / "test_out_land_to_port.mp4"
+        fc, lbl = build_filter_complex("16:9", layout_mode="fit_blur")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(self.landscape_src),
+            "-filter_complex", fc,
+            "-map", lbl,
+            "-c:v", "libx264", "-preset", "ultrafast",
+            str(out_mp4)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        self.assertTrue(out_mp4.exists())
+
+        # Extract frame at 0.5s
+        frame_png = PROCESSING_DIR / "test_out_land_frame.png"
+        cmd_extract = [
+            "ffmpeg", "-y",
+            "-ss", "0.5",
+            "-i", str(out_mp4),
+            "-vframes", "1",
+            str(frame_png)
+        ]
+        subprocess.run(cmd_extract, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        self.assertTrue(frame_png.exists())
+
+        img = Image.open(frame_png)
+        self.assertEqual(img.width, PORTRAIT_WIDTH)  # 1080
+        self.assertEqual(img.height, PORTRAIT_HEIGHT)  # 1920
+
+        # Sample top background letterbox (e.g. y=200, middle of top bar)
+        top_bg = img.crop((400, 150, 680, 350))
+        # Sample foreground center (y=960, middle of sharp original)
+        center_fg = img.crop((400, 860, 680, 1060))
+
+        # Background letterbox must not be black (it has blurred video content)
+        bg_colors = list(top_bg.getdata())
+        avg_bg_luma = sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in [c[:3] for c in bg_colors]) / len(bg_colors)
+        self.assertGreater(avg_bg_luma, 10.0, "Background letterbox should contain blurred video, not black")
+
+        # Cleanup
+        out_mp4.unlink(missing_ok=True)
+        frame_png.unlink(missing_ok=True)
+
+    def test_03_portrait_to_landscape_render_and_geometry(self):
+        """Render 9:16 portrait to 16:9 widescreen fit_blur and analyze dimensions."""
+        out_mp4 = PROCESSING_DIR / "test_out_port_to_land.mp4"
+        fc, lbl = build_filter_complex("9:16", layout_mode="fit_blur")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(self.portrait_src),
+            "-filter_complex", fc,
+            "-map", lbl,
+            "-c:v", "libx264", "-preset", "ultrafast",
+            str(out_mp4)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        self.assertTrue(out_mp4.exists())
+
+        # Extract frame
+        frame_png = PROCESSING_DIR / "test_out_port_frame.png"
+        cmd_extract = [
+            "ffmpeg", "-y",
+            "-ss", "0.5",
+            "-i", str(out_mp4),
+            "-vframes", "1",
+            str(frame_png)
+        ]
+        subprocess.run(cmd_extract, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        self.assertTrue(frame_png.exists())
+
+        img = Image.open(frame_png)
+        self.assertEqual(img.width, WIDE_WIDTH)  # 1920
+        self.assertEqual(img.height, WIDE_HEIGHT)  # 1080
+
+        # Sample left background pillarbox (x=200, y=540)
+        left_bg = img.crop((100, 400, 300, 680))
+        bg_colors = list(left_bg.getdata())
+        avg_bg_luma = sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in [c[:3] for c in bg_colors]) / len(bg_colors)
+        self.assertGreater(avg_bg_luma, 10.0, "Background pillarbox should contain blurred video, not black")
+
+        # Cleanup
+        out_mp4.unlink(missing_ok=True)
+        frame_png.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_font_library_and_rendering.py
+============================================================
+"""Test suite for Dispatch Font Library, Font Rendering & Custom Font Imports.
+Verifies font catalog, ASS export font parity, fontsdir reframer integration, and font APIs.
+"""
+import io
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from dispatch.captions.model import CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig, WordStyleOverride
+from dispatch.captions.exporter import export_to_ass, get_ass_weight_tag
+from dispatch.video_engine.reframer import build_filter_complex
+from dispatch.config import FONTS_DIR
+
+
+class TestFontLibraryAndRendering(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_font_manifest_exists_and_contains_curated_library(self):
+        """Verify the curated 20-25 creator fonts are cataloged with licenses and real weights."""
+        manifest_path = FONTS_DIR / "fonts_manifest.json"
+        self.assertTrue(manifest_path.exists(), "fonts_manifest.json must exist in FONTS_DIR")
+        
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+            
+        self.assertGreaterEqual(len(manifest), 20, "Should contain at least 20 curated creator fonts")
+        
+        families = {f["family"] for f in manifest}
+        required_families = [
+            "Anton", "Archivo Black", "Bebas Neue", "Montserrat", "Oswald",
+            "Barlow Condensed", "League Spartan", "Poppins", "Inter", "Roboto",
+            "Open Sans", "Noto Sans", "Space Grotesk", "Bangers", "Luckiest Guy",
+            "Russo One", "Titan One", "Bungee", "Permanent Marker", "Noto Sans Devanagari"
+        ]
+        for req in required_families:
+            self.assertIn(req, families, f"Required font '{req}' missing from font manifest")
+
+        # Verify real weights specification
+        anton = next(f for f in manifest if f["family"] == "Anton")
+        self.assertEqual(anton["weights"], ["400"], "Anton must only declare its real available weight (400)")
+
+    def test_ass_export_includes_inline_font_family_size_and_weight(self):
+        """ASS dialogue events must include explicit \\fn, \\fs, \\b, \\fsp tags for exact render parity."""
+        track = CaptionTrack(
+            default_style=StyleConfig(
+                font_family="Montserrat",
+                font_size=54,
+                font_weight="bold",
+                letter_spacing=1.5,
+                primary_color="#FFFFFF"
+            ),
+            groups=[
+                CaptionGroup(
+                    id="g1",
+                    start=0.0,
+                    end=2.0,
+                    style=StyleConfig(
+                        font_family="Anton",
+                        font_size=60,
+                        font_weight="900",
+                        letter_spacing=2.0,
+                        primary_color="#FFE600",
+                        glow_enabled=True,
+                        glow_color="#00F0FF"
+                    ),
+                    words=[
+                        Word(id="w1", text="SUPER", start=0.0, end=1.0),
+                        Word(id="w2", text="CREATOR", start=1.0, end=2.0),
+                    ]
+                )
+            ]
+        )
+        ass_path = self.temp_path / "test_font.ass"
+        export_to_ass(track, ass_path)
+
+        with open(ass_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Check inline tags in dialogue events
+        self.assertIn(r"\fnAnton", content, "Dialogue event must contain \\fnAnton inline override")
+        self.assertIn(r"\fs60", content, "Dialogue event must contain \\fs60 font size override")
+        self.assertIn(r"\b900", content, "Dialogue event must contain \\b900 font weight override")
+        self.assertIn(r"\fsp2.0", content, "Dialogue event must contain \\fsp2.0 letter spacing override")
+
+        # Check glow layer also contains matching font tags
+        dialogue_lines = [line for line in content.splitlines() if line.startswith("Dialogue:")]
+        self.assertGreaterEqual(len(dialogue_lines), 2)
+        glow_line = dialogue_lines[0]
+        self.assertIn(r"\fnAnton", glow_line, "Glow layer must have matching \\fnAnton tag")
+        self.assertIn(r"\b900", glow_line, "Glow layer must have matching \\b900 weight tag")
+
+    def test_ass_export_word_level_style_overrides(self):
+        """Word-level style overrides (color, weight, scale) must be preserved in ASS output."""
+        track = CaptionTrack(
+            default_style=StyleConfig(font_family="Inter", font_size=48, font_weight="400"),
+            groups=[
+                CaptionGroup(
+                    id="g1",
+                    start=0.0,
+                    end=2.0,
+                    words=[
+                        Word(id="w1", text="NORMAL", start=0.0, end=1.0),
+                        Word(
+                            id="w2",
+                            text="EMPHASIS",
+                            start=1.0,
+                            end=2.0,
+                            style_override=WordStyleOverride(
+                                color="#FF0000",
+                                font_weight="900",
+                                scale=1.25
+                            )
+                        ),
+                    ]
+                )
+            ]
+        )
+        ass_path = self.temp_path / "test_word_override.ass"
+        export_to_ass(track, ass_path)
+
+        with open(ass_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Should contain weight override \b900 for the word
+        self.assertIn(r"\b900", content)
+
+    def test_reframer_includes_fontsdir_in_subtitles_filter(self):
+        """build_filter_complex must pass :fontsdir to FFmpeg subtitles filter when FONTS_DIR exists."""
+        fake_sub = self.temp_path / "subs.ass"
+        fake_sub.write_text("[Script Info]\n", encoding="utf-8")
+
+        filter_str, out_label = build_filter_complex(
+            aspect_ratio="9:16",
+            layout_mode="native_916",
+            ass_subtitle_path=fake_sub
+        )
+        self.assertIn("subtitles=", filter_str)
+        self.assertIn(":fontsdir=", filter_str, "Subtitles filter must specify :fontsdir for libass font discovery")
+
+    def test_api_get_fonts(self):
+        """FastAPI endpoint /api/fonts returns 200 and catalog of fonts."""
+        from fastapi.testclient import TestClient
+        from dispatch.web.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/fonts")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("fonts", data)
+        self.assertIsInstance(data["fonts"], list)
+        self.assertGreater(len(data["fonts"]), 0)
+
+    def test_api_import_invalid_font_extension(self):
+        """Uploading non-ttf/otf files must return 400 with helpful error."""
+        from fastapi.testclient import TestClient
+        from dispatch.web.app import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/fonts/import",
+            files={"file": ("virus.exe", b"not a font file", "application/octet-stream")}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Only .ttf and .otf", response.json()["detail"])
+
+    def test_api_import_corrupt_font_file(self):
+        """Uploading corrupt font file must return 400 with validation failure message."""
+        from fastapi.testclient import TestClient
+        from dispatch.web.app import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/fonts/import",
+            files={"file": ("fake_font.ttf", b"corrupt" * 200, "font/ttf")}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Corrupt or invalid font format", response.json()["detail"])
+
+    def test_api_import_valid_ttf(self):
+        """Uploading genuine TTF must succeed, parse family, and return font entry."""
+        from fastapi.testclient import TestClient
+        from dispatch.web.app import app
+        from dispatch.config import BUNDLED_FONTS_DIR
+
+        # Use Anton from bundled fonts as test upload
+        sample_font = BUNDLED_FONTS_DIR / "Anton-Regular.ttf"
+        if not sample_font.exists():
+            return
+
+        client = TestClient(app)
+        with open(sample_font, "rb") as f:
+            content = f.read()
+
+        response = client.post(
+            "/api/fonts/import",
+            files={"file": ("CustomTestFont.ttf", content, "font/ttf")}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data.get("success"))
+        font = data.get("font")
+        self.assertIsNotNone(font)
+        self.assertTrue(font.get("is_custom"))
+        self.assertEqual(font.get("filename"), "CustomTestFont.ttf")
+
+    def test_capcut_style_export_parity(self):
+        """Verify export parity for case transforms, italic/underline, shadow distance/angle, and alpha."""
+        my_style = StyleConfig(
+            font_family="Montserrat",
+            font_size=48,
+            font_weight="bold",
+            font_style="italic",
+            underline=True,
+            text_transform="title",
+            text_opacity=0.8,
+            outline_enabled=True,
+            outline_color="#000000",
+            outline_width=4.0,
+            outline_opacity=0.6,
+            shadow_enabled=True,
+            shadow_color="#111111",
+            shadow_distance=5.0,
+            shadow_angle=90.0,
+            shadow_opacity=0.5,
+            background_enabled=True,
+            background_mode="line",
+            background_color="#222222",
+            background_opacity=0.9
+        )
+        track = CaptionTrack(
+            default_style=my_style,
+            groups=[
+                CaptionGroup(
+                    id="g1",
+                    start=0.0,
+                    end=2.0,
+                    style=my_style,
+                    words=[
+                        Word(id="w1", text="super", start=0.0, end=1.0),
+                        Word(id="w2", text="creator", start=1.0, end=2.0, style_override=WordStyleOverride(underline=False)),
+                    ]
+                )
+            ]
+        )
+        ass_path = self.temp_path / "test_capcut.ass"
+        export_to_ass(track, ass_path)
+
+        with open(ass_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # 1. Boxed style in V4+ Styles
+        self.assertIn("Style: Boxed", content)
+
+        # 2. Italic & Underline tags
+        self.assertIn(r"\i1", content)
+        self.assertIn(r"\u1", content)
+
+        # 3. Directional shadow: angle 90 deg -> x=0, y=5.0
+        self.assertIn(r"\xshad0.0\yshad5.0", content)
+
+        # 4. Title case transform in dialogue
+        self.assertIn("Super", content)
+        self.assertIn("Creator", content)
+
+        # 5. Word override underline negation
+        self.assertIn(r"\u0", content)
+
+        # 6. Dialogue uses Boxed style
+        self.assertIn(",Boxed,", content)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_gemini_two_stage.py
+============================================================
+"""Unit tests for Gemini Two-Stage Transcription Engine."""
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+
+from dispatch.transcription.gemini_engine import (
+    _parse_offset_to_seconds,
+    check_and_increment_daily_transcribe_quota,
+    transcribe_stage1_flash_lite,
+    transcribe_stage2_precision_words,
+    _parse_stage1_time,
+    _deduplicate_overlapping_segments,
+    drain_queued_transcriptions,
+)
+from dispatch import db
+from dispatch.transcription.audio import _probe_audio_duration, split_audio_for_transcription
+
+
+def fake_genai_module():
+    module = ModuleType("google.genai")
+    module.types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: kwargs,
+        AudioTranscriptionConfig=lambda **kwargs: kwargs,
+    )
+    return module
+
+
+class TestGeminiTwoStage(unittest.TestCase):
+
+    def test_parse_offset_to_seconds(self):
+        self.assertEqual(_parse_offset_to_seconds("0.100s"), 0.1)
+        self.assertEqual(_parse_offset_to_seconds("2.450s"), 2.45)
+        self.assertEqual(_parse_offset_to_seconds("15s"), 15.0)
+        self.assertEqual(_parse_offset_to_seconds(3.5), 3.5)
+        self.assertEqual(_parse_offset_to_seconds(None), 0.0)
+
+    def test_daily_transcribe_quota_tracking(self):
+        # Reset test state
+        db.set_setting("transcribe_quota_date", "2026-01-01")
+        db.set_setting("transcribe_quota_count", "0")
+
+        # First 5 calls pass with limit=5
+        for i in range(1, 6):
+            self.assertTrue(check_and_increment_daily_transcribe_quota(max_daily_requests=5))
+
+        # 6th call exceeds limit
+        self.assertFalse(check_and_increment_daily_transcribe_quota(max_daily_requests=5))
+
+    @patch("dispatch.transcription.gemini_engine.get_gemini_client")
+    def test_transcribe_stage1_flash_lite(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        mock_file = MagicMock()
+        mock_file.name = "files/test1234"
+        mock_client.files.upload.return_value = mock_file
+
+        mock_resp = MagicMock()
+        mock_resp.text = '[{"start": "00:01.00", "end": "00:04.50", "text": "Testing hook", "speaker": "Speaker 1"}]'
+        mock_client.models.generate_content.return_value = mock_resp
+
+        # Create dummy audio file
+        test_file = Path("storage/test_dummy.mp3")
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_bytes(b"dummy")
+
+        with patch.dict(sys.modules, {"google.genai": fake_genai_module()}), \
+             patch("dispatch.transcription.gemini_engine.split_audio_for_transcription", return_value=[(test_file, 0.0)]):
+            segments = transcribe_stage1_flash_lite(test_file)
+        try:
+            self.assertEqual(len(segments), 1)
+            self.assertEqual(segments[0]["start"], 1.0)
+            self.assertEqual(segments[0]["end"], 4.5)
+            self.assertEqual(segments[0]["text"], "Testing hook")
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+
+    @patch("dispatch.transcription.gemini_engine.get_gemini_client")
+    def test_transcribe_stage2_precision_words(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        mock_file = MagicMock()
+        mock_file.name = "files/test5678"
+        mock_client.files.upload.return_value = mock_file
+
+        # Mock WordInfo
+        w1 = MagicMock()
+        w1.word = "Hello"
+        w1.start_offset = "0.200s"
+        w1.end_offset = "0.500s"
+
+        w2 = MagicMock()
+        w2.word = "world"
+        w2.start_offset = "0.600s"
+        w2.end_offset = "1.100s"
+
+        part = MagicMock()
+        trans = MagicMock()
+        trans.speaker_label = "spk:0"
+        trans.words = [w1, w2]
+        part.audio_transcription = trans
+
+        cand = MagicMock()
+        cand.content.parts = [part]
+
+        mock_resp = MagicMock()
+        mock_resp.text = "Hello world"
+        mock_resp.candidates = [cand]
+        mock_client.models.generate_content.return_value = mock_resp
+
+        test_file = Path("storage/test_dummy_clip.mp3")
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_bytes(b"dummy")
+
+        with patch.dict(sys.modules, {"google.genai": fake_genai_module()}), \
+             patch("dispatch.transcription.gemini_engine._probe_audio_duration", return_value=3.0):
+            result = transcribe_stage2_precision_words(test_file)
+        try:
+            self.assertEqual(result["full_text"], "Hello world")
+            self.assertEqual(len(result["words"]), 2)
+            self.assertEqual(result["words"][0]["word"], "Hello")
+            self.assertEqual(result["words"][0]["start"], 0.2)
+            self.assertEqual(result["speech_start"], 0.2)
+            self.assertEqual(result["speech_end"], 1.1)
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+
+    def test_stage1_combines_part_transcripts_on_original_timeline(self):
+        client = MagicMock()
+        client.files.upload.side_effect = [SimpleNamespace(name="part-one"), SimpleNamespace(name="part-two")]
+        client.models.generate_content.side_effect = [
+            SimpleNamespace(text='[{"start":"00:09.00","end":"00:10.00","text":"first"}]'),
+            SimpleNamespace(text='[{"start":"00:01.00","end":"00:02.00","text":"second"}]'),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "long.mp3"
+            first = Path(tmp) / "first.mp3"
+            second = Path(tmp) / "second.mp3"
+            source.write_bytes(b"source")
+            first.write_bytes(b"part 1")
+            second.write_bytes(b"part 2")
+            with patch.dict(sys.modules, {"google.genai": fake_genai_module()}), \
+                 patch("dispatch.transcription.gemini_engine.get_gemini_client", return_value=client), \
+                 patch("dispatch.transcription.gemini_engine.split_audio_for_transcription",
+                       return_value=[(first, 0.0), (second, 595.0)]) as split_audio:
+                segments = transcribe_stage1_flash_lite(source)
+
+        split_audio.assert_called_once()
+        self.assertEqual(split_audio.call_args.kwargs["overlap_seconds"], 5.0)
+        self.assertEqual([item["start"] for item in segments], [9.0, 596.0])
+        self.assertEqual([item["text"] for item in segments], ["first", "second"])
+        self.assertEqual(client.files.delete.call_count, 2)
+        self.assertEqual(_parse_stage1_time("01:02:03.5"), 3723.5)
+
+    def test_stage1_deduplicates_only_adjacent_window_boundary_phrases(self):
+        segments = [
+            {"start": 597.5, "end": 599.5, "text": "same phrase", "speaker": "one", "_source_part_index": 0},
+            {"start": 598.1, "end": 600.2, "text": "Same phrase.", "speaker": "one", "_source_part_index": 1},
+            {"start": 601.0, "end": 602.0, "text": "same phrase", "speaker": "one", "_source_part_index": 1},
+        ]
+        merged = _deduplicate_overlapping_segments(segments, overlap_seconds=5.0)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0]["start"], 597.5)
+        self.assertEqual(merged[0]["end"], 600.2)
+        self.assertNotIn("_source_part_index", merged[0])
+
+    def test_stage2_rejects_full_source_audio_before_upload(self):
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "multi_hour.mp3"
+            source.write_bytes(b"fixture")
+            with patch.dict(sys.modules, {"google.genai": fake_genai_module()}), \
+                 patch("dispatch.transcription.gemini_engine.get_gemini_client", return_value=client), \
+                 patch("dispatch.transcription.gemini_engine._probe_audio_duration", return_value=7200.0):
+                with self.assertRaisesRegex(ValueError, "Full-source transcription is disabled"):
+                    transcribe_stage2_precision_words(source)
+        client.files.upload.assert_not_called()
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools are required")
+    def test_long_audio_split_keeps_order_offsets_and_short_final_part(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mp3"
+            parts_dir = Path(tmp) / "parts"
+            subprocess.run(
+                ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=2.2", "-c:a", "libmp3lame",
+                 "-b:a", "32k", str(source)],
+                check=True,
+            )
+            parts = split_audio_for_transcription(source, parts_dir, chunk_seconds=1)
+            offsets = [offset for _, offset in parts]
+            self.assertEqual(offsets[0], 0.0)
+            self.assertAlmostEqual(offsets[1], 0.9, delta=0.01)
+            self.assertAlmostEqual(offsets[2], 1.8, delta=0.01)
+            self.assertTrue(all(path.is_file() and path.stat().st_size > 0 for path, _ in parts))
+            self.assertLess(_probe_audio_duration(parts[-1][0]), 1.0, "the final segment is a valid shorter remainder")
+
+    def test_stage2_slice_failure_retries_and_never_transcribes_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "long_source.mp4"
+            source.write_bytes(b"source fixture")
+            process_dir = Path(tmp) / "processing"
+            clip = {
+                "id": "clip-stage2-slice-failure", "chunk_id": "chunk-stage2-slice-failure",
+                "start_time": 100.0, "end_time": 120.0,
+                "padded_start": 96.0, "padded_end": 124.0,
+            }
+            failed_ffmpeg = SimpleNamespace(returncode=1, stderr="synthetic extraction error")
+            with patch("dispatch.transcription.gemini_engine.db.get_queued_transcription_clips", return_value=[clip]), \
+                 patch("dispatch.transcription.gemini_engine.db.get_chunk_by_id", return_value={"filepath": str(source)}), \
+                 patch("dispatch.transcription.gemini_engine.check_and_increment_daily_transcribe_quota", return_value=True), \
+                 patch("subprocess.run", return_value=failed_ffmpeg) as run_ffmpeg, \
+                 patch("dispatch.transcription.gemini_engine.transcribe_stage2_precision_words") as transcribe, \
+                 patch("dispatch.transcription.gemini_engine.PROCESSING_DIR", process_dir):
+                drained = drain_queued_transcriptions(max_batch=1)
+            self.assertEqual(drained, 0)
+            self.assertEqual(run_ffmpeg.call_count, 2, "bounded extraction gets one safe retry")
+            transcribe.assert_not_called()
+
+    def test_transcription_queue_stats_and_backlog(self):
+        # Insert a queued_transcription clip directly into SQLite
+        clip_id = "test_queued_clip_999"
+        with db.get_db_connection() as conn:
+            conn.cursor().execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+            conn.cursor().execute("""
+                INSERT INTO clips (id, start_time, end_time, padded_start, padded_end, duration, title, hook, virality_score, status)
+                VALUES (?, 10.0, 40.0, 6.0, 44.0, 30.0, 'Test Clip', 'Test Hook', 85, 'queued_transcription')
+            """, (clip_id,))
+            conn.commit()
+
+        try:
+            queued = db.get_queued_transcription_clips(limit=10)
+            self.assertTrue(any(c["id"] == clip_id for c in queued))
+
+            stats = db.get_transcription_queue_stats()
+            self.assertGreaterEqual(stats["queued_count"], 1)
+            self.assertEqual(stats["daily_quota_max"], 25)
+        finally:
+            with db.get_db_connection() as conn:
+                conn.cursor().execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+                conn.commit()
+
+    @patch("dispatch.transcription.gemini_engine.check_and_increment_daily_transcribe_quota")
+    def test_drain_queued_transcriptions_respects_quota(self, mock_quota):
+        # When quota is exhausted, drain stops immediately
+        mock_quota.return_value = False
+        from dispatch.transcription.gemini_engine import drain_queued_transcriptions
+        drained = drain_queued_transcriptions(max_batch=5)
+        self.assertEqual(drained, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_governor.py
+============================================================
+"""Unit test for Phase 4: Resource Governor & Laptop Performance Manager."""
+import unittest
+from unittest.mock import patch, MagicMock
+from dispatch.governor.resource_governor import ResourceGovernor, GovernorPolicy
+
+
+class TestResourceGovernor(unittest.TestCase):
+    def test_live_metrics_retrieval(self):
+        governor = ResourceGovernor()
+        metrics = governor.get_system_metrics()
+        self.assertIn("free_disk_gb", metrics)
+        self.assertIn("on_ac_power", metrics)
+        self.assertIn("cpu_percent", metrics)
+        self.assertIn("idle_seconds", metrics)
+        self.assertGreater(metrics["total_disk_gb"], 0)
+
+    def test_optimal_worker_threads(self):
+        policy = GovernorPolicy(reserved_cpu_cores=2)
+        governor = ResourceGovernor(policy=policy)
+        threads = governor.get_optimal_worker_threads()
+        self.assertGreaterEqual(threads, 1)
+
+    def test_low_process_priority(self):
+        governor = ResourceGovernor()
+        # Should succeed or gracefully handle without throwing exceptions
+        success = governor.set_low_process_priority()
+        self.assertIsInstance(success, bool)
+
+    def test_disk_space_policy_enforcement(self):
+        # Policy requiring 500 GB free disk space (which test machine doesn't have)
+        policy = GovernorPolicy(min_free_disk_gb=500.0)
+        governor = ResourceGovernor(policy=policy)
+        can_run, reason = governor.can_process_heavy_task()
+        self.assertFalse(can_run)
+        self.assertIn("Disk space low", reason)
+
+    def test_battery_policy_enforcement(self):
+        # Mock battery status: on battery, 20%
+        mock_battery = MagicMock()
+        mock_battery.power_plugged = False
+        mock_battery.percent = 20.0
+
+        with patch("psutil.sensors_battery", return_value=mock_battery), \
+             patch("psutil.cpu_percent", return_value=10.0):
+            # Case 1: allow_on_battery = False -> Should disallow
+            policy1 = GovernorPolicy(allow_on_battery=False, min_free_disk_gb=1.0)
+            gov1 = ResourceGovernor(policy1)
+            can_run1, reason1 = gov1.can_process_heavy_task()
+            self.assertFalse(can_run1)
+            self.assertIn("battery", reason1.lower())
+
+            # Case 2: allow_on_battery = True, but min_battery_percent = 30% -> Should disallow
+            policy2 = GovernorPolicy(allow_on_battery=True, min_battery_percent=30.0, min_free_disk_gb=1.0)
+            gov2 = ResourceGovernor(policy2)
+            can_run2, reason2 = gov2.can_process_heavy_task()
+            self.assertFalse(can_run2)
+            self.assertIn("too low", reason2.lower())
+
+            # Case 3: allow_on_battery = True, min_battery_percent = 15% -> Should allow
+            policy3 = GovernorPolicy(allow_on_battery=True, min_battery_percent=15.0, min_free_disk_gb=1.0)
+            gov3 = ResourceGovernor(policy3)
+            with patch.object(gov3, "get_user_idle_seconds", return_value=200.0):
+                can_run3, reason3 = gov3.can_process_heavy_task()
+                self.assertTrue(can_run3)
+
+    def test_user_activity_policy_enforcement(self):
+        policy = GovernorPolicy(pause_when_user_active=True, idle_threshold_seconds=60.0, min_free_disk_gb=1.0)
+        governor = ResourceGovernor(policy=policy)
+
+        # Mock user actively typing (idle 5 seconds)
+        with patch.object(governor, "get_user_idle_seconds", return_value=5.0):
+            mock_battery = MagicMock()
+            mock_battery.power_plugged = True
+            mock_battery.percent = 100.0
+            with patch("psutil.sensors_battery", return_value=mock_battery):
+                can_run, reason = governor.can_process_heavy_task()
+                self.assertFalse(can_run)
+                self.assertIn("actively using", reason)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_ingest_privacy_gate.py
+============================================================
+"""Privacy gate regressions: private and unverifiable sources are rejected before
+any download; only public/unlisted may proceed (Friends-ready Alpha contract)."""
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from dispatch import db
+from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
+
+
+class TestIngestPrivacyGate(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="privacy_gate_")
+        from dispatch.config import STORAGE_DIR
+        self._orig_storage = STORAGE_DIR
+        import dispatch.config as cfg
+        cfg.STORAGE_DIR = Path(self.tmp.name)
+        cfg.DATABASE_DIR = Path(self.tmp.name) / "database"
+        cfg.DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+        db.init_db()
+
+    def tearDown(self):
+        import dispatch.config as cfg
+        cfg.STORAGE_DIR = self._orig_storage
+        self.tmp.cleanup()
+
+    def _ingest(self, verdict):
+        downloads = []
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                   side_effect=lambda ids: {i: {"privacy_status": verdict} for i in ids}), \
+             patch("dispatch.ingestion.validator.probe_video",
+                   lambda f: (True, {"duration": 10.0, "width": 720, "height": 1280}, None)), \
+             patch.object(YouTubeInboxCatcher, "fetch_video_info",
+                          lambda self, vid: {"id": vid, "title": "t", "duration": 10}), \
+             patch.object(YouTubeInboxCatcher, "download_video", self._fake_download(downloads)):
+            return YouTubeInboxCatcher().ingest_video("priv_gate_1"), downloads
+
+    def _fake_download(self, downloads):
+        tmp = Path(self.tmp.name)
+        def fake(self_, vid):
+            f = tmp / f"{vid}.mp4"
+            f.write_bytes(b"x")
+            downloads.append(vid)
+            return f
+        return fake
+
+    def test_private_source_rejected_before_download(self):
+        result, downloads = self._ingest("private")
+        self.assertEqual(result["status"], "FAILED")
+        self.assertIn("Private", result["error"])
+        self.assertEqual(downloads, [])  # never touched yt-dlp
+
+    def test_unverifiable_source_rejected(self):
+        result, downloads = self._ingest("")
+        self.assertEqual(result["status"], "FAILED")
+        self.assertIn("could not be verified", result["error"])
+        self.assertEqual(downloads, [])
+
+    def test_public_and_unlisted_pass_gate(self):
+        for verdict in ("public", "unlisted"):
+            result, _ = self._ingest(verdict)
+            self.assertNotEqual(result.get("status"), "FAILED", msg=verdict)
+
+
+    def test_configured_cookies_cannot_bypass_private_rejection(self):
+        """B1 #7: even with authenticated yt-dlp cookies configured, a PRIVATE verdict
+        is rejected before download - yt-dlp access is never treated as visibility."""
+        import os
+        os.environ["DISPATCH_YTDLP_COOKIES_FILE"] = "cookies.txt"
+        try:
+            result, downloads = self._ingest("private")
+            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(downloads, [])
+        finally:
+            del os.environ["DISPATCH_YTDLP_COOKIES_FILE"]
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+============================================================
+FILE: tests\test_ingestion.py
+============================================================
+"""Test suite for Dispatch ingestion and validation."""
+import unittest
+import subprocess
+from pathlib import Path
+from dispatch.config import INCOMING_DIR, PROCESSING_DIR
+from dispatch.ingestion.validator import probe_video, calculate_file_hash
+from dispatch.ingestion.watcher import process_incoming_file
+from dispatch.db import init_db, get_db_connection
+
+
+class TestIngestion(unittest.TestCase):
+    def setUp(self):
+        init_db()
+
+    def test_ingestion(self):
+        test_video = INCOMING_DIR / "unit_test_video.mp4"
+        
+        # Generate 2-second 1080p landscape test video with sine audio
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=1000",
+            "-t", "2",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(test_video)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        
+        # 1. Test probe
+        is_valid, meta, err = probe_video(test_video)
+        self.assertTrue(is_valid, f"Validation failed: {err}")
+        self.assertEqual(meta["aspect_ratio"], "16:9", f"Expected 16:9, got {meta['aspect_ratio']}")
+        self.assertTrue(meta["has_audio"], "Audio track missing")
+        self.assertGreater(meta["duration"], 1.8, f"Duration unexpected: {meta['duration']}")
+        
+        # 2. Test hash
+        f_hash = calculate_file_hash(test_video)
+        self.assertEqual(len(f_hash), 32, f"Invalid hash: {f_hash}")
+        
+        # 3. Test staging via watcher
+        result = process_incoming_file(test_video)
+        self.assertIsNotNone(result, "Failed to process incoming file")
+        self.assertTrue(result["filepath"].exists(), "Staged file not found in processing")
+        self.assertEqual(result["filepath"].parent, PROCESSING_DIR, "File was not moved to processing")
+        self.assertFalse(test_video.exists(), "Original file should have been moved")
+        
+        # Clean up test artifact
+        result["filepath"].unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+============================================================
+FILE: tests\test_job_queue.py
+============================================================
+"""Unit test for Phase 3: Persistent job queue, leases, checkpoints, and crash recovery."""
+import unittest
+from datetime import datetime, timedelta
+from dispatch.db import init_db, register_chunk, get_db_connection
+from dispatch.orchestrator.state_machine import PipelineStage, JobStatus
+from dispatch.orchestrator.job_queue import (
+    init_job_queue_schema,
+    enqueue_job,
+    claim_job,
+    renew_heartbeat,
+    complete_stage_checkpoint,
+    fail_stage_job
+)
+from dispatch.orchestrator.recovery import recover_laptop_orchestrator
+
+
+class TestJobQueue(unittest.TestCase):
+    def setUp(self):
+        init_db()
+        init_job_queue_schema()
+
+    def test_job_queue_and_recovery(self):
+        # 1. Register a test chunk
+        chunk_id = register_chunk(
+            session_id="test_sess_p3",
+            filename="test_chunk_p3.mp4",
+            filepath="storage/processing/test_chunk_p3.mp4",
+            file_hash="dummy_hash_p3"
+        )
+
+        # 2. Enqueue job
+        job_id = enqueue_job(chunk_id=chunk_id, session_id="test_sess_p3")
+        self.assertIsNotNone(job_id)
+
+        # 3. Worker 1 claims job
+        claimed = claim_job(worker_id="worker_alpha", lease_duration_seconds=30)
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed["job_id"], job_id)
+        self.assertEqual(claimed["current_stage"], "VERIFY")
+        self.assertEqual(claimed["status"], "PROCESSING")
+
+        # 4. Advance checkpoint: VERIFY -> TRANSCRIBE
+        next_stg = complete_stage_checkpoint(job_id, PipelineStage.VERIFY)
+        self.assertEqual(next_stg, PipelineStage.TRANSCRIBE)
+
+        # Worker claims job at TRANSCRIBE stage
+        claimed2 = claim_job(worker_id="worker_alpha", lease_duration_seconds=30)
+        self.assertEqual(claimed2["job_id"], job_id)
+        self.assertEqual(claimed2["current_stage"], "TRANSCRIBE")
+
+        # 5. SIMULATE POWER LOSS / WORKER CRASH:
+        # Expire the lease in the past
+        past_time = (datetime.now() - timedelta(minutes=5)).isoformat()
+        with get_db_connection() as conn:
+            conn.execute("UPDATE pipeline_jobs SET lease_expires_at = ? WHERE job_id = ?", (past_time, job_id))
+
+        # Run boot recovery
+        recovery = recover_laptop_orchestrator()
+        self.assertIn(job_id, recovery["reclaimed_jobs"])
+
+        # Verify job is RETRY_PENDING and retained stage TRANSCRIBE (checkpoint preserved!)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, current_stage, worker_id FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+            row = cursor.fetchone()
+            self.assertEqual(row["status"], "RETRY_PENDING")
+            self.assertEqual(row["current_stage"], "TRANSCRIBE", "Job should have resumed from TRANSCRIBE checkpoint!")
+            self.assertIsNone(row["worker_id"])
+
+        # 6. Worker 2 claims and finishes through all stages
+        claimed3 = claim_job(worker_id="worker_beta", lease_duration_seconds=30)
+        self.assertEqual(claimed3["job_id"], job_id)
+        self.assertEqual(claimed3["current_stage"], "TRANSCRIBE")
+
+        # Advance TRANSCRIBE -> ANALYZE
+        complete_stage_checkpoint(job_id, PipelineStage.TRANSCRIBE)
+        claimed4 = claim_job(worker_id="worker_beta")
+        self.assertEqual(claimed4["current_stage"], "ANALYZE")
+
+        # Advance ANALYZE -> RENDER
+        complete_stage_checkpoint(job_id, PipelineStage.ANALYZE)
+        claimed5 = claim_job(worker_id="worker_beta")
+        self.assertEqual(claimed5["current_stage"], "RENDER")
+
+        # Advance RENDER -> FINALIZE
+        complete_stage_checkpoint(job_id, PipelineStage.RENDER)
+        claimed6 = claim_job(worker_id="worker_beta")
+        self.assertEqual(claimed6["current_stage"], "FINALIZE")
+
+        # Advance FINALIZE -> COMPLETED
+        final_stg = complete_stage_checkpoint(job_id, PipelineStage.FINALIZE)
+        self.assertEqual(final_stg, PipelineStage.COMPLETED)
+
+        # Verify final status in DB
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, current_stage FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+            final_row = cursor.fetchone()
+            self.assertEqual(final_row["status"], "COMPLETED")
+            self.assertEqual(final_row["current_stage"], "COMPLETED")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+

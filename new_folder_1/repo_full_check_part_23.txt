@@ -1,0 +1,1948 @@
+﻿
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\recorder\CameraCaptureManager.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.util.Range
+import android.util.Rational
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
+import android.util.Size
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.CaptureRequestOptions
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraControl
+import androidx.camera.core.CameraInfo
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.MeteringPoint
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.*
+import androidx.camera.view.PreviewView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import com.google.common.util.concurrent.ListenableFuture
+
+internal fun isAeAfLockConfirmed(afLockConfirmed: Boolean, aeLockConfirmed: Boolean): Boolean =
+    afLockConfirmed || aeLockConfirmed
+
+internal fun clampExposureIndex(index: Int, minIndex: Int, maxIndex: Int): Int =
+    index.coerceIn(minIndex, maxIndex)
+
+/**
+ * CameraX Video Capture Engine for POCO C65 and Android devices.
+ * Streams camera frames to PreviewView and records FHD 1080p MP4 segments with audio.
+ * Supports: Front/Back camera, Tap-to-Focus, AE/AF Lock, Exposure Bias, Torch, and 1x/2x Zoom.
+ */
+class CameraCaptureManager(private val context: Context) {
+
+    companion object {
+        private const val TAG = "CameraCaptureManager"
+        private const val LOCK_CONFIRMATION_TIMEOUT_MS = 4_500L
+        private const val LOCK_RECOVERY_TIMEOUT_MS = 1_800L
+    }
+
+    private val recordingExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var camera: Camera? = null
+    private var videoCapture: VideoCapture<Recorder>? = null
+    private var activeRecording: Recording? = null
+    private val focusOperationGeneration = CameraRequestGeneration()
+    private val exposureOperationGeneration = CameraRequestGeneration()
+    private var boundLifecycleOwner: LifecycleOwner? = null
+    private var boundLensFacing: Int? = null
+    
+    var isRecording: Boolean = false
+        private set
+
+    var currentLensFacing: Int = CameraSelector.LENS_FACING_BACK
+        private set
+
+    var isTorchEnabled: Boolean = false
+        private set
+
+    @Volatile var isAeLocked: Boolean = false
+        private set
+    @Volatile var isAfLocked: Boolean = false
+        private set
+    @Volatile var isAeAfLockUncertain: Boolean = false
+        private set
+    val isAeAfLocked: Boolean
+        get() = isAeLocked || isAfLocked
+
+    private fun clearConfirmedLockState() {
+        isAeLocked = false
+        isAfLocked = false
+        isAeAfLockUncertain = false
+    }
+
+    var currentZoomRatio: Float = 1.0f
+        private set
+
+    var isAudioEnabled: Boolean = true
+        private set
+
+    var currentExposureIndex: Int = 0
+        private set
+
+    private var orientationEventListener: android.view.OrientationEventListener? = null
+    var currentRotation: Int = android.view.Surface.ROTATION_0
+        private set
+    var currentOrientationMode: String = "portrait"
+        private set
+
+    init {
+        setupOrientationListener()
+    }
+
+    private fun setupOrientationListener() {
+        orientationEventListener = object : android.view.OrientationEventListener(context) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                val newRotation = when (orientation) {
+                    in 45..134 -> android.view.Surface.ROTATION_270
+                    in 135..224 -> android.view.Surface.ROTATION_180
+                    in 225..314 -> android.view.Surface.ROTATION_90
+                    else -> android.view.Surface.ROTATION_0
+                }
+                if (newRotation != currentRotation) {
+                    currentRotation = newRotation
+                    currentOrientationMode = if (newRotation == android.view.Surface.ROTATION_90 || newRotation == android.view.Surface.ROTATION_270) {
+                        "landscape"
+                    } else {
+                        "portrait"
+                    }
+                    try {
+                        videoCapture?.targetRotation = currentRotation
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to update targetRotation: ${e.message}")
+                    }
+                }
+            }
+        }
+        if (orientationEventListener?.canDetectOrientation() == true) {
+            orientationEventListener?.enable()
+        }
+    }
+
+    fun toggleAudio(): Boolean {
+        isAudioEnabled = !isAudioEnabled
+        try {
+            activeRecording?.mute(!isAudioEnabled)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to mute/unmute active recording: ${e.message}")
+        }
+        return isAudioEnabled
+    }
+
+    fun setAudioEnabled(enabled: Boolean) {
+        isAudioEnabled = enabled
+        try {
+            activeRecording?.mute(!isAudioEnabled)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update audio mute state: ${e.message}")
+        }
+    }
+
+    var activeLifecycleOwner: LifecycleOwner? = null
+        private set
+
+    val isInitialized: Boolean
+        get() = camera != null && videoCapture != null && !isBindingCamera
+
+    var activePreviewView: PreviewView? = null
+        private set
+
+    private val pendingReadyCallbacks = mutableListOf<() -> Unit>()
+    private val pendingErrorCallbacks = mutableListOf<(String) -> Unit>()
+
+    /**
+     * Builds a ResolutionSelector targeting crisp 16:9 aspect ratio and 1080p resolution across all devices.
+     */
+    private fun createResolutionSelector(): ResolutionSelector {
+        return ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(1920, 1080),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                )
+            )
+            .build()
+    }
+
+    /**
+     * Builds a QualitySelector prioritizing 1080p FHD video capture to match the 1080p preview and UI claims.
+     * Ordered FHD -> HD -> SD so it automatically picks high-definition quality without framing crop mismatches.
+     */
+    private fun createQualitySelector(): QualitySelector {
+        return QualitySelector.fromOrderedList(
+            listOf(Quality.FHD, Quality.HD, Quality.SD),
+            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+        )
+    }
+
+    /**
+     * Applies Camera2 hardware extensions for continuous video autofocus and auto-exposure.
+     * Uses FAST / device default processing for smooth live preview without latency or color shifting.
+     */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun applyCamera2Optimizations(previewBuilder: Preview.Builder, lensFacing: Int = currentLensFacing) {
+        try {
+            val extender = Camera2Interop.Extender(previewBuilder)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+
+            // Fast preview processing to maintain stable 30fps without thermal throttling or color shift
+            extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+            extender.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+
+            // Hardware continuous autofocus for video if supported
+            if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                extender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Camera2Interop options not supported on this device: ${e.message}")
+        }
+    }
+
+    private var isBindingCamera = false
+
+    /**
+     * Binds CameraX Preview and VideoCapture to the given LifecycleOwner and PreviewView.
+     */
+    fun initializeCamera(
+        lifecycleOwner: LifecycleOwner,
+        previewView: PreviewView,
+        lensFacing: Int = currentLensFacing,
+        onReady: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        activeLifecycleOwner = lifecycleOwner
+        activePreviewView = previewView
+
+        if (isBindingCamera) {
+            Log.i(TAG, "Camera binding already in progress, queuing callbacks.")
+            currentLensFacing = lensFacing
+            onReady?.let { pendingReadyCallbacks.add(it) }
+            onError?.let { pendingErrorCallbacks.add(it) }
+            return
+        }
+
+        if (camera != null && videoCapture != null && boundLifecycleOwner == lifecycleOwner && boundLensFacing == lensFacing) {
+            currentLensFacing = lensFacing
+            Log.i(TAG, "Camera already cleanly bound and active. Re-confirming ready.")
+            onReady?.invoke()
+            return
+        }
+
+        currentLensFacing = lensFacing
+        focusOperationGeneration.invalidate()
+        exposureOperationGeneration.invalidate()
+        clearConfirmedLockState()
+
+        onReady?.let { pendingReadyCallbacks.add(it) }
+        onError?.let { pendingErrorCallbacks.add(it) }
+        isBindingCamera = true
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+                val lensFacingToBind = currentLensFacing
+
+                val previewBuilder = Preview.Builder().setResolutionSelector(createResolutionSelector())
+                applyCamera2Optimizations(previewBuilder, lensFacingToBind)
+                val preview = previewBuilder.build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+                val recorder = Recorder.Builder()
+                    .setExecutor(recordingExecutor)
+                    .setQualitySelector(createQualitySelector())
+                    .build()
+
+                val nextVideoCapture = VideoCapture.withOutput(recorder).apply {
+                    targetRotation = currentRotation
+                }
+
+                val cameraSelector = CameraSelector.Builder()
+                    .requireLensFacing(lensFacingToBind)
+                    .build()
+
+                cameraProvider.unbindAll()
+                val boundCamera = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    preview,
+                    nextVideoCapture
+                )
+                camera = boundCamera
+                videoCapture = nextVideoCapture
+                boundLifecycleOwner = lifecycleOwner
+                boundLensFacing = lensFacingToBind
+
+                // Restore previous state if applicable
+                boundCamera.cameraControl.setZoomRatio(currentZoomRatio)
+                val exposure = boundCamera.cameraInfo.exposureState
+                val range = exposure.exposureCompensationRange
+                if (exposure.isExposureCompensationSupported && range.lower < range.upper) {
+                    currentExposureIndex = clampExposureIndex(currentExposureIndex, range.lower, range.upper)
+                    if (currentExposureIndex != exposure.exposureCompensationIndex) {
+                        boundCamera.cameraControl.setExposureCompensationIndex(currentExposureIndex)
+                    }
+                } else {
+                    currentExposureIndex = 0
+                }
+
+                isBindingCamera = false
+                Log.i(TAG, "CameraX High-Resolution 1080p VideoCapture bound successfully (Lens: $lensFacingToBind).")
+                val callbacks = pendingReadyCallbacks.toList()
+                pendingReadyCallbacks.clear()
+                pendingErrorCallbacks.clear()
+                callbacks.forEach { it.invoke() }
+
+            } catch (exc: Exception) {
+                isBindingCamera = false
+                camera = null
+                videoCapture = null
+                boundLifecycleOwner = null
+                boundLensFacing = null
+                val msg = exc.message ?: "Camera binding failed"
+                Log.e(TAG, "Failed to bind CameraX lifecycle: $msg", exc)
+                val errCallbacks = pendingErrorCallbacks.toList()
+                pendingReadyCallbacks.clear()
+                pendingErrorCallbacks.clear()
+                errCallbacks.forEach { it.invoke(msg) }
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    /**
+     * Suspending coroutine that binds VideoCapture directly to LifecycleOwner (Activity or Service)
+     * and returns true upon success, false upon failure.
+     */
+    suspend fun bindLifecycle(
+        lifecycleOwner: LifecycleOwner,
+        lensFacing: Int = currentLensFacing
+    ): Boolean = suspendCancellableCoroutine { continuation ->
+        activeLifecycleOwner = lifecycleOwner
+        currentLensFacing = lensFacing
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+
+                val recorder = Recorder.Builder()
+                    .setQualitySelector(createQualitySelector())
+                    .build()
+
+                videoCapture = VideoCapture.withOutput(recorder).apply {
+                    targetRotation = currentRotation
+                }
+
+                val cameraSelector = CameraSelector.Builder()
+                    .requireLensFacing(currentLensFacing)
+                    .build()
+
+                val useCases = mutableListOf<androidx.camera.core.UseCase>()
+                activePreviewView?.let { pv ->
+                    val pb = Preview.Builder().setResolutionSelector(createResolutionSelector())
+                    applyCamera2Optimizations(pb)
+                    val preview = pb.build().also {
+                        it.setSurfaceProvider(pv.surfaceProvider)
+                    }
+                    useCases.add(preview)
+                }
+                videoCapture?.let { useCases.add(it) }
+
+                cameraProvider.unbindAll()
+                camera = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    *useCases.toTypedArray()
+                )
+
+                camera?.cameraControl?.setZoomRatio(currentZoomRatio)
+                if (currentExposureIndex != 0) {
+                    setExposureIndex(currentExposureIndex, null)
+                }
+
+                Log.i(TAG, "VideoCapture bound to Lifecycle (Lens: $currentLensFacing).")
+                if (continuation.isActive) continuation.resume(true)
+            } catch (exc: Exception) {
+                Log.e(TAG, "Failed to bind VideoCapture to Lifecycle: ${exc.message}", exc)
+                videoCapture = null
+                if (continuation.isActive) continuation.resume(false)
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    /**
+     * Binds VideoCapture directly to LifecycleService so recording continues with screen off.
+     * Retains live PreviewView binding if the Activity View is attached.
+     */
+    fun bindToService(
+        serviceLifecycleOwner: LifecycleOwner,
+        lensFacing: Int = currentLensFacing,
+        onReady: ((Boolean) -> Unit)? = null
+    ) {
+        activeLifecycleOwner = serviceLifecycleOwner
+        currentLensFacing = lensFacing
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+
+                val recorder = Recorder.Builder()
+                    .setQualitySelector(createQualitySelector())
+                    .build()
+
+                videoCapture = VideoCapture.withOutput(recorder).apply {
+                    targetRotation = currentRotation
+                }
+
+                val cameraSelector = CameraSelector.Builder()
+                    .requireLensFacing(currentLensFacing)
+                    .build()
+
+                val serviceUseCases = mutableListOf<androidx.camera.core.UseCase>()
+                activePreviewView?.let { pv ->
+                    val pb = Preview.Builder().setResolutionSelector(createResolutionSelector())
+                    applyCamera2Optimizations(pb)
+                    val preview = pb.build().also {
+                        it.setSurfaceProvider(pv.surfaceProvider)
+                    }
+                    serviceUseCases.add(preview)
+                }
+                videoCapture?.let { serviceUseCases.add(it) }
+
+                cameraProvider.unbindAll()
+                camera = cameraProvider.bindToLifecycle(
+                    serviceLifecycleOwner,
+                    cameraSelector,
+                    *serviceUseCases.toTypedArray()
+                )
+
+                camera?.cameraControl?.setZoomRatio(currentZoomRatio)
+                if (currentExposureIndex != 0) {
+                    setExposureIndex(currentExposureIndex, null)
+                }
+
+                Log.i(TAG, "VideoCapture bound to LifecycleService (Lens: $currentLensFacing).")
+                onReady?.invoke(true)
+            } catch (exc: Exception) {
+                Log.e(TAG, "Failed to bind VideoCapture to LifecycleService: ${exc.message}", exc)
+                videoCapture = null
+                onReady?.invoke(false)
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    /**
+     * Suspending coroutine that binds VideoCapture to LifecycleService and returns success/failure.
+     */
+    suspend fun bindToServiceAsync(
+        serviceLifecycleOwner: LifecycleOwner,
+        lensFacing: Int = currentLensFacing
+    ): Boolean = suspendCancellableCoroutine { cont ->
+        bindToService(serviceLifecycleOwner, lensFacing) { ok ->
+            if (cont.isActive) cont.resume(ok)
+        }
+    }
+
+    /**
+     * Toggles lens facing between BACK and FRONT, re-binding to active LifecycleOwner.
+     */
+    suspend fun toggleLensFacing(
+        onReady: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ): Int {
+        val nextLens = if (currentLensFacing == CameraSelector.LENS_FACING_BACK) {
+            CameraSelector.LENS_FACING_FRONT
+        } else {
+            CameraSelector.LENS_FACING_BACK
+        }
+        isTorchEnabled = false
+        clearConfirmedLockState()
+        focusOperationGeneration.invalidate()
+        exposureOperationGeneration.invalidate()
+        val owner = activeLifecycleOwner
+        val pv = activePreviewView
+        if (owner != null && pv != null) {
+            initializeCamera(owner, pv, nextLens, onReady, onError)
+        } else if (owner != null) {
+            val success = try { bindLifecycle(owner, nextLens) } catch (e: Exception) {
+                onError?.invoke(e.message ?: "Camera lens switch failed")
+                false
+            }
+            if (success) {
+                currentLensFacing = nextLens
+                onReady?.invoke()
+            } else {
+                onError?.invoke("Camera lens switch failed")
+            }
+        } else {
+            onError?.invoke("Camera preview is not available")
+        }
+        return currentLensFacing
+    }
+
+    /**
+     * Switches between Back Camera and Front/Selfie Camera with PreviewView.
+     */
+    fun switchCamera(
+        lifecycleOwner: LifecycleOwner,
+        previewView: PreviewView,
+        onReady: (() -> Unit)? = null
+    ) {
+        val nextLens = if (currentLensFacing == CameraSelector.LENS_FACING_BACK) {
+            CameraSelector.LENS_FACING_FRONT
+        } else {
+            CameraSelector.LENS_FACING_BACK
+        }
+        isTorchEnabled = false
+        clearConfirmedLockState()
+        initializeCamera(lifecycleOwner, previewView, nextLens, onReady)
+    }
+
+    private var lastMeteringPoint: MeteringPoint? = null
+
+    data class FocusResult(
+        val success: Boolean,
+        val isLocked: Boolean,
+        val hasAf: Boolean,
+        val hasAe: Boolean,
+        val error: String? = null,
+        val lockStateUncertain: Boolean = false
+    )
+
+    /**
+     * Focuses and meters on the tapped (x, y) coordinate on PreviewView.
+     */
+    fun focusOnPoint(
+        x: Float,
+        y: Float,
+        previewView: PreviewView,
+        onComplete: ((FocusResult) -> Unit)? = null
+    ) {
+        if (isAeAfLocked || isAeAfLockUncertain) {
+            onComplete?.invoke(FocusResult(false, isAeAfLocked, isAfLocked, isAeLocked, "Unlock the camera before focusing", isAeAfLockUncertain))
+            return
+        }
+        val operationGeneration = focusOperationGeneration.begin()
+        clearConfirmedLockState()
+        val cam = camera
+        if (cam == null) {
+            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Camera not initialized"))
+            return
+        }
+        try {
+            val point = previewView.meteringPointFactory.createPoint(x, y)
+            lastMeteringPoint = point
+
+            val info = cam.cameraInfo
+            val canAf = try {
+                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build())
+            } catch (_: Exception) { false }
+            val canAe = try {
+                info.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AE).build())
+            } catch (_: Exception) { false }
+
+            val flags = (if (canAf) FocusMeteringAction.FLAG_AF else 0) or (if (canAe) FocusMeteringAction.FLAG_AE else 0)
+            if (flags == 0) {
+                onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Focus/metering not supported on this camera"))
+                return
+            }
+
+            val action = FocusMeteringAction.Builder(point, flags)
+                .setAutoCancelDuration(3, TimeUnit.SECONDS)
+                .build()
+
+            val future = cam.cameraControl.startFocusAndMetering(action)
+            future.addListener({
+                if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
+                try {
+                    val result = future.get()
+                    onComplete?.invoke(FocusResult(success = result.isFocusSuccessful, isLocked = false, hasAf = canAf, hasAe = canAe))
+                } catch (e: Exception) {
+                    onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = canAf, hasAe = canAe, error = e.message))
+                }
+            }, ContextCompat.getMainExecutor(context))
+            Log.i(TAG, "Focus dispatched at ($x, $y) with flags=$flags.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to dispatch focus: ${e.message}")
+            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = e.message))
+        }
+    }
+
+    /**
+     * Focuses and meters on the given metering point.
+     */
+    fun focusOnPoint(meteringPoint: MeteringPoint) {
+        val cam = camera ?: return
+        if (isAeAfLocked || isAeAfLockUncertain) return
+        focusOperationGeneration.begin()
+        clearConfirmedLockState()
+        lastMeteringPoint = meteringPoint
+        val action = FocusMeteringAction.Builder(meteringPoint, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(3, TimeUnit.SECONDS)
+            .build()
+        cam.cameraControl.startFocusAndMetering(action)
+        Log.i(TAG, "Focus and metering point dispatched.")
+    }
+
+    /** Locks only the channels whose hardware requests were actually confirmed. */
+    fun lockAeAfAtPoint(
+        x: Float,
+        y: Float,
+        previewView: PreviewView,
+        onComplete: ((FocusResult) -> Unit)? = null
+    ) {
+        val operationGeneration = focusOperationGeneration.begin()
+        clearConfirmedLockState()
+        val cam = camera
+        if (cam == null) {
+            onComplete?.invoke(FocusResult(success = false, isLocked = false, hasAf = false, hasAe = false, error = "Camera not initialized"))
+            return
+        }
+        val aeLockSupported = cameraSupportsAeLock(cam)
+        val point = try {
+            previewView.meteringPointFactory.createPoint(x, y).also { lastMeteringPoint = it }
+        } catch (e: Exception) {
+            onComplete?.invoke(FocusResult(false, false, false, false, e.message))
+            return
+        }
+        val canAf = runCatching {
+            cam.cameraInfo.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build())
+        }.getOrDefault(false)
+        val canAeRegion = runCatching {
+            cam.cameraInfo.isFocusMeteringSupported(FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AE).build())
+        }.getOrDefault(false)
+        val flags = (if (canAf) FocusMeteringAction.FLAG_AF else 0) or
+            (if (canAeRegion) FocusMeteringAction.FLAG_AE else 0)
+        val completed = AtomicBoolean(false)
+        lateinit var timeout: Runnable
+
+        fun finish(afConfirmed: Boolean, aeConfirmed: Boolean, error: String? = null) {
+            if (!completed.compareAndSet(false, true)) return
+            mainHandler.removeCallbacks(timeout)
+            isAfLocked = afConfirmed
+            isAeLocked = aeConfirmed
+            isAeAfLockUncertain = false
+            val locked = isAeAfLockConfirmed(afConfirmed, aeConfirmed)
+            onComplete?.invoke(FocusResult(locked, locked, afConfirmed, aeConfirmed, error))
+            Log.i(TAG, "Camera lock confirmation: af=$afConfirmed ae=$aeConfirmed")
+        }
+
+        fun recoverAndFinish(error: String) {
+            if (!completed.compareAndSet(false, true)) return
+            mainHandler.removeCallbacks(timeout)
+            focusOperationGeneration.invalidate()
+            val recoveryGeneration = focusOperationGeneration.begin()
+            isAeAfLockUncertain = true
+            recoverCameraLocks(cam, aeLockSupported) { released ->
+                if (!focusOperationGeneration.isCurrent(recoveryGeneration) || camera !== cam) return@recoverCameraLocks
+                if (released) clearConfirmedLockState() else isAeAfLockUncertain = true
+                onComplete?.invoke(FocusResult(false, false, false, false, error, lockStateUncertain = !released))
+            }
+        }
+
+        timeout = Runnable { recoverAndFinish("Camera lock confirmation timed out; attempting recovery") }
+        mainHandler.postDelayed(timeout, LOCK_CONFIRMATION_TIMEOUT_MS)
+
+        fun applyAeLock(afConfirmed: Boolean, focusError: String? = null) {
+            if (!focusOperationGeneration.isCurrent(operationGeneration)) return
+            if (!aeLockSupported) {
+                if (afConfirmed) finish(true, false, "AE lock is unsupported on this lens; AF remains locked")
+                else recoverAndFinish(focusError ?: "This lens could not confirm an AE or AF lock")
+                return
+            }
+            try {
+                val aeFuture = setCameraAeLock(cam, true)
+                aeFuture.addListener({
+                    if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
+                    try {
+                        aeFuture.get()
+                        finish(afConfirmed, true, if (!afConfirmed && canAf) "AE locked; AF did not confirm" else null)
+                    } catch (e: Exception) {
+                        if (afConfirmed) finish(true, false, "AF is locked, but AE lock was rejected: ${e.message}")
+                        else recoverAndFinish("Camera did not confirm AE lock: ${e.message}")
+                    }
+                }, ContextCompat.getMainExecutor(context))
+            } catch (e: Exception) {
+                if (afConfirmed) finish(true, false, "AF is locked, but AE lock could not be requested: ${e.message}")
+                else recoverAndFinish("Camera could not request AE lock: ${e.message}")
+            }
+        }
+
+        if (flags == 0) {
+            applyAeLock(false, "This lens does not support focus metering")
+            return
+        }
+        try {
+            val action = FocusMeteringAction.Builder(point, flags).disableAutoCancel().build()
+            val focusFuture = cam.cameraControl.startFocusAndMetering(action)
+            focusFuture.addListener({
+                if (!focusOperationGeneration.isCurrent(operationGeneration)) return@addListener
+                try {
+                    val focusResult = focusFuture.get()
+                    applyAeLock(canAf && focusResult.isFocusSuccessful)
+                } catch (e: Exception) {
+                    applyAeLock(false, "Focus request failed: ${e.message}")
+                }
+            }, ContextCompat.getMainExecutor(context))
+        } catch (e: Exception) {
+            applyAeLock(false, "Focus request failed: ${e.message}")
+        }
+    }
+
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun cameraSupportsAeLock(cam: Camera): Boolean = try {
+        Camera2CameraInfo.from(cam.cameraInfo)
+            .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read AE lock capability: ${e.message}")
+        false
+    }
+
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun setCameraAeLock(cam: Camera, locked: Boolean): ListenableFuture<Void?> =
+        Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(
+            CaptureRequestOptions.Builder()
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, locked)
+                .build()
+        )
+
+    private fun recoverCameraLocks(cam: Camera, releaseAe: Boolean, onComplete: (Boolean) -> Unit) {
+        val futures = mutableListOf<ListenableFuture<*>>()
+        var requestsCreated = true
+        try {
+            futures += cam.cameraControl.cancelFocusAndMetering()
+        } catch (e: Exception) {
+            requestsCreated = false
+            Log.w(TAG, "Could not request AF unlock: ${e.message}")
+        }
+        if (releaseAe) {
+            try {
+                futures += setCameraAeLock(cam, false)
+            } catch (e: Exception) {
+                requestsCreated = false
+                Log.w(TAG, "Could not request AE unlock: ${e.message}")
+            }
+        }
+        if (futures.isEmpty()) {
+            onComplete(false)
+            return
+        }
+
+        val remaining = AtomicInteger(futures.size)
+        val allSucceeded = AtomicBoolean(requestsCreated)
+        val completed = AtomicBoolean(false)
+        val timeout = Runnable {
+            if (completed.compareAndSet(false, true)) onComplete(false)
+        }
+        mainHandler.postDelayed(timeout, LOCK_RECOVERY_TIMEOUT_MS)
+        futures.forEach { future ->
+            future.addListener({
+                val succeeded = try {
+                    future.get()
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "Camera lock recovery request failed: ${e.message}")
+                    false
+                }
+                if (!succeeded) allSucceeded.set(false)
+                if (remaining.decrementAndGet() == 0 && completed.compareAndSet(false, true)) {
+                    mainHandler.removeCallbacks(timeout)
+                    onComplete(allSucceeded.get())
+                }
+            }, ContextCompat.getMainExecutor(context))
+        }
+    }
+
+    /** Unlocks both native lock mechanisms and confirms recovery before clearing the UI state. */
+    fun unlockAeAf(onComplete: ((Boolean) -> Unit)? = null) {
+        val operationGeneration = focusOperationGeneration.begin()
+        val cam = camera
+        if (cam == null) {
+            onComplete?.invoke(false)
+            return
+        }
+        isAeAfLockUncertain = true
+        recoverCameraLocks(cam, cameraSupportsAeLock(cam)) { released ->
+            if (!focusOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@recoverCameraLocks
+            if (released) clearConfirmedLockState() else isAeAfLockUncertain = true
+            onComplete?.invoke(released)
+        }
+    }
+
+    /**
+     * Locks or unlocks Auto Exposure & Auto Focus (AE/AF Lock).
+     */
+    fun toggleAeAfLock(previewView: PreviewView? = null): Boolean {
+        if (camera == null) return false
+        if (isAeAfLocked || isAeAfLockUncertain) {
+            unlockAeAf()
+            return false
+        }
+        run {
+            val point = lastMeteringPoint ?: if (previewView != null && previewView.width > 0 && previewView.height > 0) {
+                previewView.meteringPointFactory.createPoint(previewView.width / 2f, previewView.height / 2f)
+            } else {
+                val factory = androidx.camera.core.SurfaceOrientedMeteringPointFactory(1f, 1f)
+                factory.createPoint(0.5f, 0.5f)
+            }
+            val pv = previewView ?: activePreviewView
+            if (pv != null) lockAeAfAtPoint(point.x, point.y, pv)
+        }
+        return isAeAfLocked
+    }
+
+    /**
+     * Toggles flashlight / torch (back camera only).
+     */
+    fun toggleTorch(): Boolean {
+        val cam = camera ?: return false
+        if (currentLensFacing != CameraSelector.LENS_FACING_BACK) return false
+        isTorchEnabled = !isTorchEnabled
+        cam.cameraControl.enableTorch(isTorchEnabled)
+        return isTorchEnabled
+    }
+
+    /**
+     * Toggles microphone audio recording status.
+     */
+    fun toggleMic(): Boolean {
+        isAudioEnabled = !isAudioEnabled
+        try {
+            activeRecording?.mute(!isAudioEnabled)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to mute/unmute active recording: ${e.message}")
+        }
+        return isAudioEnabled
+    }
+
+    /**
+     * Sets zoom ratio clamped to camera capabilities (e.g. 1.0f, 2.0f, 3.0f).
+     */
+    fun setZoom(ratio: Float): Float {
+        val cam = camera ?: run {
+            currentZoomRatio = ratio
+            return ratio
+        }
+        val zoomState = cam.cameraInfo.zoomState.value
+        val minZ = zoomState?.minZoomRatio ?: 1.0f
+        val maxZ = zoomState?.maxZoomRatio ?: 5.0f
+        val clamped = ratio.coerceIn(minZ, maxZ)
+        currentZoomRatio = clamped
+        cam.cameraControl.setZoomRatio(clamped)
+        return currentZoomRatio
+    }
+
+    fun setZoomRatio(ratio: Float): Float = setZoom(ratio)
+
+    data class ZoomInfo(
+        val minZoomRatio: Float,
+        val maxZoomRatio: Float,
+        val currentZoomRatio: Float
+    )
+
+    fun getZoomInfo(): ZoomInfo {
+        val cam = camera ?: return ZoomInfo(1.0f, 5.0f, currentZoomRatio)
+        val zoomState = cam.cameraInfo.zoomState.value
+        val minZ = zoomState?.minZoomRatio ?: 1.0f
+        val maxZ = zoomState?.maxZoomRatio ?: 5.0f
+        return ZoomInfo(minZ, maxZ, currentZoomRatio)
+    }
+
+    /**
+     * Cycles zoom between 1.0x -> 2.0x -> 3.0x -> 1.0x.
+     */
+    fun toggleZoom(): Float {
+        val nextZoom = when {
+            currentZoomRatio < 1.5f -> 2.0f
+            currentZoomRatio < 2.5f -> 3.0f
+            else -> 1.0f
+        }
+        return setZoom(nextZoom)
+    }
+
+    data class ExposureCompensationInfo(
+        val minIndex: Int,
+        val maxIndex: Int,
+        val currentIndex: Int,
+        val stepEv: Float,
+        val isSupported: Boolean
+    )
+
+    fun getExposureInfo(): ExposureCompensationInfo {
+        val cam = camera ?: return ExposureCompensationInfo(
+            minIndex = 0,
+            maxIndex = 0,
+            currentIndex = 0,
+            stepEv = 0f,
+            isSupported = false
+        )
+        val state = cam.cameraInfo.exposureState
+        val isSupported = state.isExposureCompensationSupported
+        val range = state.exposureCompensationRange
+        val step = if (state.exposureCompensationStep.denominator > 0) {
+            state.exposureCompensationStep.numerator.toFloat() / state.exposureCompensationStep.denominator.toFloat()
+        } else {
+            0f
+        }
+        val supported = isSupported && (range.lower < range.upper)
+        return ExposureCompensationInfo(
+            minIndex = range.lower,
+            maxIndex = range.upper,
+            currentIndex = state.exposureCompensationIndex,
+            stepEv = step,
+            isSupported = supported
+        )
+    }
+
+    /**
+     * Sets exposure compensation bias index cleanly clamped to hardware capabilities.
+     * Reports actual result through asynchronous callback.
+     */
+    fun setExposureIndex(index: Int, onComplete: ((Int?, String?) -> Unit)? = null): Int {
+        val cam = camera ?: run {
+            onComplete?.invoke(null, "Camera not initialized")
+            return currentExposureIndex
+        }
+        val state = cam.cameraInfo.exposureState
+        if (!state.isExposureCompensationSupported) {
+            onComplete?.invoke(null, "Exposure compensation not supported")
+            return currentExposureIndex
+        }
+        val range = state.exposureCompensationRange
+        val targetIndex = clampExposureIndex(index, range.lower, range.upper)
+        val operationGeneration = exposureOperationGeneration.begin()
+        try {
+            val future = cam.cameraControl.setExposureCompensationIndex(targetIndex)
+            future.addListener({
+                if (!exposureOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@addListener
+                try {
+                    val applied = future.get()
+                    currentExposureIndex = applied
+                    onComplete?.invoke(applied, null)
+                    Log.i(TAG, "Exposure compensation applied: index=$applied")
+                } catch (e: Exception) {
+                    if (!exposureOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@addListener
+                    Log.w(TAG, "Exposure compensation future failed: ${e.message}")
+                    currentExposureIndex = cam.cameraInfo.exposureState.exposureCompensationIndex
+                    onComplete?.invoke(null, e.message)
+                }
+            }, ContextCompat.getMainExecutor(context))
+            return targetIndex
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to dispatch exposure compensation: ${e.message}")
+            onComplete?.invoke(null, e.message)
+            return currentExposureIndex
+        }
+    }
+
+    /**
+     * Resets exposure compensation back to default (0).
+     */
+    fun resetExposure(onComplete: ((Int?, String?) -> Unit)? = null): Int {
+        return setExposureIndex(0, onComplete)
+    }
+    fun setExposureIndex(index: Int): Int {
+        return setExposureIndex(index, null)
+    }
+
+    /**
+     * Resets exposure compensation back to default (0).
+     */
+    fun resetExposure(): Int {
+        return setExposureIndex(0)
+    }
+
+    /**
+     * Steps exposure bias by delta (-1 or +1).
+     */
+    fun stepExposure(delta: Int): Int {
+        val cam = camera ?: return currentExposureIndex
+        val range = cam.cameraInfo.exposureState.exposureCompensationRange
+        val target = (currentExposureIndex + delta).coerceIn(range.lower, range.upper)
+        return setExposureIndex(target)
+    }
+
+    fun getExposureRange(): Range<Int>? {
+        return camera?.cameraInfo?.exposureState?.exposureCompensationRange
+    }
+
+    /**
+     * Lists available audio input devices (detecting internal vs external microphones).
+     */
+    fun getAudioInputDevices(): List<AudioDeviceInfo> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            return audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
+        }
+        return emptyList()
+    }
+
+    /**
+     * Starts recording into the target segment .tmp file.
+     */
+    fun startSegmentRecording(
+        targetTmpFile: File,
+        onError: ((errorCode: Int, cause: Throwable?) -> Unit)? = null,
+        onFinalized: (file: File, durationMs: Long) -> Unit
+    ) {
+        val vc = videoCapture ?: run {
+            Log.e(TAG, "VideoCapture not initialized")
+            onError?.invoke(-1, IllegalStateException("VideoCapture not initialized"))
+            return
+        }
+
+        try {
+            vc.targetRotation = currentRotation
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to apply targetRotation before recording: ${e.message}")
+        }
+        Log.i(TAG, "Starting segment recording (Orientation: $currentOrientationMode, Rotation: $currentRotation)")
+
+        val outputOptions = FileOutputOptions.Builder(targetTmpFile).build()
+        val pendingRecording = vc.output.prepareRecording(context, outputOptions)
+
+        if (isAudioEnabled && ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            pendingRecording.withAudioEnabled()
+        }
+
+        isRecording = true
+        activeRecording = pendingRecording.start(recordingExecutor) { recordEvent ->
+            when (recordEvent) {
+                is VideoRecordEvent.Start -> {
+                    isRecording = true
+                    mainHandler.post {
+                        RecordingForegroundService.instance?.updateNotification()
+                    }
+                    Log.i(TAG, "Started recording 1080p FHD video segment: ${targetTmpFile.name} ($currentOrientationMode)")
+                }
+                is VideoRecordEvent.Finalize -> {
+                    isRecording = false
+                    mainHandler.post {
+                        RecordingForegroundService.instance?.updateNotification()
+                    }
+                    val durationMs = recordEvent.recordingStats.recordedDurationNanos / 1_000_000
+                    when (RecordingSafetyPolicy.finalizeDisposition(
+                        hasCameraError = recordEvent.hasError(),
+                        fileLength = targetTmpFile.length(),
+                        durationMs = durationMs
+                    )) {
+                        RecordingFinalizeDisposition.COMMIT -> {
+                            Log.i(TAG, "Segment finalized successfully: ${targetTmpFile.name} (${durationMs}ms, ${targetTmpFile.length()} bytes)")
+                            onFinalized(targetTmpFile, durationMs)
+                        }
+                        RecordingFinalizeDisposition.DELETE_EMPTY_AND_REPORT_ERROR -> {
+                            Log.w(TAG, "Removing empty finalized segment: ${targetTmpFile.name}")
+                            targetTmpFile.delete()
+                            onError?.invoke(-2, IllegalStateException("Recording produced an empty segment"))
+                        }
+                        RecordingFinalizeDisposition.PRESERVE_AND_REPORT_ERROR -> {
+                            val errorCode = if (recordEvent.hasError()) recordEvent.error else -2
+                            val cause = recordEvent.cause ?: IllegalStateException("Recording segment was too short to finalize safely")
+                            Log.e(TAG, "Preserving failed segment ${targetTmpFile.name} (${targetTmpFile.length()} bytes, ${durationMs}ms), error code: $errorCode", cause)
+                            onError?.invoke(errorCode, cause)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Stops the currently active segment recording.
+     */
+    fun stopActiveRecording() {
+        if (activeRecording != null) {
+            activeRecording?.stop()
+            activeRecording = null
+            isRecording = false
+            RecordingForegroundService.instance?.updateNotification()
+        }
+    }
+
+    /**
+     * Releases listeners and resources.
+     */
+    fun destroy() {
+        orientationEventListener?.disable()
+        stopActiveRecording()
+    }
+}
+
+
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\recorder\CameraRequestGeneration.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import java.util.concurrent.atomic.AtomicLong
+
+/** Tracks the newest camera-control request so cancelled or late futures cannot overwrite state. */
+internal class CameraRequestGeneration {
+    private val generation = AtomicLong(0)
+
+    fun begin(): Long = generation.incrementAndGet()
+
+    fun invalidate() {
+        generation.incrementAndGet()
+    }
+
+    fun isCurrent(requestGeneration: Long): Boolean = generation.get() == requestGeneration
+}
+
+
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\recorder\RecordingForegroundService.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import android.app.*
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.LifecycleService
+import com.resolvia.dispatch.MainActivity
+import kotlin.coroutines.resume
+
+/**
+ * Android Lifecycle Foreground Service holding Camera and Microphone while user records.
+ * Binds CameraX VideoCapture to the SERVICE lifecycle so recording continues uninterrupted
+ * when the phone screen is turned off or locked.
+ */
+class RecordingForegroundService : LifecycleService() {
+
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
+    companion object {
+        private const val CHANNEL_ID = "dispatch_recording_channel"
+        private const val NOTIFICATION_ID = 1001
+
+        @Volatile
+        var instance: RecordingForegroundService? = null
+            private set
+
+        @Volatile
+        var cameraManager: CameraCaptureManager? = null
+
+        /** In-process ownership marker so upload recovery cannot mistake a live session for a crash. */
+        @Volatile
+        var activeSessionId: String? = null
+            private set
+
+        fun markSessionActive(sessionId: String) {
+            activeSessionId = sessionId
+        }
+
+        fun markSessionInactive(sessionId: String) {
+            if (activeSessionId == sessionId) activeSessionId = null
+        }
+
+        fun isSessionActive(sessionId: String): Boolean = activeSessionId == sessionId
+
+        @Volatile
+        private var onBoundCallback: ((Boolean) -> Unit)? = null
+
+        fun start(context: Context) {
+            start(context, null)
+        }
+
+        fun start(context: Context, manager: CameraCaptureManager? = null) {
+            cameraManager = manager
+            val intent = Intent(context, RecordingForegroundService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        suspend fun startAndAwaitBind(context: Context, manager: CameraCaptureManager): Boolean {
+            val current = instance
+            if (current != null) {
+                cameraManager = manager
+                return manager.bindToServiceAsync(current)
+            }
+
+            return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                onBoundCallback = { success ->
+                    if (cont.isActive) cont.resume(success)
+                }
+                start(context, manager)
+            }
+        }
+
+        fun stop(context: Context) {
+            val intent = Intent(context, RecordingForegroundService::class.java)
+            context.stopService(intent)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        createNotificationChannel()
+
+        // Acquire WakeLock bounded to 6 hours to prevent indefinite battery drain on crash
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        wakeLock = powerManager?.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
+            "Dispatch:RecordingWakeLock"
+        )
+        wakeLock?.acquire(6 * 60 * 60 * 1000L)
+
+        // Bind CameraX VideoCapture to this service's lifecycle if manager available
+        cameraManager?.let { mgr ->
+            mgr.bindToService(this) { success ->
+                onBoundCallback?.invoke(success)
+                onBoundCallback = null
+            }
+        } ?: run {
+            onBoundCallback?.invoke(false)
+            onBoundCallback = null
+        }
+    }
+
+    override fun onDestroy() {
+        instance = null
+        onBoundCallback?.invoke(false)
+        onBoundCallback = null
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (_: Exception) {}
+        super.onDestroy()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        val notification = createNotification()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            startForeground(NOTIFICATION_ID, notification, serviceType)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+
+        return START_STICKY
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Dispatch Continuous Recording",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps camera recording alive in background"
+                setSound(null, null)
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+    }
+
+    fun updateNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.notify(NOTIFICATION_ID, createNotification())
+    }
+
+    private fun createNotification(): Notification {
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val isActivelyRecording = cameraManager?.isRecording == true
+
+        val title = if (isActivelyRecording) {
+            "Dispatch: Recording Active"
+        } else {
+            "Dispatch: Recording Interrupted"
+        }
+
+        val content = if (isActivelyRecording) {
+            "Continuous segments saving to durable outbox"
+        } else {
+            "Camera session stopped or awaiting recovery"
+        }
+
+        val icon = if (isActivelyRecording) {
+            android.R.drawable.ic_menu_camera
+        } else {
+            android.R.drawable.ic_dialog_alert
+        }
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setSmallIcon(icon)
+            .setContentIntent(pendingIntent)
+            .setOngoing(isActivelyRecording)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+}
+
+
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\recorder\RecordingSafetyPolicy.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import java.io.File
+
+internal class RecordingStorageException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
+
+internal enum class RecordingFinalizeDisposition {
+    COMMIT,
+    PRESERVE_AND_REPORT_ERROR,
+    DELETE_EMPTY_AND_REPORT_ERROR
+}
+
+/** Production policy shared by CameraX finalization and recording recovery tests. */
+internal object RecordingSafetyPolicy {
+    const val MINIMUM_FREE_BYTES: Long = 512L * 1024L * 1024L
+
+    fun finalizeDisposition(hasCameraError: Boolean, fileLength: Long, durationMs: Long): RecordingFinalizeDisposition = when {
+        hasCameraError -> RecordingFinalizeDisposition.PRESERVE_AND_REPORT_ERROR
+        fileLength <= 0L -> RecordingFinalizeDisposition.DELETE_EMPTY_AND_REPORT_ERROR
+        durationMs < 1_000L -> RecordingFinalizeDisposition.PRESERVE_AND_REPORT_ERROR
+        else -> RecordingFinalizeDisposition.COMMIT
+    }
+
+    fun hasEnoughSpace(availableBytes: Long): Boolean = availableBytes >= MINIMUM_FREE_BYTES
+
+    fun requireAvailableSpace(availableBytes: Long?): Long {
+        if (availableBytes == null) {
+            throw RecordingStorageException("Could not check recording storage. Recording was stopped to protect your files.")
+        }
+        if (!hasEnoughSpace(availableBytes)) {
+            val availableMb = availableBytes / (1024L * 1024L)
+            val requiredMb = MINIMUM_FREE_BYTES / (1024L * 1024L)
+            throw RecordingStorageException("Not enough free storage to record safely ($availableMb MB available; $requiredMb MB required). Free space and try again.")
+        }
+        return availableBytes
+    }
+
+    fun isAlreadyCommittedSegmentStatus(status: String?): Boolean = status in setOf(
+        "QUEUED_FOR_UPLOAD",
+        "FAILED_RETRY",
+        "UPLOADING",
+        "WAITING_FOR_YOUTUBE",
+        "UPLOADED_TO_YOUTUBE",
+        "UPLOADED_AWAITING_PROCESSING",
+        "PROCESSED_ON_YOUTUBE",
+        "VERIFIED_BY_LAPTOP"
+    ) || status?.startsWith("FAILED_") == true
+
+    fun finalizedFileCandidate(tmpFile: File, finalFile: File): File? = when {
+        tmpFile.isFile && tmpFile.length() > 0L -> tmpFile
+        finalFile.isFile && finalFile.length() > 0L -> finalFile
+        else -> null
+    }
+}
+
+
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\recorder\RecordingScreenDimmingState.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+internal enum class RecordingTouchAction { DOWN, POINTER_DOWN, MOVE, UP, CANCEL, OTHER }
+
+internal data class RecordingTouchOutcome(
+    val consume: Boolean = false,
+    val wokeScreen: Boolean = false,
+    val userActivity: Boolean = false
+)
+
+/** Production state machine for recording-only idle dimming and its consumed wake gesture. */
+internal class RecordingScreenDimmingState {
+    var recordingEnabled: Boolean = false
+        private set
+    var activityResumed: Boolean = false
+        private set
+    var isDimmed: Boolean = false
+        private set
+
+    private var consumingWakeGesture = false
+
+    val shouldRunInactivityTimer: Boolean
+        get() = recordingEnabled && activityResumed && !isDimmed
+
+    fun setRecordingEnabled(enabled: Boolean) {
+        recordingEnabled = enabled
+        if (!enabled) {
+            isDimmed = false
+            consumingWakeGesture = false
+        }
+    }
+
+    fun onActivityResumed() {
+        activityResumed = true
+    }
+
+    fun onActivityPaused() {
+        activityResumed = false
+        isDimmed = false
+        consumingWakeGesture = false
+    }
+
+    fun onInactivityTimeout(): Boolean {
+        if (!shouldRunInactivityTimer) return false
+        isDimmed = true
+        return true
+    }
+
+    fun onTouch(action: RecordingTouchAction): RecordingTouchOutcome {
+        if (consumingWakeGesture) {
+            if (action == RecordingTouchAction.UP || action == RecordingTouchAction.CANCEL) {
+                consumingWakeGesture = false
+            }
+            return RecordingTouchOutcome(consume = true)
+        }
+
+        if (!recordingEnabled || !activityResumed) return RecordingTouchOutcome()
+
+        if (isDimmed && action == RecordingTouchAction.DOWN) {
+            isDimmed = false
+            consumingWakeGesture = true
+            return RecordingTouchOutcome(consume = true, wokeScreen = true)
+        }
+
+        val userActivity = action == RecordingTouchAction.DOWN ||
+            action == RecordingTouchAction.POINTER_DOWN ||
+            action == RecordingTouchAction.MOVE
+        return RecordingTouchOutcome(userActivity = userActivity)
+    }
+}
+
+
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\recorder\SegmenterEngine.kt
+============================================================
+package com.resolvia.dispatch.recorder
+
+import android.content.Context
+import android.media.MediaMetadataRetriever
+import android.os.StatFs
+import androidx.room.withTransaction
+import androidx.work.*
+import com.resolvia.dispatch.data.*
+import kotlinx.coroutines.*
+import java.io.File
+import java.io.FileInputStream
+import java.security.MessageDigest
+
+/**
+ * Native Android Recording Segmenter Engine.
+ * Coordinates CameraX hardware video/audio capture into rolling 10-minute segments.
+ * Crash-safe: writes to .tmp, atomically renames to .mp4 upon completion, calculates SHA-256,
+ * and enqueues to WorkManager sync outbox.
+ */
+class SegmenterEngine(
+    private val context: Context,
+    private val database: AppDatabase
+) {
+    private val dao = database.recordingDao()
+    private val recordingsDir: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "recordings").apply {
+        if (!exists()) mkdirs()
+    }
+
+    var currentSessionId: String? = null
+        private set
+    var currentSegmentId: String? = null
+        private set
+    var currentSequenceNumber: Int = 0
+        private set
+    var currentTmpFile: File? = null
+        private set
+
+    var isSessionActive: Boolean = false
+        private set
+
+    // Default 10-minute rolling segments (600,000 ms)
+    var segmentDurationMs: Long = 10 * 60 * 1000L
+
+    private var segmentRollJob: Job? = null
+    private var storageMonitorJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    private var activeFinalizeDeferred: CompletableDeferred<Unit>? = null
+
+    suspend fun startSession(
+        cameraManager: CameraCaptureManager,
+        notes: String = ""
+    ): String = withContext(Dispatchers.IO) {
+        requireRecordingStorage()
+        val sessionId = "sess_${System.currentTimeMillis()}"
+        val session = SessionEntity(sessionId = sessionId, notes = notes)
+        RecordingForegroundService.markSessionActive(sessionId)
+        try {
+            dao.insertSession(session)
+        } catch (e: Exception) {
+            RecordingForegroundService.markSessionInactive(sessionId)
+            throw e
+        }
+
+        currentSessionId = sessionId
+        currentSequenceNumber = 0
+        isSessionActive = true
+
+        // Bind CameraX directly to Foreground Service lifecycle so recording survives screen lock
+        val bound = withTimeoutOrNull(10000L) {
+            RecordingForegroundService.startAndAwaitBind(context, cameraManager)
+        } ?: false
+
+        if (!bound) {
+            isSessionActive = false
+            RecordingForegroundService.markSessionInactive(sessionId)
+            dao.updateSessionStatus(sessionId, 0, "FINALIZED")
+            throw IllegalStateException("Failed to bind camera capture to foreground service")
+        }
+
+        try {
+            withContext(Dispatchers.Main) {
+                startNextSegment(cameraManager)
+                startStorageMonitor(cameraManager)
+            }
+        } catch (e: Exception) {
+            isSessionActive = false
+            if (e is RecordingStorageException) {
+                runCatching { dao.updateSessionStatus(sessionId, 0, "FINALIZED") }
+            }
+            RecordingForegroundService.markSessionInactive(sessionId)
+            RecordingForegroundService.stop(context)
+            throw e
+        }
+
+        sessionId
+    }
+
+    suspend fun startNextSegment(cameraManager: CameraCaptureManager) {
+        if (!isSessionActive) return
+        requireRecordingStorage()
+        val sessionId = currentSessionId ?: return
+
+        currentSequenceNumber++
+        val sequenceNumber = currentSequenceNumber
+        val segId = String.format("%s_seg_%04d", sessionId, sequenceNumber)
+        val tmpFile = File(recordingsDir, "$segId.tmp")
+
+        currentSegmentId = segId
+        currentTmpFile = tmpFile
+
+        val segment = SegmentEntity(
+            segmentId = segId,
+            sessionId = sessionId,
+            sequenceNumber = sequenceNumber,
+            filename = "$segId.mp4",
+            filepath = File(recordingsDir, "$segId.mp4").absolutePath,
+            status = "RECORDING"
+        )
+        // Persist the row before CameraX can begin writing; recovery must always see ownership.
+        withContext(Dispatchers.IO) { dao.insertSegment(segment) }
+        if (!isSessionActive) {
+            withContext(Dispatchers.IO) { dao.updateSegmentStatus(segId, "ERROR_STOPPED_BEFORE_START") }
+            return
+        }
+
+        cameraManager.startSegmentRecording(
+            targetTmpFile = tmpFile,
+            onError = { errorCode, cause ->
+                android.util.Log.e("SegmenterEngine", "Hardware recording error on $segId: code $errorCode", cause)
+                segmentRollJob?.cancel()
+                activeFinalizeDeferred?.complete(Unit)
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        // Keep the row and any partial file as recovery evidence on every hardware error.
+                        dao.updateSegmentStatus(segId, "ERROR_$errorCode")
+                        // CameraX errors can indicate an encoder or storage failure. Preserve the
+                        // partial file and end this session instead of immediately retrying blindly.
+                        isSessionActive = false
+                        storageMonitorJob?.cancel()
+                        android.util.Log.e("SegmenterEngine", "Hardware capture failed; stopping session without automatic retry")
+                    } catch (e: Exception) {
+                        android.util.Log.e("SegmenterEngine", "Could not persist recording error state; stopping session", e)
+                        isSessionActive = false
+                    }
+                    if (!isSessionActive) {
+                        storageMonitorJob?.cancel()
+                        // Leave the session marked RECORDING so the next worker can safely recover it.
+                        RecordingForegroundService.markSessionInactive(sessionId)
+                        RecordingForegroundService.stop(context)
+                    }
+                }
+            },
+            onFinalized = { finalizedFile, durationMs ->
+                scope.launch(Dispatchers.IO) {
+                    var committed = false
+                    var sessionCanFinalize = false
+                    try {
+                        onSegmentHardwareFinalized(segId, sessionId, sequenceNumber, finalizedFile, durationMs)
+                        committed = true
+                        sessionCanFinalize = true
+                    } catch (e: Exception) {
+                        android.util.Log.e("SegmenterEngine", "Could not commit finalized segment $segId", e)
+                        runCatching { dao.updateSegmentStatus(segId, "ERROR_FINALIZATION") }
+                        activeFinalizeDeferred?.complete(Unit)
+                        isSessionActive = false
+                    }
+
+                    if (committed && isSessionActive) {
+                        withContext(Dispatchers.Main) {
+                            try {
+                                startNextSegment(cameraManager)
+                            } catch (e: Exception) {
+                                android.util.Log.e("SegmenterEngine", "Could not start the next recording segment", e)
+                                isSessionActive = false
+                                storageMonitorJob?.cancel()
+                                if (e is RecordingStorageException) {
+                                    sessionCanFinalize = true
+                                    withContext(Dispatchers.Main) {
+                                        android.widget.Toast.makeText(context, e.message, android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                } else {
+                                    sessionCanFinalize = false
+                                }
+                            }
+                        }
+                    }
+
+                    if (!isSessionActive) {
+                        storageMonitorJob?.cancel()
+                        try {
+                            if (sessionCanFinalize) dao.updateSessionStatus(sessionId, sequenceNumber, "FINALIZED")
+                        } catch (e: Exception) {
+                            // Keep RECORDING in Room so upload recovery can inspect the committed files.
+                            android.util.Log.e("SegmenterEngine", "Could not finalize session state", e)
+                        } finally {
+                            RecordingForegroundService.markSessionInactive(sessionId)
+                            RecordingForegroundService.stop(context)
+                        }
+                    }
+                }
+            }
+        )
+
+        // Schedule timer to roll into next segment
+        segmentRollJob?.cancel()
+        segmentRollJob = scope.launch {
+            delay(segmentDurationMs)
+            if (isSessionActive && cameraManager.isRecording) {
+                cameraManager.stopActiveRecording() // triggers onFinalized callback above
+            }
+        }
+    }
+
+    private suspend fun onSegmentHardwareFinalized(
+        segId: String,
+        sessId: String,
+        seqNum: Int,
+        tmpFile: File,
+        durationMs: Long
+    ) = withContext(Dispatchers.IO) {
+        if (RecordingSafetyPolicy.isAlreadyCommittedSegmentStatus(dao.getSegmentById(segId)?.status)) {
+            activeFinalizeDeferred?.complete(Unit)
+            return@withContext
+        }
+
+        val finalMp4 = File(recordingsDir, "$segId.mp4")
+        val mediaFile = RecordingSafetyPolicy.finalizedFileCandidate(tmpFile, finalMp4)
+        if (mediaFile == null || durationMs < 1000L) {
+            val failureStatus = when {
+                mediaFile == null && !tmpFile.exists() && !finalMp4.exists() -> "FAILED_MISSING_FILE"
+                mediaFile == null -> "FAILED_EMPTY"
+                else -> "FAILED_TOO_SHORT"
+            }
+            // Preserve the database row; retain non-empty evidence for diagnosis/recovery.
+            dao.updateSegmentStatus(segId, failureStatus)
+            activeFinalizeDeferred?.complete(Unit)
+            return@withContext
+        }
+
+        if (!isReadableVideo(mediaFile)) {
+            android.util.Log.e("SegmenterEngine", "Finalized media is unreadable; preserving ${mediaFile.absolutePath}")
+            dao.updateSegmentStatus(segId, "FAILED_CORRUPT")
+            activeFinalizeDeferred?.complete(Unit)
+            return@withContext
+        }
+
+        // CameraX may deliver a duplicate completion after a rename-before-Room interruption.
+        // Reuse the already-promoted file instead of changing a queued row back to failed.
+        if (mediaFile != finalMp4) {
+            if (!mediaFile.renameTo(finalMp4)) {
+                val expectedLength = mediaFile.length()
+                mediaFile.copyTo(finalMp4, overwrite = true)
+                if (!finalMp4.isFile || finalMp4.length() != expectedLength) {
+                    throw java.io.IOException("Could not verify copied finalized segment $segId")
+                }
+                mediaFile.delete()
+            }
+        }
+
+        val fileSize = finalMp4.length()
+        val sha256 = calculateSha256(finalMp4)
+
+        val now = System.currentTimeMillis()
+        val updatedSegment = SegmentEntity(
+            segmentId = segId,
+            sessionId = sessId,
+            sequenceNumber = seqNum,
+            filename = finalMp4.name,
+            filepath = finalMp4.absolutePath,
+            fileSizeBytes = fileSize,
+            sha256Hash = sha256,
+            status = "QUEUED_FOR_UPLOAD",
+            createdAt = now - durationMs,
+            finalizedAt = now
+        )
+        // Commit the segment state and outbox row together so a process death cannot strand a file.
+        database.withTransaction {
+            dao.updateSegment(updatedSegment)
+            dao.insertOutbox(
+                OutboxEntity(
+                    segmentId = segId,
+                    sessionId = sessId,
+                    remoteOffset = 0L,
+                    status = "QUEUED_FOR_UPLOAD"
+                )
+            )
+        }
+
+        // Trigger WorkManager background sync immediately
+        triggerYouTubeUpload()
+
+        activeFinalizeDeferred?.complete(Unit)
+    }
+
+    suspend fun stopSession(cameraManager: CameraCaptureManager) = withContext(Dispatchers.Main) {
+        isSessionActive = false
+        segmentRollJob?.cancel()
+        segmentRollJob = null
+        storageMonitorJob?.cancel()
+        storageMonitorJob = null
+
+        // Await active recording finalization to ensure tail segment is committed
+        if (cameraManager.isRecording) {
+            val deferred = CompletableDeferred<Unit>()
+            activeFinalizeDeferred = deferred
+            cameraManager.stopActiveRecording()
+            withTimeoutOrNull(6000L) {
+                deferred.await()
+            }
+            activeFinalizeDeferred = null
+        }
+
+        // Stop foreground service after finalization has been requested. The completion callback
+        // marks the session FINALIZED and clears its recovery guard only after the file is committed.
+        RecordingForegroundService.stop(context)
+
+        withContext(Dispatchers.IO) {
+            currentSessionId = null
+            currentSegmentId = null
+            currentTmpFile = null
+        }
+    }
+
+    fun triggerYouTubeUpload() {
+        val pairing = PairingManager(context)
+        val networkType = if (pairing.isWifiOnlyEnabled) NetworkType.UNMETERED else NetworkType.CONNECTED
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(networkType)
+            .build()
+
+        // Recordings leave the phone only through the YouTube cloud inbox.
+        val ytSyncWork = OneTimeWorkRequestBuilder<com.resolvia.dispatch.sync.YouTubeDirectUploadWorker>()
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "DispatchYouTubeUploadWorker",
+            ExistingWorkPolicy.KEEP,
+            ytSyncWork
+        )
+    }
+
+    private fun calculateSha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { fis ->
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
+            while (fis.read(buffer).also { bytesRead = it } != -1) {
+                digest.update(buffer, 0, bytesRead)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun isReadableVideo(file: File): Boolean {
+        if (!file.isFile || file.length() <= 0L) return false
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) == "yes" &&
+                (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) > 0L
+        } catch (e: Exception) {
+            android.util.Log.w("SegmenterEngine", "Could not read finalized recording ${file.name}: ${e.message}")
+            false
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    private fun availableRecordingBytes(): Long {
+        if (!recordingsDir.isDirectory && !recordingsDir.mkdirs()) {
+            throw RecordingStorageException("Recording storage is unavailable. Check the phone's storage and try again.")
+        }
+        return try {
+            StatFs(recordingsDir.absolutePath).availableBytes
+        } catch (e: Exception) {
+            throw RecordingStorageException("Could not check recording storage. Recording was stopped to protect your files.", e)
+        }
+    }
+
+    private fun requireRecordingStorage(): Long {
+        return RecordingSafetyPolicy.requireAvailableSpace(availableRecordingBytes())
+    }
+
+    private fun startStorageMonitor(cameraManager: CameraCaptureManager) {
+        storageMonitorJob?.cancel()
+        storageMonitorJob = scope.launch {
+            while (isSessionActive) {
+                delay(15_000L)
+                val issue = try {
+                    val availableBytes = availableRecordingBytes()
+                    if (RecordingSafetyPolicy.hasEnoughSpace(availableBytes)) null else {
+                        val availableMb = availableBytes / (1024L * 1024L)
+                        "Recording stopped to protect your footage: only $availableMb MB of free storage remains."
+                    }
+                } catch (e: RecordingStorageException) {
+                    e.message ?: "Recording stopped because phone storage could not be checked."
+                }
+                if (issue != null && isSessionActive) {
+                    isSessionActive = false
+                    segmentRollJob?.cancel()
+                    android.util.Log.e("SegmenterEngine", issue)
+                    android.widget.Toast.makeText(context, issue, android.widget.Toast.LENGTH_LONG).show()
+                    if (cameraManager.isRecording) {
+                        cameraManager.stopActiveRecording()
+                    } else {
+                        currentSessionId?.let { RecordingForegroundService.markSessionInactive(it) }
+                        RecordingForegroundService.stop(context)
+                    }
+                    break
+                }
+            }
+        }
+    }
+}
+
+
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\sync\ConfirmedUploadProgress.kt
+============================================================
+package com.resolvia.dispatch.sync
+
+/** Tracks only server-confirmed offsets and bounds repeated non-advancing responses. */
+internal class ConfirmedUploadProgress(initialOffset: Long, private val totalBytes: Long) {
+    var offset: Long = initialOffset.coerceIn(0L, totalBytes)
+        private set
+    var consecutiveNoProgress: Int = 0
+        private set
+
+    val retryExhausted: Boolean
+        get() = consecutiveNoProgress >= MAX_NO_PROGRESS_ATTEMPTS
+
+    /** Returns true when a valid authoritative server offset changes our saved offset. */
+    fun observe(serverOffset: Long?): Boolean {
+        if (serverOffset == null || serverOffset !in 0L..totalBytes) {
+            consecutiveNoProgress++
+            return false
+        }
+        if (serverOffset == offset) {
+            consecutiveNoProgress++
+            return false
+        }
+        offset = serverOffset
+        consecutiveNoProgress = 0
+        return true
+    }
+
+    fun retryDelayMs(jitterMs: Long): Long {
+        val exponent = (consecutiveNoProgress - 1).coerceAtLeast(0).coerceAtMost(3)
+        val backoff = (1_000L shl exponent).coerceAtMost(MAX_BACKOFF_MS)
+        return backoff + jitterMs.coerceIn(0L, MAX_JITTER_MS)
+    }
+
+    companion object {
+        const val MAX_NO_PROGRESS_ATTEMPTS = 4
+        const val MAX_BACKOFF_MS = 8_000L
+        const val MAX_JITTER_MS = 500L
+    }
+}
+
+
+============================================================
+FILE: android\app\src\main\java\com\resolvia\dispatch\sync\RecordingRecoveryPolicy.kt
+============================================================
+package com.resolvia.dispatch.sync
+
+import java.io.File
+
+/** Small production decisions used by interrupted-recording recovery. */
+internal fun shouldRecoverRecordingSession(sessionId: String, activeSessionId: String?): Boolean =
+    sessionId != activeSessionId
+
+internal fun findRecoveryCandidate(tmpFile: File, finalizedFile: File): File? = when {
+    tmpFile.isFile && tmpFile.length() > 0L -> tmpFile
+    finalizedFile.isFile && finalizedFile.length() > 0L -> finalizedFile
+    else -> null
+}
+
