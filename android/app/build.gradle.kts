@@ -76,6 +76,7 @@ android {
    }
 
 dependencies {
+    implementation("androidx.browser:browser:1.8.0")
     // JVM unit tests: real org.json (Android's is a stub that throws "not mocked")
     testImplementation("org.json:json:20231013")
     // Core Android & Lifecycle

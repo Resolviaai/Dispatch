@@ -92,12 +92,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     if (Bridge.isAvailable()) {
       // 2026-10-24 architecture pivot: YouTube sign-in happens ON THIS PHONE via
       // Google OAuth; the PC never transfers credentials or pairing codes.
-      const nativeOnDevice: any = (window as any).DispatchBridge?.connectYouTubeOnDevice;
-      if (typeof nativeOnDevice === 'function') {
-        setFeedback('Opening Google sign-in…');
-        await fetchYouTubeStatus();
+      // On-device OAuth: Custom Tab to the Dispatch Worker's Google consent flow.
+      // The Supabase access token (short-lived) binds the authorization to this user.
+      const { currentSession } = await import('../auth/supabase');
+      const sess = await currentSession();
+      if (!sess?.access_token) {
+        setFeedback('Sign in first, then connect YouTube.');
         return;
       }
+      const openTab: any = (window as any).DispatchBridge?.openCustomTab;
+      const url = `https://dispatch-cloud.resolviaai.workers.dev/oauth/google/start?token=${encodeURIComponent(sess.access_token)}`;
+      if (typeof openTab === 'function') {
+        openTab(url);
+        setFeedback('Google sign-in opened. Approve access, then return here.');
+        setTimeout(fetchYouTubeStatus, 8000);
+        return;
+      }
+      window.open(url, '_blank');
+      setFeedback('Google sign-in opened in your browser. Approve access, then return here.');
+      setTimeout(fetchYouTubeStatus, 8000);
+      return;
       setFeedback('On-device Google sign-in arrives in the next app update. PC credential transfer has been removed for security.');
       return;
     }

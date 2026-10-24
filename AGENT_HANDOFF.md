@@ -175,3 +175,10 @@ Owner's pasted `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET` (.env, from the earli
 2. **Remote processing:** Supabase table `processing_jobs` (user_id, youtube_video_id, status) + PC poller via service key; friends' ingest endpoint on the PC authenticated per-user; visibility gate unchanged.
 3. **Tenant isolation:** add user_id to local SQLite/Room when multi-user rows land on the PC (alpha may keep PC single-owner with admin-worker per ADR amendment 2).
 **Not verified:** real Google consent (needs the built UI), any device test.
+
+## 34. On-device YouTube OAuth SHIPPED (2026-10-24) — uploads unblocked for all users
+- **Flow:** app Settings → "Connect YouTube" → Custom Tab opens `Worker /oauth/google/start?token=<supabase-jwt>` → Google consent → callback to `/oauth/google/callback` → code exchanged server-side (client secret in Worker env) → refresh token AES-256-GCM encrypted (TOKEN_VAULT_KEY) → stored per-user in Supabase `youtube_connections` (service-role RPCs, single-use 10-min oauth_states).
+- **Migration `20261024000006_youtube_oauth.sql` applied live.** Worker v3604ab8a deployed with TOKEN_VAULT_KEY/YOUTUBE_CLIENT_ID/SECRET secrets + OAUTH_REDIRECT_URI var. Live probes: start w/o token 401, callback w/o params 400 (fail-closed).
+- **Android:** `openCustomTab` bridge method (host-pinned to the Worker), `androidx.browser` dep; **Settings defect fixed** — `connectYouTubeOnDevice` is now actually invoked with the session token (was check-but-never-call). Debug APK rebuilt (21,250,333 bytes) with the auth-gated + OAuth UI bundle.
+- **Tests:** worker 24/24 + tsc clean; frontend build green; python auth/removal/privacy suites green. **Not verified:** real Google consent round-trip (needs device/browser sign-in) and the PC decrypt path in production processing — device test pending.
+- **PC vault read (next):** `dispatch/youtube_connections.py` decrypt helper using DISPATCH_TOKEN_VAULT_KEY (key already in PC .env) so the processing pipeline uses per-user tokens; owner's own PC token stays in use until per-user flows replace it.

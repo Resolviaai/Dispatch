@@ -8,6 +8,7 @@
  * presigned URLs (aws4fetch SIGV4, service s3 / region auto, explicit expiry).
  */
 import { AwsClient } from "aws4fetch";
+import { encryptToken, buildAuthorizeUrl, validateTokenResponse } from "./oauth.ts";
 
 export interface Env {
   SUPABASE_URL: string;
@@ -19,6 +20,10 @@ export interface Env {
   R2_S3_SECRET_ACCESS_KEY: string;
   R2_BUCKET_NAME: string;
   R2_ACCOUNT_ID: string;
+  TOKEN_VAULT_KEY: string;
+  YOUTUBE_CLIENT_ID: string;
+  YOUTUBE_CLIENT_SECRET: string;
+  OAUTH_REDIRECT_URI: string;
 }
 
 const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
@@ -191,6 +196,62 @@ export default {
         }
         return runCleanup(env);
       }
+
+    // ---- On-device YouTube OAuth (authenticated via Supabase JWT only) ----
+    if (url.pathname === "/oauth/google/start" && request.method === "GET") {
+      // Custom-Tab navigation cannot set headers: the short-lived Supabase access
+      // token arrives as ?token= and is verified the same strict way (never trusted
+      // without server-side validation). It expires in <=1h, limiting replay value.
+      const qsToken = url.searchParams.get("token");
+      const reqForAuth = qsToken
+        ? new Request(request.url, { headers: { Authorization: `Bearer ${qsToken}` } })
+        : request;
+      const user = await authenticate(env, reqForAuth);
+      if (!user) return json(401, { error: "unauthorized" });
+      const state = crypto.randomUUID() + crypto.randomUUID();
+      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: user.userId });
+      return Response.redirect(
+        buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
+    }
+    if (url.pathname === "/oauth/google/callback" && request.method === "GET") {
+      const code = url.searchParams.get("code") ?? "";
+      const state = url.searchParams.get("state") ?? "";
+      if (!code || !state) return json(400, { error: "missing code/state" });
+      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_state: state }),
+      });
+      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
+      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
+      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      if (!uid) return json(400, { error: "invalid or expired state" });
+      const tokRes = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code, client_id: env.YOUTUBE_CLIENT_ID, client_secret: env.YOUTUBE_CLIENT_SECRET,
+          redirect_uri: env.OAUTH_REDIRECT_URI, grant_type: "authorization_code",
+        }),
+      });
+      const tok = (await tokRes.json()) as Record<string, unknown>;
+      if (!tokRes.ok) return json(502, { error: `token exchange failed: ${JSON.stringify(tok).slice(0, 120)}` });
+      const bad = validateTokenResponse(tok);
+      if (bad) return json(502, { error: bad });
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, tok.refresh_token as string);
+      let email: string | null = null;
+      try {
+        const payload = JSON.parse(atob((tok.id_token as string).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+        email = typeof payload.email === "string" ? payload.email : null;
+      } catch { /* id_token optional */ }
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_refresh_token`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: uid, p_refresh_token_encrypted: enc, p_google_email: email }),
+      });
+      return new Response("<html><body style='font-family:sans-serif;background:#161616;color:#F5F5F5;text-align:center;padding-top:20vh'><h2>YouTube connected</h2><p>You can close this page and return to Dispatch.</p></body></html>",
+        { headers: { "content-type": "text/html" } });
+    }
 
     const actor = await authenticate(env, request);
     if (!actor) return json(401, { error: "unauthorized" });

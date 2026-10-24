@@ -67,6 +67,19 @@ class DispatchNativeBridge(
         return false
     }
 
+    /** Opens an https URL from the trusted Dispatch Worker in a Custom Tab.
+     *  Restricted to the known Dispatch cloud host; JavaScript cannot open
+     *  arbitrary pages through this. */
+    @JavascriptInterface
+    fun openCustomTab(url: String): Boolean {
+        if (!url.startsWith("https://dispatch-cloud.resolviaai.workers.dev/")) return false
+        return try {
+            val intent = androidx.browser.customtabs.CustomTabsIntent.Builder().build()
+            intent.launchUrl(activity, android.net.Uri.parse(url))
+            true
+        } catch (e: Exception) { false }
+    }
+
     @JavascriptInterface
     fun getAuthToken(): String = pairingManager.pcAuthToken
 
