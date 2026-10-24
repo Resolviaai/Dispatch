@@ -29,9 +29,9 @@ export interface Env {
 }
 
 const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
-const KINDS = { clip_video: "video/mp4", thumbnail: "image/jpeg" } as const;
+const KINDS = { clip_video: "video/mp4", thumbnail: "image/jpeg", edit_window: "video/mp4" } as const;
 type Kind = keyof typeof KINDS;
-const CAP_BYTES: Record<Kind, number> = { clip_video: 536870912, thumbnail: 8388608 };
+const CAP_BYTES: Record<Kind, number> = { clip_video: 536870912, thumbnail: 8388608, edit_window: 536870912 };
 
 // ---------- pure helpers (also unit-tested) ----------
 export function validateReserveInput(kind: string, mime: string, expectedBytes: number): string | null {
@@ -239,9 +239,23 @@ export default {
         }));
         return json(200, { users }, adminOrigin); // operational metadata only, no tokens
       }
-      const banMatch = url.pathname.match(/^\/admin\/users\/([0-9a-fA-F-]{36})\/(ban|unban)$/);
-      if (banMatch && request.method === "POST") {
-        const [, uid, action] = banMatch;
+      const userAction = url.pathname.match(/^\/admin\/users\/([0-9a-fA-F-]{36})\/(ban|unban|quota)$/);
+      if (userAction && request.method === "POST") {
+        const [, uid, action] = userAction;
+        if (action === "quota") {
+          const body = await request.json().catch(() => ({})) as { quota_gb?: number };
+          const gb = Number(body.quota_gb);
+          if (!Number.isFinite(gb) || gb <= 0 || gb > 10) {
+            return json(400, { error: "quota_gb must be between 0 and 10 (decimal GB)" }, adminOrigin);
+          }
+          const quotaBytes = Math.round(gb * 1_000_000_000);
+          const qres = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_set_user_quota`, {
+            method: "POST", headers: S,
+            body: JSON.stringify({ p_target_user: uid, p_quota_bytes: quotaBytes }),
+          });
+          if (!qres.ok) return json(502, { error: `quota update failed: ${qres.status}` }, adminOrigin);
+          return json(200, { quota_gb: gb, quota_bytes: quotaBytes }, adminOrigin);
+        }
         const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${uid}`, {
           method: "PUT", headers: S,
           body: JSON.stringify({ ban_duration: action === "ban" ? "876000h" : "none" }),

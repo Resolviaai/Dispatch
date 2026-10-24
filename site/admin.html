@@ -100,6 +100,10 @@ async function loadUsers() {
           <div class="meta">${u.banned ? "Disabled" : "Active"} · joined ${String(u.created_at || "").slice(0, 10)}${u.last_sign_in ? " · last seen " + String(u.last_sign_in).slice(0, 10) : ""}</div>
         </div>
         <span class="pill ${u.banned ? "off" : "on"}">${u.banned ? "Disabled" : "Active"}</span>
+        <input type="number" step="0.1" min="0.1" max="10" value="2.0"
+          class="act" style="width:80px" title="Quota in decimal GB (max 10)"
+          data-quota="${u.id}" aria-label="Quota GB for ${u.email}">
+        <button class="act" data-uid="${u.id}" data-quota-save="${u.id}">Set GB</button>
         ${u.banned
           ? `<button class="act" data-uid="${u.id}" data-act="unban">Enable</button>`
           : `<button class="act danger" data-uid="${u.id}" data-act="ban">Disable</button>`}
@@ -112,6 +116,26 @@ async function loadUsers() {
 }
 
 $("users").addEventListener("click", async (ev) => {
+  const save = ev.target.closest("button[data-quota-save]");
+  if (save) {
+    const uid = save.dataset.quotaSave;
+    const input = document.querySelector('input[data-quota="' + uid + '"]');
+    const gb = parseFloat(input && input.value);
+    if (!Number.isFinite(gb) || gb <= 0 || gb > 10) {
+      $("status").innerHTML = '<span class="err">Quota must be between 0.1 and 10 GB.</span>';
+      return;
+    }
+    btn_disabled(save, true);
+    try {
+      await api("/admin/users/" + uid + "/quota", { method: "POST", body: JSON.stringify({ quota_gb: gb }) });
+      $("status").innerHTML = '<span class="ok">Quota set to ' + gb + ' GB.</span>';
+    } catch (e) {
+      $("status").innerHTML = '<span class="err">' + e.message.replace(/</g, "&lt;") + '</span>';
+    } finally {
+      btn_disabled(save, false);
+    }
+    return;
+  }
   const btn = ev.target.closest("button[data-uid]");
   if (!btn) return;
   const { uid, act } = btn.dataset;
@@ -126,6 +150,7 @@ $("users").addEventListener("click", async (ev) => {
   }
 });
 
+function btn_disabled(b, d) { b.disabled = d; }
 function showLogin() { $("login").classList.remove("hidden"); $("panel").classList.add("hidden"); }
 function showPanel() { $("login").classList.add("hidden"); $("panel").classList.remove("hidden"); loadUsers(); }
 

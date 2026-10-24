@@ -227,7 +227,7 @@ def _parse_stage1_time(value: Any) -> float:
 
 
 def transcribe_stage2_precision_words(
-    media_path: Path
+    media_path: Path, max_input_seconds: Optional[float] = None
 ) -> Dict[str, Any]:
     """Stage 2: Precision word-level alignment using gemini-3.5-transcribe.
     
@@ -241,7 +241,9 @@ def transcribe_stage2_precision_words(
           - speech_start: float timestamp of first spoken word
           - speech_end: float timestamp of last spoken word
     """
-    max_stage2_seconds = MAX_CLIP_DURATION + 16.0
+    # Final clips use MAX_CLIP_DURATION + headroom; bounded edit windows pass
+    # their own 300 s bound explicitly. Full-source transcription stays disabled.
+    max_stage2_seconds = max_input_seconds if max_input_seconds else MAX_CLIP_DURATION + 16.0
     if media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
         from dispatch.ingestion.validator import inspect_video_orientation
         info = inspect_video_orientation(media_path)
