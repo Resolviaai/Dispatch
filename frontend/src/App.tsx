@@ -4,6 +4,7 @@ import { CameraScreen } from './screens/CameraScreen';
 import { RecordingsScreen } from './screens/RecordingsScreen';
 import { ClipsScreen } from './screens/ClipsScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { AdminScreen } from './screens/AdminScreen';
 import { BottomNav, TabType } from './components/BottomNav';
 import { RecordingItem, Bridge, apiUrl } from './bridge';
 import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
@@ -12,6 +13,7 @@ import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
+  const [isAdmin, setIsAdmin] = useState(false);
   const [pcHost, setPcHost] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const native = (window as any).DispatchBridge?.getPcHost?.()?.trim();
@@ -83,6 +85,16 @@ export const App: React.FC = () => {
       isCancelled = true;
       clearInterval(interval);
     };
+  }, [pcHost]);
+
+  // Admin tab visibility: backend decides via the allowlist (server-enforced).
+  useEffect(() => {
+    let cancelled = false;
+    fetch(apiUrl('/api/admin/whoami', pcHost), { headers: getAuthHeaders() })
+      .then(res => res.json())
+      .then(d => { if (!cancelled && typeof d.is_admin === 'boolean') setIsAdmin(d.is_admin); })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, [pcHost]);
 
   // Current system time for phone top bar
@@ -353,6 +365,9 @@ export const App: React.FC = () => {
             </ScreenErrorBoundary>
           )}
 
+          {currentTab === 'admin' && (
+            <AdminScreen pcHost={pcHost} />
+          )}
           {currentTab === 'settings' && (
             <SettingsScreen pcHost={pcHost} onPcHostChange={setPcHost} />
           )}
@@ -360,7 +375,7 @@ export const App: React.FC = () => {
 
         {/* BOTTOM NAVIGATION DECK: Hidden inside Editor for dedicated workspace */}
         {!isEditorOpen && (
-          <BottomNav currentTab={currentTab} onTabChange={setCurrentTab} />
+          <BottomNav currentTab={currentTab} onTabChange={setCurrentTab} isAdmin={isAdmin} />
         )}
 
         {/* HOME INDICATOR BAR (Only in desktop browser preview, hidden on Android device) */}

@@ -2318,6 +2318,90 @@ async def disconnect_youtube(request: Request):
     return {"status": "success", "message": "YouTube account disconnected"}
 
 
+# --- Admin (Workstream B): allowlist bootstrap, backend-enforced role ---
+def _admin_emails() -> set:
+    return {e.strip().lower() for e in os.getenv("DISPATCH_ADMIN_EMAILS", "").split(",") if e.strip()}
+
+
+def require_admin(request: Request) -> Dict[str, Any]:
+    """Backend-enforced admin authorization: verified Supabase identity whose email
+    is in the DISPATCH_ADMIN_EMAILS allowlist. No client-supplied role is trusted."""
+    user = get_authenticated_user(request)
+    if user["email"].lower() not in _admin_emails():
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+@app.get("/api/admin/whoami")
+async def admin_whoami(request: Request):
+    try:
+        user = require_admin(request)
+        return {"is_admin": True, "email": user["email"]}
+    except HTTPException as e:
+        if e.status_code == 401:
+            raise
+        return {"is_admin": False, "email": getattr(e, "detail", "")}
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request):
+    require_admin(request)
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not key:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    import httpx
+    resp = httpx.get(f"{os.getenv('SUPABASE_URL', '')}/auth/v1/admin/users?per_page=100",
+                     headers={"apikey": key, "Authorization": f"Bearer {key}"}, timeout=15.0)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Could not list users")
+    users = [{"id": u.get("id"), "email": u.get("email"),
+              "created_at": u.get("created_at"), "last_sign_in": u.get("last_sign_in_at"),
+              "banned": bool(u.get("banned_until"))}
+             for u in resp.json().get("users", [])]
+    return {"users": users}  # operational metadata only - no tokens or secrets
+
+
+@app.post("/api/admin/users/{user_id}/ban")
+async def admin_ban_user(user_id: str, request: Request):
+    require_admin(request)
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    import httpx
+    resp = httpx.put(f"{os.getenv('SUPABASE_URL', '')}/auth/v1/admin/users/{user_id}",
+                     headers={"apikey": key, "Authorization": f"Bearer {key}",
+                              "Content-Type": "application/json"},
+                     content=json.dumps({"ban_duration": "876000h"}))  # ~100 years
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Ban failed")
+    logger.info("Admin banned user %s", user_id)
+    return {"status": "banned"}
+
+
+@app.post("/api/admin/users/{user_id}/unban")
+async def admin_unban_user(user_id: str, request: Request):
+    require_admin(request)
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    import httpx
+    resp = httpx.put(f"{os.getenv('SUPABASE_URL', '')}/auth/v1/admin/users/{user_id}",
+                     headers={"apikey": key, "Authorization": f"Bearer {key}",
+                              "Content-Type": "application/json"},
+                     content=json.dumps({"ban_duration": "none"}))
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Unban failed")
+    logger.info("Admin unbanned user %s", user_id)
+    return {"status": "active"}
+
+
+@app.get("/api/admin/stats")
+async def admin_stats(request: Request):
+    """High-level processing counters from the local store (no user content)."""
+    require_admin(request)
+    with db.get_db_connection() as conn:
+        cur = conn.cursor()
+        clips = cur.execute("SELECT status, COUNT(*) c FROM clips GROUP BY status").fetchall()
+        jobs = cur.execute("SELECT status, COUNT(*) c FROM processing_jobs GROUP BY status").fetchall() if True else []
+    return {"clips": {r["status"]: r["c"] for r in clips}, "remote_jobs": {}}
+
+
 @app.get("/api/auth/session")
 async def auth_session(request: Request):
     """Who am I? Verifies the app's Supabase session over the local link."""
