@@ -133,6 +133,20 @@ def start_dispatch(run_web: bool = True):
     outbox_worker.start()
     logger.info("Autonomous Publishing Outbox worker active (Consumes queued -> uploading -> published/failed)")
 
+    # 9b. Remote processing jobs (friends submit from anywhere; this PC claims them)
+    if os.getenv("DISPATCH_REMOTE_JOBS", "1") == "1":
+        try:
+            import threading
+            from dispatch.youtube_connections import RemoteJobPoller
+            from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
+            _catcher = YouTubeInboxCatcher()
+            _poller = RemoteJobPoller(ingest_video=_catcher.ingest_video)
+            threading.Thread(target=_poller.run_forever, daemon=True,
+                             name="dispatch-remote-jobs").start()
+            logger.info("Remote processing job poller active (claims queued jobs from the cloud)")
+        except Exception as e:
+            logger.warning("Remote job poller not started: %s", e)
+
     # 9. Start Web Dashboard
     if run_web:
         # Optional TLS (strongly recommended when pairing phones over LAN: the

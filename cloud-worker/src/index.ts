@@ -253,6 +253,34 @@ export default {
         { headers: { "content-type": "text/html" } });
     }
 
+    // ---- Remote processing jobs (authenticated app clients, any network) ----
+    if (url.pathname === "/jobs/submit" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const body = await request.json().catch(() => ({})) as { url?: string };
+      const ytUrl = (body.url ?? "").trim();
+      if (!/^https:\/\/(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{6,20}/.test(ytUrl))
+        return json(400, { error: "invalid YouTube URL" });
+      const sub = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_submit_job`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: user.userId, p_url: ytUrl }),
+      });
+      if (!sub.ok) return json(502, { error: `submit failed: ${sub.status}` });
+      const subBody = await sub.json() as unknown;
+      const arr = Array.isArray(subBody) ? subBody as Array<{ id: string; status: string }> : [];
+      return json(200, { job_id: arr[0]?.id ?? null, status: arr[0]?.status ?? "queued" });
+    }
+    if (url.pathname === "/jobs/status" && request.method === "GET") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const res = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,youtube_url,status,video_id,last_error,created_at&order=created_at.desc&limit=20`,
+        { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
+      if (!res.ok) return json(502, { error: `status failed: ${res.status}` });
+      return json(200, { jobs: await res.json() });
+    }
+
     const actor = await authenticate(env, request);
     if (!actor) return json(401, { error: "unauthorized" });
     const userId = actor.userId;
