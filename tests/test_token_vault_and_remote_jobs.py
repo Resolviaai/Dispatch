@@ -34,9 +34,16 @@ class TestVaultRoundTrip(unittest.TestCase):
         self.assertEqual(yc.decrypt_refresh_token(enc), token)
 
     def test_tampered_ciphertext_fails_closed(self):
-        enc = self._encrypt_like_worker("secret")[:-1] + ("A" if enc_last_not_a() else "B")
+        # Deterministic corruption: flip one ciphertext byte in the middle - the GCM
+        # tag MUST reject it. (Base64-tail edits can decode to identical bytes: flaky.)
+        import base64 as b64
+        enc = self._encrypt_like_worker("secret")
+        raw = bytearray(b64.urlsafe_b64decode(enc + "=" * (-len(enc) % 4)))
+        raw[len(raw) // 2] ^= 0x01
+        tampered = b64url(bytes(raw))
         with self.assertRaises(Exception):
-            yc.decrypt_refresh_token(enc)
+            yc.decrypt_refresh_token(tampered)
+
 
     def test_missing_vault_key_raises_unavailable(self):
         os.environ.pop("DISPATCH_TOKEN_VAULT_KEY", None)
@@ -44,8 +51,6 @@ class TestVaultRoundTrip(unittest.TestCase):
             yc.vault_key()
 
 
-def enc_last_not_a():
-    return True
 
 
 class TestRemoteJobs(unittest.TestCase):
