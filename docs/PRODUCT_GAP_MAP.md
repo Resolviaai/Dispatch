@@ -24,7 +24,7 @@ Date: 2026-10-24 · Baseline `75137b3` · This is the SINGLE authoritative plan 
 | G11 | Legacy OAuth/pairing remnants (§6.2) | PARTIAL | To remove AFTER G3: native bridge `connectYouTube(pcHost, pairingCode)`, 4-digit pairing UI, PC pairing copy, `start-auth`, `scripts/auth_youtube.py` | listed files |
 
 ## Implementation order (single, authoritative — supersedes all earlier sequences)
-1. **P0 Architecture decision** → approve `docs/ADR-001-canonical-architecture.md` (owner gate).
+1. **P0 Architecture decision → APPROVED (2026-10-24):** ADR-001 ratified — per-worker bound tokens, Android-only review UI, server-side token vault. Implementation may start.
 2. **P0 Auth:** Supabase email/password in app UI; server-side JWT verification on every local API; session expiry/logout/registration.
 3. **P0 Tenant isolation:** ownership strategy per ADR (legacy local data = PC-worker-owned; cloud = per-user), worker identity per ADR, adversarial cross-user + worker-impersonation tests.
 4. **P0 Admin:** role from `DISPATCH_ADMIN_EMAILS` bootstrap, backend-enforced admin APIs, minimal protected admin UI, audit log, no-secret-disclosure tests.

@@ -1,7 +1,6 @@
 # ADR-001 — Dispatch Canonical Multi-User Architecture (PROPOSED — awaiting owner approval)
 
-Status: **PROPOSED**. Nothing here is settled until the owner approves. Implementation of the
-following workstreams does not start until approval.
+Status: **APPROVED by owner (2026-10-24, MCQ):** Decision 2 = Bound per-worker token (owner-issued single-use enrollment code → user-bound worker credential; shared token becomes maintenance-only); Decision 1 = review lives in the **Android app only** for the alpha (no hosted web review app); Decision 4 = **server-side encrypted token vault on the PC backend** (no tokens on devices). Decision 3 boundaries stand as written. Workstream implementation may now start in the gap-map order.
 
 ## Decision 1 — What runs where
 - **Android app (primary user interface):** email/password sign-in via Supabase Auth;
