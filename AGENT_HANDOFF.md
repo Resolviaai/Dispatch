@@ -216,3 +216,9 @@ Owner's pasted `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET` (.env, from the earli
 - **Live verification:** admin page HTTP 200; `/admin/whoami` unauthenticated → **401**. Full admin sign-in round-trip = owner browser test (pending).
 - **Mobile app:** the Admin tab was removed from the nav per owner instruction (backend /api/admin/* APIs on the PC remain for the LAN dashboard; AdminScreen.tsx retained in code for possible reuse). Next APK build drops the tab.
 - **Note:** the same Supabase email/password pair works for both the app sign-in and the web admin; admin rights come from the server-side allowlist, never from the client.
+
+## 40. v1.1.5 published (2026-10-24) — admin panel is WEB-ONLY per owner
+- Mobile app: **Admin tab removed** (owner directive: admin lives at the landing-page link, not the app). Backend /api/admin/* on the PC unchanged (LAN dashboard can still use it); AdminScreen.tsx kept in code.
+- **v1.1.5-alpha (versionCode 9)** published with Dispatch.apk + update.json; stable URL hash-verified serving it. Landing page + admin.html deployed (admin page live, 200).
+- Account/credentials state: resolviaai@gmail.com created in Supabase (password-verified sign-in works) and allowlisted in Worker ADMIN_EMAILS. rohitbag959@gmail.com = friend test account.
+- Everything pushed through `503dabc`. Remaining owner verifications: phone install of v1.1.5, web admin sign-in round-trip in a browser, friend ban/unban isolation test.
