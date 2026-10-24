@@ -1,21 +1,19 @@
 import React from 'react';
-import { Camera, Film, Sparkles, Settings as SettingsIcon , Shield } from 'lucide-react';
+import { Camera, Film, Sparkles, Settings as SettingsIcon  } from 'lucide-react';
 
-export type TabType = 'record' | 'sessions' | 'clips' | 'settings' | 'admin';
+export type TabType = 'record' | 'sessions' | 'clips' | 'settings';
 
 interface BottomNavProps {
-  isAdmin?: boolean;
-  currentTab: TabType;
+    currentTab: TabType;
   onTabChange: (tab: TabType) => void;
 }
 
-export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onTabChange, isAdmin }) => {
+export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onTabChange }) => {
   const tabs = [
     { id: 'record' as TabType, label: 'Record', icon: Camera },
     { id: 'sessions' as TabType, label: 'Sessions', icon: Film },
     { id: 'clips' as TabType, label: 'Clips', icon: Sparkles },
     { id: 'settings' as TabType, label: 'Settings', icon: SettingsIcon },
-    ...(isAdmin ? [{ id: 'admin' as TabType, label: 'Admin', icon: Shield }] : []),
   ];
 
   return (

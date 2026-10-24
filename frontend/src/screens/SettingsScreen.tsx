@@ -189,9 +189,37 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
   };
 
+  const [accountEmail, setAccountEmail] = useState('');
+  useEffect(() => {
+    import('../auth/supabase').then(({ currentSession }) =>
+      currentSession().then(sess => setAccountEmail(sess?.user?.email ?? '')));
+  }, []);
+
+  const handleSignOut = async () => {
+    const { signOut } = await import('../auth/supabase');
+    await signOut(); // AuthGate flips to the sign-in screen automatically
+  };
+
   return (
     <div className="w-full h-full flex flex-col bg-studio text-text-main overflow-hidden select-none">
       
+      {/* ACCOUNT */}
+      <div className="mx-3 mb-3 rounded-xl bg-surface-100 border border-border p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center text-xs font-semibold text-primary-h">
+            {accountEmail.slice(0, 1).toUpperCase()}
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs text-text-muted">Signed in as</p>
+            <p className="text-sm font-medium text-text-main truncate">{accountEmail || '…'}</p>
+          </div>
+        </div>
+        <button onClick={handleSignOut}
+          className="w-full min-h-[44px] rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-xs font-medium text-text-main transition-all duration-150 active:scale-[0.98]">
+          Sign out
+        </button>
+      </div>
+
       {/* SCREEN HEADER */}
       <div className="shrink-0 px-5 pt-4 pb-3 border-b border-border bg-studio flex items-center justify-between">
         <div>
