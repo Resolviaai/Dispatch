@@ -416,23 +416,26 @@ class YouTubeInboxCatcher:
         # YouTube Data API, and if it cannot be verified the ingestion is refused -
         # authenticated yt-dlp cookies must never silently bypass this restriction.
         from dispatch.youtube_inbox.oauth import get_youtube_processing_status
-        privacy_check_errored = False
         try:
             privacy_info = get_youtube_processing_status([video_id]).get(video_id, {})
         except Exception as status_err:
-            # Transient API failure: we cannot verify yet. Fall back to the download
-            # step (a private video still fails there without opt-in cookies) instead
-            # of crashing the pipeline; a DEFINITIVE no-record verdict still rejects.
-            logger.warning("Visibility check unavailable for %s (%s); continuing to download gate", video_id, status_err)
-            privacy_info = {}
-            privacy_check_errored = True
+            # Fail-closed policy (alpha brief B1): a transient visibility-API failure
+            # must NEVER fall through to the download path. Defer with a durable,
+            # non-terminal status; the next ingest/poll attempt re-verifies.
+            err_msg = (
+                "Visibility check unavailable (network/API error); download deferred. "
+                "Only verified public/unlisted sources are ingested."
+            )
+            logger.warning("Deferring %s: visibility check unavailable (%s)", video_id, status_err)
+            db.update_youtube_video(video_id, status="WAITING_FOR_VISIBILITY_CHECK", last_error=err_msg)
+            return {"video_id": video_id, "status": "WAITING_FOR_VISIBILITY_CHECK", "verified": False, "error": err_msg}
         privacy_status = (privacy_info.get("privacy_status") or "").lower()
         if privacy_status == "private":
             err_msg = "Private videos are not supported as sources."
             logger.error("Rejecting private source video %s", video_id)
             db.update_youtube_video(video_id, status="FAILED", last_error=err_msg)
             return {"video_id": video_id, "status": "FAILED", "verified": False, "error": err_msg}
-        if privacy_status not in ("public", "unlisted") and not privacy_check_errored:
+        if privacy_status not in ("public", "unlisted"):
             err_msg = (
                 f"Source visibility could not be verified (got '{privacy_status or 'unknown'}'). "
                 "Only public or unlisted videos can be ingested."

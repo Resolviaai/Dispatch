@@ -129,50 +129,23 @@ class PairingCodeTests(unittest.TestCase):
         self.assertIn("Too many incorrect pairing attempts", str(ctx.exception))
 
     def test_complete_pc_generation_to_phone_pairing_flow(self):
-        """Test the complete PC generation -> phone entry -> successful pairing flow via API."""
+        """REMOVED-FLOW CONTRACT (2026-10-24 pivot): PC->phone credential pairing no
+        longer exists; on-device OAuth replaces it. Both routes fail closed with 410
+        and NEVER return credential material under any input."""
         from fastapi.testclient import TestClient
         from dispatch.web.app import app
-        
         client = TestClient(app)
-        
-        # 1. PC generates 4-digit pairing code from localhost
         pc_resp = client.post(
             "/api/integrations/youtube/pairing-code",
             json={"understands_http_risk": True},
             headers={"host": "localhost:8000"}
         )
-        self.assertEqual(pc_resp.status_code, 200)
-        data = pc_resp.json()
-        code = data["code"]
-        self.assertEqual(len(code), 4)
-        self.assertTrue(code.isdigit())
-        self.assertEqual(data["expires_in"], 300)
-        
-        # 2. Phone enters the 4-digit code from local LAN IP
-        mock_creds = {
-            "refresh_token": "mock-refresh-token",
-            "client_id": "mock-client-id",
-            "client_secret": "mock-client-secret"
-        }
-        with patch("dispatch.web.app._load_youtube_pairing_credentials", return_value=mock_creds):
-            phone_resp = client.post(
-                "/api/youtube/credentials",
-                json={"pairing_code": code},
-                headers={"host": "localhost:8000"}
-            )
-            self.assertEqual(phone_resp.status_code, 200)
-            phone_data = phone_resp.json()
-            self.assertTrue(phone_data["configured"])
-            self.assertEqual(phone_data["refresh_token"], "mock-refresh-token")
-            
-        # 3. Second attempt with consumed code is rejected (single-use)
-        second_resp = client.post(
+        self.assertEqual(pc_resp.status_code, 410)
+        phone_resp = client.post(
             "/api/youtube/credentials",
-            json={"pairing_code": code},
-            headers={"host": "localhost:8000"}
+            json={"pairing_code": "1234"},
         )
-        self.assertEqual(second_resp.status_code, 401)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertEqual(phone_resp.status_code, 410)
+        for body in (pc_resp.text, phone_resp.text):
+            for marker in ("refresh_token", "client_secret", "mock-refresh-token"):
+                self.assertNotIn(marker, body)

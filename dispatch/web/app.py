@@ -62,11 +62,7 @@ from dispatch.captions.presets import get_default_preset_id, get_preset
 from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish
 
 from dispatch.sync.receiver import router as sync_router
-from dispatch.sync.pairing_codes import (
-    PairingCodeError,
-    consume_pairing_code,
-    issue_pairing_code,
-)
+
 from dispatch.sync.receiver import is_trusted_localhost
 
 logger = logging.getLogger("dispatch.web")
@@ -142,6 +138,20 @@ async def log_requests(request: Request, call_next):
         raise
 
 app.include_router(sync_router)
+
+
+def require_secure_credential_transport(request: Request, client_host: str) -> None:
+    """P0 security invariant: YouTube refresh tokens / client secrets must never be
+    returned to a NON-LOOPBACK caller over plaintext HTTP. Pairing codes gate WHO
+    receives credentials; they cannot protect an unencrypted channel. Fails closed
+    (426) with an actionable message; loopback PC dashboard use is unaffected."""
+    if request.url.scheme == "http" and not is_trusted_localhost(client_host):
+        logger.warning("Refused credential transfer over plaintext HTTP to %s", client_host)
+        raise HTTPException(
+            status_code=426,
+            detail=("Credentials are not sent over unencrypted HTTP. Enable TLS on the PC "
+                    "Dispatch server (see DISPATCH_WEB_TLS in the README) and pair again over https://."),
+        )
 
 
 def verify_dashboard_auth(request: Request) -> None:
@@ -2280,111 +2290,18 @@ async def disconnect_youtube(request: Request):
     return {"status": "success", "message": "YouTube account disconnected"}
 
 
-@app.get("/api/youtube/credentials")
-async def get_youtube_credentials(
-    request: Request,
-    authorization: Optional[str] = Header(None)
-):
-    """Legacy read path, restricted to loopback or an existing Bearer device token."""
-    verify_dashboard_auth(request)
-    return _youtube_credentials_response()
+@app.api_route("/api/youtube/credentials", methods=["GET", "POST"])
+async def youtube_credentials_removed():
+    """REMOVED (2026-10-24 architecture pivot): the phone performs its own
+    on-device Google/YouTube OAuth. The PC never transfers refresh tokens or
+    client secrets to any client under any transport or pairing scheme."""
+    raise HTTPException(status_code=410, detail="PC credential transfer removed. Connect YouTube from the phone app (on-device sign-in).")
 
 
 @app.post("/api/integrations/youtube/pairing-code")
-async def create_youtube_pairing_code(request: Request, payload: PairingCodeIssueRequest):
-    """Issue an explicit, five-minute pairing code only from the local PC dashboard."""
-    client_host = request.client.host if request.client else "unknown"
-    if not is_trusted_localhost(client_host):
-        raise HTTPException(status_code=403, detail="Create pairing codes from the PC dashboard itself.")
-    
-    # Enforce Host and Origin header checks even for loopback clients
-    verify_dashboard_auth(request)
-
-    if not payload.understands_http_risk:
-        raise HTTPException(
-            status_code=400,
-            detail="Confirm that the phone will receive YouTube credentials over unencrypted HTTP.",
-        )
-    credentials = _youtube_credentials_response()
-    if not credentials["configured"]:
-        raise HTTPException(
-            status_code=409,
-            detail="YouTube is not configured on this PC. Complete Google sign-in on the PC first.",
-        )
-
-    code, expires_in = issue_pairing_code()
-    return {
-        "code": code,
-        "expires_in": expires_in,
-        "expires_in_seconds": expires_in,
-        "message": "One-time code. Use it within five minutes on a trusted local network.",
-    }
-
-
-@app.post("/api/youtube/credentials")
-async def pair_youtube_credentials(
-    request: Request,
-    payload: PairingCredentialsRequest,
-    authorization: Optional[str] = Header(None),
-):
-    client_host = request.client.host if request.client else "unknown"
-    # CRITICAL FORENSIC FIX: Validate Host and Origin headers for ALL clients (LAN and loopback)
-    # to prevent DNS rebinding and cross-site request forgery attacks on credential transfer.
-    raw_host = request.headers.get("host", "").strip()
-    parsed_host = raw_host.split(":")[0].strip().lower()
-    # For loopback callers, parsed_host must be trusted loopback
-    if is_trusted_localhost(client_host):
-        if parsed_host and parsed_host not in ("localhost", "127.0.0.1", "::1", "testserver"):
-            raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
-    
-    # Origin check if browser/webview origin header is supplied
-    origin_header = request.headers.get("origin", "").strip()
-    if origin_header:
-        try:
-            split_origin = urllib.parse.urlsplit(origin_header)
-            origin_scheme = split_origin.scheme.lower()
-            origin_hostname = (split_origin.hostname or "").lower()
-            origin_port = split_origin.port
-
-            is_valid_loopback = (
-                origin_scheme == "http"
-                and origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
-                and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
-            )
-            is_valid_android = (
-                origin_scheme == "https"
-                and origin_hostname == "appassets.androidplatform.net"
-            )
-            if not (is_valid_loopback or is_valid_android):
-                logger.warning("Rejected credential request: untrusted origin '%s'", origin_header)
-                raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise
-            raise HTTPException(status_code=403, detail="Forbidden: Malformed Origin header")
-
-    if payload.pairing_code:
-        if not _is_local_network_peer(client_host):
-            raise HTTPException(status_code=403, detail="One-time pairing codes are accepted only on a local or Tailscale network.")
-        try:
-            consume_pairing_code(payload.pairing_code.strip(), client_host)
-        except PairingCodeError as error:
-            raise HTTPException(status_code=error.status_code, detail=str(error))
-    elif not is_trusted_localhost(client_host):
-        from dispatch.sync.receiver import verify_token
-        verify_token(authorization)
-    else:
-        # Loopback caller must pass dashboard auth
-        verify_dashboard_auth(request)
-
-    credentials = _youtube_credentials_response()
-    if not credentials["configured"]:
-        raise HTTPException(
-            status_code=409,
-            detail="YouTube is not configured on this PC. Complete Google sign-in on the PC first.",
-        )
-    return credentials
-
+async def pairing_code_removed():
+    """REMOVED (2026-10-24): pairing-code credential transfer no longer exists."""
+    raise HTTPException(status_code=410, detail="Pairing codes removed. Connect YouTube from the phone app.")
 
 
 # --- Embedded HTML Dashboard ---

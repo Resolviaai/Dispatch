@@ -229,17 +229,41 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
             self.assertEqual(res["vid_2"]["duration"], "PT1M")
 
     def test_06_transient_api_error_does_not_corrupt_state(self):
-        """6. Transient API errors fall back safely and retain video in database."""
+        """6. Transient visibility-API errors DEFER without downloading (fail-closed),
+        keep a durable non-terminal record, and retry succeeds once the API recovers."""
         vid = "tt_tran0006"
-        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", side_effect=RuntimeError("Network timeout")), \
-             patch.object(self.catcher, "download_video", side_effect=Exception("ERROR: [youtube] We're processing this video. Check back later.")):
+        downloads = []
+        def fake_download(catcher_self, v):
+            downloads.append(v)
+            raise Exception("download must not be reached on defer")
+        with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status", side_effect=RuntimeError("Network timeout")),              patch.object(self.catcher, "download_video", fake_download):
 
             result = self.catcher.ingest_video(url_or_id=vid)
 
-            self.assertEqual(result["status"], "WAITING_FOR_YOUTUBE_PROCESSING")
+            self.assertEqual(result["status"], "WAITING_FOR_VISIBILITY_CHECK")
+            self.assertEqual(downloads, [])  # invariant: no download before verified visibility
             record = db.get_youtube_video(vid)
             self.assertIsNotNone(record)
-            self.assertEqual(record["status"], "WAITING_FOR_YOUTUBE_PROCESSING")
+            self.assertEqual(record["status"], "WAITING_FOR_VISIBILITY_CHECK")
+            self.assertIn("deferred", record["last_error"] or "")
+
+        # Retry once the visibility service recovers: the SAME video proceeds (not
+        # permanently poisoned, not marked private/failed).
+        import tempfile as _tf, shutil as _sh
+        from pathlib import Path as _P
+        tmp = _P(_tf.mkdtemp(prefix="t06_retry_"))
+        (tmp / f"{vid}.mp4").write_bytes(b"x")
+        try:
+            with patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                       side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}),                  patch("dispatch.ingestion.validator.probe_video",
+                       lambda f: (True, {"duration": 10.0, "width": 720, "height": 1280}, None)),                  patch.object(self.catcher, "fetch_video_info",
+                              lambda self_, v: {"id": v, "title": "t", "duration": 10}),                  patch.object(self.catcher, "download_video", lambda self_, v: tmp / f"{v}.mp4"):
+                retried = self.catcher.ingest_video(url_or_id=vid)
+            self.assertNotEqual(retried["status"], "WAITING_FOR_VISIBILITY_CHECK")
+            self.assertNotEqual(retried["status"], "FAILED")
+        finally:
+            _sh.rmtree(tmp, ignore_errors=True)
+
 
     def test_07_already_downloaded_video_skipped_idempotently(self):
         """7. An already-downloaded valid video returns immediately without re-downloading."""

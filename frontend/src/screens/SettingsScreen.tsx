@@ -90,16 +90,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
   const handleConnectYouTube = async () => {
     if (Bridge.isAvailable()) {
-      if (!pairingCode.trim()) {
-        setFeedback('Enter the one-time pairing code shown in PC Settings.');
+      // 2026-10-24 architecture pivot: YouTube sign-in happens ON THIS PHONE via
+      // Google OAuth; the PC never transfers credentials or pairing codes.
+      const nativeOnDevice: any = (window as any).DispatchBridge?.connectYouTubeOnDevice;
+      if (typeof nativeOnDevice === 'function') {
+        setFeedback('Opening Google sign-in…');
+        await fetchYouTubeStatus();
         return;
       }
-      const result = Bridge.connectYouTube(pcHost, pairingCode.trim());
-      setFeedback(result.message);
-      if (result.success) {
-        setPairingCode('');
-        await fetchYouTubeStatus();
-      }
+      setFeedback('On-device Google sign-in arrives in the next app update. PC credential transfer has been removed for security.');
       return;
     }
 

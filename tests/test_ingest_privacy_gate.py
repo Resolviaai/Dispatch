@@ -64,5 +64,18 @@ class TestIngestPrivacyGate(unittest.TestCase):
             self.assertNotEqual(result.get("status"), "FAILED", msg=verdict)
 
 
+    def test_configured_cookies_cannot_bypass_private_rejection(self):
+        """B1 #7: even with authenticated yt-dlp cookies configured, a PRIVATE verdict
+        is rejected before download - yt-dlp access is never treated as visibility."""
+        import os
+        os.environ["DISPATCH_YTDLP_COOKIES_FILE"] = "cookies.txt"
+        try:
+            result, downloads = self._ingest("private")
+            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(downloads, [])
+        finally:
+            del os.environ["DISPATCH_YTDLP_COOKIES_FILE"]
+
+
 if __name__ == "__main__":
     unittest.main()
