@@ -9,7 +9,7 @@ interface BottomNavProps {
   onTabChange: (tab: TabType) => void;
 }
 
-export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onTabChange }) => {
+export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onTabChange, isAdmin }) => {
   const tabs = [
     { id: 'record' as TabType, label: 'Record', icon: Camera },
     { id: 'sessions' as TabType, label: 'Sessions', icon: Film },

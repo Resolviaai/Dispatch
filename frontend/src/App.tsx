@@ -6,7 +6,7 @@ import { ClipsScreen } from './screens/ClipsScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { AdminScreen } from './screens/AdminScreen';
 import { BottomNav, TabType } from './components/BottomNav';
-import { RecordingItem, Bridge, apiUrl } from './bridge';
+import { RecordingItem, Bridge, apiUrl, getAuthHeaders } from './bridge';
 import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
 import { StudioWorkstation } from './studio/StudioWorkstation';
 import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
