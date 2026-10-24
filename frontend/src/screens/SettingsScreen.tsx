@@ -35,8 +35,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [inputHost, setInputHost] = useState(pcHost);
-  const [pairingCode, setPairingCode] = useState('');
-  const [acknowledgeHttpRisk, setAcknowledgeHttpRisk] = useState(false);
   const [isCreatingPairingCode, setIsCreatingPairingCode] = useState(false);
   const isNativeAndroid = Bridge.isAvailable();
 
@@ -154,27 +152,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
   };
 
-  const handleCreatePairingCode = async () => {
-    setIsCreatingPairingCode(true);
-    setFeedback(null);
-    try {
-      const res = await fetch(apiUrl('/api/integrations/youtube/pairing-code', pcHost), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ understands_http_risk: acknowledgeHttpRisk }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || 'Could not create a pairing code.');
-      }
-      setPairingCode(data.code);
-      setFeedback('Pairing code created. Enter it on the phone within five minutes.');
-    } catch (e: any) {
-      setFeedback(e.message || 'Could not create a pairing code.');
-    } finally {
-      setIsCreatingPairingCode(false);
-    }
-  };
 
   const handleDisconnectYouTube = () => {
     if (Bridge.isAvailable()) {
@@ -305,33 +282,22 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 <span>{isSavingHost ? 'Verifying Host...' : 'Save PC address'}</span>
               </button>
 
-              <label className="block text-xs font-mono text-text-main" htmlFor="youtube-pairing-code">
-                One-time code from PC Settings
-              </label>
-              <input
-                id="youtube-pairing-code"
-                value={pairingCode}
-                onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, '').slice(0, 4))}
-                placeholder="4-digit code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={4}
-                className="w-full min-h-[44px] rounded-lg bg-surface-200 border border-border px-3 text-center text-lg font-mono tabular-nums tracking-[0.3em] font-semibold text-text-main placeholder:text-text-muted"
-              />
-              <div className="rounded-lg bg-surface-200 border border-border p-3 flex gap-2">
-                <ShieldAlert size={16} className="shrink-0 text-warning" />
-                <p className="text-[10px] font-mono text-text-muted leading-relaxed">
-                  Pair only on a trusted network. This HTTP connection is not encrypted; the code authorizes sending your YouTube refresh token and client secret to this phone.
-                </p>
-              </div>
+              <p className="text-xs text-text-muted leading-relaxed">
+                Connect your own YouTube account with Google sign-in on this phone. Recordings upload to your channel as unlisted for PC processing.
+              </p>
               <button
                 onClick={handleConnectYouTube}
-                disabled={pairingCode.length !== 4}
-                className="w-full min-h-[44px] py-2.5 px-3 rounded-lg bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
+                className="w-full min-h-[44px] py-2.5 px-3 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
               >
-                <KeyRound size={16} />
-                <span>Pair this phone</span>
+                <Youtube size={16} />
+                <span>Connect YouTube (Google sign-in)</span>
               </button>
+              <div className="rounded-lg bg-surface-200 border border-border p-3 flex gap-2">
+                <ShieldAlert size={16} className="shrink-0 text-primary" />
+                <p className="text-[10px] text-text-muted leading-relaxed">
+                  You approve access in Google's own screen. Tokens stay encrypted on the PC backend - never over plain HTTP.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="space-y-2 pt-1">
@@ -350,47 +316,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           )}
 
           {youtubeState.connected && !isNativeAndroid && (
-            <div className="mt-3 rounded-lg bg-surface-200 border border-border p-3 space-y-2.5">
-              <div className="flex items-center gap-2">
-                <KeyRound size={16} className="text-primary" />
-                <span className="text-xs font-semibold text-text-main">Connect the phone</span>
-              </div>
-              <p className="text-[10px] font-mono text-text-muted leading-relaxed">
-                The one-time code expires in five minutes and works once. HTTP does not encrypt this transfer: the phone receives your YouTube refresh token and client secret. Use a trusted local network only.
+            <div className="mt-3 rounded-lg bg-surface-200 border border-border p-3">
+              <p className="text-[10px] text-text-muted leading-relaxed">
+                Phone pairing is retired. Each user connects YouTube inside the Dispatch app with their own Google sign-in.
               </p>
-              <label className="flex min-h-[44px] items-center gap-2 text-[10px] font-mono text-text-muted">
-                <input
-                  type="checkbox"
-                  checked={acknowledgeHttpRisk}
-                  onChange={(event) => setAcknowledgeHttpRisk(event.target.checked)}
-                  className="h-4 w-4 accent-blue-600"
-                />
-                I understand this credential transfer is unencrypted.
-              </label>
-              <button
-                onClick={handleCreatePairingCode}
-                disabled={!acknowledgeHttpRisk || isCreatingPairingCode}
-                className="w-full min-h-[44px] rounded-lg bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
-              >
-                <KeyRound size={16} />
-                {isCreatingPairingCode ? 'Creating code…' : 'Create phone pairing code'}
-              </button>
-              {pairingCode && (
-                <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-100 px-3 py-2">
-                  <span className="text-lg font-mono font-semibold tabular-nums tracking-[0.2em] text-text-main">{pairingCode}</span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard?.writeText(pairingCode);
-                      setFeedback('Pairing code copied. Enter it on the phone now.');
-                    }}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-text-muted hover:bg-surface-200 transition-all duration-150 active:scale-[0.98]"
-                    aria-label="Copy pairing code"
-                  >
-                    <Copy size={16} />
-                  </button>
-                  <span className="text-[10px] font-mono text-text-muted">Use within five minutes</span>
-                </div>
-              )}
             </div>
           )}
         </div>

@@ -204,11 +204,25 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     setImportError(null);
     setImportNotice(null);
     try {
-      const res = await fetch(apiUrl('/api/youtube/ingest', pcHost), {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ url: value })
-      });
+      // ANY-NETWORK SUBMISSION: signed-in users submit through the cloud Worker,
+      // so processing works from any network (the PC claims jobs from the cloud).
+      // The direct PC path remains for the owner's LAN as a fallback.
+      const { currentSession } = await import('../auth/supabase');
+      const sess = await currentSession();
+      let res: Response;
+      if (sess?.access_token) {
+        res = await fetch('https://dispatch-cloud.resolviaai.workers.dev/jobs/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
+          body: JSON.stringify({ url: value })
+        });
+      } else {
+        res = await fetch(apiUrl('/api/youtube/ingest', pcHost), {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ url: value })
+        });
+      }
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         // Truthful feedback only after the API responds; live progress appears in the imported list below.
@@ -216,7 +230,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         setImportNotice(
           data.status === 'already_processing'
             ? 'This video is already being processed — tracking it below.'
-            : 'Accepted — video queued for download and processing. Track progress below.'
+            : 'Accepted — queued in the cloud. Your PC picks it up automatically and processes it.'
         );
         if (!rawOverride) setImportUrl('');
       } else {
