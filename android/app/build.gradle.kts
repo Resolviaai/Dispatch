@@ -76,6 +76,8 @@ android {
    }
 
 dependencies {
+    // JVM unit tests: real org.json (Android's is a stub that throws "not mocked")
+    testImplementation("org.json:json:20231013")
     // Core Android & Lifecycle
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")

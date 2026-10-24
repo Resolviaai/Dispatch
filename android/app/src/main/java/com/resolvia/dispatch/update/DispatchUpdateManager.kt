@@ -30,7 +30,14 @@ object DispatchUpdateManager {
     /** Fixed official repository; every metadata/APK fetch must resolve here. */
     const val RELEASES_REPO: String = "Resolviaai/Dispatch"
     const val ALLOWED_HOST: String = "github.com"
-    const val ALLOWED_ASSET_HOST_SUFFIX: String = ".githubusercontent.com"
+    /** Exact permitted download hosts (release page + the two real asset CDN hosts).
+     *  Never constructed by concatenation: "objects." + ".githubusercontent.com"
+     *  produced the invalid host "objects..githubusercontent.com" (audit Bug 1). */
+    val ALLOWED_DOWNLOAD_HOSTS: Set<String> = setOf(
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    )
 
     const val APK_ASSET_NAME: String = "Dispatch.apk"
     const val MANIFEST_ASSET_NAME: String = "update.json"
@@ -121,9 +128,24 @@ object DispatchUpdateManager {
         return "https://$ALLOWED_HOST/$RELEASES_REPO/releases/download/$tag/$APK_ASSET_NAME"
     }
 
+    /** Parses the URL and accepts only HTTPS on the exact permitted hosts. A
+     *  github.com URL must also be under this repository's releases path; asset-CDN
+     *  hosts are accepted only for pathless signed-asset URLs (query strings allowed). */
     fun isAllowedDownloadUrl(url: String): Boolean {
-        return url.startsWith("https://$ALLOWED_HOST/$RELEASES_REPO/releases/") ||
-            url.startsWith("https://objects.$ALLOWED_ASSET_HOST_SUFFIX/")
+        val uri = try {
+            java.net.URI(url)
+        } catch (e: Exception) {
+            return false
+        }
+        if (!"https".equals(uri.scheme, ignoreCase = true)) return false
+        val host = uri.host?.lowercase() ?: return false
+        return when (host) {
+            "github.com" ->
+                uri.path?.startsWith("/$RELEASES_REPO/releases/") == true
+            "objects.githubusercontent.com", "release-assets.githubusercontent.com" ->
+                uri.path?.startsWith("/") == true
+            else -> false
+        }
     }
 
     /** Incremental SHA-256 of a downloaded file (never loads the APK into memory). */

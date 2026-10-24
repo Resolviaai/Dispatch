@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 /** Deterministic JVM tests for the updater's policy, parsing, and URL rules. */
@@ -103,22 +104,55 @@ class DispatchUpdateManagerTest {
             DispatchUpdateManager.apkUrlFor("../../evil")
             fail()
         } catch (_: IllegalArgumentException) { /* expected */ }
+        // legit asset-CDN redirect targets must be ACCEPTED (audit Bug 1 regression)
+        assertTrue(
+            DispatchUpdateManager.isAllowedDownloadUrl(
+                "https://objects.githubusercontent.com/releases/abc/Dispatch.apk?X=1"))
+        assertTrue(
+            DispatchUpdateManager.isAllowedDownloadUrl(
+                "https://release-assets.githubusercontent.com/1406999073/abc?sig=zz"))
+        // hostile lookalikes must be REJECTED
+        for (bad in listOf(
+            "https://objects..githubusercontent.com/x",
+            "https://objects.githubusercontent.com.evil.com/x",
+            "https://githubusercontent.com/x",
+            "https://objects.githubusercontents.com/x",
+            "https://github.com/Resolviaai/OtherRepo/releases/download/v1/x.apk",
+            "ftp://objects.githubusercontent.com/x",
+        )) {
+            assertFalse(bad, DispatchUpdateManager.isAllowedDownloadUrl(bad))
+        }
     }
 
     // --- identity constant agreement with the release script ---
     @Test fun `trusted fingerprint matches the release script pin`() {
-        val script = java.io.File("../scripts/prepare_release.ps1").readText()
+        var script: String? = null
+        for (up in 1..6) {
+            val f = java.io.File("../".repeat(up) + "scripts/prepare_release.ps1")
+            if (f.exists()) { script = f.readText(); break }
+        }
+        if (script == null) script = java.io.File("scripts/prepare_release.ps1").takeIf { it.exists() }?.readText()
+        assertNotNull("prepare_release.ps1 not found from test working dir", script)
+        assertTrue("release script must pin the same fingerprint",
+            script!!.contains(DispatchUpdateManager.TRUSTED_CERT_SHA256))
         assertTrue("release script must pin the same fingerprint",
             script.contains(DispatchUpdateManager.TRUSTED_CERT_SHA256))
     }
 
     // --- incremental hashing ---
     @Test fun `incremental sha256 matches known vector`() {
+        // Reader must SERVE the data once, then report EOF (-1). The previous fake
+        // returned the same bytes forever, so the digest loop never terminated
+        // (audit Bug 2) and the assertion only checked the digest's length.
         val data = "dispatch".toByteArray(Charsets.US_ASCII)
+        var served = false
         val digest = DispatchUpdateManager.sha256Of { buf ->
-            if (data.isEmpty()) -1 else { System.arraycopy(data, 0, buf, 0, data.size); data.size }
+            if (served) -1 else {
+                System.arraycopy(data, 0, buf, 0, data.size)
+                served = true
+                data.size
+            }
         }
-        // known sha256 of "dispatch"
-        assertEquals("8d3c8f4d1f3ecb0f2b8d1fdaea02cf8f70e5a9a3f8f6b6ee1a5a5d2db1c8f9d0".length, digest.length)
+        assertEquals("db8d1b6d64e4ec90ceb335fc4344e75799fdc20cd236d27cc85ed4783a33d3fa", digest)
     }
 }
