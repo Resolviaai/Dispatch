@@ -115,3 +115,5 @@ android/keystore/
 android/keystore.properties
 release-out/
 storage/tls/
+
+frontend/.env*

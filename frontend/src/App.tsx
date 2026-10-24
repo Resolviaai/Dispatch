@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { AuthGate } from './auth/AuthGate';
 import { CameraScreen } from './screens/CameraScreen';
 import { RecordingsScreen } from './screens/RecordingsScreen';
 import { ClipsScreen } from './screens/ClipsScreen';
@@ -266,7 +267,9 @@ export const App: React.FC = () => {
     );
   }
 
+  // Email/password gate: everything below renders only for an authenticated user.
   return (
+    <AuthGate>{(session) => (
     <div className={`h-[100dvh] w-full ${isNative && currentTab === 'record' ? 'bg-transparent' : 'bg-studio'} text-text-main flex flex-col items-center overflow-hidden p-0 md:py-2 md:px-3 font-sans`}>
       
       {/* DESKTOP REVIEW CONTROL HEADER (Layer 1: Surface 100) */}
@@ -390,5 +393,6 @@ export const App: React.FC = () => {
       </div>
 
     </div>
+    )}</AuthGate>
   );
 };

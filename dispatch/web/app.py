@@ -140,6 +140,32 @@ async def log_requests(request: Request, call_next):
 app.include_router(sync_router)
 
 
+def get_authenticated_user(request: Request) -> Dict[str, Any]:
+    """Identity boundary: verifies the Supabase JWT from the Authorization header
+    against Supabase itself (signature + expiry validated server-side by Supabase).
+    Returns {user_id, email}. Fails closed with 401 for missing/invalid tokens.
+    Loopback dashboard calls keep their existing device-token path."""
+    auth = request.headers.get("authorization") or ""
+    token = auth[7:] if auth.lower().startswith("bearer ") else None
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        import httpx
+        globals()['httpx'] = httpx  # patchable in tests
+        resp = httpx.get(
+            f"{os.getenv('SUPABASE_URL', '')}/auth/v1/user",
+            headers={"apikey": os.getenv("SUPABASE_ANON_KEY", ""), "Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+    except Exception as e:
+        logger.warning("Auth verification unavailable: %s", e)
+        raise HTTPException(status_code=503, detail="Auth service unreachable")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    user = resp.json()
+    return {"user_id": user.get("id", ""), "email": user.get("email", "")}
+
+
 def require_secure_credential_transport(request: Request, client_host: str) -> None:
     """P0 security invariant: YouTube refresh tokens / client secrets must never be
     returned to a NON-LOOPBACK caller over plaintext HTTP. Pairing codes gate WHO
@@ -2288,6 +2314,13 @@ async def disconnect_youtube(request: Request):
     if token_file.exists():
         token_file.unlink()
     return {"status": "success", "message": "YouTube account disconnected"}
+
+
+@app.get("/api/auth/session")
+async def auth_session(request: Request):
+    """Who am I? Verifies the app's Supabase session over the local link."""
+    user = get_authenticated_user(request)
+    return {"user_id": user["user_id"], "email": user["email"]}
 
 
 @app.api_route("/api/youtube/credentials", methods=["GET", "POST"])
