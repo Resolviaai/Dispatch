@@ -186,7 +186,7 @@ def start_dispatch(run_web: bool = True):
     if run_web:
         # Optional TLS (strongly recommended when pairing phones over LAN: the
         # credential endpoints refuse plaintext for non-loopback callers).
-        tls_files = _ensure_tls_certificates() if os.getenv("DISPATCH_WEB_TLS", "1") == "1" else None
+        tls_files = _ensure_tls_certificates() if os.getenv("DISPATCH_WEB_TLS", "0") == "1" else None
         scheme = "https" if tls_files else "http"
         logger.info("Launching Web Dashboard on %s://%s:%d", scheme, WEB_HOST, WEB_PORT)
         logger.info("Review clips on PC: %s://localhost:%d", scheme, WEB_PORT)
