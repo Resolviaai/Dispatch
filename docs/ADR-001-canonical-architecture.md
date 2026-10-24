@@ -64,3 +64,8 @@ is public (no secret). No token in URLs, logs, or browser storage.
 - Automatic LAN discovery as PC identity: unauthenticated — rejected.
 
 **Owner approval needed on:** D1–D4 as written, or amendments in chat.
+
+## Amendment 2 (2026-10-24) — Owner constraints: law of least power + Pareto
+- **Alpha worker topology simplified:** in the alpha there is exactly ONE processing worker — the owner's PC, holding an **admin-worker credential** (bound to the admin role, server-side authorized to process ALL users' jobs). Friends never receive worker tokens; their phones are plain authenticated clients. Friends' self-enrollment PCs are deferred until actually needed. This keeps the per-worker security model AND matches the product rule that friends don't need their own PCs.
+- **Least-power choices:** auth = Supabase Auth as-is (no custom auth backend); identity boundary = verify the Supabase JWT on the existing FastAPI routes (no new service); token vault = one encrypted store on the PC backend; review UI = the existing app screens; no hosted web app, no new frameworks, no speculative abstractions. Build only what an acceptance test needs.
+- **Build order per Pareto:** auth+isolation → admin minimal → on-device OAuth; each phase is demo-able and tested before the next.
