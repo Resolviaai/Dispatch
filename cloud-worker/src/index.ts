@@ -24,6 +24,8 @@ export interface Env {
   YOUTUBE_CLIENT_ID: string;
   YOUTUBE_CLIENT_SECRET: string;
   OAUTH_REDIRECT_URI: string;
+  ADMIN_EMAILS: string; // comma-separated allowlist (server-side only)
+  SITE_ORIGIN: string;  // e.g. https://resolviaai.github.io — CORS-pinned admin origin
 }
 
 const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
@@ -40,8 +42,15 @@ export function validateReserveInput(kind: string, mime: string, expectedBytes: 
   return null;
 }
 
-export function json(status: number, body: Record<string, unknown>): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+export function json(status: number, body: Record<string, unknown>, corsOrigin?: string): Response {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (corsOrigin) {
+    headers["Access-Control-Allow-Origin"] = corsOrigin;
+    headers["Access-Control-Allow-Headers"] = "authorization, content-type";
+    headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+    headers["Vary"] = "Origin";
+  }
+  return new Response(JSON.stringify(body), { status, headers });
 }
 
 // Table-valued Postgres RPCs come back from PostgREST as ARRAYS.
@@ -75,21 +84,21 @@ async function selectOne<T>(env: Env, table: string, id: string, columns: string
 }
 
 // ---------- auth ----------
-export async function authenticate(env: Env, request: Request): Promise<{ userId: string } | null> {
+export async function authenticate(env: Env, request: Request): Promise<{ userId: string; email: string } | null> {
   const auth = request.headers.get("Authorization") ?? "";
   if (!auth.startsWith("Bearer ")) return null;
   const token = auth.slice(7);
   if (env.DISPATCH_WORKER_TOKEN && token === env.DISPATCH_WORKER_TOKEN) {
     const uid = request.headers.get("X-Dispatch-User-Id");
     return uid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)
-      ? { userId: uid } : null;
+      ? { userId: uid, email: "" } : null;
   }
   const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return null;
-  const user = (await res.json()) as { id?: string };
-  return user.id ? { userId: user.id } : null;
+  const user = (await res.json()) as { id?: string; email?: string };
+  return user.id ? { userId: user.id, email: user.email ?? "" } : null;
 }
 
 // ---------- R2 presign (aws4fetch: service s3, region auto, explicit X-Amz-Expires) ----------
@@ -196,6 +205,52 @@ export default {
         }
         return runCleanup(env);
       }
+
+    // ---- Web admin panel (served from the pinned site origin; server-side allowlist) ----
+    const adminOrigin = env.SITE_ORIGIN || "";
+    if (url.pathname.startsWith("/admin/") || url.pathname === "/admin") {
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: {
+          "Access-Control-Allow-Origin": adminOrigin,
+          "Access-Control-Allow-Headers": "authorization, content-type",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Max-Age": "86400",
+          "Vary": "Origin",
+        }});
+      }
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" }, adminOrigin);
+      const admins = (env.ADMIN_EMAILS || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+      if (!admins.includes(user.email.toLowerCase())) {
+        return json(403, { error: "admin access required" }, adminOrigin);
+      }
+      const S = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" };
+
+      if (url.pathname === "/admin/whoami" && request.method === "GET") {
+        return json(200, { is_admin: true, email: user.email }, adminOrigin);
+      }
+      if (url.pathname === "/admin/users" && request.method === "GET") {
+        const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?per_page=100`, { headers: S });
+        if (!res.ok) return json(502, { error: `list failed: ${res.status}` }, adminOrigin);
+        const data = await res.json() as { users?: Array<Record<string, unknown>> };
+        const users = (data.users ?? []).map(u => ({
+          id: u.id, email: u.email, created_at: u.created_at,
+          last_sign_in: u.last_sign_in_at, banned: !!u.banned_until,
+        }));
+        return json(200, { users }, adminOrigin); // operational metadata only, no tokens
+      }
+      const banMatch = url.pathname.match(/^\/admin\/users\/([0-9a-fA-F-]{36})\/(ban|unban)$/);
+      if (banMatch && request.method === "POST") {
+        const [, uid, action] = banMatch;
+        const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${uid}`, {
+          method: "PUT", headers: S,
+          body: JSON.stringify({ ban_duration: action === "ban" ? "876000h" : "none" }),
+        });
+        if (!res.ok) return json(502, { error: `${action} failed: ${res.status}` }, adminOrigin);
+        return json(200, { status: action === "ban" ? "banned" : "active" }, adminOrigin);
+      }
+      return json(404, { error: "not found" }, adminOrigin);
+    }
 
     // ---- On-device YouTube OAuth (authenticated via Supabase JWT only) ----
     if (url.pathname === "/oauth/google/start" && request.method === "GET") {

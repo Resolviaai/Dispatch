@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dispatch — Admin</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root{--bg:#161616;--surface:#1C1C1C;--border:#2E2E2E;--well:#232323;--primary:#2563EB;--primary-h:#3B82F6;--text:#F5F5F5;--muted:#A3A3A3;--ok:#22C55E;--bad:#EF4444;--warn:#F59E0B}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;line-height:1.6;min-height:100vh}
+.wrap{max-width:760px;margin:0 auto;padding:24px 20px 60px}
+h1{font-size:20px;display:flex;align-items:center;gap:10px;margin-bottom:4px}
+h1 .badge{font-size:11px;background:var(--primary);color:#fff;border-radius:6px;padding:2px 8px;font-weight:600}
+.sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+input{width:100%;min-height:46px;background:var(--well);border:1px solid var(--border);border-radius:10px;padding:0 12px;color:var(--text);font-size:14px}
+input:focus{outline:none;border-color:var(--primary)}
+button{min-height:46px;padding:0 16px;border-radius:10px;border:none;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
+button:active{transform:scale(.98)}
+.primary{background:var(--primary);color:#fff;width:100%;margin-top:14px}
+.primary:hover{background:var(--primary-h)}
+.ghost{background:var(--well);color:var(--text);border:1px solid var(--border)}
+.err{color:var(--bad);font-size:13px;margin-top:10px}
+.ok{color:var(--ok);font-size:13px;margin-top:10px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
+.row:last-child{border-bottom:none}
+.row .em{font-size:14px;font-weight:500;word-break:break-all}
+.row .meta{font-size:11.5px;color:var(--muted)}
+.pill{font-size:11px;padding:2px 10px;border-radius:999px;font-weight:600}
+.pill.on{background:rgba(34,197,94,.12);color:var(--ok);border:1px solid rgba(34,197,94,.35)}
+.pill.off{background:rgba(239,68,68,.12);color:var(--bad);border:1px solid rgba(239,68,68,.35)}
+.act{min-height:40px;font-size:12px;background:var(--well);color:var(--text);border:1px solid var(--border)}
+.act.danger{border-color:rgba(239,68,68,.4);color:var(--bad)}
+.hidden{display:none}
+#status{margin-top:14px;font-size:13px}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.linkback{color:var(--muted);font-size:12px;text-decoration:none}
+.linkback:hover{color:var(--primary-h)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1><span class="badge">ADMIN</span> Dispatch Admin</h1>
+    <a class="linkback" href="index.html">← Site</a>
+  </div>
+  <p class="sub">Sign in with your admin account. Access is enforced server-side by allowlist.</p>
+
+  <div id="login" class="card">
+    <label for="em">Email</label>
+    <input id="em" type="email" autocomplete="username">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password">
+    <button class="primary" id="btn">Sign in</button>
+    <p id="loginMsg" class="err"></p>
+  </div>
+
+  <div id="panel" class="hidden">
+    <div class="card">
+      <div class="top">
+        <span class="pill on">Allowlisted admin</span>
+        <button class="ghost act" id="out">Sign out</button>
+      </div>
+      <p class="sub" style="margin:8px 0 0">Registered accounts. Disable blocks sign-in immediately; data is preserved.</p>
+      <div id="users"><p class="sub">Loading…</p></div>
+      <p id="status"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://aldzlbdxplqkcnyjhzmm.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZHpsbGR4cGxxcWtjbnlqaHptbSIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzkyNzQ1ODIyLCJleHAiOjIxMDgzMjE4MjJ9.6wwdz6wIbm8YFVQyKyXpuw3Wub2dMfG5Fq-Z83iD9Mw";
+const WORKER = "https://dispatch-cloud.resolviaai.workers.dev";
+let access_token = sessionStorage.getItem("admin_tok") || "";
+
+const $ = id => document.getElementById(id);
+async function api(path, opts = {}) {
+  const res = await fetch(WORKER + path, {
+    ...opts,
+    headers: { "Authorization": "Bearer " + access_token, "Content-Type": "application/json", ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+  return body;
+}
+
+async function loadUsers() {
+  $("users").innerHTML = '<p class="sub">Loading…</p>';
+  try {
+    const { users } = await api("/admin/users");
+    if (!users.length) { $("users").innerHTML = '<p class="sub">No registered users yet.</p>'; return; }
+    $("users").innerHTML = users.map(u => `
+      <div class="row">
+        <div>
+          <div class="em">${(u.email || u.id).replace(/</g, "&lt;")}</div>
+          <div class="meta">${u.banned ? "Disabled" : "Active"} · joined ${String(u.created_at || "").slice(0, 10)}${u.last_sign_in ? " · last seen " + String(u.last_sign_in).slice(0, 10) : ""}</div>
+        </div>
+        <span class="pill ${u.banned ? "off" : "on"}">${u.banned ? "Disabled" : "Active"}</span>
+        ${u.banned
+          ? `<button class="act" data-uid="${u.id}" data-act="unban">Enable</button>`
+          : `<button class="act danger" data-uid="${u.id}" data-act="ban">Disable</button>`}
+      </div>`).join("");
+  } catch (e) {
+    $("users").innerHTML = "";
+    $("status").innerHTML = '<span class="err">' + e.message.replace(/</g, "&lt;") + '</span>';
+    if (/unauthorized/i.test(e.message)) showLogin();
+  }
+}
+
+$("users").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-uid]");
+  if (!btn) return;
+  const { uid, act } = btn.dataset;
+  if (act === "ban" && !confirm("Disable this account? They will be signed out and blocked from signing in. Their data is preserved.")) return;
+  btn.disabled = true;
+  try {
+    await api("/admin/users/" + uid + "/" + act, { method: "POST" });
+    $("status").innerHTML = '<span class="ok">Account ' + (act === "ban" ? "disabled" : "enabled") + '.</span>';
+    loadUsers();
+  } catch (e) {
+    $("status").innerHTML = '<span class="err">' + e.message.replace(/</g, "&lt;") + '</span>';
+  }
+});
+
+function showLogin() { $("login").classList.remove("hidden"); $("panel").classList.add("hidden"); }
+function showPanel() { $("login").classList.add("hidden"); $("panel").classList.remove("hidden"); loadUsers(); }
+
+$("btn").addEventListener("click", async () => {
+  $("loginMsg").textContent = "";
+  const res = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+    method: "POST",
+    headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: $("em").value.trim(), password: $("pw").value }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) {
+    $("loginMsg").textContent = data.error_description || data.msg || "Sign-in failed";
+    return;
+  }
+  access_token = data.access_token;
+  sessionStorage.setItem("admin_tok", access_token);
+  try {
+    await api("/admin/whoami"); // server-side allowlist check
+    showPanel();
+  } catch (e) {
+    showLogin();
+    $("loginMsg").textContent = "This account is not an admin.";
+  }
+});
+$("out").addEventListener("click", () => { sessionStorage.removeItem("admin_tok"); access_token = ""; showLogin(); });
+
+if (access_token) { showPanel(); } else { showLogin(); }
+</script>
+</body>
+</html>
