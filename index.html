@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dispatch — Record once. Get ready-to-post clips.</title>
+<meta name="description" content="Dispatch records long talking sessions on your phone, processes them on your Windows PC with AI, and hands back short, captioned vertical clips ready to publish. Invite-only alpha.">
+<meta property="og:title" content="Dispatch — Record once. Get ready-to-post clips.">
+<meta property="og:description" content="Phone recording + PC AI processing = ready-to-post short clips. Android alpha now available.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#161616">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root{--bg:#161616;--surface:#1C1C1C;--border:#2E2E2E;--well:#232323;--well2:#282828;--primary:#2563EB;--primary-h:#3B82F6;--text:#F5F5F5;--muted:#A3A3A3;--ok:#22C55E;--warn:#F59E0B}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{border-bottom:1px solid var(--border);padding:18px 0}
+.nav{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px}
+.logo{width:32px;height:32px;border-radius:8px;background:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+main{padding:56px 0 0}
+.hero{text-align:center;max-width:720px;margin:0 auto 48px}
+.hero h1{font-size:clamp(30px,6vw,52px);line-height:1.15;font-weight:700;letter-spacing:-.02em;margin-bottom:16px}
+.hero h1 span{color:var(--primary-h)}
+.hero p{font-size:clamp(15px,2.5vw,18px);color:var(--muted);max-width:560px;margin:0 auto 28px}
+.cta{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:0 28px;background:var(--primary);color:#fff;font-size:16px;font-weight:600;border-radius:12px;text-decoration:none;box-shadow:0 0 40px rgba(37,99,235,.25);transition:all .15s}
+.cta:hover{background:var(--primary-h)}
+.cta:active{transform:scale(.98)}
+.cta-sub{display:block;margin-top:12px;font-size:12px;color:var(--muted)}
+.badge{display:inline-block;font-size:12px;font-weight:600;color:var(--warn);border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.08);border-radius:999px;padding:4px 12px;margin-bottom:18px}
+section{padding:48px 0;border-top:1px solid var(--border)}
+h2{font-size:clamp(22px,4vw,30px);font-weight:600;margin-bottom:8px;text-align:center}
+.sub{color:var(--muted);text-align:center;max-width:560px;margin:0 auto 36px;font-size:15px}
+.steps{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.steps{grid-template-columns:repeat(3,1fr)}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px}
+.card .num{font-size:12px;font-weight:600;color:var(--primary-h);margin-bottom:10px;display:block}
+.card h3{font-size:17px;font-weight:600;margin-bottom:8px}
+.card p{font-size:14px;color:var(--muted)}
+.card ul{list-style:none;margin-top:10px}
+.card li{font-size:13px;color:var(--muted);padding:5px 0 5px 22px;position:relative}
+.card li::before{content:"";position:absolute;left:0;top:11px;width:8px;height:8px;border-radius:50%;background:var(--primary)}
+.card li.no::before{background:var(--warn)}
+.requirements{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.requirements{grid-template-columns:1fr 1fr}}
+.note{background:var(--well);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:13.5px;color:var(--muted)}
+.note strong{color:var(--text)}
+.link{color:var(--primary-h);text-decoration:none;font-weight:500}
+.link:hover{text-decoration:underline}
+.faq{max-width:720px;margin:0 auto}
+.faq .q{font-size:15px;font-weight:600;margin-bottom:6px}
+.faq .a{font-size:14px;color:var(--muted);margin-bottom:22px}
+.download-cta{text-align:center;padding:64px 0}
+footer{border-top:1px solid var(--border);padding:32px 0 40px;font-size:12.5px;color:var(--muted)}
+footer .cols{display:grid;grid-template-columns:1fr;gap:20px}
+@media(min-width:760px){footer .cols{grid-template-columns:2fr 1fr 1fr}}
+footer h4{color:var(--text);font-size:13px;margin-bottom:8px}
+footer a{color:var(--muted);text-decoration:none;display:block;padding:3px 0}
+footer a:hover{color:var(--primary-h)}
+.skip{position:absolute;left:-9999px}
+.skip:focus{left:0;top:0;background:var(--primary);color:#fff;padding:10px 16px;z-index:99;border-radius:0 0 8px 0}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <div class="wrap nav">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
+      Dispatch
+    </div>
+    <a class="link" href="#how-it-works">How it works</a>
+  </div>
+</header>
+<main id="main" class="wrap">
+  <div class="hero">
+    <span class="badge">Invite-only alpha</span>
+    <h1>Record once.<br>Get <span>ready-to-post</span> clips.</h1>
+    <p>Dispatch records your long talking sessions on your phone, edits them into short captioned vertical clips on your own Windows PC, and hands them back for review — nothing to edit manually.</p>
+    <a class="cta" href="https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk" download>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download the Android app
+    </a>
+    <span class="cta-sub">Alpha 1.1.5 &middot; ~11&nbsp;MB &middot; Android 8.0+ &middot; <a class="link" href="#install">install help</a></span>
+  </div>
+
+  <section id="how-it-works">
+    <h2>How it works</h2>
+    <p class="sub">Your phone records. Your PC does the heavy lifting. You just review and approve.</p>
+    <div class="steps">
+      <div class="card">
+        <span class="num">STEP 1 — PHONE</span>
+        <h3>Record your session</h3>
+        <p>Open Dispatch and talk as long as you like. Recording survives screen-off and interruptions; finished sessions upload to your own YouTube channel as private-to-you unlisted footage.</p>
+      </div>
+      <div class="card">
+        <span class="num">STEP 2 — WINDOWS PC</span>
+        <h3>AI processes locally</h3>
+        <p>The Dispatch companion on your Windows PC fetches the session, transcribes it, and its AI picks the strongest moments. Your PC renders finished vertical clips with burned-in captions — no video leaves your machine unprocessed.</p>
+      </div>
+      <div class="card">
+        <span class="num">STEP 3 — REVIEW</span>
+        <h3>Approve &amp; publish</h3>
+        <p>Check each suggested clip, fine-tune the selected range if you want, then approve. Approved clips render exactly as previewed and upload to YouTube from your PC.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="requirements">
+    <h2>What you need</h2>
+    <p class="sub">Dispatch is a two-part system: the phone app plus a companion app on your own Windows PC.</p>
+    <div class="requirements">
+      <div class="card">
+        <h3>Android phone</h3>
+        <ul>
+          <li>Android 8.0 (Oreo) or newer</li>
+          <li>Camera and microphone permission</li>
+          <li>A Google/YouTube account for session uploads</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Windows PC companion</h3>
+        <ul>
+          <li>Windows 10/11 PC on the same Wi-Fi</li>
+          <li>Python 3.11 installed from <a class="link" href="https://github.com/Resolviaai/Dispatch" target="_blank" rel="noopener">the Dispatch repository</a></li>
+          <li>FFmpeg (the setup guide walks you through it)</li>
+          <li>Your own Gemini API key for AI clip selection</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="alpha">
+    <h2>Alpha limitations — the honest list</h2>
+    <p class="sub">This is an early invite-only alpha. Here is exactly what works and what does not yet.</p>
+    <div class="requirements">
+      <div class="card">
+        <h3>Working today</h3>
+        <ul>
+          <li>Phone recording with rolling segments and crash recovery</li>
+          <li>Session upload to your own YouTube channel</li>
+          <li>PC download, transcription, and AI highlight selection</li>
+          <li>Clip review with range editing, then render and YouTube publish</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Not finished yet</h3>
+        <ul>
+          <li class="no">Cloud review from anywhere — currently review happens on your PC</li>
+          <li class="no">Publishing targets beyond YouTube (Instagram, LinkedIn, X are planned)</li>
+          <li class="no">Processing of other people's private videos — only your own uploads and public/unlisted URLs</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Installing the app</h2>
+    <div class="faq">
+      <p class="q">Android blocked the install with "unknown sources"</p>
+      <p class="a">That is expected for any app outside the Play Store. Tap <strong>Settings → Allow from this source</strong> in the dialog (it only trusts this one download), then tap Install again. If it says <em>"App not installed"</em> and you previously installed an early test build of Dispatch, first uninstall the old app (long-press its icon → Uninstall) and install this download again — the first public build uses a new secure signature, and Android never updates across different signatures. Uninstalling clears the old app’s local data, so re-pair it with your PC afterwards.</p>
+      <p class="q">Where is the Windows companion?</p>
+      <p class="a">Clone or download <a class="link" href="https://github.com/Resolviaai/Dispatch" target="_blank" rel="noopener">the Dispatch repository</a> on your PC and follow the README setup steps. The phone app needs the PC companion running on your Wi-Fi to process sessions.</p>
+      <p class="q">Something broke — who do I ask?</p>
+      <p class="a">Open an issue on <a class="link" href="https://github.com/Resolviaai/Dispatch/issues" target="_blank" rel="noopener">the GitHub issue tracker</a> and include what you were doing plus any error text.</p>
+    </div>
+  </section>
+
+  <section class="download-cta">
+    <h2>Ready to try it?</h2>
+    <p class="sub">Alpha 1.1.5 — adds in-app sign-in and connect-YouTube-from-phone. Signed; installs over previous alphas.</p>
+    <a class="cta" href="https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk" download>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download Dispatch.apk
+    </a>
+  </section>
+</main>
+<footer>
+  <div class="wrap cols">
+    <div>
+      <h4>Dispatch</h4>
+      <p>Record once, publish clips. Personal video processing that stays on your own hardware: your phone records, your PC renders, your accounts publish. We never sell or train on your content.</p>
+    </div>
+    <div>
+      <h4>Product</h4>
+      <a href="#how-it-works">How it works</a>
+      <a href="#requirements">Requirements</a>
+      <a href="https://github.com/Resolviaai/Dispatch/releases">Releases</a>
+    </div>
+    <div>
+      <h4>Help</h4>
+      <a href="https://github.com/Resolviaai/Dispatch/issues">Report an issue</a>
+      <a href="admin.html">Admin</a>
+      <a href="https://github.com/Resolviaai/Dispatch#readme">Setup guide</a>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top:24px">&copy; 2026 Resolviaai &middot; Dispatch is invite-only alpha software.</div>
+</footer>
+</body>
+</html>
