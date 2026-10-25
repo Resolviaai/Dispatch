@@ -168,6 +168,9 @@
   .chip-warning { background-color: var(--tint-warning-bg); color: var(--tint-warning-fg); border-color: var(--tint-warning-line); }
   .chip-danger { background-color: var(--tint-danger-bg); color: var(--tint-danger-fg); border-color: var(--tint-danger-line); }
   .chip-info { background-color: var(--tint-info-bg); color: var(--tint-info-fg); border-color: var(--tint-info-line); }
+  /* Selected filter chip: accent-soft in dark, full black inversion in light (YouTube pattern). */
+  .chip-selected { background-color: var(--ds-accent-soft); color: var(--ds-accent); }
+  [data-theme="light"] .chip-selected { background-color: #0F0F0F; color: #FFFFFF; }
   .text-status-success { color: var(--tint-success-fg); }
   .text-status-warning { color: var(--tint-warning-fg); }
   .text-status-danger { color: var(--tint-danger-fg); }

@@ -189,6 +189,18 @@ function formatTimeCode(sec: number): string {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
+function formatAge(createdAt?: string): string {
+  if (!createdAt) return '';
+  const t = new Date(createdAt).getTime();
+  if (Number.isNaN(t)) return '';
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.floor(hrs / 24) + 'd ago';
+}
+
 function getRetentionDaysLeft(publishedAt?: string): number {
   if (!publishedAt) return 7;
   const pubDate = new Date(publishedAt).getTime();
@@ -2134,168 +2146,134 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // =========================================================================
   const renderLibraryView = () => (
     <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
-      {/* 1. COMPACT HEADER */}
-      <header className="shrink-0 px-3.5 pt-3 pb-2 border-b border-border bg-canvas z-20">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center shrink-0">
-              <Film size={15} className="text-primary" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-semibold tracking-tight text-text-main truncate leading-tight">
-                  Clips
-                </h1>
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono tabular-nums border ${
-                  (isPcOnline ?? !connectionError)
-                    ? 'chip-success border'
-                    : 'chip-danger border'
-                }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full bg-current ${(isPcOnline ?? !connectionError) ? 'text-status-success' : 'text-status-danger'}`} />
-                  {(isPcOnline ?? !connectionError) ? 'Studio Online' : 'Offline'}
-                </span>
-              </div>
-              <p className="text-xs text-text-secondary truncate">
-                {readyClips.length} ready to review &bull; {allClips.length} total from {uniqueSessionCount} session{uniqueSessionCount === 1 ? '' : 's'}
-              </p>
-            </div>
+      {/* HEADER — title + metadata, ghost circular refresh (same shape as every icon button) */}
+      <header className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas z-20">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
+              Clips
+            </h1>
+            <p className="text-xs text-text-muted mt-0.5 tabular-nums truncate">
+              {(isPcOnline ?? !connectionError) ? 'Studio online' : 'Offline'} &middot; {readyClips.length} ready &middot; {allClips.length} total
+            </p>
           </div>
-
           <button
             type="button"
             onClick={fetchClips}
             disabled={isLoading}
-            className="min-h-[44px] min-w-[44px] rounded-xl bg-surface-200 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95] transition-all"
-            title="Refresh clips"
+            aria-label="Refresh clips"
+            className="w-11 h-11 -mr-2 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
           >
-            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+            <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
           </button>
         </div>
 
-        {/* 2. STATUS / FILTER TABS */}
-        <div className="mt-2.5 flex items-center gap-1.5">
+        {/* FILTER CHIPS — uniform pills, YouTube selected-chip inversion */}
+        <div className="mt-3 flex items-center gap-2 overflow-x-auto no-scrollbar">
           {[
             { id: 'ready' as FilterStatus, label: 'Ready', count: readyClips.length },
             { id: 'approved' as FilterStatus, label: 'Uploaded', count: approvedClips.length },
             { id: 'all' as FilterStatus, label: 'All', count: allClips.length },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setFilterStatus(tab.id)}
-              className={`min-h-[32px] px-3 rounded-full border text-[13px] font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all ${filterStatus === tab.id
-                ? 'bg-primary-soft border-primary/40 text-primary'
-                : 'bg-surface-200 border-border text-text-secondary hover:text-text-main'
+          ].map((chip) => {
+            const isSelected = filterStatus === chip.id;
+            return (
+              <button
+                key={chip.id}
+                type="button"
+                onClick={() => setFilterStatus(chip.id)}
+                aria-pressed={isSelected}
+                className={`h-8 shrink-0 px-3 rounded-full text-[13px] font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                  isSelected
+                    ? 'chip-selected'
+                    : 'bg-surface-2 text-text-secondary hover:text-text-main'
                 }`}
-            >
-              <span>{tab.label}</span>
-              <span className="font-mono tabular-nums text-[10px] px-1.5 py-0.2 rounded-full bg-surface-300">
-                {tab.count}
-              </span>
-            </button>
-          ))}
+              >
+                <span>{chip.label}</span>
+                <span className="tabular-nums text-xs opacity-70">{chip.count}</span>
+              </button>
+            );
+          })}
         </div>
       </header>
 
-      {/* 4.2 BACKLOG QUEUE DEPTH ALERT BANNER */}
+      {/* BACKLOG — flat notice line, not a card */}
       {queueStats && queueStats.queued_count > 0 && (
-        <div className="shrink-0 mx-3.5 mt-2.5 p-2.5 rounded-xl bg-surface-200 border chip-warning flex items-center justify-between gap-2.5 z-20">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-6 h-6 rounded-lg chip-warning border flex items-center justify-center shrink-0">
-              <Clock size={13} className="text-amber-400" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[12px] font-semibold text-text-main truncate">
-                <span className="font-mono tabular-nums">{queueStats.ready_count}</span> clips ready &middot;{' '}
-                <span className="text-status-warning font-mono tabular-nums">{queueStats.queued_count}</span> queued for tomorrow's reset
-              </p>
-              <p className="text-[10px] text-text-muted font-mono tabular-nums">
-                Daily free tier quota ({queueStats.daily_quota_used}/{queueStats.daily_quota_max} requests) reached &middot; FIFO auto-drain at midnight UTC
-              </p>
-            </div>
-          </div>
-          <span className="shrink-0 text-[10px] font-mono uppercase px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/25 text-amber-400">
-            Backlog Active
-          </span>
+        <div className="shrink-0 px-4 py-2 bg-surface-2 border-b border-border flex items-center justify-between gap-3">
+          <p className="text-xs text-text-secondary tabular-nums truncate">
+            <span className="text-status-warning font-medium">{queueStats.queued_count} queued</span>
+            {' '}&middot; daily quota {queueStats.daily_quota_used}/{queueStats.daily_quota_max} &middot; auto-drains at midnight UTC
+          </p>
+          <span className="shrink-0 text-xs font-medium text-status-warning">Backlog</span>
         </div>
       )}
 
-      {/* SESSION FILTER ACTIVE BANNER */}
+      {/* SESSION FILTER — flat strip */}
       {sessionFilter && (
-        <div className="shrink-0 px-3.5 py-2 bg-primary/10 border-b border-primary/25 flex items-center justify-between gap-2 z-20">
-          <div className="flex items-center gap-2 min-w-0 text-xs font-mono text-primary">
-            <Sparkles size={13} className="shrink-0" />
-            <span className="truncate">
-              Filtering session: <span className="text-text-main font-semibold">{sessionFilter}</span> ({filteredClips.length}&nbsp;{filteredClips.length === 1 ? 'clip' : 'clips'})
-            </span>
-          </div>
+        <div className="shrink-0 px-4 py-2 bg-primary-soft border-b border-primary/25 flex items-center justify-between gap-3">
+          <span className="text-xs text-primary truncate">
+            Session {sessionFilter.replace('sess_', '')} &middot; {filteredClips.length}&nbsp;{filteredClips.length === 1 ? 'clip' : 'clips'}
+          </span>
           {onClearSessionFilter && (
             <button
               type="button"
               onClick={onClearSessionFilter}
-              className="shrink-0 px-2.5 py-1 rounded-md bg-surface-200 hover:bg-surface-300 border border-border text-[11px] font-mono text-text-muted hover:text-text-main flex items-center gap-1 active:scale-[0.98] transition-all"
+              className="shrink-0 min-h-[32px] px-3 rounded-full bg-surface-2 text-xs font-medium text-text-secondary hover:text-text-main flex items-center gap-1 active:scale-[0.98] transition-all"
             >
               <X size={12} />
-              <span>Show All Clips</span>
+              Show all
             </button>
           )}
         </div>
       )}
 
-      {/* FEEDBACK BANNER */}
+      {/* FEEDBACK — flat strip */}
       {feedback && (
-        <div className="mx-3 mt-2 shrink-0 px-3 py-2 rounded-xl bg-surface-100 border border-border flex items-center justify-between text-[11px] text-text-secondary">
-          <div className="flex items-center gap-2 truncate">
-            <CheckCircle2 size={14} className="text-primary shrink-0" />
-            <span className="truncate">{feedback}</span>
-          </div>
-          <button type="button" onClick={() => setFeedback(null)} className="text-text-muted hover:text-text-main">
-            <X size={12} />
+        <div className="shrink-0 px-4 py-2 bg-surface-2 border-b border-border flex items-center justify-between gap-3">
+          <span className="text-xs text-text-secondary truncate">{feedback}</span>
+          <button type="button" onClick={() => setFeedback(null)} aria-label="Dismiss" className="text-text-muted hover:text-text-main">
+            <X size={14} />
           </button>
         </div>
       )}
 
-      {/* 3. VERTICALLY SCROLLABLE CLIPS LIST */}
-      <main className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-4 pb-28">
+      {/* CLIP LIST — flat rows on canvas, separated by dividers (no cards) */}
+      <main className="flex-1 min-h-0 overflow-y-auto pb-24">
         {isLoading && allClips.length === 0 ? (
-          /* Loading Skeletons */
-          <div className="space-y-3">
+          <div className="px-4 divide-y divide-border">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-28 rounded-2xl bg-surface-100 border border-border animate-pulse p-3 flex gap-3">
-                <div className="w-16 h-full rounded-xl bg-surface-200" />
-                <div className="flex-1 space-y-2 py-1">
-                  <div className="h-4 bg-surface-200 rounded w-3/4" />
-                  <div className="h-3 bg-surface-200 rounded w-1/2" />
-                  <div className="h-3 bg-surface-200 rounded w-1/3" />
+              <div key={i} className="py-3 flex gap-3 animate-pulse">
+                <div className="w-[132px] aspect-video rounded-lg bg-surface-2 shrink-0" />
+                <div className="flex-1 space-y-2 py-0.5">
+                  <div className="h-4 bg-surface-2 rounded w-11/12" />
+                  <div className="h-3 bg-surface-2 rounded w-1/2" />
+                  <div className="h-3 bg-surface-2 rounded w-1/3" />
                 </div>
               </div>
             ))}
           </div>
         ) : filteredClips.length === 0 ? (
           connectionError ? (
-            /* Connection Error State */
             <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
-              <div className="w-16 h-16 rounded-2xl bg-surface-100 border chip-danger flex items-center justify-center mb-4 text-status-danger">
-                <WifiOff size={26} />
+              <div className="w-16 h-16 rounded-full bg-surface-2 border chip-danger flex items-center justify-center mb-4 text-status-danger">
+                <WifiOff size={24} />
               </div>
               <h2 className="text-base font-semibold tracking-tight text-text-main">Cannot connect to PC Studio</h2>
               <p className="text-sm text-text-secondary mt-1.5 max-w-[290px] leading-relaxed">
-                Attempting to reach <span className="font-mono text-text-main">{pcHost}</span>. Ensure your PC Dispatch server is running and both devices are on the same Wi-Fi network.
+                Attempting to reach <span className="font-mono text-text-main">{pcHost}</span>. Ensure the Dispatch server is running and both devices are on the same Wi-Fi network.
               </p>
               <button
                 type="button"
                 onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
+                className="mt-5 min-h-[44px] px-6 rounded-full bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
               >
                 <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
-                <span>Retry Connection</span>
+                <span>Retry</span>
               </button>
             </div>
           ) : (
-            /* Normal Empty State */
             <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
-              <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-4 text-text-muted">
-                <Film size={26} />
+              <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
+                <Film size={24} />
               </div>
               <h2 className="text-base font-semibold tracking-tight text-text-main">No clips yet</h2>
               <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
@@ -2304,64 +2282,50 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <button
                 type="button"
                 onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-5 rounded-xl bg-surface-200 border border-border text-sm font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
+                className="mt-5 min-h-[44px] px-6 rounded-full bg-surface-2 text-sm font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
               >
                 <RefreshCw size={15} />
-                <span>Refresh Clips</span>
+                <span>Refresh</span>
               </button>
             </div>
           )
         ) : (
-          /* Grouped Sessions */
           groupedSessions.map(([sessionId, clipsInSession]) => (
-            <div key={sessionId} className="space-y-2">
-              {/* Session Group Header */}
-              <div className="flex items-center justify-between px-1">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-text-secondary">
-                  <Layers size={13} className="text-primary shrink-0" />
-                  <span className="font-mono">{sessionId.replace('sess_', 'Session ')}</span>
-                </div>
-                <span className="font-mono tabular-nums text-[10px] text-text-muted">
-                  {clipsInSession.length}&nbsp;clip{clipsInSession.length === 1 ? '' : 's'}
+            <section key={sessionId}>
+              {/* Session section header — plain text, no card */}
+              <div className="px-4 pt-4 pb-1 flex items-center justify-between">
+                <span className="text-xs font-medium uppercase tracking-wider text-text-muted">
+                  Session {sessionId.replace('sess_', '')}
+                </span>
+                <span className="text-xs text-text-muted tabular-nums">
+                  {clipsInSession.length}&nbsp;{clipsInSession.length === 1 ? 'clip' : 'clips'}
                 </span>
               </div>
 
-              {/* Clip Cards */}
-              <div className="space-y-2">
+              <div className="px-4 divide-y divide-border">
                 {clipsInSession.map((clip) => {
                   const isReady = clip.status === 'ready_review';
                   const isUploaded = clip.status === 'approved' || clip.status === 'published';
-                  const youtubeUrl = clip.remote_url || (clip.remote_id ? `https://youtu.be/${clip.remote_id}` : null);
+                  const youtubeUrl = clip.remote_url || (clip.remote_id ? 'https://youtu.be/' + clip.remote_id : null);
                   const daysLeft = getRetentionDaysLeft(clip.published_at);
-
-                  const handleCardClick = () => {
-                    if (clip.is_cloud_only && youtubeUrl) {
-                      window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
-                      return;
-                    }
-                    setSelectedClipId(clip.id);
-                    setViewMode('detail');
-                  };
+                  const age = formatAge(clip.created_at);
 
                   return (
                     <div
                       key={clip.id}
-                      onClick={handleCardClick}
-                      className="group w-full rounded-2xl bg-surface-100 hover:bg-surface-200/60 border border-border hover:border-border-strong p-2.5 flex items-stretch gap-3 cursor-pointer active:scale-[0.99] transition-all shadow-sm"
+                      onClick={() => {
+                        if (clip.is_cloud_only && youtubeUrl) {
+                          window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
+                          return;
+                        }
+                        setSelectedClipId(clip.id);
+                        setViewMode('detail');
+                      }}
+                      className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors"
                     >
-                      {/* Left: 9:16 Thumbnail (Clicking thumbnail opens YouTube if uploaded!) */}
-                      <div
-                        onClick={(e) => {
-                          if (youtubeUrl) {
-                            e.stopPropagation();
-                            window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
-                          }
-                        }}
-                        className={`relative w-16 h-28 rounded-xl bg-black border border-border/70 overflow-hidden shrink-0 flex items-center justify-center ${youtubeUrl ? 'hover:ring-2 hover:ring-primary/60 transition-all' : ''}`}
-                        title={youtubeUrl ? "Click thumbnail to view video on YouTube" : undefined}
-                      >
-                        {/* Fallback film icon behind image */}
-                        <Film size={18} className="text-text-muted shrink-0" />
+                      {/* 16:9 thumbnail — uniform aspect for every clip (Studio pattern) */}
+                      <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
+                        <Film size={16} className="text-white/40" />
                         {clip.thumbnail_url && (
                           <img
                             src={clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)}
@@ -2372,121 +2336,69 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                             }}
                           />
                         )}
-
-                        {/* Cloud-only pill overlay */}
                         {clip.is_cloud_only && (
-                          <div className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 font-mono text-[8px] text-sky-400 flex items-center gap-0.5 border border-sky-500/30">
+                          <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 text-white text-[9px] font-medium flex items-center gap-0.5">
                             <Cloud size={8} />
-                            <span>Cloud</span>
-                          </div>
-                        )}
-
-                        {/* YouTube external link trigger overlay if uploaded */}
-                        {youtubeUrl && (
-                          <div className="absolute top-1 right-1 w-5 h-5 rounded-md bg-black/80 border border-white/20 flex items-center justify-center text-white shadow-sm opacity-90 group-hover:scale-105 transition-all">
-                            <ExternalLink size={9} />
-                          </div>
-                        )}
-
-                        {/* Duration Badge */}
-                        <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/80 font-mono tabular-nums text-[9px] font-semibold text-white">
-                          {formatDuration(clip.duration)}
-                        </div>
-                      </div>
-
-                      {/* Center: Metadata */}
-                      <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
-                        <div>
-                          <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
-                            {clip.title || clip.hook || 'Untitled Clip'}
-                          </h3>
-                          {clip.hook && clip.title !== clip.hook && (
-                            <p className="text-xs text-text-secondary mt-0.5 line-clamp-1 italic">
-                              &ldquo;{clip.hook}&rdquo;
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                          {/* Virality score if present */}
-                          {typeof clip.virality_score === 'number' && clip.virality_score > 0 && (
-                            <span className="font-mono tabular-nums text-xs px-1.5 py-0.5 rounded bg-primary/10 border border-primary/25 text-primary font-semibold flex items-center gap-1">
-                              <Sparkles size={10} />
-                              {clip.virality_score}%
-                            </span>
-                          )}
-
-                          {/* Source session label */}
-                          <span className="font-mono text-xs text-text-muted">
-                            {clip.session_id ? clip.session_id.replace('sess_', '#') : 'Direct'}
+                            Cloud
                           </span>
-                        </div>
+                        )}
+                        {/* Duration badge — black bg, white text, both themes */}
+                        <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
+                          {formatDuration(clip.duration)}
+                        </span>
                       </div>
 
-                      {/* Right: Status, Retention Info & Actions */}
-                      <div className="shrink-0 flex flex-col justify-between items-end pl-1">
-                        <div className="flex flex-col items-end gap-1">
+                      {/* Title + metadata — Studio row anatomy */}
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
+                          {clip.title || clip.hook || 'Untitled Clip'}
+                        </h3>
+                        <p className="text-xs text-text-muted mt-1 tabular-nums truncate">
+                          {typeof clip.virality_score === 'number' && clip.virality_score > 0 && (
+                            <>{clip.virality_score}% &middot; </>
+                          )}
+                          {age || (clip.session_id ? clip.session_id.replace('sess_', '#') : 'Direct')}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1.5">
                           <span
-                            className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${isReady
+                            className={'text-xs font-medium px-2 py-0.5 rounded-full border ' + (isReady
                               ? 'bg-primary/15 text-primary border-primary/30'
-                              : 'chip-success border'
-                              }`}
+                              : 'chip-success border')
+                            }
                           >
                             {isReady ? 'Ready' : 'Uploaded'}
                           </span>
-
-                          {isUploaded && (
-                            clip.is_cloud_only ? (
-                              <span className="font-mono text-xs text-status-info flex items-center gap-1" title="Local MP4 purged after 7-day retention. Thumbnail & live YouTube link preserved permanently.">
-                                <Cloud size={9} />
-                                <span>Cloud Only</span>
-                              </span>
-                            ) : (
-                              <span
-                                className="font-mono tabular-nums text-xs text-text-muted"
-                                title="Local video auto-deletes 7 days after upload to reclaim disk space, keeping thumbnail and YouTube link permanently"
-                              >
-                                {daysLeft}d left
-                              </span>
-                            )
+                          {isUploaded && !clip.is_cloud_only && (
+                            <span className="text-xs text-text-muted tabular-nums" title="Local video auto-deletes 7 days after upload; thumbnail and YouTube link are kept">
+                              {daysLeft}d left
+                            </span>
                           )}
-                        </div>
-
-                        <div className="flex items-center gap-1 mt-auto">
-                          {youtubeUrl && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
-                              }}
-                              className="min-h-[36px] px-2.5 rounded-lg bg-surface-200 hover:bg-surface-3 border border-border text-text-secondary hover:text-text-main text-xs font-semibold flex items-center gap-1 active:scale-95 transition-all"
-                              title="Open live video on YouTube"
-                            >
-                              <ExternalLink size={11} />
-                              <span className="hidden sm:inline">Watch</span>
-                            </button>
+                          {isUploaded && clip.is_cloud_only && (
+                            <span className="text-xs text-status-info" title="Local MP4 purged after 7-day retention; thumbnail and YouTube link are kept">
+                              Cloud only
+                            </span>
                           )}
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedClipId(clip.id);
-                              setIsMoreModalOpen(true);
-                            }}
-                            className="min-h-[44px] min-w-[36px] rounded-lg text-text-muted hover:text-text-main flex items-center justify-center active:scale-[0.95]"
-                            title="More options"
-                          >
-                            <MoreVertical size={16} />
-                          </button>
                         </div>
                       </div>
+
+                      {/* Kebab — circular ghost, aligned to the 16px margin */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedClipId(clip.id);
+                          setIsMoreModalOpen(true);
+                        }}
+                        aria-label="More options"
+                        className="-mr-2 w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+                      >
+                        <MoreVertical size={18} />
+                      </button>
                     </div>
                   );
                 })}
               </div>
-            </div>
+            </section>
           ))
         )}
       </main>
@@ -2503,27 +2415,27 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     return (
       <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
-        {/* TOP BAR (Target: 48–52px high, 36–40px touch buttons) */}
-        <header className="shrink-0 h-[50px] px-3 border-b border-border bg-canvas z-20 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+        {/* TOP BAR — 56px, ghost circular buttons */}
+        <header className="shrink-0 h-14 px-2 border-b border-border bg-canvas z-20 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 min-w-0">
             <button
               type="button"
               onClick={() => {
                 setViewMode('library');
                 setSelectedClipId(null);
               }}
-              className="w-[38px] h-[38px] rounded-xl bg-surface-200 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95] transition-all"
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
               title="Back to Clips Library"
               aria-label="Back"
             >
-              <ChevronLeft size={18} />
+              <ChevronLeft size={20} />
             </button>
             <div className="min-w-0">
               <h2 className="text-base font-semibold tracking-tight text-text-main truncate leading-tight">
                 {currentClip.title || 'Clip Detail'}
               </h2>
-              <div className="text-xs text-text-muted truncate font-mono">
-                {currentClip.session_id ? `Source: ${currentClip.session_id}` : 'Dispatch Review'}
+              <div className="text-xs text-text-muted truncate tabular-nums">
+                {currentClip.session_id ? 'Session ' + currentClip.session_id.replace('sess_', '') : 'Dispatch review'}
               </div>
             </div>
           </div>
@@ -2531,16 +2443,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           <button
             type="button"
             onClick={() => setIsMoreModalOpen(true)}
-            className="w-[38px] h-[38px] rounded-xl bg-surface-200 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95] transition-all"
+            className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
             title="Options"
             aria-label="Options"
           >
-            <MoreVertical size={16} />
+            <MoreVertical size={18} />
           </button>
         </header>
 
         {/* DETAIL MAIN VIEWPORT: Responsive preview with stable visual center */}
-        <main className="flex-1 min-h-0 flex flex-col px-3 pt-1 pb-2 gap-2 overflow-hidden">
+        <main className="flex-1 min-h-0 flex flex-col px-4 pt-2 pb-3 gap-3 overflow-hidden">
           {/* 1. CLEAN VIDEO PLAYER WITH DYNAMIC RESPONSIVE FRAMING: Stable center stage */}
           <div className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden py-1">
             <FramedVideoStage
@@ -2602,17 +2514,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               </div>
             )}
 
-            {/* Playback Transport Row (Target: 40–44px high) */}
-            <section className="w-full h-11 flex items-center gap-3 px-1">
-              {/* Play / Pause button (Target: 32–36px) */}
+            {/* Playback transport */}
+            <section className="w-full h-11 flex items-center gap-3">
               <button
                 type="button"
                 onClick={handleTogglePlay}
-                className="w-[34px] h-[34px] rounded-full bg-surface-200 hover:bg-surface-300 border border-border text-text-main flex items-center justify-center active:scale-[0.95] shrink-0 transition-colors shadow-sm"
+                className="w-10 h-10 rounded-full bg-surface-2 hover:bg-surface-3 text-text-main flex items-center justify-center active:scale-[0.95] shrink-0 transition-colors"
                 title={isPlaying ? 'Pause' : 'Play'}
                 aria-label={isPlaying ? 'Pause' : 'Play'}
               >
-                {isPlaying ? <Pause size={14} /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
+                {isPlaying ? <Pause size={16} /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
               </button>
 
               {/* Creator App Scrubber */}
@@ -2638,20 +2549,19 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               </div>
 
               {/* Timecode display */}
-              <div className="font-mono tabular-nums text-[11px] font-semibold text-text-main flex items-center gap-1 shrink-0 select-none">
+              <div className="font-mono tabular-nums text-xs font-semibold text-text-main flex items-center gap-1 shrink-0 select-none">
                 <span className="text-text-main">{formatTimeCode(currentTime)}</span>
                 <span className="text-text-muted">/</span>
                 <span className="text-text-secondary">{formatTimeCode(duration || currentClip.duration || 0)}</span>
               </div>
             </section>
 
-            {/* Core Action Buttons: [Edit] and [Publish / Watch Live] (Target: 42–44px high, equal widths, 8–10px gap) */}
-            <section className="w-full grid grid-cols-2 gap-2.5">
-              {/* Edit: Opens Full Caption Studio */}
+            {/* Primary actions — pill pair, one hero (publish) */}
+            <section className="w-full grid grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => setViewMode('studio')}
-                className="min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-3 border border-border text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                className="min-h-[44px] rounded-full bg-surface-2 hover:bg-surface-3 text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               >
                 <Scissors size={15} className="text-primary" />
                 <span>Edit</span>
@@ -2665,7 +2575,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     const url = currentClip.remote_url || `https://youtu.be/${currentClip.remote_id}`;
                     window.open(url, '_blank', 'noopener,noreferrer');
                   }}
-                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                  className="min-h-[44px] rounded-full bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
                 >
                   <ExternalLink size={14} />
                   <span>Watch on YouTube</span>
@@ -2674,7 +2584,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => setViewMode('publish')}
-                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                  className="min-h-[44px] rounded-full bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
                 >
                   <Send size={14} />
                   <span>Publish</span>
@@ -2683,7 +2593,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               )}
             </section>
 
-            {/* Layout Framing Quick Select (Target: ~68–76px total, buttons 32–36px high) */}
+            {/* Layout framing — flat section, single divider (no card) */}
             {(() => {
               const availableModes = (currentClip.available_layout_modes && currentClip.available_layout_modes.length > 0)
                 ? currentClip.available_layout_modes
@@ -2692,10 +2602,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               const activeModeObj = availableModes.find((m) => m.id === layoutMode) || availableModes[0];
 
               return (
-                <section className="w-full h-[72px] bg-surface-100 border border-border rounded-xl px-2.5 py-2 flex flex-col justify-between">
-                  <div className="flex items-center justify-between text-[11px] leading-tight">
-                    <span className="font-semibold text-text-main">Layout Framing</span>
-                    <span className="font-mono text-[10px] text-primary font-semibold">
+                <section className="w-full pt-3 mt-1 border-t border-border">
+                  <div className="flex items-center justify-between text-xs leading-tight mb-2">
+                    <span className="font-medium uppercase tracking-wider text-text-muted">Layout framing</span>
+                    <span className="font-mono text-xs text-primary font-semibold tabular-nums">
                       {activeModeObj ? `${activeModeObj.target_aspect} ${activeModeObj.label}` : layoutMode}
                     </span>
                   </div>
@@ -2705,9 +2615,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         key={opt.id}
                         type="button"
                         onClick={() => handleLayoutChange(opt.id)}
-                        className={`min-h-[34px] px-2.5 rounded-full border text-[13px] font-medium whitespace-nowrap active:scale-[0.98] transition-all flex-1 min-w-[64px] ${layoutMode === opt.id
-                          ? 'bg-primary-soft border-primary/40 text-primary font-semibold'
-                          : 'bg-surface-200 border-border text-text-secondary hover:text-text-main'
+                        className={`h-8 px-3 rounded-full text-[13px] font-medium whitespace-nowrap active:scale-[0.98] transition-all flex-1 min-w-[64px] ${layoutMode === opt.id
+                          ? 'chip-selected font-semibold'
+                          : 'bg-surface-2 text-text-secondary hover:text-text-main'
                           }`}
                         title={opt.description}
                       >
