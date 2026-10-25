@@ -548,6 +548,40 @@ export default {
       return json(200, { deleted: true, id: accountId });
     }
 
+    if (deleteAccountMatch && (request.method === "PATCH" || request.method === "POST")) {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const accountId = deleteAccountMatch[1];
+      const body = await request.json().catch(() => ({})) as {
+        is_source_vault?: boolean;
+        is_publisher?: boolean;
+      };
+      const getRes = await fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${accountId}&user_id=eq.${user.userId}&select=metadata,provider`, {
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+      });
+      if (!getRes.ok) return json(502, { error: "failed to retrieve account" });
+      const rows = await getRes.json() as Array<{ metadata?: Record<string, unknown>; provider: string }>;
+      if (!rows.length) return json(404, { error: "account not found" });
+      const currentMeta = rows[0].metadata || {};
+      const updatedMeta = {
+        ...currentMeta,
+        ...(typeof body.is_source_vault === "boolean" ? { is_source_vault: body.is_source_vault } : {}),
+        ...(typeof body.is_publisher === "boolean" ? { is_publisher: body.is_publisher } : {}),
+      };
+      const updateRes = await fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${accountId}&user_id=eq.${user.userId}`, {
+        method: "PATCH",
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          "content-type": "application/json",
+          "prefer": "return=minimal"
+        },
+        body: JSON.stringify({ metadata: updatedMeta, updated_at: new Date().toISOString() })
+      });
+      if (!updateRes.ok) return json(502, { error: "failed to update account roles" });
+      return json(200, { ok: true, metadata: updatedMeta });
+    }
+
     // ---- Per-User Gemini API Keys Vault ----
     if (url.pathname === "/keys/gemini" && request.method === "GET") {
       const user = await authenticate(env, request);

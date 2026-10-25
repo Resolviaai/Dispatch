@@ -32,6 +32,7 @@ import {
   saveGeminiKey,
   deleteGeminiKey,
   initGoogleOAuth,
+  updateAccountRoles,
 } from '../accounts/accountsService';
 
 interface SettingsScreenProps {
@@ -197,6 +198,23 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     } else {
       setFeedback(`Could not disconnect ${account.account_name}.`);
     }
+  };
+
+  const handleToggleRole = async (account: ConnectedAccount, role: 'source_vault' | 'publisher') => {
+    if (!jwtToken) return;
+    const currentVault = account.metadata?.is_source_vault !== false;
+    const currentPub = account.metadata?.is_publisher !== false;
+    const updated = role === 'source_vault'
+      ? { is_source_vault: !currentVault }
+      : { is_publisher: !currentPub };
+
+    setAccounts(prev => prev.map(a => a.id === account.id ? {
+      ...a,
+      metadata: { ...(a.metadata || {}), ...updated }
+    } : a));
+
+    setFeedback(`Updated ${account.account_name} roles.`);
+    await updateAccountRoles(jwtToken, account.id, updated);
   };
 
   const handleConnectProvider = async (provider: 'instagram' | 'linkedin' | 'twitter' | 'facebook') => {
@@ -416,37 +434,92 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
 
           {/* YouTube Accounts */}
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
               <span className="flex items-center gap-1.5"><Youtube size={14} className="text-danger" /> YouTube Channels</span>
               <span className="font-mono">{youtubeAccounts.length} connected</span>
             </div>
 
+            {/* Educational Role Architecture Box */}
+            <div className="p-3 rounded-xl bg-surface-2 border border-border text-xs text-text-secondary space-y-1">
+              <p className="font-semibold text-text-main flex items-center gap-1.5">
+                <Sparkles size={13} className="text-primary" />
+                <span>Source Vault vs. Publishing Channel</span>
+              </p>
+              <p className="leading-relaxed text-text-muted">
+                <strong>Raw Ingest Vault (Route A):</strong> Phone uploads unlisted recordings here for your PC Studio to fetch & edit.
+              </p>
+              <p className="leading-relaxed text-text-muted">
+                <strong>Shorts Publisher:</strong> The destination channel where approved vertical clips are published.
+              </p>
+              <p className="text-[11px] text-text-muted italic pt-0.5">
+                Tip: You can use the same channel for both, or connect separate storage and brand channels.
+              </p>
+            </div>
+
             {youtubeAccounts.length > 0 ? (
-              <div className="space-y-2">
-                {youtubeAccounts.map((acc) => (
-                  <div key={acc.id} className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      {acc.avatar_url ? (
-                        <img src={acc.avatar_url} alt="" className="w-8 h-8 rounded-full border border-border shrink-0 object-cover" />
-                      ) : (
-                        <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center text-text-muted shrink-0">
-                          <Youtube size={15} />
+              <div className="space-y-2.5">
+                {youtubeAccounts.map((acc) => {
+                  const isSourceVault = acc.metadata?.is_source_vault !== false;
+                  const isPublisher = acc.metadata?.is_publisher !== false;
+
+                  return (
+                    <div key={acc.id} className="p-3.5 rounded-xl bg-surface-2 border border-border space-y-2.5 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {acc.avatar_url ? (
+                            <img src={acc.avatar_url} alt="" className="w-8 h-8 rounded-full border border-border shrink-0 object-cover" />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center text-text-muted shrink-0">
+                              <Youtube size={15} />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="font-medium text-text-main truncate">{acc.account_name}</p>
+                            <p className="text-xs text-text-muted truncate font-mono">{acc.account_email || acc.account_id}</p>
+                          </div>
                         </div>
-                      )}
-                      <div className="min-w-0">
-                        <p className="font-medium text-text-main truncate">{acc.account_name}</p>
-                        <p className="text-xs text-text-muted truncate font-mono">{acc.account_email || acc.account_id}</p>
+                        <button
+                          onClick={() => handleDisconnectAccount(acc)}
+                          className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+
+                      {/* Role Assignment Buttons */}
+                      <div className="flex items-center gap-2 pt-2 border-t border-border/60 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRole(acc, 'source_vault')}
+                          className={`min-h-[34px] px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                            isSourceVault
+                              ? 'bg-primary/15 border-primary/40 text-primary'
+                              : 'bg-surface-3 border-border text-text-muted hover:text-text-secondary'
+                          }`}
+                          title="Toggle whether raw footage from phone uploads to this channel"
+                        >
+                          <span>{isSourceVault ? '✓' : '+'}</span>
+                          <span>Raw Ingest Vault (Route A)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRole(acc, 'publisher')}
+                          className={`min-h-[34px] px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                            isPublisher
+                              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+                              : 'bg-surface-3 border-border text-text-muted hover:text-text-secondary'
+                          }`}
+                          title="Toggle whether Shorts can be published to this channel"
+                        >
+                          <span>{isPublisher ? '✓' : '+'}</span>
+                          <span>Shorts Publisher</span>
+                        </button>
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleDisconnectAccount(acc)}
-                      className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="text-xs text-text-muted italic">No YouTube accounts connected yet.</p>

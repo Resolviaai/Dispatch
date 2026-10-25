@@ -173,3 +173,23 @@ export async function initGoogleOAuth(jwtToken: string): Promise<{ url: string }
   const errData = await res.json().catch(() => ({})) as { error?: string };
   throw new Error(errData.error || `Google OAuth initialization failed (${res.status})`);
 }
+
+export async function updateAccountRoles(
+  jwtToken: string,
+  accountId: string,
+  roles: { is_source_vault?: boolean; is_publisher?: boolean }
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${WORKER_BASE}/accounts/${accountId}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${jwtToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(roles),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
