@@ -293,6 +293,67 @@ export default {
       return json(200, { accounts: Array.isArray(accounts) ? accounts : [] });
     }
 
+    if (url.pathname === "/accounts/connect" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const body = await request.json().catch(() => ({})) as {
+        provider?: string;
+        account_id?: string;
+        account_name?: string;
+        account_email?: string | null;
+        avatar_url?: string | null;
+        credentials?: Record<string, unknown> | string;
+        metadata?: Record<string, unknown>;
+      };
+      const provider = (body.provider ?? "").trim().toLowerCase();
+      const validProviders = ["youtube", "instagram", "linkedin", "twitter", "x"];
+      const normalizedProvider = provider === "x" ? "twitter" : provider;
+      if (!validProviders.includes(provider)) {
+        return json(400, { error: `invalid provider '${provider}'. Supported: youtube, instagram, linkedin, twitter` });
+      }
+      const accountId = (body.account_id ?? "").trim();
+      if (!accountId) {
+        return json(400, { error: "account_id is required" });
+      }
+      const accountName = (body.account_name ?? accountId).trim();
+      if (!body.credentials) {
+        return json(400, { error: "credentials are required" });
+      }
+      const credString = typeof body.credentials === "string" ? body.credentials : JSON.stringify(body.credentials);
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, credString);
+
+      const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          p_user_id: user.userId,
+          p_provider: normalizedProvider,
+          p_account_id: accountId,
+          p_account_name: accountName,
+          p_account_email: body.account_email ?? null,
+          p_avatar_url: body.avatar_url ?? null,
+          p_credentials_encrypted: enc,
+          p_metadata: body.metadata ?? {},
+        }),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({})) as { message?: string };
+        const errMsg = errJson.message || `storage failed: ${res.status}`;
+        if (errMsg.includes("LIMIT_EXCEEDED")) {
+          return json(409, { error: errMsg });
+        }
+        return json(502, { error: errMsg });
+      }
+      const newId = await res.json() as unknown;
+      return json(200, {
+        ok: true,
+        id: Array.isArray(newId) ? (newId[0] as unknown) : newId,
+        provider: normalizedProvider,
+        account_id: accountId,
+        account_name: accountName
+      });
+    }
+
     const deleteAccountMatch = url.pathname.match(/^\/accounts\/([0-9a-fA-F-]{36})$/);
     if (deleteAccountMatch && request.method === "DELETE") {
       const user = await authenticate(env, request);
@@ -355,14 +416,22 @@ export default {
       return json(200, { deleted: true });
     }
 
-    // ---- On-device YouTube OAuth (Ticket-based + backward-compatible JWT) ----
-    if (url.pathname === "/oauth/google/init" && request.method === "POST") {
+    // ---- On-device YouTube / Provider OAuth (Ticket-based + backward-compatible JWT) ----
+    const oauthInitMatch = url.pathname.match(/^\/oauth\/([a-zA-Z0-9_-]+)\/init$/);
+    if (oauthInitMatch && request.method === "POST") {
+      const provider = oauthInitMatch[1].toLowerCase();
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
-      const ticket = crypto.randomUUID();
-      await rpc(env, "cloud_put_oauth_state", { p_state: "ticket:" + ticket, p_user_id: user.userId });
-      return json(200, {
-        url: `https://dispatch-cloud.resolviaai.workers.dev/oauth/google/start?ticket=${ticket}`
+      if (provider === "google" || provider === "youtube") {
+        const ticket = crypto.randomUUID();
+        await rpc(env, "cloud_put_oauth_state", { p_state: "ticket:" + ticket, p_user_id: user.userId });
+        return json(200, {
+          url: `https://dispatch-cloud.resolviaai.workers.dev/oauth/google/start?ticket=${ticket}`
+        });
+      }
+      return json(400, {
+        error: `OAuth flow for ${provider} is not configured on this cluster. Use direct account credentials connection instead.`,
+        manual_connect_available: true
       });
     }
 

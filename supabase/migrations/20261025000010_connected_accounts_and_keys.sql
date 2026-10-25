@@ -78,6 +78,15 @@ returns text language sql security definer set search_path = public as $$
   where id = p_account_id and user_id = p_user_id;
 $$;
 
+create or replace function public.cloud_get_credentials_by_account_id(p_account_id text, p_user_id uuid default null)
+returns text language sql security definer set search_path = public as $$
+  select credentials_encrypted
+  from connected_accounts
+  where (account_id = p_account_id or id::text = p_account_id)
+    and (p_user_id is null or user_id = p_user_id)
+  limit 1;
+$$;
+
 create or replace function public.cloud_delete_connected_account(p_account_id uuid, p_user_id uuid)
 returns boolean language plpgsql security definer set search_path = public as $$
 begin
@@ -230,6 +239,7 @@ $$;
 -- Revocations and grants
 revoke all on function public.cloud_list_connected_accounts(uuid) from public, anon;
 revoke all on function public.cloud_get_account_credentials(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.cloud_get_credentials_by_account_id(text, uuid) from public, anon, authenticated;
 revoke all on function public.cloud_delete_connected_account(uuid, uuid) from public, anon;
 revoke all on function public.cloud_store_connected_account(uuid, text, text, text, text, text, text, jsonb) from public, anon, authenticated;
 revoke all on function public.cloud_store_gemini_key(uuid, text, text) from public, anon, authenticated;
@@ -240,6 +250,7 @@ revoke all on function public.cloud_set_user_priority(uuid, int) from public, an
 
 grant execute on function public.cloud_list_connected_accounts(uuid) to service_role;
 grant execute on function public.cloud_get_account_credentials(uuid, uuid) to service_role;
+grant execute on function public.cloud_get_credentials_by_account_id(text, uuid) to service_role;
 grant execute on function public.cloud_delete_connected_account(uuid, uuid) to service_role;
 grant execute on function public.cloud_store_connected_account(uuid, text, text, text, text, text, text, jsonb) to service_role;
 grant execute on function public.cloud_store_gemini_key(uuid, text, text) to service_role;

@@ -49,21 +49,54 @@ def upload_x_video(
             oauth_secret or os.getenv("X_ACCESS_SECRET")
         )
 
-        upload_url = "https://upload.twitter.com/1.1/media/upload.json"
+        # Modern X API v2 media upload with fallback
+        upload_url = "https://api.x.com/2/media/upload"
+        auth_kwargs = {"auth": oauth} if oauth else {"headers": {"Authorization": f"Bearer {token}"}}
 
         # Step 1: INIT
-        init_res = requests.post(
-            upload_url,
-            auth=oauth,
-            data={
-                "command": "INIT",
-                "media_type": "video/mp4",
-                "total_bytes": str(file_size),
-                "media_category": "tweet_video"
-            },
-            timeout=30
-        )
-        init_res.raise_for_status()
+        try:
+            init_res = requests.post(
+                upload_url,
+                **auth_kwargs,
+                data={
+                    "command": "INIT",
+                    "media_type": "video/mp4",
+                    "total_bytes": str(file_size),
+                    "media_category": "tweet_video"
+                },
+                timeout=30
+            )
+            if init_res.status_code == 404:
+                # If v2 endpoint not yet available on this tier, use v1.1
+                upload_url = "https://upload.twitter.com/1.1/media/upload.json"
+                init_res = requests.post(
+                    upload_url,
+                    auth=oauth,
+                    data={
+                        "command": "INIT",
+                        "media_type": "video/mp4",
+                        "total_bytes": str(file_size),
+                        "media_category": "tweet_video"
+                    },
+                    timeout=30
+                )
+            init_res.raise_for_status()
+        except requests.RequestException:
+            # Fallback for standard OAuth 1.0a accounts
+            upload_url = "https://upload.twitter.com/1.1/media/upload.json"
+            init_res = requests.post(
+                upload_url,
+                auth=oauth,
+                data={
+                    "command": "INIT",
+                    "media_type": "video/mp4",
+                    "total_bytes": str(file_size),
+                    "media_category": "tweet_video"
+                },
+                timeout=30
+            )
+            init_res.raise_for_status()
+
         media_id = init_res.json()["media_id_string"]
 
         # Step 2: APPEND chunks (5MB slices)

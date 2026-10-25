@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Share2,
+  X as CloseIcon,
 } from 'lucide-react';
 import { Bridge, StorageInfo, apiUrl } from '../bridge';
 import { getThemePreference, setThemePreference, ThemePreference } from '../theme';
@@ -26,6 +27,7 @@ import {
   GeminiKeyStatus,
   listConnectedAccounts,
   deleteConnectedAccount,
+  connectAccount,
   getGeminiKeyStatus,
   saveGeminiKey,
   deleteGeminiKey,
@@ -49,6 +51,43 @@ export function setDefaultLensPref(lens: 'back' | 'front') {
   }
 }
 
+const InstagramIcon = () => (
+  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+    <defs>
+      <linearGradient id="ig-grad-settings" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stopColor="#FED373" />
+        <stop offset="25%" stopColor="#F15245" />
+        <stop offset="60%" stopColor="#D92E7F" />
+        <stop offset="100%" stopColor="#9B36B7" />
+      </linearGradient>
+    </defs>
+    <rect width="24" height="24" rx="6" fill="url(#ig-grad-settings)" />
+    <rect x="5.5" y="5.5" width="13" height="13" rx="3.5" stroke="white" strokeWidth="1.5" />
+    <circle cx="12" cy="12" r="3" stroke="white" strokeWidth="1.5" />
+    <circle cx="15.8" cy="8.2" r="0.8" fill="white" />
+  </svg>
+);
+
+const LinkedInIcon = () => (
+  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+    <rect width="24" height="24" rx="6" fill="#0A66C2" />
+    <path
+      d="M7.5 9.5H5V17H7.5V9.5ZM6.25 8.2C7.05 8.2 7.7 7.55 7.7 6.75C7.7 5.95 7.05 5.3 6.25 5.3C5.45 5.3 4.8 5.95 4.8 6.75C4.8 7.55 5.45 8.2 6.25 8.2ZM19 17H16.5V13.1C16.5 12.15 16.48 10.95 15.15 10.95C13.8 10.95 13.6 12.02 13.6 13.03V17H11.1V9.5H13.5V10.55H13.53C13.87 9.9 14.7 9.25 15.9 9.25C18.45 9.25 18.95 10.9 18.95 13.05V17H19Z"
+      fill="white"
+    />
+  </svg>
+);
+
+const XIcon = () => (
+  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+    <rect width="24" height="24" rx="6" fill="#18181B" stroke="#27272A" strokeWidth="1" />
+    <path
+      d="M14.7 6.5H16.8L12.2 11.75L17.6 18.5H13.35L10.02 14.15L6.2 18.5H4.1L8.98 12.92L3.8 6.5H8.16L11.16 10.47L14.7 6.5ZM13.96 17.22H15.12L7.5 7.72H6.25L13.96 17.22Z"
+      fill="white"
+    />
+  </svg>
+);
+
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000' }) => {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
@@ -56,6 +95,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [isSavingGemini, setIsSavingGemini] = useState(false);
   const [showGeminiInput, setShowGeminiInput] = useState(false);
+
+  // Connection modal state for non-Google providers
+  const [connectingModal, setConnectingModal] = useState<'instagram' | 'linkedin' | 'twitter' | null>(null);
+  const [formAccountId, setFormAccountId] = useState('');
+  const [formAccountName, setFormAccountName] = useState('');
+  const [formToken, setFormToken] = useState('');
+  const [isConnectingAccount, setIsConnectingAccount] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const [wifiOnly, setWifiOnly] = useState(true);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
@@ -122,6 +169,66 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
       setFeedback(`${account.account_name} disconnected.`);
     } else {
       setFeedback(`Could not disconnect ${account.account_name}.`);
+    }
+  };
+
+  const handleOpenConnect = (provider: 'instagram' | 'linkedin' | 'twitter') => {
+    setConnectingModal(provider);
+    setFormAccountId('');
+    setFormAccountName('');
+    setFormToken('');
+    setConnectionError(null);
+  };
+
+  const handleCloseConnect = () => {
+    setConnectingModal(null);
+    setConnectionError(null);
+  };
+
+  const handleSaveAccount = async () => {
+    if (!jwtToken || !connectingModal) return;
+    const provider = connectingModal;
+    const accountId = formAccountId.trim();
+    const accountName = formAccountName.trim() || accountId;
+    const token = formToken.trim();
+
+    if (!accountId) {
+      setConnectionError('Account identifier is required');
+      return;
+    }
+    if (!token) {
+      setConnectionError('Access token is required');
+      return;
+    }
+
+    setIsConnectingAccount(true);
+    setConnectionError(null);
+
+    let credentials: Record<string, unknown> = {};
+    if (provider === 'instagram') {
+      credentials = { access_token: token, account_id: accountId };
+    } else if (provider === 'linkedin') {
+      credentials = { access_token: token, author_urn: accountId };
+    } else if (provider === 'twitter') {
+      credentials = { bearer_token: token, handle: accountId };
+    }
+
+    const res = await connectAccount(jwtToken, {
+      provider,
+      account_id: accountId,
+      account_name: accountName,
+      credentials,
+      metadata: { connected_at: new Date().toISOString() },
+    });
+
+    setIsConnectingAccount(false);
+
+    if (res.ok) {
+      setFeedback(`${accountName} connected successfully.`);
+      handleCloseConnect();
+      refreshAccounts();
+    } else {
+      setConnectionError(res.error || 'Failed to connect account.');
     }
   };
 
@@ -361,11 +468,126 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             </button>
           </div>
 
-          {/* Social Platforms Notice */}
-          <div className="pt-2 border-t border-border space-y-2">
-            <p className="text-xs text-text-muted leading-relaxed">
-              Dispatch supports multiple YouTube &amp; Instagram destinations, and single LinkedIn and X destinations. Connecting an account binds it directly to your publishing outbox.
-            </p>
+          {/* Instagram Accounts */}
+          <div className="pt-3 border-t border-border space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
+              <span className="flex items-center gap-1.5"><InstagramIcon /> Instagram Reels</span>
+              <span className="font-mono">{instagramAccounts.length} connected</span>
+            </div>
+
+            {instagramAccounts.length > 0 ? (
+              <div className="space-y-2">
+                {instagramAccounts.map((acc) => (
+                  <div key={acc.id} className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
+                        <InstagramIcon />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-medium text-text-main truncate">{acc.account_name}</p>
+                        <p className="text-xs text-text-muted truncate font-mono">{acc.account_id}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDisconnectAccount(acc)}
+                      className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted italic">No Instagram accounts connected yet.</p>
+            )}
+
+            <button
+              onClick={() => handleOpenConnect('instagram')}
+              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <Plus size={15} />
+              <span>{instagramAccounts.length > 0 ? 'Connect Another Instagram Account' : 'Connect Instagram Account'}</span>
+            </button>
+          </div>
+
+          {/* LinkedIn Account (Limit: 1) */}
+          <div className="pt-3 border-t border-border space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
+              <span className="flex items-center gap-1.5"><LinkedInIcon /> LinkedIn</span>
+              <span className="font-mono">{linkedinAccount ? '1 / 1 connected' : '0 / 1 connected'}</span>
+            </div>
+
+            {linkedinAccount ? (
+              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
+                    <LinkedInIcon />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-text-main truncate">{linkedinAccount.account_name}</p>
+                    <p className="text-xs text-text-muted truncate font-mono">{linkedinAccount.account_id}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDisconnectAccount(linkedinAccount)}
+                  className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted italic">No LinkedIn account connected yet (single account limit).</p>
+            )}
+
+            {!linkedinAccount && (
+              <button
+                onClick={() => handleOpenConnect('linkedin')}
+                className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <Plus size={15} />
+                <span>Connect LinkedIn Account</span>
+              </button>
+            )}
+          </div>
+
+          {/* X (Twitter) Account (Limit: 1) */}
+          <div className="pt-3 border-t border-border space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
+              <span className="flex items-center gap-1.5"><XIcon /> X (Twitter)</span>
+              <span className="font-mono">{twitterAccount ? '1 / 1 connected' : '0 / 1 connected'}</span>
+            </div>
+
+            {twitterAccount ? (
+              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
+                    <XIcon />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-text-main truncate">{twitterAccount.account_name}</p>
+                    <p className="text-xs text-text-muted truncate font-mono">{twitterAccount.account_id}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDisconnectAccount(twitterAccount)}
+                  className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted italic">No X account connected yet (single account limit).</p>
+            )}
+
+            {!twitterAccount && (
+              <button
+                onClick={() => handleOpenConnect('twitter')}
+                className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <Plus size={15} />
+                <span>Connect X Account</span>
+              </button>
+            )}
           </div>
         </section>
 
@@ -526,6 +748,129 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </section>
 
       </div>
+
+      {/* CONNECT ACCOUNT MODAL */}
+      {connectingModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-2xl p-5 w-full max-w-sm space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {connectingModal === 'instagram' && <InstagramIcon />}
+                {connectingModal === 'linkedin' && <LinkedInIcon />}
+                {connectingModal === 'twitter' && <XIcon />}
+                <h3 className="text-base font-semibold text-text-main">
+                  {connectingModal === 'instagram' && 'Connect Instagram Reels'}
+                  {connectingModal === 'linkedin' && 'Connect LinkedIn'}
+                  {connectingModal === 'twitter' && 'Connect X (Twitter)'}
+                </h3>
+              </div>
+              <button
+                onClick={handleCloseConnect}
+                disabled={isConnectingAccount}
+                className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-95 transition-all"
+                aria-label="Close"
+              >
+                <CloseIcon size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-text-muted">
+              {connectingModal === 'instagram' && 'Binds an Instagram Business or Creator account for publishing vertical Reels.'}
+              {connectingModal === 'linkedin' && 'Binds a personal member or organization URN for publishing video posts.'}
+              {connectingModal === 'twitter' && 'Binds an X / Twitter profile for publishing video posts.'}
+            </p>
+
+            {connectionError && (
+              <div className="p-2.5 rounded-lg bg-danger/10 border border-danger/30 text-xs text-danger">
+                {connectionError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
+                  {connectingModal === 'instagram' && 'Instagram User ID'}
+                  {connectingModal === 'linkedin' && 'Author URN'}
+                  {connectingModal === 'twitter' && 'X Handle (@username)'}
+                </label>
+                <input
+                  type="text"
+                  value={formAccountId}
+                  onChange={(e) => setFormAccountId(e.target.value)}
+                  placeholder={
+                    connectingModal === 'instagram'
+                      ? '17841400000000000'
+                      : connectingModal === 'linkedin'
+                      ? 'urn:li:person:abcdef'
+                      : '@resolviaai'
+                  }
+                  className="w-full rounded-xl bg-surface-2 border border-border px-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
+                  disabled={isConnectingAccount}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
+                  Display / Account Name
+                </label>
+                <input
+                  type="text"
+                  value={formAccountName}
+                  onChange={(e) => setFormAccountName(e.target.value)}
+                  placeholder="e.g. My Channel or Company"
+                  className="w-full rounded-xl bg-surface-2 border border-border px-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
+                  disabled={isConnectingAccount}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
+                  {connectingModal === 'instagram' && 'Graph API Access Token'}
+                  {connectingModal === 'linkedin' && 'Member Access Token'}
+                  {connectingModal === 'twitter' && 'Bearer Token / Access Token'}
+                </label>
+                <input
+                  type="password"
+                  value={formToken}
+                  onChange={(e) => setFormToken(e.target.value)}
+                  placeholder="Paste access token..."
+                  className="w-full rounded-xl bg-surface-2 border border-border px-3 py-2 text-sm text-text-main placeholder:text-text-muted font-mono text-xs focus:outline-none focus:border-primary"
+                  disabled={isConnectingAccount}
+                />
+                <p className="text-[11px] text-text-muted mt-1">
+                  Credentials are encrypted with AES-256-GCM in the vault.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={handleCloseConnect}
+                disabled={isConnectingAccount}
+                className="min-h-[44px] px-4 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-secondary active:scale-[0.98] transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAccount}
+                disabled={isConnectingAccount}
+                className="min-h-[44px] flex-1 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-50"
+              >
+                {isConnectingAccount ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>Connecting…</span>
+                  </>
+                ) : (
+                  <span>Save &amp; Connect</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

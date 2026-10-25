@@ -32,13 +32,13 @@ logger = logging.getLogger("dispatch.transcription.gemini")
 STAGE1_WINDOW_OVERLAP_SECONDS = 5.0
 
 
-def get_gemini_client():
+def get_gemini_client(api_key: Optional[str] = None):
     """Lazy initialize and return Google GenAI Client with active API key."""
-    api_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
-    if not api_key:
+    key = api_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+    if not key:
         raise ValueError("GEMINI_API_KEY is not configured in environment or .env")
     from google import genai
-    return genai.Client(api_key=api_key)
+    return genai.Client(api_key=key)
 
 
 def _parse_offset_to_seconds(offset_str: Any) -> float:
@@ -84,18 +84,20 @@ def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> 
 
 def transcribe_stage1_flash_lite(
     media_path: Path,
-    prompt: Optional[str] = None
+    prompt: Optional[str] = None,
+    api_key: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Stage 1: Coarse sentence-level transcription using gemini-3.5-flash-lite.
     
     Args:
         media_path: Local path to .mp4 video or .mp3 audio file.
         prompt: Optional custom transcription prompt.
+        api_key: Optional Gemini API key override (e.g. user vaulted key).
         
     Returns:
         List of segment dicts: [{'start': float, 'end': float, 'text': str, 'speaker': str}]
     """
-    client = get_gemini_client()
+    client = get_gemini_client(api_key=api_key)
     from google.genai import types
 
     system_instruction = (
@@ -227,12 +229,16 @@ def _parse_stage1_time(value: Any) -> float:
 
 
 def transcribe_stage2_precision_words(
-    media_path: Path, max_input_seconds: Optional[float] = None
+    media_path: Path,
+    max_input_seconds: Optional[float] = None,
+    api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """Stage 2: Precision word-level alignment using gemini-3.5-transcribe.
     
     Args:
         media_path: Local path to sliced 30-60s clip video or audio file.
+        max_input_seconds: Optional override for max audio length.
+        api_key: Optional Gemini API key override (e.g. user vaulted key).
         
     Returns:
         Dict with:
@@ -256,7 +262,7 @@ def transcribe_stage2_precision_words(
             f"received {media_duration:.1f}s. Full-source transcription is disabled."
         )
 
-    client = get_gemini_client()
+    client = get_gemini_client(api_key=api_key)
     from google.genai import types
 
     if media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
@@ -411,11 +417,22 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             if p_start < 0 or slice_duration <= 0 or slice_duration > MAX_CLIP_DURATION + 16.0:
                 raise ValueError(f"Invalid bounded Stage 2 range [{p_start:.2f}, {p_end:.2f}]")
 
+            user_id = clip.get("user_id")
+            active_key = ""
+            if user_id:
+                try:
+                    from dispatch.youtube_connections import get_user_gemini_key
+                    active_key = get_user_gemini_key(user_id) or ""
+                except Exception:
+                    pass
+            from dispatch.config import GEMINI_API_KEY
+            active_key = active_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+
             PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix=f"dispatch_stage2_{clip_id}_", dir=str(PROCESSING_DIR)) as temp_dir:
                 slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
                 extract_stage2_clip_audio(source_path, p_start, p_end, slice_mp3)
-                stage2_res = transcribe_stage2_precision_words(slice_mp3)
+                stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=active_key)
 
             words = stage2_res.get("words", [])
             if words:

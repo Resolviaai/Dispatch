@@ -264,6 +264,16 @@ def _process_outbox_queue_internal() -> int:
             idempotency_key = job.get("idempotency_key") or f"idem_{clip_id}_{platform}"
             idempotency_marker = f"dispatch_idempotency_key:{idempotency_key}"
 
+            # Retrieve bound account credentials if account_id is present
+            account_id = job.get("account_id")
+            account_creds = {}
+            if account_id:
+                try:
+                    from dispatch.youtube_connections import get_account_credentials
+                    account_creds = get_account_credentials(account_id)
+                except Exception as ce:
+                    logger.debug("Account credentials lookup note for %s: %s", account_id, ce)
+
             if platform in ("youtube", "youtube_shorts"):
                 privacy = "public" if publish_mode == "public" else ("unlisted" if publish_mode == "unlisted" else "private")
                 # Include idempotency key marker in description
@@ -273,23 +283,42 @@ def _process_outbox_queue_internal() -> int:
                     title=title,
                     description=full_desc,
                     tags=hashtags,
-                    privacy_status=privacy
+                    privacy_status=privacy,
+                    credentials_data=account_creds
                 )
             elif platform == "instagram":
+                ig_token = account_creds.get("access_token") if account_creds else None
+                ig_uid = account_id or (account_creds.get("account_id") if account_creds else None)
                 result = upload_instagram_reel(
                     video_path=video_path,
-                    caption=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}"
+                    caption=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}",
+                    access_token=ig_token,
+                    ig_user_id=ig_uid
                 )
             elif platform == "linkedin":
+                li_token = account_creds.get("access_token") if account_creds else None
+                li_author = account_id or (account_creds.get("author_urn") if account_creds else None)
                 result = upload_linkedin_video(
                     video_path=video_path,
                     commentary=f"{title}\n\n{description}\n\n{hashtags}",
-                    title=title
+                    title=title,
+                    access_token=li_token,
+                    author_urn=li_author
                 )
             elif platform in ("x", "twitter"):
+                x_bearer = account_creds.get("bearer_token") if account_creds else None
+                x_key = account_creds.get("api_key") if account_creds else None
+                x_secret = account_creds.get("api_secret") if account_creds else None
+                x_tok = account_creds.get("oauth_token") if account_creds else None
+                x_tok_sec = account_creds.get("oauth_secret") if account_creds else None
                 result = upload_x_video(
                     video_path=video_path,
-                    text=f"{title}\n\n{hashtags}"
+                    text=f"{title}\n\n{hashtags}",
+                    bearer_token=x_bearer,
+                    api_key=x_key,
+                    api_secret=x_secret,
+                    oauth_token=x_tok,
+                    oauth_secret=x_tok_sec
                 )
             else:
                 err_msg = f"Unsupported publishing platform '{platform}'"

@@ -13,7 +13,8 @@ def upload_youtube_short(
     description: str,
     tags: str,
     privacy_status: str = "private",
-    credentials_path: Optional[Path] = None
+    credentials_path: Optional[Path] = None,
+    credentials_data: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Upload video to YouTube as a Short.
     
@@ -63,7 +64,9 @@ def upload_youtube_short(
                 token_file = c
                 break
 
-    if not token_file and not os.getenv("YOUTUBE_ACCESS_TOKEN"):
+    has_account_creds = bool(credentials_data and (credentials_data.get("refresh_token") or credentials_data.get("token") or credentials_data.get("access_token")))
+
+    if not token_file and not os.getenv("YOUTUBE_ACCESS_TOKEN") and not has_account_creds:
         raise PermissionError("YouTube OAuth credentials missing (youtube_token.json). Please authenticate via Settings.")
 
     # If real credentials exist, execute actual Google API client upload
@@ -73,7 +76,22 @@ def upload_youtube_short(
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request as GoogleAuthRequest
 
-        if token_file and token_file.exists():
+        if has_account_creds and credentials_data:
+            ref_tok = credentials_data.get("refresh_token") or credentials_data.get("token")
+            acc_tok = credentials_data.get("access_token")
+            creds = Credentials(
+                token=acc_tok,
+                refresh_token=ref_tok,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+                client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+            )
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleAuthRequest())
+                except Exception as refresh_err:
+                    logger.warning("Failed to refresh account-specific YouTube OAuth token: %s", refresh_err)
+        elif token_file and token_file.exists():
             creds = Credentials.from_authorized_user_file(str(token_file))
             if creds.expired and creds.refresh_token:
                 try:

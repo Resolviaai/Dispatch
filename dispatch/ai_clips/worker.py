@@ -158,7 +158,18 @@ class HighlightWorker:
                                 if cp.exists():
                                     src_path = cp
 
-                    self._render_clips_for_video(video_id, clip_ids, segments, src_path)
+                    user_id = item.get("user_id") or item.get("channel_id")
+                    active_render_key = ""
+                    if user_id:
+                        try:
+                            from dispatch.youtube_connections import get_user_gemini_key
+                            active_render_key = get_user_gemini_key(user_id) or ""
+                        except Exception:
+                            pass
+                    from dispatch.config import GEMINI_API_KEY
+                    active_render_key = active_render_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+
+                    self._render_clips_for_video(video_id, clip_ids, segments, src_path, api_key=active_render_key)
                     # Verify rendered outputs exist on disk before marking COMPLETED
                     if clip_ids:
                         all_rendered = True
@@ -221,7 +232,8 @@ class HighlightWorker:
         video_id: str,
         saved_ids: List[str],
         segments: List[Dict[str, Any]],
-        source_video_path: Optional[Path]
+        source_video_path: Optional[Path],
+        api_key: Optional[str] = None
     ):
         """Render candidate clips with Stage 2 precision transcription and FFmpeg."""
         if not saved_ids:
@@ -278,7 +290,7 @@ class HighlightWorker:
                 ) as temp_dir:
                     slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
                     extract_stage2_clip_audio(source_video_path, p_start, p_end, slice_mp3)
-                    stage2_res = transcribe_stage2_precision_words(slice_mp3)
+                    stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=api_key)
 
                 words = stage2_res.get("words", [])
                 if words:
@@ -478,16 +490,25 @@ class HighlightWorker:
 
         attempt_count = int(item.get("ai_attempt_count") or 0) + 1
 
-        # Key-rotation fix: read the LIVE env value at call time. The module-level
-        # GEMINI_API_KEY import goes stale when the dashboard rotates the key.
-        if not os.getenv("GEMINI_API_KEY", ""):
+        # Resolve user's vaulted Gemini key if available, otherwise read the live env value
+        user_gemini_key = ""
+        user_id = item.get("user_id") or item.get("channel_id")
+        if user_id:
+            try:
+                from dispatch.youtube_connections import get_user_gemini_key
+                user_gemini_key = get_user_gemini_key(user_id)
+            except Exception as ke:
+                logger.debug("User Gemini key lookup note for %s: %s", user_id, ke)
+
+        active_gemini_key = user_gemini_key or os.getenv("GEMINI_API_KEY", "")
+        if not active_gemini_key:
             err_msg = "GEMINI_API_KEY is not configured or is empty. Cannot extract highlights."
             db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
             raise RuntimeError(err_msg)
 
         try:
-            # Strictly call Gemini API: NO fallback to extract_clips_local_heuristic
-            raw_clips, model_used = call_gemini_generate_content(user_prompt)
+            # Strictly call Gemini API with active key (user-vaulted or server fallback)
+            raw_clips, model_used = call_gemini_generate_content(user_prompt, api_key=active_gemini_key)
 
             # Validate, filter, snap, clamp, and deduplicate
             validated_clips = validate_and_filter_candidates(
@@ -536,7 +557,7 @@ class HighlightWorker:
                          video_id, attempt_count, self.max_attempts, err_msg)
 
             # Determine whether error is permanent or retryable
-            current_gemini_key = os.getenv("GEMINI_API_KEY", "")
+            current_gemini_key = active_gemini_key
             is_permanent = (
                 not current_gemini_key
                 or "API_KEY" in err_msg.upper()

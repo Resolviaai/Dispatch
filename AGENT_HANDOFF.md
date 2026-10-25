@@ -313,3 +313,28 @@ Owner rejected fully-rounded buttons AND chips (screenshots of detail page + cli
   - Worker unit tests: 28/28 passed; `tsc` 0 errors.
   - Frontend: `npx tsc --noEmit` 0 errors, 4 suites passed; bundle built into Android web assets.
   - Android unit tests: 27/27 tasks passed; `prepare_release.ps1` generated signed `v1.1.14-alpha` APK (versionCode 18, SHA-256 verified). Shipped and landing page updated.
+
+## 51. Post-Audit Resolution & End-to-End Pipeline Wiring (2026-10-25) — v1.1.14-alpha (18)
+- **Hardware-Confirmed AE Lock & Async Re-lock**:
+  - `CameraCaptureManager.kt`: Replaced hardcoded support with dynamic `CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE` probe. Tracks active hardware lock state via `TotalCaptureResult` (`CaptureResult.CONTROL_AE_LOCK` and `CaptureResult.CONTROL_AE_STATE_LOCKED`). Fixed async race in `setExposureIndex` by awaiting `relockFuture` before updating `isAeLocked` and invoking `onComplete`.
+- **Per-User Gemini Key Full Pipeline Ingestion**:
+  - `dispatch/youtube_connections.py`: Added `get_user_gemini_key(user_id)` reading from Supabase vault.
+  - `dispatch/ai_clips/worker.py`: Resolves `user_id` and injects vaulted key into highlight candidate extraction and Stage 2 precision alignment.
+  - `dispatch/transcription/gemini_engine.py` & `worker.py`: Wired `api_key` override through `transcribe_stage1_flash_lite`, `transcribe_stage2_precision_words`, and `drain_queued_transcriptions`.
+- **Publishing Outbox Account Credential Binding**:
+  - Migration `20261025000010_connected_accounts_and_keys.sql`: Added `cloud_get_credentials_by_account_id` RPC.
+  - `dispatch/publisher/outbox.py`: Reads `job.get("account_id")`, resolves decrypted credentials via `get_account_credentials`, and passes credentials directly into platform upload functions.
+- **Multi-Platform Account Connection & Limit Enforcement**:
+  - `cloud-worker/src/index.ts`: Added `POST /accounts/connect` to validate, encrypt with `TOKEN_VAULT_KEY`, and store accounts into `connected_accounts` table. Enforces 1-account limit for LinkedIn/X and multi-account for YouTube/Instagram. Added generalized `/oauth/:provider/init`.
+  - `frontend/src/accounts/accountsService.ts`: Added `connectAccount` and `initProviderOAuth`.
+  - `frontend/src/screens/SettingsScreen.tsx`: Added full Connected Accounts management for YouTube, Instagram, LinkedIn, and X with dedicated connection modals, platform vector icons, and limit enforcement.
+- **Publisher Modernization Completed**:
+  - `dispatch/publisher/linkedin.py`: Updated to `Linkedin-Version: 202408`, exclusively using modern Community Management Videos API (`/rest/videos?action=initializeUpload`) and Posts API (`/rest/posts`). Removed deprecated `v2/assets` and `v2/ugcPosts`.
+  - `dispatch/publisher/twitter.py`: Migrated media uploads to `https://api.x.com/2/media/upload` (with v1.1 fallback) and posts to `https://api.x.com/2/tweets`.
+- **Full Verification**:
+  - Python tests: 67/67 passed.
+  - Cloud Worker tests: 29/29 passed (`npm test`).
+  - Frontend: `npx tsc --noEmit` clean, all 4 test suites passed 100%, bundle built into `android/app/src/main/assets/web`.
+  - Android debug unit tests: 27/27 passed.
+  - Release APK verified: `release-out/Dispatch.apk` (versionCode 18, SHA-256 cert fingerprint `94f778490fde8ffd2c7e644d0c8169249f2e79829d769b5f71aa0301c5643804`).
+

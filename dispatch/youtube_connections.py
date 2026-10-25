@@ -70,6 +70,44 @@ def disconnect_user_token(user_id: str) -> None:
     _supabase_rpc("cloud_delete_refresh_token", {"p_user_id": user_id})
 
 
+def get_user_gemini_key(user_id: Optional[str] = None) -> str:
+    """Decrypt and return the given user's vaulted Gemini API key, or '' if none."""
+    if not user_id:
+        return ""
+    try:
+        rows = _supabase_rpc("cloud_get_gemini_key", {"p_user_id": user_id})
+        enc = rows[0]["cloud_get_gemini_key"] if isinstance(rows, list) and rows else rows
+        if not enc or not isinstance(enc, str):
+            return ""
+        return decrypt_refresh_token(enc)
+    except Exception as e:
+        logger.debug("Could not retrieve vaulted Gemini key for user %s: %s", user_id, e)
+        return ""
+
+
+def get_account_credentials(account_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    """Retrieve and decrypt credentials for a connected account.
+    Returns parsed credentials dict or empty dict if not found."""
+    if not account_id:
+        return {}
+    try:
+        rows = _supabase_rpc("cloud_get_credentials_by_account_id", {
+            "p_account_id": str(account_id),
+            "p_user_id": user_id
+        })
+        enc = rows[0]["cloud_get_credentials_by_account_id"] if isinstance(rows, list) and rows else rows
+        if not enc or not isinstance(enc, str):
+            return {}
+        decrypted = decrypt_refresh_token(enc)
+        import json
+        if decrypted.startswith("{"):
+            return json.loads(decrypted)
+        return {"access_token": decrypted, "refresh_token": decrypted}
+    except Exception as e:
+        logger.debug("Could not retrieve credentials for account %s: %s", account_id, e)
+        return {}
+
+
 class RemoteJob:
     def __init__(self, job_id: str, user_id: str, youtube_url: str):
         self.job_id = job_id

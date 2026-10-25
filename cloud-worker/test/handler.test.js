@@ -261,6 +261,37 @@ test("accounts listing returns array of user accounts", async () => {
   assert.deepEqual(body.accounts, mockAccounts);
 });
 
+test("accounts connect stores credentials and returns account id", async () => {
+  supabase.set("/rpc/cloud_store_connected_account", {
+    method: "POST",
+    fn: (_url, init) => {
+      const b = JSON.parse(init.body);
+      assert.equal(b.p_provider, "instagram");
+      assert.equal(b.p_account_id, "ig_user_123");
+      assert.equal(b.p_account_name, "Creator IG");
+      assert.ok(b.p_credentials_encrypted);
+      return { body: "account-uuid-789" };
+    }
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/accounts/connect", {
+    method: "POST",
+    headers: pcHeaders(),
+    body: JSON.stringify({
+      provider: "instagram",
+      account_id: "ig_user_123",
+      account_name: "Creator IG",
+      credentials: { access_token: "EAAB..." }
+    })
+  }), { ...env(), TOKEN_VAULT_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.id, "account-uuid-789");
+  assert.equal(data.account_id, "ig_user_123");
+});
+
 test("accounts deletion by id succeeds", async () => {
   supabase.set("/rpc/cloud_delete_connected_account", { method: "POST", fn: () => ({ body: true }) });
   const res = await worker.fetch(new Request("https://w.test/accounts/11111111-2222-3333-4444-555555555555", { method: "DELETE", headers: pcHeaders() }), env());

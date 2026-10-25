@@ -11,8 +11,11 @@ import android.os.Looper
 import android.util.Log
 import android.util.Range
 import android.util.Rational
+import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.util.Size
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.Camera2CameraControl
@@ -91,6 +94,14 @@ class CameraCaptureManager(private val context: Context) {
     @Volatile var isAfLocked: Boolean = false
         private set
     @Volatile var isAeAfLockUncertain: Boolean = false
+        private set
+
+    @Volatile
+    var hardwareReportedAeLocked: Boolean = false
+        private set
+
+    @Volatile
+    var lastHardwareAeState: Int? = null
         private set
     val isAeAfLocked: Boolean
         get() = isAeLocked || isAfLocked
@@ -228,6 +239,20 @@ class CameraCaptureManager(private val context: Context) {
             if (lensFacing == CameraSelector.LENS_FACING_BACK) {
                 extender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             }
+
+            // Real hardware AE lock state tracking via repeating capture callback
+            extender.setSessionCaptureCallback(object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    val aeLock = result.get(CaptureResult.CONTROL_AE_LOCK)
+                    val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                    lastHardwareAeState = aeState
+                    hardwareReportedAeLocked = (aeLock == java.lang.Boolean.TRUE) || (aeState == CaptureResult.CONTROL_AE_STATE_LOCKED)
+                }
+            })
         } catch (e: Exception) {
             Log.w(TAG, "Camera2Interop options not supported on this device: ${e.message}")
         }
@@ -724,12 +749,17 @@ class CameraCaptureManager(private val context: Context) {
         }
     }
 
-    // The CONTROL_AE_LOCK_AVAILABLE characteristic misreports on several devices
-    // (its value rarely equals Boolean.TRUE), which silently skipped the hardware
-    // AE lock and made "lock exposure" a no-op. Sending the lock request is safe
-    // everywhere — unsupported requests are ignored by the capture pipeline — so we
-    // always apply and rely on the per-request try/catch instead.
-    private fun cameraSupportsAeLock(cam: Camera): Boolean = true
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun cameraSupportsAeLock(cam: Camera): Boolean {
+        return try {
+            val avail = Camera2CameraInfo.from(cam.cameraInfo)
+                .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE)
+            // If the lens explicitly reports false, AE lock is unsupported. Null or true allows attempt.
+            avail != java.lang.Boolean.FALSE
+        } catch (_: Exception) {
+            true
+        }
+    }
 
     @OptIn(ExperimentalCamera2Interop::class)
     private fun setCameraAeLock(cam: Camera, locked: Boolean): ListenableFuture<Void?> =
@@ -966,28 +996,61 @@ class CameraCaptureManager(private val context: Context) {
                     val applied = future.get()
                     currentExposureIndex = applied
                     if (wasAeLocked) {
-                        isAeLocked = true
-                        setCameraAeLock(cam, true)
+                        // Re-lock asynchronously and only set isAeLocked after confirmation
+                        val relockFuture = setCameraAeLock(cam, true)
+                        relockFuture.addListener({
+                            if (!exposureOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@addListener
+                            try {
+                                relockFuture.get()
+                                isAeLocked = true
+                                Log.i(TAG, "AE lock re-established after exposure index change to $applied")
+                            } catch (re: Exception) {
+                                isAeLocked = false
+                                Log.w(TAG, "Failed to re-lock AE after exposure change: ${re.message}")
+                            }
+                            onComplete?.invoke(applied, null)
+                        }, ContextCompat.getMainExecutor(context))
+                    } else {
+                        onComplete?.invoke(applied, null)
+                        Log.i(TAG, "Exposure compensation applied: index=$applied (wasAeLocked=false)")
                     }
-                    onComplete?.invoke(applied, null)
-                    Log.i(TAG, "Exposure compensation applied: index=$applied (re-locked=$wasAeLocked)")
                 } catch (e: Exception) {
                     if (!exposureOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@addListener
                     Log.w(TAG, "Exposure compensation future failed: ${e.message}")
                     currentExposureIndex = cam.cameraInfo.exposureState.exposureCompensationIndex
                     if (wasAeLocked) {
-                        isAeLocked = true
-                        setCameraAeLock(cam, true)
+                        val relockFuture = setCameraAeLock(cam, true)
+                        relockFuture.addListener({
+                            try {
+                                relockFuture.get()
+                                isAeLocked = true
+                            } catch (_: Exception) {
+                                isAeLocked = false
+                            }
+                            onComplete?.invoke(null, e.message)
+                        }, ContextCompat.getMainExecutor(context))
+                    } else {
+                        onComplete?.invoke(null, e.message)
                     }
-                    onComplete?.invoke(null, e.message)
                 }
             }, ContextCompat.getMainExecutor(context))
             return targetIndex
         } catch (e: Exception) {
             Log.w(TAG, "Failed to dispatch exposure compensation: ${e.message}")
             if (wasAeLocked) {
-                isAeLocked = true
-                try { setCameraAeLock(cam, true) } catch (_: Exception) {}
+                try {
+                    val relockFuture = setCameraAeLock(cam, true)
+                    relockFuture.addListener({
+                        try {
+                            relockFuture.get()
+                            isAeLocked = true
+                        } catch (_: Exception) {
+                            isAeLocked = false
+                        }
+                    }, ContextCompat.getMainExecutor(context))
+                } catch (_: Exception) {
+                    isAeLocked = false
+                }
             }
             onComplete?.invoke(null, e.message)
             return currentExposureIndex

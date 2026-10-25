@@ -161,12 +161,20 @@ class TranscriptionWorker:
         local_path_str = item.get("local_video_path")
         if local_path_str and Path(local_path_str).exists():
             from dispatch.config import GEMINI_API_KEY
-            api_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+            user_id = item.get("user_id") or item.get("channel_id")
+            vaulted_key = ""
+            if user_id:
+                try:
+                    from dispatch.youtube_connections import get_user_gemini_key
+                    vaulted_key = get_user_gemini_key(user_id) or ""
+                except Exception as e:
+                    logger.debug("Failed to retrieve user gemini key: %s", e)
+            api_key = vaulted_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
             if api_key:
                 try:
                     logger.info("Stage 1 Fast Ingestion: Transcribing %s with gemini-3.5-flash-lite...", video_id)
                     from dispatch.transcription.gemini_engine import transcribe_stage1_flash_lite
-                    stage1_segments = transcribe_stage1_flash_lite(Path(local_path_str))
+                    stage1_segments = transcribe_stage1_flash_lite(Path(local_path_str), api_key=api_key)
                     if stage1_segments:
                         logger.info("Stage 1 Gemini transcription succeeded for %s (%d segments). Finalizing immediately.",
                                     video_id, len(stage1_segments))

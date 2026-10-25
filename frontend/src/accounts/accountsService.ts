@@ -106,6 +106,58 @@ export async function deleteGeminiKey(jwtToken: string): Promise<boolean> {
   }
 }
 
+export interface ConnectAccountParams {
+  provider: 'youtube' | 'instagram' | 'linkedin' | 'twitter';
+  account_id: string;
+  account_name: string;
+  account_email?: string;
+  avatar_url?: string;
+  credentials: Record<string, unknown> | string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function connectAccount(
+  jwtToken: string,
+  params: ConnectAccountParams
+): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    const res = await fetch(`${WORKER_BASE}/accounts/connect`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${jwtToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json() as { ok?: boolean; id?: string; error?: string };
+    if (!res.ok) {
+      return { ok: false, error: data.error || `Connection failed: ${res.status}` };
+    }
+    return { ok: true, id: data.id };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
+  }
+}
+
+export async function initProviderOAuth(jwtToken: string, provider: string): Promise<{ url?: string; error?: string }> {
+  try {
+    const res = await fetch(`${WORKER_BASE}/oauth/${encodeURIComponent(provider)}/init`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${jwtToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await res.json() as { url?: string; error?: string };
+    if (res.ok && data.url) {
+      return { url: data.url };
+    }
+    return { error: data.error || `OAuth initiation failed: ${res.status}` };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Network error' };
+  }
+}
+
 export async function initGoogleOAuth(jwtToken: string): Promise<{ url: string }> {
   try {
     const res = await fetch(`${WORKER_BASE}/oauth/google/init`, {
