@@ -62,8 +62,9 @@ export function applyExposureResult(
   currentIndex: number,
   result: ExposureResultEvent
 ): { index: number; error: string | null } {
-  if (result.success && Number.isInteger(result.index)) {
-    return { index: result.index, error: null };
+  const applied = result.index;
+  if (result.success && applied !== undefined && Number.isInteger(applied)) {
+    return { index: applied, error: null };
   }
   return {
     index: currentIndex,
@@ -159,7 +160,7 @@ export function applyNativeLockState(
     return { ...current, status: 'locked', isLocked: true, hasAe, hasAf, error: undefined };
   }
   if (current.status === 'locking') return current;
-  if (current.isLocked || current.status === 'locking' || current.status === 'unlocking') {
+  if (current.isLocked || current.status === 'unlocking') {
     return { ...current, status: current.status === 'unlocking' ? 'idle' : current.status, isLocked: false, hasAe: false, hasAf: false };
   }
   return current;
