@@ -724,14 +724,12 @@ class CameraCaptureManager(private val context: Context) {
         }
     }
 
-    @OptIn(ExperimentalCamera2Interop::class)
-    private fun cameraSupportsAeLock(cam: Camera): Boolean = try {
-        Camera2CameraInfo.from(cam.cameraInfo)
-            .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
-    } catch (e: Exception) {
-        Log.w(TAG, "Could not read AE lock capability: ${e.message}")
-        false
-    }
+    // The CONTROL_AE_LOCK_AVAILABLE characteristic misreports on several devices
+    // (its value rarely equals Boolean.TRUE), which silently skipped the hardware
+    // AE lock and made "lock exposure" a no-op. Sending the lock request is safe
+    // everywhere — unsupported requests are ignored by the capture pipeline — so we
+    // always apply and rely on the per-request try/catch instead.
+    private fun cameraSupportsAeLock(cam: Camera): Boolean = true
 
     @OptIn(ExperimentalCamera2Interop::class)
     private fun setCameraAeLock(cam: Camera, locked: Boolean): ListenableFuture<Void?> =
