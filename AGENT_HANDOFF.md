@@ -288,3 +288,28 @@ Owner rejected fully-rounded buttons AND chips (screenshots of detail page + cli
 - Action buttons (Edit / Publish / Watch on YouTube / Retry / Refresh / Show all) → `rounded-xl` (12px). Filter chips + framing chips → `rounded-lg` (8px). Circular stays ONLY for icon-only buttons (refresh/back/kebab/play) and switches.
 - **design.md radii token updated with the owner override** ("chips 8, buttons 12, circular only for icon-only") so future passes never revert it.
 - Verified in emulator on the detail page (screenshot-cropped): Edit/Publish 12px, framing chips 8px. Shipped v1.1.13-alpha (17), stable URL hash-verified, landing live at 1.1.13.
+
+## 50. Camera exposure lock, Google Account Picker, Connected Accounts, Studio Sessions anatomy & Modernized Publisher (2026-10-25) — v1.1.14-alpha (18)
+- **Camera exposure lock persistence & AWB lock**:
+  - `CameraCaptureManager.kt`: Coupled `CaptureRequest.CONTROL_AWB_LOCK` with `CONTROL_AE_LOCK` in `setCameraAeLock` to prevent color temperature shifts upon exposure lock. Fixed defect where `isAeLocked = false` was set permanently on sun-dial drag; now checks `wasAeLocked`, temporarily unlocks for the index change, and re-locks with `setCameraAeLock(cam, true); isAeLocked = true` on future completion or error.
+- **Google Sign-In Account Picker in Custom Tabs**:
+  - `DispatchNativeBridge.kt:openCustomTab`: Explicitly probes `packageManager` for Chrome packages (`com.android.chrome`, `com.chrome.beta`, etc.) and sets the `CustomTabsIntent` package to Chrome. Surfaces the phone's signed-in Google Accounts via Google Play Services web sign-in instead of falling back to default browsers without Google cookies (e.g. Mi Browser on HyperOS).
+- **Connected Accounts & Per-User Key Vault**:
+  - Migration `20261025000010_connected_accounts_and_keys.sql`: Added `profiles.queue_priority`, `connected_accounts` table (multiple YouTube/Instagram, max 1 LinkedIn/Twitter), `gemini_connections` table, and upgraded `cloud_claim_job` with 45-min lease reclamation and 3-consecutive-user fairness.
+  - Cloud Worker: Added `GET /accounts`, `DELETE /accounts/:id`, `GET/POST/DELETE /keys/gemini`, `POST /admin/users/:id/priority`, single-use ticket exchange in `POST /oauth/google/init` to prevent JWT query leaks.
+  - Frontend: Added `accountsService.ts`. Updated `SettingsScreen.tsx` with Connected Accounts list, multi-channel YouTube display with avatars, and Gemini AI Key vault.
+  - `ClipsScreen.tsx`: Bound destination toggles to connected identities, blocking publishing when selected destinations lack connected accounts, and accurately labeling per-provider privacy (YouTube private/unlisted, socials public).
+- **Sessions Screen Studio Anatomy Pass (`RecordingsScreen.tsx`)**:
+  - YouTube Studio anatomy: Flat divider-free rows separated by whitespace alone (`py-3`), 16:9 thumbnails (`w-[132px] aspect-video`), 8px chips (`rounded-lg`, order: `All → Queued → Uploaded`), 12px buttons (`rounded-xl`), and flat segment rows.
+- **Publisher Modernization & Multi-Platform Updates**:
+  - `dispatch/db.py`: Added `account_id` column to `publishing_outbox`, automatic migration in `init_db()`, updated `approve_clip` to bind accounts.
+  - `dispatch/web/app.py`: Updated `ApproveRequest` to accept `account_ids`.
+  - `dispatch/publisher/youtube.py`: Checks YouTube Data API `videos().list(part="status,processingDetails")` before declaring completion (marks `processing` until YouTube reports `uploadStatus: "processed"`).
+  - `dispatch/publisher/linkedin.py`: Migrated to modern Community Management API (`Linkedin-Version: 202401`, `/rest/videos`, `/rest/posts`) with legacy fallback.
+  - `dispatch/publisher/instagram.py`: Verified and upgraded to Graph API `v21.0`.
+  - `site/admin.html`: Added priority setting action with direct POST to Worker `/admin/users/:id/priority`.
+- **Release Verification**:
+  - All 56 Python tests passed (`test_publisher`, `test_phase4_publishing`, `test_migration_grant_hygiene`, `test_cloud_config`, `test_cloud_quota`, `test_auth_session`, `test_edit_windows`).
+  - Worker unit tests: 28/28 passed; `tsc` 0 errors.
+  - Frontend: `npx tsc --noEmit` 0 errors, 4 suites passed; bundle built into Android web assets.
+  - Android unit tests: 27/27 tasks passed; `prepare_release.ps1` generated signed `v1.1.14-alpha` APK (versionCode 18, SHA-256 verified). Shipped and landing page updated.

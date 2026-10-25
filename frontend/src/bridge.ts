@@ -120,6 +120,7 @@ declare global {
       getPcHost?: () => string;
       setPcHost?: (pcHost: string) => boolean;
       getAuthToken?: () => string;
+      openCustomTab?: (url: string) => boolean;
     };
   }
 }
@@ -461,6 +462,21 @@ export const Bridge = {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem('dispatch_wifi_only', String(enabled));
     }
+  },
+
+  openCustomTab(url: string): boolean {
+    if (window.DispatchBridge?.openCustomTab) {
+      try {
+        return window.DispatchBridge.openCustomTab(url);
+      } catch (e) {
+        console.warn('Failed to open custom tab', e);
+      }
+    }
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank');
+      return true;
+    }
+    return false;
   }
 };
 

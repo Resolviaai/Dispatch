@@ -150,6 +150,39 @@ def _process_outbox_queue_internal() -> int:
     except Exception as e:
         logger.debug("Stale outbox recovery check note: %s", e)
 
+    # 2. Check remote status of in-flight processing jobs (e.g. YouTube processing)
+    try:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM publishing_outbox WHERE status = 'processing'")
+            processing_jobs = [dict(r) for r in cursor.fetchall()]
+        for pjob in processing_jobs:
+            if pjob.get("platform") in ("youtube", "youtube_shorts") and pjob.get("remote_id"):
+                from dispatch.youtube_inbox.oauth import get_youtube_service
+                svc = get_youtube_service()
+                if svc:
+                    s_resp = svc.videos().list(part="status", id=pjob["remote_id"]).execute()
+                    items = s_resp.get("items", [])
+                    if items:
+                        st = items[0].get("status", {}).get("uploadStatus")
+                        if st == "processed":
+                            with db.get_db_connection() as conn:
+                                conn.execute("""
+                                    UPDATE publishing_outbox 
+                                    SET status = 'published', updated_at = CURRENT_TIMESTAMP, published_at = CURRENT_TIMESTAMP
+                                    WHERE id = ?
+                                """, (pjob["id"],))
+                            check_and_finalize_clip(pjob["clip_id"], Path(pjob.get("video_path") or f"storage/clips/{pjob['clip_id']}.mp4"))
+                        elif st in ("failed", "rejected"):
+                            with db.get_db_connection() as conn:
+                                conn.execute("""
+                                    UPDATE publishing_outbox 
+                                    SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                                    WHERE id = ?
+                                """, (f"YouTube processing {st}: {items[0].get('status', {}).get('rejectionReason', 'unknown')}", pjob["id"]))
+    except Exception as e:
+        logger.debug("Processing status check note: %s", e)
+
     queue = db.get_outbox_queue()
     if not queue:
         return 0
@@ -268,23 +301,26 @@ def _process_outbox_queue_internal() -> int:
                     )
                 continue
 
-            # Update job record to published
+            # Update job record with actual provider status
+            final_status = result.get("status", "published")
             with db.get_db_connection() as conn:
                 conn.execute("""
                     UPDATE publishing_outbox 
-                    SET status = 'published', 
+                    SET status = ?, 
                         remote_id = ?, 
                         remote_url = ?, 
                         updated_at = CURRENT_TIMESTAMP,
                         published_at = CURRENT_TIMESTAMP
                     WHERE id = ?
-                """, (result.get("remote_id"), result.get("remote_url"), job_id))
+                """, (final_status, result.get("remote_id"), result.get("remote_url"), job_id))
 
-            success_count += 1
-            logger.info("Successfully published %s to %s (%s)", clip_id, platform, result.get("remote_url"))
-
-            # Check if all outbox jobs for this clip have finished
-            check_and_finalize_clip(clip_id, video_path)
+            if final_status == "published":
+                success_count += 1
+                logger.info("Successfully published %s to %s (%s)", clip_id, platform, result.get("remote_url"))
+                # Check if all outbox jobs for this clip have finished
+                check_and_finalize_clip(clip_id, video_path)
+            else:
+                logger.info("Uploaded %s to %s with in-flight remote status '%s' (%s)", clip_id, platform, final_status, result.get("remote_url"))
 
         except PermissionError as pe:
             logger.warning("Publishing job %s (%s) blocked: %s", job_id, platform, pe)

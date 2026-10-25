@@ -74,10 +74,41 @@ class DispatchNativeBridge(
     fun openCustomTab(url: String): Boolean {
         if (!url.startsWith("https://dispatch-cloud.resolviaai.workers.dev/")) return false
         return try {
-            val intent = androidx.browser.customtabs.CustomTabsIntent.Builder().build()
-            intent.launchUrl(activity, android.net.Uri.parse(url))
+            val builder = androidx.browser.customtabs.CustomTabsIntent.Builder()
+                .setShowTitle(true)
+            val customTabsIntent = builder.build()
+
+            // Prefer Chrome so Google Accounts on the device are available in the OAuth account picker
+            val pm = activity.packageManager
+            val chromePackages = listOf(
+                "com.android.chrome",
+                "com.chrome.beta",
+                "com.chrome.dev",
+                "com.chrome.canary",
+                "com.google.android.apps.chrome"
+            )
+            val selectedPackage = chromePackages.firstOrNull { pkg ->
+                try {
+                    pm.getPackageInfo(pkg, 0)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (selectedPackage != null) {
+                customTabsIntent.intent.setPackage(selectedPackage)
+            }
+            customTabsIntent.launchUrl(activity, android.net.Uri.parse(url))
             true
-        } catch (e: Exception) { false }
+        } catch (e: Exception) {
+            try {
+                val browserIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                activity.startActivity(browserIntent)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     @JavascriptInterface

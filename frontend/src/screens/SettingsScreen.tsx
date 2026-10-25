@@ -12,9 +12,25 @@ import {
   Camera,
   Wifi,
   ExternalLink,
+  Sparkles,
+  Key,
+  Trash2,
+  Plus,
+  RefreshCw,
+  Share2,
 } from 'lucide-react';
 import { Bridge, StorageInfo, apiUrl } from '../bridge';
 import { getThemePreference, setThemePreference, ThemePreference } from '../theme';
+import {
+  ConnectedAccount,
+  GeminiKeyStatus,
+  listConnectedAccounts,
+  deleteConnectedAccount,
+  getGeminiKeyStatus,
+  saveGeminiKey,
+  deleteGeminiKey,
+  initGoogleOAuth,
+} from '../accounts/accountsService';
 
 interface SettingsScreenProps {
   pcHost?: string;
@@ -33,197 +49,144 @@ export function setDefaultLensPref(lens: 'back' | 'front') {
   }
 }
 
-/**
- * Settings (Design System v3 §2.7.6) — a control panel, not a data sheet.
- * Every section carries an actionable control: theme picker, default camera,
- * account sign-out, YouTube connect/disconnect, PC address with live test,
- * upload network toggle. Static facts are compressed to one metadata line.
- */
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000' }) => {
-  const [youtubeState, setYoutubeState] = useState<{
-    connected: boolean;
-    channelTitle: string;
-    channelId: string;
-  }>({
-    connected: false,
-    channelTitle: '',
-    channelId: '',
-  });
+  const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+  const [geminiStatus, setGeminiStatus] = useState<GeminiKeyStatus>({ configured: false, key_prefix: null });
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [isSavingGemini, setIsSavingGemini] = useState(false);
+  const [showGeminiInput, setShowGeminiInput] = useState(false);
 
-  const [isChecking, setIsChecking] = useState(false);
-  const [isStartingAuth, setIsStartingAuth] = useState(false);
   const [wifiOnly, setWifiOnly] = useState(true);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [themePref, setThemePref] = useState<ThemePreference>(() => getThemePreference());
   const [defaultLens, setDefaultLens] = useState<'back' | 'front'>(() => getDefaultLensPref());
-  const isNativeAndroid = Bridge.isAvailable();
-
-  const fetchYouTubeStatus = async () => {
-    setIsChecking(true);
-    if (Bridge.isAvailable()) {
-      const status = Bridge.getYouTubeStatus();
-      setYoutubeState({
-        connected: status.connected,
-        channelTitle: status.channelTitle || '',
-        channelId: status.account || '',
-      });
-      setIsChecking(false);
-      return;
-    }
-    try {
-      const res = await fetch(apiUrl('/api/integrations/status', pcHost));
-      if (res.ok) {
-        const data = await res.json();
-        setYoutubeState({
-          connected: !!data.youtube?.connected,
-          channelTitle: data.youtube?.channel_title || '',
-          channelId: data.youtube?.channel_id || '',
-        });
-        if (!data.youtube?.connected && data.youtube?.error) {
-          setFeedback(data.youtube.error);
-        }
-      }
-    } catch {
-      // Bridge fallback on phone
-      if (Bridge.isAvailable()) {
-        const status = Bridge.getYouTubeStatus();
-        setYoutubeState({
-          connected: status.connected,
-          channelTitle: status.channelTitle || '',
-          channelId: status.account || '',
-        });
-      }
-    } finally {
-      setIsChecking(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchYouTubeStatus();
-    setWifiOnly(Bridge.getWifiOnly());
-    setStorageInfo(Bridge.getStorageInfo());
-  }, [pcHost]);
-
-  const handleConnectYouTube = async () => {
-    if (Bridge.isAvailable()) {
-      // On-device OAuth: Custom Tab to the Dispatch Worker's Google consent flow.
-      // The Supabase access token (short-lived) binds the authorization to this user.
-      const { currentSession } = await import('../auth/supabase');
-      const sess = await currentSession();
-      if (!sess?.access_token) {
-        setFeedback('Sign in first, then connect YouTube.');
-        return;
-      }
-      const openTab: any = (window as any).DispatchBridge?.openCustomTab;
-      const url = `https://dispatch-cloud.resolviaai.workers.dev/oauth/google/start?token=${encodeURIComponent(sess.access_token)}`;
-      let opened = false;
-      if (typeof openTab === 'function') {
-        try {
-          opened = openTab(url) !== false;
-        } catch {
-          opened = false;
-        }
-      }
-      if (!opened) {
-        // Fallback for devices without a Custom Tab handler: system browser.
-        try {
-          opened = !!window.open(url, '_blank');
-        } catch {
-          opened = false;
-        }
-      }
-      setFeedback(
-        opened
-          ? 'Google sign-in opened. Approve access, then return here.'
-          : 'Could not open the browser on this device. Check that a browser is installed and retry.'
-      );
-      setTimeout(fetchYouTubeStatus, 8000);
-      return;
-    }
-
-    setIsStartingAuth(true);
-    setFeedback(null);
-    try {
-      const res = await fetch(apiUrl('/api/integrations/youtube/start-auth', pcHost), { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || 'Dispatch could not start Google sign-in.');
-      }
-      setFeedback(data.message || 'Google sign-in is starting.');
-
-      for (let attempt = 0; attempt < 150; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2000));
-        const statusResponse = await fetch(apiUrl('/api/integrations/youtube/auth-status', pcHost));
-        const authState = await statusResponse.json();
-        if (!statusResponse.ok) {
-          throw new Error(authState.detail || 'Could not check Google sign-in status.');
-        }
-        if (authState.status === 'authenticated') {
-          setFeedback(authState.message || 'YouTube account connected and verified.');
-          await fetchYouTubeStatus();
-          return;
-        }
-        if (authState.status === 'failed') {
-          setFeedback(authState.message || 'Google sign-in failed. Check the PC and retry.');
-          return;
-        }
-        if (authState.status === 'awaiting_authorization') {
-          setFeedback('Google sign-in opened. Complete authorization in the PC browser…');
-        }
-      }
-      setFeedback('Google sign-in is still waiting. Complete it in the PC browser, then check the connection again.');
-    } catch (e: any) {
-      setFeedback(e.message || 'Google sign-in failed. Check the PC and retry.');
-    } finally {
-      setIsStartingAuth(false);
-    }
-  };
-
-
-  const handleDisconnectYouTube = () => {
-    if (Bridge.isAvailable()) {
-      Bridge.disconnectYouTube();
-    }
-    setYoutubeState({ connected: false, channelTitle: '', channelId: '' });
-    setFeedback('YouTube disconnected.');
-  };
-
   const [accountEmail, setAccountEmail] = useState('');
+  const [jwtToken, setJwtToken] = useState<string | null>(null);
+
   useEffect(() => {
     import('../auth/supabase').then(({ currentSession }) =>
-      currentSession().then(sess => setAccountEmail(sess?.user?.email ?? '')));
+      currentSession().then(sess => {
+        setAccountEmail(sess?.user?.email ?? '');
+        setJwtToken(sess?.access_token ?? null);
+      }));
   }, []);
+
+  const refreshAccounts = async () => {
+    if (!jwtToken) return;
+    setIsLoadingAccounts(true);
+    try {
+      const list = await listConnectedAccounts(jwtToken);
+      setAccounts(list);
+      const gemini = await getGeminiKeyStatus(jwtToken);
+      setGeminiStatus(gemini);
+    } finally {
+      setIsLoadingAccounts(false);
+    }
+  };
+
+  useEffect(() => {
+    if (jwtToken) {
+      refreshAccounts();
+    }
+    setWifiOnly(Bridge.getWifiOnly());
+    setStorageInfo(Bridge.getStorageInfo());
+  }, [jwtToken, pcHost]);
+
+  const handleConnectYouTube = async () => {
+    if (!jwtToken) {
+      setFeedback('Sign in first, then connect your YouTube account.');
+      return;
+    }
+    setFeedback('Opening Google sign-in...');
+    try {
+      const { url } = await initGoogleOAuth(jwtToken);
+      const opened = Bridge.openCustomTab(url);
+      setFeedback(
+        opened
+          ? 'Google sign-in opened. Select your account and approve access, then return here.'
+          : 'Could not open browser. Check that Chrome is installed and retry.'
+      );
+      setTimeout(refreshAccounts, 8000);
+    } catch (e: any) {
+      setFeedback(e.message || 'Failed to start Google sign-in.');
+    }
+  };
+
+  const handleDisconnectAccount = async (account: ConnectedAccount) => {
+    if (!jwtToken) return;
+    const ok = await deleteConnectedAccount(jwtToken, account.id);
+    if (ok) {
+      setAccounts(prev => prev.filter(a => a.id !== account.id));
+      setFeedback(`${account.account_name} disconnected.`);
+    } else {
+      setFeedback(`Could not disconnect ${account.account_name}.`);
+    }
+  };
+
+  const handleSaveGeminiKey = async () => {
+    if (!jwtToken || !geminiKeyInput.trim()) return;
+    setIsSavingGemini(true);
+    setFeedback(null);
+    try {
+      const res = await saveGeminiKey(jwtToken, geminiKeyInput.trim());
+      if (res.saved) {
+        setGeminiStatus({ configured: true, key_prefix: res.key_prefix || null });
+        setGeminiKeyInput('');
+        setShowGeminiInput(false);
+        setFeedback('Personal Gemini API key saved securely in your vault.');
+      } else {
+        setFeedback(res.error || 'Failed to save Gemini API key.');
+      }
+    } finally {
+      setIsSavingGemini(false);
+    }
+  };
+
+  const handleDeleteGeminiKey = async () => {
+    if (!jwtToken) return;
+    const ok = await deleteGeminiKey(jwtToken);
+    if (ok) {
+      setGeminiStatus({ configured: false, key_prefix: null });
+      setFeedback('Personal Gemini API key removed.');
+    }
+  };
 
   const handleSignOut = async () => {
     const { signOut } = await import('../auth/supabase');
-    await signOut(); // AuthGate flips to the sign-in screen automatically
+    await signOut();
   };
 
   const themeOptions: { id: ThemePreference; label: string; desc: string; icon: React.ReactNode }[] = [
-    { id: 'device', label: 'Use device theme', desc: 'Follows your phone\u2019s setting', icon: <Monitor size={16} /> },
+    { id: 'device', label: 'Use device theme', desc: 'Follows your phone’s setting', icon: <Monitor size={16} /> },
     { id: 'dark', label: 'Dark', desc: 'Studio charcoal', icon: <Moon size={16} /> },
     { id: 'light', label: 'Light', desc: 'Bright daylight', icon: <Sun size={16} /> },
   ];
 
   const handleThemeChange = (pref: ThemePreference) => {
     setThemePref(pref);
-    setThemePreference(pref); // instant recolour, no reload
+    setThemePreference(pref);
   };
 
   const handleLensChange = (lens: 'back' | 'front') => {
     setDefaultLens(lens);
-    setDefaultLensPref(lens); // applied next time the Record screen opens
+    setDefaultLensPref(lens);
   };
 
   const storageUsedPct = storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb) && storageInfo.totalGb! > 0
     ? Math.max(0, Math.min(100, Math.round(((storageInfo.totalGb! - storageInfo.freeGb!) / storageInfo.totalGb!) * 100)))
     : null;
 
+  const youtubeAccounts = accounts.filter(a => a.provider === 'youtube');
+  const instagramAccounts = accounts.filter(a => a.provider === 'instagram');
+  const linkedinAccount = accounts.find(a => a.provider === 'linkedin');
+  const twitterAccount = accounts.find(a => a.provider === 'twitter');
+
   return (
     <div className="w-full h-full flex flex-col bg-canvas text-text-main overflow-hidden select-none">
 
-      {/* SCREEN HEADER — "Where am I?" */}
+      {/* SCREEN HEADER */}
       <div className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas">
         <h1 className="text-lg font-semibold tracking-tight text-text-main flex items-center gap-2">
           <SettingsIcon size={19} className="text-primary" />
@@ -234,13 +197,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </p>
       </div>
 
-      {/* CONTENT SCROLL AREA — single-direction vertical flow */}
+      {/* CONTENT SCROLL AREA */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
 
         {/* FEEDBACK BANNER */}
         {feedback && (
-          <div role="status" className="p-3 rounded-xl bg-surface border border-border text-sm text-text-secondary">
-            {feedback}
+          <div role="status" className="p-3 rounded-xl bg-surface border border-border text-sm text-text-secondary flex items-start justify-between gap-2">
+            <span>{feedback}</span>
+            <button onClick={() => setFeedback(null)} className="text-xs text-text-muted hover:text-text-main">Dismiss</button>
           </div>
         )}
 
@@ -277,16 +241,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 2. RECORDING — real controls, facts compressed */}
+        {/* 2. RECORDING */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
           <h2 className="text-base font-semibold tracking-tight text-text-main">Recording</h2>
 
-          {/* Default camera control */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="flex items-center gap-2 text-sm font-medium text-text-main">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-2 text-sm text-text-main">
                 <Camera size={15} className="text-text-muted" />
-                Default camera
+                Default camera lens
               </span>
               <span className="text-xs text-text-muted">Opens with the Record screen</span>
             </div>
@@ -335,79 +298,150 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </button>
         </section>
 
-        {/* 4. YOUTUBE */}
+        {/* 4. CONNECTED ACCOUNTS (Single service of truth) */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold tracking-tight text-text-main">Connected Accounts</h2>
+              <p className="text-xs text-text-muted mt-0.5">Publishing destinations and identity binding</p>
+            </div>
+            <button
+              onClick={refreshAccounts}
+              disabled={isLoadingAccounts}
+              className="p-2 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-text-secondary active:scale-[0.98]"
+              title="Refresh connected accounts"
+            >
+              <RefreshCw size={14} className={isLoadingAccounts ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          {/* YouTube Accounts */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
+              <span className="flex items-center gap-1.5"><Youtube size={14} className="text-danger" /> YouTube Channels</span>
+              <span className="font-mono">{youtubeAccounts.length} connected</span>
+            </div>
+
+            {youtubeAccounts.length > 0 ? (
+              <div className="space-y-2">
+                {youtubeAccounts.map((acc) => (
+                  <div key={acc.id} className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {acc.avatar_url ? (
+                        <img src={acc.avatar_url} alt="" className="w-8 h-8 rounded-full border border-border shrink-0 object-cover" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center text-text-muted shrink-0">
+                          <Youtube size={15} />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="font-medium text-text-main truncate">{acc.account_name}</p>
+                        <p className="text-xs text-text-muted truncate font-mono">{acc.account_email || acc.account_id}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDisconnectAccount(acc)}
+                      className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted italic">No YouTube accounts connected yet.</p>
+            )}
+
+            <button
+              onClick={handleConnectYouTube}
+              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <Plus size={15} />
+              <span>{youtubeAccounts.length > 0 ? 'Connect Another YouTube Channel' : 'Connect YouTube (Google Sign-In)'}</span>
+            </button>
+          </div>
+
+          {/* Social Platforms Notice */}
+          <div className="pt-2 border-t border-border space-y-2">
+            <p className="text-xs text-text-muted leading-relaxed">
+              Dispatch supports multiple YouTube &amp; Instagram destinations, and single LinkedIn and X destinations. Connecting an account binds it directly to your publishing outbox.
+            </p>
+          </div>
+        </section>
+
+        {/* 5. PER-USER GEMINI API KEY */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold tracking-tight text-text-main">YouTube</h2>
-
-            {youtubeState.connected ? (
+            <div className="flex items-center gap-2">
+              <Sparkles size={17} className="text-primary" />
+              <h2 className="text-base font-semibold tracking-tight text-text-main">Gemini AI Key</h2>
+            </div>
+            {geminiStatus.configured ? (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-success">
                 <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                Connected
+                Active
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-danger">
-                <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                Not connected
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-warning">
+                Using Shared Engine
               </span>
             )}
           </div>
 
-          {youtubeState.connected ? (
-            <div className="space-y-2 pt-1">
-              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
-                <span className="text-text-muted shrink-0">Channel</span>
-                <span className="text-status-success font-medium truncate">
-                  {youtubeState.channelTitle || 'Dispatch Authenticated'}
-                </span>
-              </div>
+          <p className="text-xs text-text-muted leading-relaxed">
+            Provide your own Google Gemini API key to power highlight selection and word-level timestamps without shared host rate limits. Your key is encrypted with AES-256-GCM in the cloud vault.
+          </p>
 
+          {geminiStatus.configured ? (
+            <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+              <div className="flex items-center gap-2 min-w-0">
+                <Key size={15} className="text-primary shrink-0" />
+                <span className="font-mono text-xs text-text-main truncate">{geminiStatus.key_prefix}</span>
+              </div>
               <button
-                onClick={handleDisconnectYouTube}
-                className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-secondary hover:text-danger text-sm flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98]"
+                onClick={handleDeleteGeminiKey}
+                className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
               >
-                <LogOut size={15} />
-                <span>Disconnect Account</span>
+                Remove
               </button>
             </div>
-          ) : isNativeAndroid ? (
-            <div className="space-y-3 pt-1">
-              <p className="text-sm text-text-secondary leading-relaxed">
-                Connect your own YouTube account with Google sign-in on this phone. Recordings upload to your channel as unlisted for PC processing.
-              </p>
-              <button
-                onClick={handleConnectYouTube}
-                disabled={isChecking}
-                className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow disabled:opacity-50"
-              >
-                <Youtube size={16} />
-                <span>Connect YouTube (Google sign-in)</span>
-              </button>
-              <div className="rounded-xl bg-surface-2 border border-border p-3 flex gap-2">
-                <ShieldAlert size={16} className="shrink-0 text-primary mt-0.5" />
-                <p className="text-xs text-text-muted leading-relaxed">
-                  You approve access in Google&rsquo;s own screen. Tokens stay encrypted on the PC backend — never over plain HTTP.
-                </p>
+          ) : showGeminiInput ? (
+            <div className="space-y-2 pt-1">
+              <input
+                type="password"
+                value={geminiKeyInput}
+                onChange={(e) => setGeminiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full min-h-[44px] rounded-xl bg-surface-2 border border-border px-3 text-sm font-mono text-text-main outline-none focus:border-primary"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSaveGeminiKey}
+                  disabled={isSavingGemini || !geminiKeyInput.trim()}
+                  className="flex-1 min-h-[40px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-50"
+                >
+                  {isSavingGemini ? 'Saving...' : 'Save Gemini Key'}
+                </button>
+                <button
+                  onClick={() => { setShowGeminiInput(false); setGeminiKeyInput(''); }}
+                  className="min-h-[40px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm text-text-secondary active:scale-[0.98]"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           ) : (
-            <div className="space-y-2 pt-1">
-              <button
-                onClick={handleConnectYouTube}
-                disabled={isStartingAuth}
-                className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow disabled:opacity-50"
-              >
-                <Youtube size={16} />
-                <span>{isStartingAuth ? 'Google sign-in in progress…' : 'Connect YouTube (OAuth)'}</span>
-              </button>
-              <p className="text-xs text-text-muted text-center">
-                Opens official Google OAuth login. No manual tokens required.
-              </p>
-            </div>
+            <button
+              onClick={() => setShowGeminiInput(true)}
+              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <Key size={15} />
+              <span>Add Personal Gemini API Key</span>
+            </button>
           )}
         </section>
 
-        {/* 5. UPLOADS — network behavior toggle */}
+        {/* 6. UPLOADS — network behavior toggle */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
           <h2 className="text-base font-semibold tracking-tight text-text-main">Uploads</h2>
 
@@ -422,7 +456,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </span>
             </div>
 
-            {/* Pill toggle (44px hitbox) */}
             <button
               onClick={() => {
                 const nextVal = !wifiOnly;
@@ -443,7 +476,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 6. STORAGE */}
+        {/* 7. STORAGE */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold tracking-tight text-text-main">Storage</h2>
@@ -473,7 +506,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           )}
         </section>
 
-        {/* 7. ABOUT — one line of truth */}
+        {/* 8. ABOUT */}
         <section className="rounded-2xl bg-surface border border-border p-4 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-semibold tracking-tight text-text-main">About</h2>

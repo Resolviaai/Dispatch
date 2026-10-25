@@ -341,6 +341,7 @@ class ApproveRequest(BaseModel):
     hashtags: Optional[str] = None
     publish_mode: Optional[str] = None  # "private" or "public"
     platforms: Optional[str] = None     # "youtube,instagram"
+    account_ids: Optional[Dict[str, str]] = None # {"youtube_shorts": "channel_id", "instagram": "ig_id"}
     layout_mode: Optional[str] = None   # "fit_blur", "crop_follow", "landscape"
     caption_track: Optional[Dict[str, Any]] = None
     range_revision: Optional[int] = None
@@ -1229,7 +1230,8 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest):
         custom_tags=payload.hashtags,
         custom_mode=payload.publish_mode,
         custom_platforms=payload.platforms,
-        custom_layout=target_layout
+        custom_layout=target_layout,
+        custom_accounts=payload.account_ids
     )
 
     # Trigger immediate outbox pass so clip publishing starts immediately (unless disabled in tests)

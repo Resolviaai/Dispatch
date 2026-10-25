@@ -239,7 +239,7 @@ export default {
         }));
         return json(200, { users }, adminOrigin); // operational metadata only, no tokens
       }
-      const userAction = url.pathname.match(/^\/admin\/users\/([0-9a-fA-F-]{36})\/(ban|unban|quota)$/);
+      const userAction = url.pathname.match(/^\/admin\/users\/([0-9a-fA-F-]{36})\/(ban|unban|quota|priority)$/);
       if (userAction && request.method === "POST") {
         const [, uid, action] = userAction;
         if (action === "quota") {
@@ -256,6 +256,19 @@ export default {
           if (!qres.ok) return json(502, { error: `quota update failed: ${qres.status}` }, adminOrigin);
           return json(200, { quota_gb: gb, quota_bytes: quotaBytes }, adminOrigin);
         }
+        if (action === "priority") {
+          const body = await request.json().catch(() => ({})) as { priority?: number };
+          const prio = Number(body.priority);
+          if (!Number.isInteger(prio) || prio < 1 || prio > 1000) {
+            return json(400, { error: "priority must be an integer between 1 and 1000" }, adminOrigin);
+          }
+          const pres = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_set_user_priority`, {
+            method: "POST", headers: S,
+            body: JSON.stringify({ p_user_id: uid, p_priority: prio }),
+          });
+          if (!pres.ok) return json(502, { error: `priority update failed: ${pres.status}` }, adminOrigin);
+          return json(200, { priority: prio }, adminOrigin);
+        }
         const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${uid}`, {
           method: "PUT", headers: S,
           body: JSON.stringify({ ban_duration: action === "ban" ? "876000h" : "none" }),
@@ -266,22 +279,121 @@ export default {
       return json(404, { error: "not found" }, adminOrigin);
     }
 
-    // ---- On-device YouTube OAuth (authenticated via Supabase JWT only) ----
-    if (url.pathname === "/oauth/google/start" && request.method === "GET") {
-      // Custom-Tab navigation cannot set headers: the short-lived Supabase access
-      // token arrives as ?token= and is verified the same strict way (never trusted
-      // without server-side validation). It expires in <=1h, limiting replay value.
-      const qsToken = url.searchParams.get("token");
-      const reqForAuth = qsToken
-        ? new Request(request.url, { headers: { Authorization: `Bearer ${qsToken}` } })
-        : request;
-      const user = await authenticate(env, reqForAuth);
+    // ---- Connected Accounts & Verification ----
+    if (url.pathname === "/accounts" && request.method === "GET") {
+      const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
+      const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_connected_accounts`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: user.userId }),
+      });
+      if (!res.ok) return json(502, { error: `list accounts failed: ${res.status}` });
+      const accounts = await res.json() as unknown;
+      return json(200, { accounts: Array.isArray(accounts) ? accounts : [] });
+    }
+
+    const deleteAccountMatch = url.pathname.match(/^\/accounts\/([0-9a-fA-F-]{36})$/);
+    if (deleteAccountMatch && request.method === "DELETE") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const accountId = deleteAccountMatch[1];
+      const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_delete_connected_account`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_account_id: accountId, p_user_id: user.userId }),
+      });
+      if (!res.ok) return json(502, { error: `delete account failed: ${res.status}` });
+      return json(200, { deleted: true, id: accountId });
+    }
+
+    // ---- Per-User Gemini API Keys Vault ----
+    if (url.pathname === "/keys/gemini" && request.method === "GET") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_get_gemini_status`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: user.userId }),
+      });
+      if (!res.ok) return json(502, { error: "failed to retrieve gemini key status" });
+      const statusArr = await res.json() as Array<{ has_key: boolean; key_prefix: string; updated_at: string }>;
+      if (Array.isArray(statusArr) && statusArr.length > 0) {
+        return json(200, { configured: true, key_prefix: statusArr[0].key_prefix, updated_at: statusArr[0].updated_at });
+      }
+      return json(200, { configured: false, key_prefix: null });
+    }
+
+    if (url.pathname === "/keys/gemini" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const body = await request.json().catch(() => ({})) as { api_key?: string };
+      const apiKey = (body.api_key ?? "").trim();
+      if (!apiKey || apiKey.length < 30 || apiKey.length > 200 || !apiKey.startsWith("AIza")) {
+        return json(400, { error: "Invalid Gemini API key format (must start with AIza...)" });
+      }
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, apiKey);
+      const prefix = `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`;
+      const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_gemini_key`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: user.userId, p_key_encrypted: enc, p_key_prefix: prefix }),
+      });
+      if (!res.ok) return json(502, { error: "failed to store gemini key" });
+      return json(200, { saved: true, key_prefix: prefix });
+    }
+
+    if (url.pathname === "/keys/gemini" && request.method === "DELETE") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_delete_gemini_key`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_user_id: user.userId }),
+      });
+      if (!res.ok) return json(502, { error: "failed to remove gemini key" });
+      return json(200, { deleted: true });
+    }
+
+    // ---- On-device YouTube OAuth (Ticket-based + backward-compatible JWT) ----
+    if (url.pathname === "/oauth/google/init" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const ticket = crypto.randomUUID();
+      await rpc(env, "cloud_put_oauth_state", { p_state: "ticket:" + ticket, p_user_id: user.userId });
+      return json(200, {
+        url: `https://dispatch-cloud.resolviaai.workers.dev/oauth/google/start?ticket=${ticket}`
+      });
+    }
+
+    if (url.pathname === "/oauth/google/start" && request.method === "GET") {
+      const ticket = url.searchParams.get("ticket");
+      let uid: string | null = null;
+      if (ticket) {
+        const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+          method: "POST",
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+          body: JSON.stringify({ p_state: "ticket:" + ticket }),
+        });
+        const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
+        const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
+        uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      } else {
+        const qsToken = url.searchParams.get("token");
+        const reqForAuth = qsToken
+          ? new Request(request.url, { headers: { Authorization: `Bearer ${qsToken}` } })
+          : request;
+        const user = await authenticate(env, reqForAuth);
+        if (user) uid = user.userId;
+      }
+      if (!uid) return json(401, { error: "unauthorized" });
+
       const state = crypto.randomUUID() + crypto.randomUUID();
-      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: user.userId });
+      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
       return Response.redirect(
         buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
     }
+
     if (url.pathname === "/oauth/google/callback" && request.method === "GET") {
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
@@ -313,12 +425,49 @@ export default {
         const payload = JSON.parse(atob((tok.id_token as string).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
         email = typeof payload.email === "string" ? payload.email : null;
       } catch { /* id_token optional */ }
+
+      // Fetch YouTube channel details
+      let channelTitle = "YouTube Channel";
+      let channelId = uid;
+      let avatarUrl: string | null = null;
+      try {
+        const chRes = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", {
+          headers: { Authorization: `Bearer ${tok.access_token}` },
+        });
+        if (chRes.ok) {
+          const chData = await chRes.json() as { items?: Array<{ id: string; snippet?: { title?: string; thumbnails?: { default?: { url?: string } } } }> };
+          if (chData.items && chData.items.length > 0) {
+            channelId = chData.items[0].id || channelId;
+            channelTitle = chData.items[0].snippet?.title || channelTitle;
+            avatarUrl = chData.items[0].snippet?.thumbnails?.default?.url || null;
+          }
+        }
+      } catch { /* channel fetch optional */ }
+
+      // Store in connected_accounts
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          p_user_id: uid,
+          p_provider: "youtube",
+          p_account_id: channelId,
+          p_account_name: channelTitle,
+          p_account_email: email,
+          p_avatar_url: avatarUrl,
+          p_credentials_encrypted: enc,
+          p_metadata: { channel_id: channelId, channel_title: channelTitle },
+        }),
+      });
+
+      // Backward compatibility with legacy single-row youtube_connections
       await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_refresh_token`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({ p_user_id: uid, p_refresh_token_encrypted: enc, p_google_email: email }),
       });
-      return new Response("<html><body style='font-family:sans-serif;background:#161616;color:#F5F5F5;text-align:center;padding-top:20vh'><h2>YouTube connected</h2><p>You can close this page and return to Dispatch.</p></body></html>",
+
+      return new Response("<html><body style='font-family:sans-serif;background:#161616;color:#F5F5F5;text-align:center;padding-top:20vh'><h2>YouTube connected</h2><p>Account <b>" + channelTitle + "</b> connected. You can close this page and return to Dispatch.</p></body></html>",
         { headers: { "content-type": "text/html" } });
     }
 

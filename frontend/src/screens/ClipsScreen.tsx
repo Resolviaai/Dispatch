@@ -46,6 +46,7 @@ import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, getAuthHeaders } from '../bridge';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
+import { ConnectedAccount, listConnectedAccounts } from '../accounts/accountsService';
 
 export type LayoutMode = 'fit_black' | 'fit_blur' | 'native_916' | 'crop_916' | 'crop_follow' | 'native_169' | 'landscape';
 export type ViewMode = 'library' | 'detail' | 'studio' | 'publish';
@@ -1244,8 +1245,42 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [showHookBanner, setShowHookBanner] = useState<boolean>(true);
   const [titleDraft, setTitleDraft] = useState<string>('');
   const [captionDraft, setCaptionDraft] = useState<string>('');
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['youtube_shorts', 'instagram']);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['youtube_shorts']);
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
+  const [selectedAccountMap, setSelectedAccountMap] = useState<Record<string, string>>({});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved' | 'error'>('idle');
+
+  useEffect(() => {
+    import('../auth/supabase').then(({ currentSession }) =>
+      currentSession().then(sess => {
+        if (sess?.access_token) {
+          listConnectedAccounts(sess.access_token).then(accs => {
+            setConnectedAccounts(accs);
+            const initialPlatforms: string[] = [];
+            const initialMap: Record<string, string> = {};
+            const yt = accs.find(a => a.provider === 'youtube');
+            if (yt) {
+              initialPlatforms.push('youtube_shorts');
+              initialMap['youtube_shorts'] = yt.account_id;
+            }
+            const ig = accs.find(a => a.provider === 'instagram');
+            if (ig) {
+              initialPlatforms.push('instagram');
+              initialMap['instagram'] = ig.account_id;
+            }
+            const li = accs.find(a => a.provider === 'linkedin');
+            if (li) initialMap['linkedin'] = li.account_id;
+            const tw = accs.find(a => a.provider === 'twitter');
+            if (tw) initialMap['x'] = tw.account_id;
+
+            if (initialPlatforms.length > 0) {
+              setSelectedPlatforms(initialPlatforms);
+            }
+            setSelectedAccountMap(initialMap);
+          });
+        }
+      }));
+  }, []);
   const [playbackFeedback, setPlaybackFeedback] = useState<string | null>(null);
   const previewAnimRef = useRef<{ active: boolean; restoreTime: number; endTime: number } | null>(null);
   const contextPreviewRef = useRef<{ sourceEnd: number; restoreTime: number } | null>(null);
@@ -2026,6 +2061,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           hashtags: captionDraft.trim(),
           publish_mode: publishMode,
           platforms: selectedPlatforms.map((p) => p === 'youtube_shorts' ? 'youtube' : p).join(','),
+          account_ids: selectedAccountMap,
           layout_mode: layoutMode,
           range_revision: currentClip.range_revision || 0,
         }),
@@ -3108,34 +3144,80 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         <main className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-5 pb-28">
           {/* Platform Selector — destination rows with pill toggles (v3 publish sheet) */}
           <section className="space-y-1.5">
-            <div className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-              Destinations
+            <div className="flex items-center justify-between text-xs font-semibold text-text-secondary uppercase tracking-wider">
+              <span>Destinations &amp; Accounts</span>
+              <span className="font-mono text-text-muted">{selectedPlatforms.length} selected</span>
             </div>
             <div className="rounded-2xl bg-surface-100 border border-border divide-y divide-border/60">
               {[
-                { id: 'youtube_shorts', label: 'YouTube Shorts', icon: <YouTubeShortsIcon /> },
-                { id: 'instagram', label: 'Instagram Reels', icon: <InstagramIcon /> },
-                { id: 'linkedin', label: 'LinkedIn Video', icon: <LinkedInIcon /> },
-                { id: 'x', label: 'X / Twitter', icon: <XIcon /> },
+                { id: 'youtube_shorts', label: 'YouTube Shorts', provider: 'youtube', icon: <YouTubeShortsIcon /> },
+                { id: 'instagram', label: 'Instagram Reels', provider: 'instagram', icon: <InstagramIcon /> },
+                { id: 'linkedin', label: 'LinkedIn Video', provider: 'linkedin', icon: <LinkedInIcon /> },
+                { id: 'x', label: 'X / Twitter', provider: 'twitter', icon: <XIcon /> },
               ].map((p) => {
                 const isSelected = selectedPlatforms.includes(p.id);
+                const platformAccounts = connectedAccounts.filter(a => a.provider === p.provider);
+                const hasAccount = platformAccounts.length > 0;
+                const chosenAccountId = selectedAccountMap[p.id] || (hasAccount ? platformAccounts[0].account_id : '');
+                const chosenAccount = platformAccounts.find(a => a.account_id === chosenAccountId) || platformAccounts[0];
+
                 return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => togglePlatform(p.id)}
-                    aria-pressed={isSelected}
-                    className={`w-full min-h-[52px] px-3 flex items-center justify-between gap-3 text-left text-sm transition-all active:scale-[0.99] ${isSelected ? 'text-text-main' : 'text-text-secondary hover:text-text-main'}`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      {p.icon}
-                      <span className="font-medium truncate">{p.label}</span>
+                  <div key={p.id} className="p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => togglePlatform(p.id)}
+                        aria-pressed={isSelected}
+                        className={`flex items-center gap-3 min-w-0 text-left text-sm transition-all active:scale-[0.99] flex-1 ${isSelected ? 'text-text-main' : 'text-text-secondary hover:text-text-main'}`}
+                      >
+                        {p.icon}
+                        <div className="min-w-0">
+                          <span className="font-medium block truncate">{p.label}</span>
+                          {hasAccount ? (
+                            <span className="text-xs text-text-muted font-mono block truncate">
+                              {chosenAccount?.account_name || 'Connected'}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-status-warning block">
+                              Not connected in Settings
+                            </span>
+                          )}
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => togglePlatform(p.id)}
+                        aria-pressed={isSelected}
+                        className="shrink-0 p-1"
+                      >
+                        <span className={`w-11 h-6 rounded-full p-0.5 flex items-center transition-colors duration-150 ${isSelected ? 'bg-primary justify-end' : 'bg-surface-3 border border-border justify-start'}`}>
+                          <span className="w-5 h-5 rounded-full bg-white shadow-sm" />
+                        </span>
+                      </button>
                     </div>
-                    {/* Pill toggle: on = accent, knob right (v3) */}
-                    <span className={`w-11 h-6 rounded-full p-0.5 flex items-center transition-colors duration-150 shrink-0 ${isSelected ? 'bg-primary justify-end' : 'bg-surface-3 border border-border justify-start'}`}>
-                      <span className="w-5 h-5 rounded-full bg-white shadow-sm" />
-                    </span>
-                  </button>
+
+                    {/* Account picker if multiple accounts connected for this provider */}
+                    {isSelected && platformAccounts.length > 1 && (
+                      <div className="pt-1.5 pl-7 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs text-text-muted">Account:</span>
+                        {platformAccounts.map((acc) => (
+                          <button
+                            key={acc.id}
+                            type="button"
+                            onClick={() => setSelectedAccountMap(prev => ({ ...prev, [p.id]: acc.account_id }))}
+                            className={`px-2 py-0.5 rounded-lg text-xs font-medium border transition-all ${
+                              chosenAccountId === acc.account_id
+                                ? 'bg-primary text-white border-primary font-semibold'
+                                : 'bg-surface-2 border-border text-text-secondary hover:text-text-main'
+                            }`}
+                          >
+                            {acc.account_name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -3211,20 +3293,44 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         </main>
 
         {/* STICKY PUBLISH ACTION FOOTER — hero CTA with destination count inside (v3) */}
-        <footer className="shrink-0 border-t border-border bg-canvas px-4 py-2.5 z-30">
-          <button
-            type="button"
-            onClick={handleApprove}
-            disabled={isSubmitting || selectedPlatforms.length === 0}
-            className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
-          >
-            <Send size={15} />
-            <span>
-              {isSubmitting
-                ? 'Publishing…'
-                : `Publish to ${selectedPlatforms.length} ${selectedPlatforms.length === 1 ? 'destination' : 'destinations'} · ${publishMode}`}
-            </span>
-          </button>
+        <footer className="shrink-0 border-t border-border bg-canvas px-4 py-2.5 z-30 space-y-2">
+          {(() => {
+            const missing = selectedPlatforms.filter(p => {
+              const prov = p === 'youtube_shorts' ? 'youtube' : (p === 'x' ? 'twitter' : p);
+              return !connectedAccounts.some(a => a.provider === prov);
+            });
+            const hasNonYt = selectedPlatforms.some(p => p !== 'youtube_shorts');
+            const isDisabled = isSubmitting || selectedPlatforms.length === 0 || missing.length > 0;
+
+            const ctaText = isSubmitting
+              ? 'Publishing…'
+              : missing.length > 0
+                ? `Connect ${missing[0] === 'youtube_shorts' ? 'YouTube' : missing[0]} in Settings to publish`
+                : selectedPlatforms.length === 0
+                  ? 'Select at least one destination'
+                  : hasNonYt
+                    ? `Publish to ${selectedPlatforms.length} destinations (YouTube: ${publishMode} · Socials: Public)`
+                    : `Publish to YouTube · ${publishMode}`;
+
+            return (
+              <>
+                {missing.length > 0 && (
+                  <div className="p-2 rounded-lg chip-warning border text-xs text-center font-medium">
+                    {missing.map(m => m === 'youtube_shorts' ? 'YouTube' : m).join(', ')} account not connected. Please connect in Settings.
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleApprove}
+                  disabled={isDisabled}
+                  className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
+                >
+                  <Send size={15} />
+                  <span>{ctaText}</span>
+                </button>
+              </>
+            );
+          })()}
         </footer>
       </div>
     );

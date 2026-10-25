@@ -736,6 +736,7 @@ class CameraCaptureManager(private val context: Context) {
         Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(
             CaptureRequestOptions.Builder()
                 .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, locked)
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, locked)
                 .build()
         )
 
@@ -944,15 +945,15 @@ class CameraCaptureManager(private val context: Context) {
         val range = state.exposureCompensationRange
         val targetIndex = clampExposureIndex(index, range.lower, range.upper)
 
-        // The sun dial must keep adjusting exposure while the camera is locked: a
-        // hardware AE lock freezes auto-exposure, so drop only the AE lock and keep
-        // the confirmed AF/metering lock intact.
-        if (isAeLocked) {
-            isAeLocked = false
+        // The sun dial must keep adjusting exposure while the camera is locked without
+        // permanently losing the AE lock. Temporarily unlock AE so compensation applies,
+        // then immediately re-lock AE at the new compensation index.
+        val wasAeLocked = isAeLocked
+        if (wasAeLocked) {
             try {
                 setCameraAeLock(cam, false)
             } catch (e: Exception) {
-                Log.w(TAG, "Could not release AE lock before exposure change: ${e.message}")
+                Log.w(TAG, "Could not temporarily release AE lock before exposure change: ${e.message}")
             }
         }
 
@@ -964,18 +965,30 @@ class CameraCaptureManager(private val context: Context) {
                 try {
                     val applied = future.get()
                     currentExposureIndex = applied
+                    if (wasAeLocked) {
+                        isAeLocked = true
+                        setCameraAeLock(cam, true)
+                    }
                     onComplete?.invoke(applied, null)
-                    Log.i(TAG, "Exposure compensation applied: index=$applied")
+                    Log.i(TAG, "Exposure compensation applied: index=$applied (re-locked=$wasAeLocked)")
                 } catch (e: Exception) {
                     if (!exposureOperationGeneration.isCurrent(operationGeneration) || camera !== cam) return@addListener
                     Log.w(TAG, "Exposure compensation future failed: ${e.message}")
                     currentExposureIndex = cam.cameraInfo.exposureState.exposureCompensationIndex
+                    if (wasAeLocked) {
+                        isAeLocked = true
+                        setCameraAeLock(cam, true)
+                    }
                     onComplete?.invoke(null, e.message)
                 }
             }, ContextCompat.getMainExecutor(context))
             return targetIndex
         } catch (e: Exception) {
             Log.w(TAG, "Failed to dispatch exposure compensation: ${e.message}")
+            if (wasAeLocked) {
+                isAeLocked = true
+                try { setCameraAeLock(cam, true) } catch (_: Exception) {}
+            }
             onComplete?.invoke(null, e.message)
             return currentExposureIndex
         }

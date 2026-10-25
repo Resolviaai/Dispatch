@@ -221,6 +221,7 @@ def init_db():
                 id TEXT PRIMARY KEY,
                 clip_id TEXT NOT NULL,
                 platform TEXT NOT NULL, -- youtube, instagram, linkedin, x
+                account_id TEXT,
                 status TEXT NOT NULL DEFAULT 'queued', -- queued, uploading, published, failed, blocked_needs_auth, reconciliation_required
                 publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
                 attempt_count INTEGER DEFAULT 0,
@@ -395,6 +396,8 @@ def init_db():
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN attempt_started_at TIMESTAMP;")
         if "next_retry_at" not in outbox_cols:
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN next_retry_at TIMESTAMP;")
+        if "account_id" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN account_id TEXT;")
 
         # Default settings if not already present
         cursor.execute("""
@@ -640,7 +643,8 @@ def approve_clip(
     custom_tags: Optional[str] = None,
     custom_mode: Optional[str] = None,
     custom_platforms: Optional[str] = None,
-    custom_layout: Optional[str] = None
+    custom_layout: Optional[str] = None,
+    custom_accounts: Optional[Dict[str, str]] = None
 ):
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -661,15 +665,17 @@ def approve_clip(
             WHERE id = ?
         """, (title, hashtags, publish_mode, target_platforms, layout_mode, clip_id))
 
-        # Enqueue to publishing outbox for each selected platform
+        # Enqueue to publishing outbox for each selected platform with its bound account_id
         platforms = [p.strip() for p in target_platforms.split(",") if p.strip()]
+        account_map = custom_accounts or {}
         for plat in platforms:
             idempotency_key = f"{clip_id}_{plat}"
+            acct_id = account_map.get(plat) or account_map.get(f"{plat}_shorts") or account_map.get("youtube" if plat == "youtube_shorts" else plat)
             cursor.execute("""
                 INSERT OR IGNORE INTO publishing_outbox (
-                    id, clip_id, platform, status, publish_mode, idempotency_key
-                ) VALUES (?, ?, ?, 'queued', ?, ?)
-            """, (f"pub_{uuid.uuid4().hex[:8]}", clip_id, plat, publish_mode, idempotency_key))
+                    id, clip_id, platform, account_id, status, publish_mode, idempotency_key
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?)
+            """, (f"pub_{uuid.uuid4().hex[:8]}", clip_id, plat, acct_id, publish_mode, idempotency_key))
 
         conn.commit()
 

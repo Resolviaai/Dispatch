@@ -251,3 +251,47 @@ test("reserve upload URL is presigned with the declared content length", async (
   // presigned PUTs - oversized bodies ARE accepted at upload time. The enforced guard
   // is /complete's actual-size verification (see oversize tests above).
 });
+
+test("accounts listing returns array of user accounts", async () => {
+  const mockAccounts = [{ id: "acc-1", provider: "youtube", account_id: "ch-1", account_name: "Channel 1" }];
+  supabase.set("/rpc/cloud_list_connected_accounts", { method: "POST", fn: () => ({ body: mockAccounts }) });
+  const res = await worker.fetch(new Request("https://w.test/accounts", { method: "GET", headers: pcHeaders() }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.accounts, mockAccounts);
+});
+
+test("accounts deletion by id succeeds", async () => {
+  supabase.set("/rpc/cloud_delete_connected_account", { method: "POST", fn: () => ({ body: true }) });
+  const res = await worker.fetch(new Request("https://w.test/accounts/11111111-2222-3333-4444-555555555555", { method: "DELETE", headers: pcHeaders() }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.deleted, true);
+});
+
+test("gemini key storage rejects invalid format and accepts valid key", async () => {
+  const badRes = await worker.fetch(new Request("https://w.test/keys/gemini", {
+    method: "POST", headers: pcHeaders(), body: JSON.stringify({ api_key: "short" })
+  }), env());
+  assert.equal(badRes.status, 400);
+
+  supabase.set("/rpc/cloud_store_gemini_key", { method: "POST", fn: () => ({ body: null }) });
+  const goodKey = "AIzaSy" + "A".repeat(33);
+  const goodRes = await worker.fetch(new Request("https://w.test/keys/gemini", {
+    method: "POST", headers: pcHeaders(), body: JSON.stringify({ api_key: goodKey })
+  }), { ...env(), TOKEN_VAULT_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" });
+  assert.equal(goodRes.status, 200);
+  const body = await goodRes.json();
+  assert.equal(body.saved, true);
+  assert.ok(body.key_prefix.startsWith("AIzaSy"));
+});
+
+test("oauth google init creates single-use ticket", async () => {
+  supabase.set("/rpc/cloud_put_oauth_state", { method: "POST", fn: () => ({ body: null }) });
+  const res = await worker.fetch(new Request("https://w.test/oauth/google/init", {
+    method: "POST", headers: pcHeaders()
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.url.includes("/oauth/google/start?ticket="));
+});

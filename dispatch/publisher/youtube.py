@@ -118,8 +118,20 @@ def upload_youtube_short(
         response = request.execute()
 
         video_id = response.get("id")
+
+        # Check YouTube Data API processing status before declaring completion
+        upload_status = response.get("status", {}).get("uploadStatus", "uploaded")
+        try:
+            status_resp = youtube.videos().list(part="status,processingDetails", id=video_id).execute()
+            items = status_resp.get("items", [])
+            if items:
+                upload_status = items[0].get("status", {}).get("uploadStatus", upload_status)
+        except Exception as check_err:
+            logger.debug("Failed to query initial processing status for %s: %s", video_id, check_err)
+
         return {
-            "status": "published",
+            "status": "published" if upload_status == "processed" else "processing",
+            "upload_status": upload_status,
             "remote_id": video_id,
             "remote_url": f"https://youtube.com/shorts/{video_id}",
             "is_simulation": False

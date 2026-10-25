@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger("dispatch.publisher.instagram")
 
-GRAPH_API_VERSION = "v19.0"
+GRAPH_API_VERSION = "v21.0"
 GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 
 
