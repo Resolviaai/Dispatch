@@ -53,7 +53,7 @@ class DispatchNativeBridge(
     @JavascriptInterface
     fun getPcHost(): String {
         val host = pairingManager.pcHost
-        return if (host.isNotBlank()) host else "192.168.0.200:8000"
+        return if (host.isNotBlank()) host else ""
     }
 
     @JavascriptInterface

@@ -339,3 +339,43 @@ test("oauth multi-provider init creates tickets for instagram, linkedin, twitter
   }
 });
 
+test("global CORS options preflight returns 204 with valid allow-origin", async () => {
+  const res = await worker.fetch(new Request("https://w.test/oauth/google/init", {
+    method: "OPTIONS",
+    headers: { "Origin": "https://resolviaai.github.io" },
+  }), env());
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get("Access-Control-Allow-Origin"), "https://resolviaai.github.io");
+  assert.ok(res.headers.get("Access-Control-Allow-Headers").includes("authorization"));
+  assert.ok(res.headers.get("Access-Control-Allow-Methods").includes("POST"));
+});
+
+test("cloud clips endpoint returns ready and approved clips", async () => {
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { id: "c1", local_clip_id: "clip_01", title: "Cloud Highlight", status: "ready_review", start_time: 10, end_time: 40 },
+        { id: "c2", local_clip_id: "clip_02", title: "Published Clip", status: "published", start_time: 5, end_time: 35 },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/processing_jobs", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "j1" }] })
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: pcHeaders(),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ready.length, 1);
+  assert.equal(body.ready[0].title, "Cloud Highlight");
+  assert.equal(body.recent_approved.length, 1);
+  assert.equal(body.recent_approved[0].title, "Published Clip");
+  assert.equal(body.queue_stats.queued_count, 1);
+  assert.equal(body.cloud_mode, true);
+});
+

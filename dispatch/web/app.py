@@ -2424,11 +2424,14 @@ async def admin_list_users(request: Request):
     prof_map = {}
     total_allocated = 0
     if prof_resp.status_code == 200:
-        for p in prof_resp.json():
-            uid = p.get("user_id")
-            if uid:
-                prof_map[uid] = p
-                total_allocated += int(p.get("storage_quota_bytes") or 0)
+        prof_data = prof_resp.json()
+        if isinstance(prof_data, list):
+            for p in prof_data:
+                if isinstance(p, dict):
+                    uid = p.get("user_id")
+                    if uid:
+                        prof_map[uid] = p
+                        total_allocated += int(p.get("storage_quota_bytes") or 0)
     pool_remaining = max(0, 10_000_000_000 - total_allocated)
     pool_remaining_gb = round(pool_remaining / 1_000_000_000, 2)
 

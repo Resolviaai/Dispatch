@@ -26,9 +26,9 @@ export const App: React.FC = () => {
       window.location.hostname === 'appassets.androidplatform.net' ||
       !!(window as any).DispatchBridge
     )) {
-      return '192.168.0.200:8000';
+      return '';
     }
-    return 'localhost:8000';
+    return '';
   });
   const [isMobileFrame, setIsMobileFrame] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {

@@ -46,7 +46,8 @@ import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, getAuthHeaders } from '../bridge';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
-import { ConnectedAccount, listConnectedAccounts } from '../accounts/accountsService';
+import { ConnectedAccount, listConnectedAccounts, WORKER_BASE } from '../accounts/accountsService';
+import { currentSession } from '../auth/supabase';
 
 export type LayoutMode = 'fit_black' | 'fit_blur' | 'native_916' | 'crop_916' | 'crop_follow' | 'native_169' | 'landscape';
 export type ViewMode = 'library' | 'detail' | 'studio' | 'publish';
@@ -1215,6 +1216,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [isCloudMode, setIsCloudMode] = useState<boolean>(false);
+  const [remoteJobs, setRemoteJobs] = useState<Array<{ id: string; youtube_url: string; status: string; last_error?: string; created_at?: string }>>([]);
+  const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
+  const [submitUrlInput, setSubmitUrlInput] = useState<string>('');
+  const [isSubmittingJob, setIsSubmittingJob] = useState<boolean>(false);
 
   // Playback & Video Sync
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1345,41 +1351,20 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
   }, [handleClearSelection]);
 
-  // 1. Fetch Real Clips from Backend
+  // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
     setIsLoading(true);
     setFeedback(null);
-    try {
-      const res = await fetch(apiUrl('/api/clips', pcHost));
-      if (res.ok) {
-        const data = await res.json();
-        const rList = Array.isArray(data.ready) ? data.ready : [];
-        const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
-        setReadyClips(rList);
-        setApprovedClips(aList);
-        if (data.queue_stats) {
-          setQueueStats(data.queue_stats);
-        }
-        setConnectionError(null);
-      } else {
-        throw new Error(`Server returned HTTP ${res.status}`);
-      }
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : 'Failed to connect to backend';
-      setConnectionError(errMsg);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    let loadedFromPc = false;
 
-  useEffect(() => {
-    fetchClips();
-    if (viewMode !== 'library') return;
-    const interval = setInterval(() => {
-      fetch(apiUrl('/api/clips', pcHost))
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (!data) return;
+    if (pcHost && pcHost.trim()) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch(apiUrl('/api/clips', pcHost), { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const data = await res.json();
           const rList = Array.isArray(data.ready) ? data.ready : [];
           const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
           setReadyClips(rList);
@@ -1388,9 +1373,101 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             setQueueStats(data.queue_stats);
           }
           setConnectionError(null);
-        })
-        .catch(() => {});
-    }, 4000);
+          setIsCloudMode(false);
+          loadedFromPc = true;
+        }
+      } catch {
+        // Fall through to Cloud Mode
+      }
+    }
+
+    if (!loadedFromPc) {
+      try {
+        const session = await currentSession();
+        const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+        if (token) {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const [clipsRes, jobsRes] = await Promise.all([
+            fetch(`${WORKER_BASE}/clips`, {
+              headers: { 'Authorization': `Bearer ${token}` },
+              signal: controller.signal,
+            }).catch(() => null),
+            fetch(`${WORKER_BASE}/jobs/status`, {
+              headers: { 'Authorization': `Bearer ${token}` },
+              signal: controller.signal,
+            }).catch(() => null),
+          ]);
+          clearTimeout(timeoutId);
+
+          if (clipsRes && clipsRes.ok) {
+            const data = await clipsRes.json();
+            const rList = Array.isArray(data.ready) ? data.ready : [];
+            const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
+            setReadyClips(rList);
+            setApprovedClips(aList);
+            if (data.queue_stats) {
+              setQueueStats(data.queue_stats);
+            }
+          }
+          if (jobsRes && jobsRes.ok) {
+            const jData = await jobsRes.json();
+            if (Array.isArray(jData.jobs)) {
+              setRemoteJobs(jData.jobs);
+            }
+          }
+        }
+        setIsCloudMode(true);
+        setConnectionError(null);
+      } catch {
+        setIsCloudMode(true);
+        setConnectionError(null);
+      }
+    }
+    setIsLoading(false);
+  };
+
+  const handleSubmitRemoteJob = async () => {
+    if (!submitUrlInput.trim()) return;
+    setIsSubmittingJob(true);
+    setFeedback(null);
+    try {
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (!token) {
+        setFeedback('Please sign in to submit remote processing jobs.');
+        return;
+      }
+      const res = await fetch(`${WORKER_BASE}/jobs/submit`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: submitUrlInput.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setSubmitUrlInput('');
+        setShowSubmitModal(false);
+        setFeedback('Job queued in Dispatch Cloud. Clips will appear once processed.');
+        fetchClips();
+      } else {
+        setFeedback(data.error || 'Failed to submit job.');
+      }
+    } catch (e: any) {
+      setFeedback(e.message || 'Network error while submitting job.');
+    } finally {
+      setIsSubmittingJob(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchClips();
+    if (viewMode !== 'library') return;
+    const interval = setInterval(() => {
+      fetchClips();
+    }, 6000);
     return () => clearInterval(interval);
   }, [pcHost, viewMode]);
 
@@ -2182,26 +2259,56 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // =========================================================================
   const renderLibraryView = () => (
     <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
-      {/* HEADER — title + metadata, ghost circular refresh (same shape as every icon button) */}
+      {/* HEADER — title + metadata, actions */}
       <header className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas z-20">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
               Clips
             </h1>
-            <p className="text-xs text-text-muted mt-0.5 tabular-nums truncate">
-              {(isPcOnline ?? !connectionError) ? 'Studio online' : 'Offline'} &middot; {readyClips.length} ready &middot; {allClips.length} total
+            <p className="text-xs text-text-muted mt-0.5 tabular-nums truncate flex items-center gap-1.5">
+              {isCloudMode ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  <span>Cloud Mode (Remote)</span>
+                </>
+              ) : (isPcOnline ?? !connectionError) ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-status-success" />
+                  <span>Studio Online (LAN)</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
+                  <span>Offline</span>
+                </>
+              )}
+              <span>&middot;</span>
+              <span>{readyClips.length} ready</span>
+              <span>&middot;</span>
+              <span>{allClips.length} total</span>
             </p>
           </div>
-          <button
-            type="button"
-            onClick={fetchClips}
-            disabled={isLoading}
-            aria-label="Refresh clips"
-            className="w-11 h-11 -mr-2 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
-          >
-            <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
-          </button>
+          <div className="flex items-center gap-1 -mr-2">
+            <button
+              type="button"
+              onClick={() => setShowSubmitModal(true)}
+              aria-label="Process YouTube Video"
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+              title="Process YouTube Video in Cloud"
+            >
+              <Plus size={19} />
+            </button>
+            <button
+              type="button"
+              onClick={fetchClips}
+              disabled={isLoading}
+              aria-label="Refresh clips"
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+            >
+              <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
         </div>
 
         {/* FILTER CHIPS — uniform pills, YouTube selected-chip inversion */}
@@ -2231,6 +2338,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           })}
         </div>
       </header>
+
+      {/* REMOTE CLOUD JOBS IN PROGRESS */}
+      {remoteJobs.filter((j) => j.status === 'queued' || j.status === 'claimed').length > 0 && (
+        <div className="shrink-0 px-4 py-2 bg-primary-soft border-b border-primary/20 flex items-center justify-between gap-3">
+          <p className="text-xs text-primary tabular-nums truncate">
+            <span className="font-semibold">{remoteJobs.filter((j) => j.status === 'queued' || j.status === 'claimed').length} cloud job(s) in progress</span>
+            {' '}&middot; analyzing highlights and speech
+          </p>
+          <span className="shrink-0 text-xs font-mono text-primary font-medium">Processing</span>
+        </div>
+      )}
 
       {/* BACKLOG — flat notice line, not a card */}
       {queueStats && queueStats.queued_count > 0 && (
@@ -2288,43 +2406,37 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             ))}
           </div>
         ) : filteredClips.length === 0 ? (
-          connectionError ? (
-            <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
-              <div className="w-16 h-16 rounded-full bg-surface-2 border chip-danger flex items-center justify-center mb-4 text-status-danger">
-                <WifiOff size={24} />
-              </div>
-              <h2 className="text-base font-semibold tracking-tight text-text-main">Cannot connect to PC Studio</h2>
-              <p className="text-sm text-text-secondary mt-1.5 max-w-[290px] leading-relaxed">
-                Attempting to reach <span className="font-mono text-text-main">{pcHost}</span>. Ensure the Dispatch server is running and both devices are on the same Wi-Fi network.
-              </p>
+          <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
+            <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
+              {isCloudMode ? <Cloud size={24} className="text-primary" /> : <Film size={24} />}
+            </div>
+            <h2 className="text-base font-semibold tracking-tight text-text-main">
+              {isCloudMode ? 'Cloud Mode Active' : 'No clips yet'}
+            </h2>
+            <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
+              {isCloudMode
+                ? 'Your app is connected to Dispatch Cloud. Submit a YouTube video to process clips from anywhere.'
+                : 'Dispatch will show generated clips here after processing a recording session.'}
+            </p>
+            <div className="mt-5 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSubmitModal(true)}
+                className="min-h-[44px] px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
+              >
+                <Plus size={15} />
+                <span>Process Video</span>
+              </button>
               <button
                 type="button"
                 onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-6 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
+                className="min-h-[44px] px-4 rounded-xl bg-surface-2 text-sm font-medium text-text-main hover:bg-surface-3 active:scale-[0.98] transition-all flex items-center gap-2"
               >
                 <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
-                <span>Retry</span>
-              </button>
-            </div>
-          ) : (
-            <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
-              <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
-                <Film size={24} />
-              </div>
-              <h2 className="text-base font-semibold tracking-tight text-text-main">No clips yet</h2>
-              <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
-                Dispatch will show generated clips here after processing a recording session.
-              </p>
-              <button
-                type="button"
-                onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-6 rounded-xl bg-surface-2 text-sm font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
-              >
-                <RefreshCw size={15} />
                 <span>Refresh</span>
               </button>
             </div>
-          )
+          </div>
         ) : (
           groupedSessions.map(([sessionId, clipsInSession]) => (
             <section key={sessionId}>
@@ -2419,6 +2531,55 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           ))
         )}
       </main>
+
+      {/* SUBMIT YOUTUBE VIDEO MODAL (Cloud Processing on any connection) */}
+      {showSubmitModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-surface border border-border p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-text-main flex items-center gap-2">
+                <Cloud size={18} className="text-primary" />
+                Process Video in Cloud
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowSubmitModal(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-text-muted hover:text-text-main"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-xs text-text-secondary leading-relaxed">
+              Paste a YouTube video link. Dispatch Cloud will extract speech, select best highlights, and render ready-to-publish short clips.
+            </p>
+            <input
+              type="url"
+              value={submitUrlInput}
+              onChange={(e) => setSubmitUrlInput(e.target.value)}
+              placeholder="https://youtube.com/watch?v=..."
+              className="w-full min-h-[44px] px-3.5 rounded-xl bg-surface-2 border border-border text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
+            />
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowSubmitModal(false)}
+                className="min-h-[44px] px-4 rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-medium text-text-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitRemoteJob}
+                disabled={isSubmittingJob || !submitUrlInput.trim()}
+                className="min-h-[44px] px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow disabled:opacity-50"
+              >
+                <Plus size={15} />
+                <span>{isSubmittingJob ? 'Submitting…' : 'Submit'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 

@@ -7,7 +7,7 @@ export const WORKER_BASE = 'https://dispatch-cloud.resolviaai.workers.dev';
 
 export interface ConnectedAccount {
   id: string;
-  provider: 'youtube' | 'instagram' | 'linkedin' | 'twitter';
+  provider: 'youtube' | 'instagram' | 'linkedin' | 'twitter' | 'facebook';
   account_id: string;
   account_name: string;
   account_email?: string;
@@ -107,7 +107,7 @@ export async function deleteGeminiKey(jwtToken: string): Promise<boolean> {
 }
 
 export interface ConnectAccountParams {
-  provider: 'youtube' | 'instagram' | 'linkedin' | 'twitter';
+  provider: 'youtube' | 'instagram' | 'linkedin' | 'twitter' | 'facebook';
   account_id: string;
   account_name: string;
   account_email?: string;

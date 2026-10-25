@@ -62,12 +62,14 @@ export function validateReserveInput(kind: string, mime: string, expectedBytes: 
   return null;
 }
 
-export function json(status: number, body: Record<string, unknown>, corsOrigin?: string): Response {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (corsOrigin) {
-    headers["Access-Control-Allow-Origin"] = corsOrigin;
-    headers["Access-Control-Allow-Headers"] = "authorization, content-type";
-    headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+export function json(status: number, body: Record<string, unknown>, corsOrigin: string = "*"): Response {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "Access-Control-Allow-Origin": corsOrigin,
+    "Access-Control-Allow-Headers": "authorization, content-type, x-dispatch-user-id, apikey",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  };
+  if (corsOrigin !== "*") {
     headers["Vary"] = "Origin";
   }
   return new Response(JSON.stringify(body), { status, headers });
@@ -216,6 +218,22 @@ async function runCleanup(env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const reqOrigin = request.headers.get("Origin") || "*";
+    if (request.method === "OPTIONS") {
+      const allowedOrigin = (url.pathname.startsWith("/admin/") || url.pathname === "/admin")
+        ? (env.SITE_ORIGIN || reqOrigin)
+        : reqOrigin;
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": allowedOrigin,
+          "Access-Control-Allow-Headers": "authorization, content-type, x-dispatch-user-id, apikey",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+          "Access-Control-Max-Age": "86400",
+          "Vary": "Origin",
+        },
+      });
+    }
     if (url.pathname === "/health") return json(200, { ok: true });
       if (request.method === "POST" && url.pathname === "/cleanup") {
         // Trusted-PC maintenance only: the raw worker token, no user impersonation.
@@ -974,6 +992,58 @@ export default {
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
       if (!res.ok) return json(502, { error: `status failed: ${res.status}` });
       return json(200, { jobs: await res.json() });
+    }
+
+    // ---- Cloud Clips (authenticated clients on any network / cellular) ----
+    if (url.pathname === "/clips" && request.method === "GET") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const [clipsRes, jobsRes] = await Promise.all([
+        fetch(
+          `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,range_revision,render_stale,cloud_updated_at&order=cloud_updated_at.desc&limit=50`,
+          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+        ),
+        fetch(
+          `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&select=id`,
+          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+        ),
+      ]);
+      const rawClips = clipsRes.ok ? (await clipsRes.json() as Array<Record<string, unknown>>) : [];
+      const ready = rawClips
+        .filter(c => c.status === "ready_review" || c.status === "ready")
+        .map(c => ({
+          id: String(c.local_clip_id || c.id),
+          cloud_id: c.id,
+          title: c.title,
+          status: "ready",
+          start_time: Number(c.start_time || 0),
+          end_time: Number(c.end_time || 0),
+          duration: Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
+          range_revision: Number(c.range_revision || 0),
+          created_at: c.cloud_updated_at,
+          is_cloud: true,
+        }));
+      const recent_approved = rawClips
+        .filter(c => c.status === "approved" || c.status === "published")
+        .map(c => ({
+          id: String(c.local_clip_id || c.id),
+          cloud_id: c.id,
+          title: c.title,
+          status: c.status,
+          start_time: Number(c.start_time || 0),
+          end_time: Number(c.end_time || 0),
+          duration: Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
+          range_revision: Number(c.range_revision || 0),
+          created_at: c.cloud_updated_at,
+          is_cloud: true,
+        }));
+      const queuedJobs = jobsRes.ok ? (await jobsRes.json() as unknown[]) : [];
+      return json(200, {
+        ready,
+        recent_approved,
+        queue_stats: { queued_count: Array.isArray(queuedJobs) ? queuedJobs.length : 0, daily_quota_used: 0, daily_quota_max: 10 },
+        cloud_mode: true,
+      });
     }
 
     const actor = await authenticate(env, request);

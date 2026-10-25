@@ -487,7 +487,8 @@ export function getApiBaseUrl(pcHost?: string): string {
     !!(window as any).DispatchBridge
   )) {
     const nativeHost = window.DispatchBridge?.getPcHost?.()?.trim() || null;
-    const host = pcHost || nativeHost || (typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_pc_host') : null) || '192.168.0.200:8000';
+    const host = pcHost || nativeHost || (typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_pc_host') : null) || '';
+    if (!host) return '';
     const cleanHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
     return `http://${cleanHost}`;
   }

@@ -88,6 +88,16 @@ const XIcon = () => (
   </svg>
 );
 
+const FacebookIcon = () => (
+  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+    <rect width="24" height="24" rx="6" fill="#1877F2" />
+    <path
+      d="M16.5 12H14V20H10.5V12H9V9H10.5V7C10.5 5.3 11.8 4 13.5 4H16.5V7H14.5C14.2 7 14 7.2 14 7.5V9H16.5L16.5 12Z"
+      fill="white"
+    />
+  </svg>
+);
+
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000' }) => {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
@@ -165,12 +175,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
   };
 
-  const handleConnectProvider = async (provider: 'instagram' | 'linkedin' | 'twitter') => {
+  const handleConnectProvider = async (provider: 'instagram' | 'linkedin' | 'twitter' | 'facebook') => {
     if (!jwtToken) {
       setFeedback('Sign in first, then connect your account.');
       return;
     }
-    const label = provider === 'twitter' ? 'X (Twitter)' : provider.charAt(0).toUpperCase() + provider.slice(1);
+    const label = provider === 'twitter' ? 'X (Twitter)' : provider === 'facebook' ? 'Facebook' : provider.charAt(0).toUpperCase() + provider.slice(1);
     setFeedback(`Opening ${label} sign-in...`);
     try {
       const res = await initProviderOAuth(jwtToken, provider);
@@ -183,7 +193,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         );
         setTimeout(refreshAccounts, 8000);
       } else {
-        setFeedback(`${label} OAuth is not configured on the server yet. Once provider credentials are registered in the cloud worker, one-tap sign-in will be enabled.`);
+        setFeedback(res.error || `${label} connection could not be initiated.`);
       }
     } catch (e: any) {
       setFeedback(e.message || `Failed to initiate ${label} sign-in.`);
@@ -245,6 +255,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
   const youtubeAccounts = accounts.filter(a => a.provider === 'youtube');
   const instagramAccounts = accounts.filter(a => a.provider === 'instagram');
+  const facebookAccounts = accounts.filter(a => a.provider === 'facebook');
   const linkedinAccount = accounts.find(a => a.provider === 'linkedin');
   const twitterAccount = accounts.find(a => a.provider === 'twitter');
 
@@ -465,6 +476,48 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             >
               <Plus size={15} />
               <span>{instagramAccounts.length > 0 ? 'Connect Another Instagram Account' : 'Connect Instagram Account'}</span>
+            </button>
+          </div>
+
+          {/* Facebook Accounts */}
+          <div className="pt-3 border-t border-border space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
+              <span className="flex items-center gap-1.5"><FacebookIcon /> Facebook Pages / Reels</span>
+              <span className="font-mono">{facebookAccounts.length} connected</span>
+            </div>
+
+            {facebookAccounts.length > 0 ? (
+              <div className="space-y-2">
+                {facebookAccounts.map((acc) => (
+                  <div key={acc.id} className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
+                        <FacebookIcon />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-medium text-text-main truncate">{acc.account_name}</p>
+                        <p className="text-xs text-text-muted truncate font-mono">{acc.account_id}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDisconnectAccount(acc)}
+                      className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted italic">No Facebook accounts connected yet.</p>
+            )}
+
+            <button
+              onClick={() => handleConnectProvider('facebook')}
+              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <Plus size={15} />
+              <span>{facebookAccounts.length > 0 ? 'Connect Another Facebook Account' : 'Connect Facebook Account'}</span>
             </button>
           </div>
 

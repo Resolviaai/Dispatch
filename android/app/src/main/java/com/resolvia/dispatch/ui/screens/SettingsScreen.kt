@@ -149,7 +149,12 @@ fun SettingsScreen(
                                 val client = OkHttpClient.Builder()
                                     .connectTimeout(5, TimeUnit.SECONDS)
                                     .build()
-                                val host = if (pairingManager.pcHost.isNotBlank()) pairingManager.pcHost else "192.168.0.200:8000"
+                                val host = pairingManager.pcHost
+                                if (host.isBlank()) {
+                                    Toast.makeText(context, "No PC Studio paired. Set PC Host or use Cloud Mode.", Toast.LENGTH_SHORT).show()
+                                    isSyncing = false
+                                    return@launch
+                                }
                                 val req = Request.Builder()
                                     .url("http://$host/api/youtube/credentials")
                                     .build()
