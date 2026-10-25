@@ -107,9 +107,13 @@ async function loadUsers() {
         <div class="actions">
           <span class="pill ${u.banned ? "off" : "on"}">${u.banned ? "Disabled" : "Active"}</span>
           <input type="number" step="0.1" min="0.1" max="10" value="2.0"
-            class="act" style="width:88px" title="Quota in decimal GB (max 10)"
+            class="act" style="width:80px" title="Quota in decimal GB (max 10)"
             data-quota="${u.id}" aria-label="Quota GB for ${u.email}">
-          <button class="act" data-uid="${u.id}" data-quota-save="${u.id}">Set GB</button>
+          <button class="act" data-uid="${u.id}" data-quota-save="${u.id}">GB</button>
+          <input type="number" step="1" min="1" max="1000" value="${u.queue_priority || 100}"
+            class="act" style="width:68px" title="Priority (lower = higher priority, default 100)"
+            data-prio="${u.id}" aria-label="Priority for ${u.email}">
+          <button class="act" data-uid="${u.id}" data-prio-save="${u.id}">Prio</button>
           ${u.banned
             ? `<button class="act" data-uid="${u.id}" data-act="unban">Enable</button>`
             : `<button class="act danger" data-uid="${u.id}" data-act="ban">Disable</button>`}
@@ -140,6 +144,26 @@ $("users").addEventListener("click", async (ev) => {
       $("status").innerHTML = '<span class="err">' + e.message.replace(/</g, "&lt;") + '</span>';
     } finally {
       btn_disabled(save, false);
+    }
+    return;
+  }
+  const prioSave = ev.target.closest("button[data-prio-save]");
+  if (prioSave) {
+    const uid = prioSave.dataset.prioSave;
+    const input = document.querySelector('input[data-prio="' + uid + '"]');
+    const prio = parseInt(input && input.value, 10);
+    if (!Number.isFinite(prio) || prio <= 0 || prio > 1000) {
+      $("status").innerHTML = '<span class="err">Priority must be between 1 and 1000 (lower runs first).</span>';
+      return;
+    }
+    btn_disabled(prioSave, true);
+    try {
+      await api("/admin/users/" + uid + "/priority", { method: "POST", body: JSON.stringify({ priority: prio }) });
+      $("status").innerHTML = '<span class="ok">Priority set to ' + prio + '.</span>';
+    } catch (e) {
+      $("status").innerHTML = '<span class="err">' + e.message.replace(/</g, "&lt;") + '</span>';
+    } finally {
+      btn_disabled(prioSave, false);
     }
     return;
   }
