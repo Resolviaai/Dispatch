@@ -21,6 +21,7 @@ from dispatch.publisher.youtube import upload_youtube_short
 from dispatch.publisher.instagram import upload_instagram_reel
 from dispatch.publisher.linkedin import upload_linkedin_video
 from dispatch.publisher.twitter import upload_x_video
+from dispatch.publisher.facebook import upload_facebook_reel
 from dispatch.config import MIN_CLIP_DURATION, MAX_CLIP_DURATION
 from dispatch.ingestion.validator import probe_video
 from dispatch import db
@@ -370,6 +371,15 @@ def _process_outbox_queue_internal() -> int:
                     api_secret=x_secret,
                     oauth_token=x_tok,
                     oauth_secret=x_tok_sec
+                )
+            elif platform == "facebook":
+                fb_token = account_creds.get("access_token") if account_creds else None
+                fb_page = account_id or (account_creds.get("page_id") if account_creds else None)
+                result = upload_facebook_reel(
+                    video_path=video_path,
+                    description=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}",
+                    access_token=fb_token,
+                    page_id=fb_page
                 )
             else:
                 err_msg = f"Unsupported publishing platform '{platform}'"

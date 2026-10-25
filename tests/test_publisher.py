@@ -71,6 +71,47 @@ class TestPublisher(unittest.TestCase):
         self.assertTrue(clip_file.exists(), "Local published clip file should remain on disk")
         clip_file.unlink(missing_ok=True)
 
+    def test_facebook_publisher(self):
+        unique_tag = uuid.uuid4().hex[:6]
+        clip_id = save_clip(
+            session_id=None,
+            chunk_id=None,
+            start_time=0.0,
+            end_time=6.0,
+            title=f"Test FB Reel {unique_tag}",
+            hook="Hook",
+            description="FB Description",
+            hashtags="#Reels",
+            virality_score=85,
+            layout_mode="fit_blur",
+            platform_targets="facebook"
+        )
+        clip_file = CLIPS_DIR / f"{clip_id}.mp4"
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=360x640:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "6",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(clip_file)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        update_clip_media(clip_id, str(clip_file), None)
+
+        approve_clip(clip_id, custom_mode="public", target_platforms="facebook")
+
+        with patch("dispatch.publisher.outbox.upload_facebook_reel", return_value={"status": "published", "remote_id": "mock_fb_123", "remote_url": "https://www.facebook.com/reel/mock_fb_123"}):
+            count = process_outbox_queue()
+        self.assertGreaterEqual(count, 1)
+
+        with db.get_db_connection() as conn:
+            row = conn.execute("SELECT status, remote_id, remote_url FROM publishing_outbox WHERE clip_id = ? AND platform = 'facebook'", (clip_id,)).fetchone()
+            self.assertEqual(row["status"], "published")
+            self.assertEqual(row["remote_id"], "mock_fb_123")
+            self.assertEqual(row["remote_url"], "https://www.facebook.com/reel/mock_fb_123")
+        clip_file.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()
