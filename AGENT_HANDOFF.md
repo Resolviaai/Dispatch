@@ -232,3 +232,16 @@ Implementation per owner brief: temporary edit windows (60s context, 300s cap, 7
 - **v1.1.6-alpha (versionCode 10) published** — signature = trusted 94f778…3804, aapt-verified com.resolvia.dispatch 1.1.6; stable URL hash-matched; landing page shows 1.1.6 (both deployed).
 - PC server restarted on latest code (LAN-bound 0.0.0.0:8000, dashboard 200, all 4 workers + remote poller active).
 - Everything committed + pushed through `984aa0b`; tree clean.
+
+## 43. v1.1.7-alpha (versionCode 11) — native camera behavior per owner spec (2026-10-25)
+Owner dictated the camera contract (Hindi voice note); UI truth = React `frontend/src/screens/CameraScreen.tsx` in the WebView (Compose `RecordScreen.kt` is dead code, referenced nowhere).
+- Tap-to-focus/meter + sun-dial drag: existed; **fixed EV-while-locked** — `setExposureIndex` now releases ONLY the hardware AE lock (AF/metering lock preserved) so the dial keeps working when locked.
+- **Tap-while-locked → unlock + refocus**: new `unlockAndFocus` bridge method chains `unlockAeAf { focusOnPoint }` in the native callback (calling focus directly is rejected by the lock guard). Frontend: no session opens while locked; pointerup runs `handleTapUnlockAndFocus`; `chainedUnlockFocusRef` shields the interim unlock_result. Also recovers `uncertain` state.
+- **Lock UX**: lock icon now centered inside the reticle (amber pill + unlock button REMOVED — tap-anywhere is the unlock); `reticleLockPop` scale 1→1.13→1 on confirm; after 1 s locked the reticle settles to 55 % opacity (`lockDimmed`). VIBRATE permission added to the manifest (was missing — navigator.vibrate was silently dead).
+- **Pause/resume**: `CameraCaptureManager.pauseActiveRecording/resumeActiveRecording` + `isRecordingPaused`; SegmenterEngine roll timer is now a 1 s pause-aware ticker (paused time doesn't shorten the 10-min segment); bridge `pauseRecording/resumeRecording/isRecordingPaused`; frontend pause/play button beside the shutter, PAUSED amber badge, frozen timer; foreground notification shows "Recording Paused". Browser MediaRecorder pause wired too.
+- **Zoom**: during recording the pills are replaced by `RecordingZoomSlider` (continuous, min→max from zoomState, integer-crossing haptic ticks, `setZoom` bridge now returns the hardware-clamped ratio); idle keeps pills (nearest-match highlight).
+- **Center marker**: viewfinder center box replaced with a lucide `Plus`.
+- Tests: `test_camera_interactions.js` extended (tap-unlock contract, slider mapping round-trips/clamps, haptic boundaries) — all frontend suites green; `testReleaseUnitTest` exit 0.
+- **v1.1.7-alpha published**: signature 94f778…3804 verified, aapt versionCode 11 / 1.1.7, fresh bundle `index-Dd8NCqIA.js` confirmed inside APK (reticleLockPop/unlockAndFocus/pauseRecording symbols), stable latest-URL SHA-256 = manifest, landing page live at 1.1.7 (gh-pages `d039b42`).
+- Gotcha recorded: an accidental `git stash` mid-deploy briefly hid the working tree — popped cleanly; always check `git stash list` after any silent `2>/dev/null` git chain.
+

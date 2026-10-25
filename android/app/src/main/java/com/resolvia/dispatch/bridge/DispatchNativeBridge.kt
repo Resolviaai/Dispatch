@@ -132,6 +132,23 @@ class DispatchNativeBridge(
     }
 
     @JavascriptInterface
+    fun isRecordingPaused(): Boolean = cameraCaptureManager.isRecordingPaused
+
+    @JavascriptInterface
+    fun pauseRecording() {
+        activity.runOnUiThread {
+            segmenterEngine.pauseSession(cameraCaptureManager)
+        }
+    }
+
+    @JavascriptInterface
+    fun resumeRecording() {
+        activity.runOnUiThread {
+            segmenterEngine.resumeSession(cameraCaptureManager)
+        }
+    }
+
+    @JavascriptInterface
     fun switchCamera() {
         notifyCameraStatus("initializing", null)
         activity.runOnUiThread {
@@ -171,7 +188,6 @@ class DispatchNativeBridge(
     fun setZoom(ratio: Float): Float {
         return try {
             cameraCaptureManager.setZoomRatio(ratio)
-            ratio
         } catch (e: Exception) {
             1.0f
         }
@@ -202,6 +218,7 @@ class DispatchNativeBridge(
             if (error != null) addProperty("error", error)
             addProperty("lensFacing", if (cameraCaptureManager.currentLensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back")
             addProperty("isRecording", cameraCaptureManager.isRecording)
+            addProperty("isRecordingPaused", cameraCaptureManager.isRecordingPaused)
             addProperty("isTorchEnabled", cameraCaptureManager.isTorchEnabled)
             addProperty("isAeAfLocked", cameraCaptureManager.isAeAfLocked)
             addProperty("isAeLocked", cameraCaptureManager.isAeLocked)
@@ -246,6 +263,7 @@ class DispatchNativeBridge(
             addProperty("isInitialized", cameraCaptureManager.isInitialized)
             addProperty("lensFacing", if (cameraCaptureManager.currentLensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back")
             addProperty("isRecording", cameraCaptureManager.isRecording)
+            addProperty("isRecordingPaused", cameraCaptureManager.isRecordingPaused)
             addProperty("isTorchEnabled", cameraCaptureManager.isTorchEnabled)
             addProperty("isAeAfLocked", cameraCaptureManager.isAeAfLocked)
             addProperty("isAeLocked", cameraCaptureManager.isAeLocked)
@@ -366,6 +384,42 @@ class DispatchNativeBridge(
                 sendCameraEvent("unlock_result", JsonObject().apply {
                     addProperty("success", ok)
                 })
+            }
+        }
+    }
+
+    /**
+     * Single-tap contract on a locked camera: unlock first, then move focus and
+     * metering to the tapped point once the unlock has been confirmed natively.
+     * Calling focusOnPoint directly would be rejected by the lock guard.
+     */
+    @JavascriptInterface
+    fun unlockAndFocus(normalizedX: Float, normalizedY: Float, triggerId: Long) {
+        activity.runOnUiThread {
+            val pv = cameraCaptureManager.activePreviewView
+            if (pv == null || pv.width <= 0 || pv.height <= 0) {
+                sendCameraEvent("focus_result", JsonObject().apply {
+                    addProperty("triggerId", triggerId)
+                    addProperty("success", false)
+                    addProperty("isLocked", false)
+                    addProperty("error", "Preview not available")
+                })
+                return@runOnUiThread
+            }
+            val px = normalizedX.coerceIn(0f, 1f) * pv.width
+            val py = normalizedY.coerceIn(0f, 1f) * pv.height
+            cameraCaptureManager.unlockAeAf {
+                cameraCaptureManager.focusOnPoint(px, py, pv) { res ->
+                    sendCameraEvent("focus_result", JsonObject().apply {
+                        addProperty("triggerId", triggerId)
+                        addProperty("success", res.success)
+                        addProperty("isLocked", false)
+                        addProperty("hasAf", res.hasAf)
+                        addProperty("hasAe", res.hasAe)
+                        addProperty("lockStateUncertain", res.lockStateUncertain)
+                        if (res.error != null) addProperty("error", res.error)
+                    })
+                }
             }
         }
     }

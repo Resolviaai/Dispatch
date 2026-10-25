@@ -38,6 +38,9 @@ class SegmenterEngine(
     var isSessionActive: Boolean = false
         private set
 
+    @Volatile var isSessionPaused: Boolean = false
+        private set
+
     // Default 10-minute rolling segments (600,000 ms)
     var segmentDurationMs: Long = 10 * 60 * 1000L
 
@@ -65,6 +68,7 @@ class SegmenterEngine(
         currentSessionId = sessionId
         currentSequenceNumber = 0
         isSessionActive = true
+        isSessionPaused = false
 
         // Bind CameraX directly to Foreground Service lifecycle so recording survives screen lock
         val bound = withTimeoutOrNull(10000L) {
@@ -202,14 +206,36 @@ class SegmenterEngine(
             }
         )
 
-        // Schedule timer to roll into next segment
+        // Pause-aware roll ticker: elapsed time only accumulates while the hardware
+        // recording is actually running, so a pause never shortens the segment.
         segmentRollJob?.cancel()
         segmentRollJob = scope.launch {
-            delay(segmentDurationMs)
-            if (isSessionActive && cameraManager.isRecording) {
-                cameraManager.stopActiveRecording() // triggers onFinalized callback above
+            var elapsedMs = 0L
+            while (true) {
+                delay(1_000L)
+                if (!isSessionActive) return@launch
+                if (isSessionPaused || cameraManager.isRecordingPaused) continue
+                elapsedMs += 1_000L
+                if (elapsedMs >= segmentDurationMs && cameraManager.isRecording) {
+                    cameraManager.stopActiveRecording() // triggers onFinalized callback above
+                    return@launch
+                }
             }
         }
+    }
+
+    /** Pauses the active hardware recording and freezes the 10-minute segment roll clock. */
+    fun pauseSession(cameraManager: CameraCaptureManager) {
+        if (!isSessionActive || isSessionPaused) return
+        isSessionPaused = true
+        cameraManager.pauseActiveRecording()
+    }
+
+    /** Resumes a paused hardware recording and unfreezes the segment roll clock. */
+    fun resumeSession(cameraManager: CameraCaptureManager) {
+        if (!isSessionActive || !isSessionPaused) return
+        if (!cameraManager.resumeActiveRecording()) return
+        isSessionPaused = false
     }
 
     private suspend fun onSegmentHardwareFinalized(
@@ -295,6 +321,7 @@ class SegmenterEngine(
 
     suspend fun stopSession(cameraManager: CameraCaptureManager) = withContext(Dispatchers.Main) {
         isSessionActive = false
+        isSessionPaused = false
         segmentRollJob?.cancel()
         segmentRollJob = null
         storageMonitorJob?.cancel()

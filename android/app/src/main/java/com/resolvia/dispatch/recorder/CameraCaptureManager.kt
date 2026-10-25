@@ -77,6 +77,9 @@ class CameraCaptureManager(private val context: Context) {
     var isRecording: Boolean = false
         private set
 
+    @Volatile var isRecordingPaused: Boolean = false
+        private set
+
     var currentLensFacing: Int = CameraSelector.LENS_FACING_BACK
         private set
 
@@ -942,6 +945,19 @@ class CameraCaptureManager(private val context: Context) {
         }
         val range = state.exposureCompensationRange
         val targetIndex = clampExposureIndex(index, range.lower, range.upper)
+
+        // The sun dial must keep adjusting exposure while the camera is locked: a
+        // hardware AE lock freezes auto-exposure, so drop only the AE lock and keep
+        // the confirmed AF/metering lock intact.
+        if (isAeLocked) {
+            isAeLocked = false
+            try {
+                setCameraAeLock(cam, false)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not release AE lock before exposure change: ${e.message}")
+            }
+        }
+
         val operationGeneration = exposureOperationGeneration.begin()
         try {
             val future = cam.cameraControl.setExposureCompensationIndex(targetIndex)
@@ -1038,6 +1054,7 @@ class CameraCaptureManager(private val context: Context) {
         }
 
         isRecording = true
+        isRecordingPaused = false
         activeRecording = pendingRecording.start(recordingExecutor) { recordEvent ->
             when (recordEvent) {
                 is VideoRecordEvent.Start -> {
@@ -1049,6 +1066,7 @@ class CameraCaptureManager(private val context: Context) {
                 }
                 is VideoRecordEvent.Finalize -> {
                     isRecording = false
+                    isRecordingPaused = false
                     mainHandler.post {
                         RecordingForegroundService.instance?.updateNotification()
                     }
@@ -1087,7 +1105,45 @@ class CameraCaptureManager(private val context: Context) {
             activeRecording?.stop()
             activeRecording = null
             isRecording = false
+            isRecordingPaused = false
             RecordingForegroundService.instance?.updateNotification()
+        }
+    }
+
+    /**
+     * Pauses the active hardware recording. The Recording object stays alive so
+     * [resumeActiveRecording] continues into the same output file.
+     */
+    fun pauseActiveRecording(): Boolean {
+        val rec = activeRecording ?: return false
+        if (!isRecording || isRecordingPaused) return isRecordingPaused
+        return try {
+            rec.pause()
+            isRecordingPaused = true
+            RecordingForegroundService.instance?.updateNotification()
+            Log.i(TAG, "Recording paused")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to pause recording: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Resumes a paused hardware recording into the same output file.
+     */
+    fun resumeActiveRecording(): Boolean {
+        val rec = activeRecording ?: return false
+        if (!isRecording || !isRecordingPaused) return !isRecordingPaused
+        return try {
+            rec.resume()
+            isRecordingPaused = false
+            RecordingForegroundService.instance?.updateNotification()
+            Log.i(TAG, "Recording resumed")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to resume recording: ${e.message}")
+            false
         }
     }
 

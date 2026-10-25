@@ -7,10 +7,14 @@ import {
   applyNativeLockState,
   applyUnlockResult,
   beginPointerSession,
+  crossedIntegerZoomBoundary,
   endPointerSession,
   exposureIndexForPointerMove,
   isCameraLifecycleTransition,
   markLockAttemptTimedOut,
+  shouldUnlockAndRefocusOnTap,
+  sliderFractionFromZoomRatio,
+  zoomRatioFromSliderFraction,
 } from './src/camera/cameraInteractionState';
 
 console.log('Camera interaction regressions...');
@@ -102,4 +106,36 @@ assert.equal(isCameraLifecycleTransition(cameraState, { ...cameraState, status: 
 assert.equal(isCameraLifecycleTransition(cameraState, { ...cameraState, lensFacing: 'front' }), true);
 assert.equal(isCameraLifecycleTransition(cameraState, { ...cameraState, isAeAfLocked: false }), false);
 
+// A single tap on a locked (or uncertain) reticle unlocks and moves focus; taps on
+// idle/focusing/failed reticles keep the plain focus contract.
+assert.equal(shouldUnlockAndRefocusOnTap({ isLocked: true, status: 'locked' }), true, 'locked reticle taps unlock + refocus');
+assert.equal(shouldUnlockAndRefocusOnTap({ isLocked: false, status: 'uncertain' }), true, 'uncertain reticle taps recover via unlock + refocus');
+assert.equal(shouldUnlockAndRefocusOnTap(null), false);
+assert.equal(shouldUnlockAndRefocusOnTap({ isLocked: false, status: 'idle' }), false);
+assert.equal(shouldUnlockAndRefocusOnTap({ isLocked: false, status: 'focusing' }), false);
+assert.equal(shouldUnlockAndRefocusOnTap({ isLocked: false, status: 'success' }), false);
+
+// Recording zoom slider maps fractions to hardware ratios and back, clamping
+// out-of-range input instead of trusting it.
+assert.equal(zoomRatioFromSliderFraction(0, 1, 5), 1);
+assert.equal(zoomRatioFromSliderFraction(1, 1, 5), 5);
+assert.equal(zoomRatioFromSliderFraction(0.5, 1, 5), 3);
+assert.equal(zoomRatioFromSliderFraction(-0.4, 1, 5), 1, 'negative fractions clamp to min zoom');
+assert.equal(zoomRatioFromSliderFraction(1.7, 1, 5), 5, 'overflow fractions clamp to max zoom');
+assert.equal(zoomRatioFromSliderFraction(0.25, 0.6, 2.6), 1.1);
+assert.ok(Number.isFinite(zoomRatioFromSliderFraction(NaN, 1, 5)), 'non-numeric input never yields NaN');
+assert.equal(sliderFractionFromZoomRatio(3, 1, 5), 0.5);
+assert.equal(sliderFractionFromZoomRatio(0.6, 0.6, 2.6), 0);
+assert.equal(sliderFractionFromZoomRatio(2.6, 0.6, 2.6), 1);
+assert.equal(sliderFractionFromZoomRatio(9, 1, 5), 1, 'a hardware ratio above max pins the slider to the end');
+const roundTrip = sliderFractionFromZoomRatio(zoomRatioFromSliderFraction(0.37, 1, 5), 1, 5);
+assert.ok(Math.abs(roundTrip - 0.37) < 0.01, 'fraction -> ratio -> fraction survives a round trip');
+
+// Haptic ticks fire exactly when the drag crosses an integer zoom boundary.
+assert.equal(crossedIntegerZoomBoundary(1.2, 1.9), false);
+assert.equal(crossedIntegerZoomBoundary(1.9, 2.05), true);
+assert.equal(crossedIntegerZoomBoundary(2.05, 2.4), false);
+assert.equal(crossedIntegerZoomBoundary(0.6, 1.0), true);
+
 console.log('  passed: direct slider drags, pointer cleanup, confirmed exposure results, AE-only locks, timeout recovery, unlock and lifecycle state');
+console.log('  passed: tap-to-unlock-and-refocus contract, recording zoom slider mapping, integer haptic boundaries');

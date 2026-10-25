@@ -171,3 +171,48 @@ export function isCameraLifecycleTransition(
 ): boolean {
   return previous.lensFacing !== next.lensFacing || next.status !== 'ready';
 }
+
+/**
+ * Native camera tap contract on a locked reticle: a single tap anywhere outside
+ * the sun dial unlocks AE/AF and moves focus to the tapped point. Uncertain lock
+ * states are included so a tap also recovers the camera.
+ */
+export function shouldUnlockAndRefocusOnTap(
+  focus: Pick<FocusExposureState, 'isLocked' | 'status'> | null
+): boolean {
+  if (!focus) return false;
+  return focus.isLocked || focus.status === 'uncertain';
+}
+
+/** Maps a 0..1 zoom slider fraction to a hardware zoom ratio. */
+export function zoomRatioFromSliderFraction(
+  fraction: number,
+  minZoom: number,
+  maxZoom: number
+): number {
+  const min = Number.isFinite(minZoom) ? minZoom : 1;
+  const max = Number.isFinite(maxZoom) ? maxZoom : min;
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  const clamped = Math.min(1, Math.max(0, Number.isFinite(fraction) ? fraction : 0));
+  return Math.round((lo + clamped * (hi - lo)) * 100) / 100;
+}
+
+/** Maps a hardware zoom ratio back to a 0..1 slider fraction. */
+export function sliderFractionFromZoomRatio(
+  ratio: number,
+  minZoom: number,
+  maxZoom: number
+): number {
+  const min = Number.isFinite(minZoom) ? minZoom : 1;
+  const max = Number.isFinite(maxZoom) ? maxZoom : min;
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  const r = Number.isFinite(ratio) ? ratio : lo;
+  return Math.min(1, Math.max(0, (r - lo) / Math.max(1e-6, hi - lo)));
+}
+
+/** True when a zoom drag crosses an integer boundary (1x → 2x), for haptic ticks. */
+export function crossedIntegerZoomBoundary(previous: number, next: number): boolean {
+  return Math.floor(previous + 1e-6) !== Math.floor(next + 1e-6);
+}

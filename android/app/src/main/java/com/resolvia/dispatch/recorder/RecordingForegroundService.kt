@@ -167,21 +167,22 @@ class RecordingForegroundService : LifecycleService() {
         )
 
         val isActivelyRecording = cameraManager?.isRecording == true
+        val isPaused = isActivelyRecording && cameraManager?.isRecordingPaused == true
 
-        val title = if (isActivelyRecording) {
-            "Dispatch: Recording Active"
-        } else {
-            "Dispatch: Recording Interrupted"
+        val title = when {
+            isPaused -> "Dispatch: Recording Paused"
+            isActivelyRecording -> "Dispatch: Recording Active"
+            else -> "Dispatch: Recording Interrupted"
         }
 
-        val content = if (isActivelyRecording) {
-            "Continuous segments saving to durable outbox"
-        } else {
-            "Camera session stopped or awaiting recovery"
+        val content = when {
+            isPaused -> "Paused — resume to continue this segment"
+            isActivelyRecording -> "Continuous segments saving to durable outbox"
+            else -> "Camera session stopped or awaiting recovery"
         }
 
         val icon = if (isActivelyRecording) {
-            android.R.drawable.ic_menu_camera
+            android.R.drawable.ic_media_pause
         } else {
             android.R.drawable.ic_dialog_alert
         }

@@ -53,6 +53,7 @@ export interface CameraStateEvent {
   error?: string | null;
   lensFacing: 'back' | 'front';
   isRecording: boolean;
+  isRecordingPaused?: boolean;
   isTorchEnabled: boolean;
   isAeAfLocked: boolean;
   isAeLocked?: boolean;
@@ -91,6 +92,9 @@ declare global {
       startRecording: () => void;
       stopRecording: () => void;
       isRecording: () => boolean;
+      isRecordingPaused?: () => boolean;
+      pauseRecording?: () => void;
+      resumeRecording?: () => void;
       switchCamera: () => void;
       toggleTorch: () => boolean;
       toggleMic: () => boolean;
@@ -99,6 +103,7 @@ declare global {
       focusOnPoint?: (normX: number, normY: number, triggerId?: number) => void;
       lockAeAfAtPoint?: (normX: number, normY: number, triggerId?: number) => boolean;
       unlockAeAf?: () => void;
+      unlockAndFocus?: (normX: number, normY: number, triggerId?: number) => void;
       setExposureIndex?: (index: number) => number;
       getExposureInfo?: () => string;
       getCameraStatus?: () => string;
@@ -158,6 +163,29 @@ export const Bridge = {
       return window.DispatchBridge.isRecording();
     }
     return false;
+  },
+
+  isRecordingPaused(): boolean {
+    if (window.DispatchBridge?.isRecordingPaused) {
+      return window.DispatchBridge.isRecordingPaused();
+    }
+    return false;
+  },
+
+  pauseRecording(): void {
+    if (window.DispatchBridge?.pauseRecording) {
+      window.DispatchBridge.pauseRecording();
+    } else {
+      console.log('[Mock Bridge] pauseRecording');
+    }
+  },
+
+  resumeRecording(): void {
+    if (window.DispatchBridge?.resumeRecording) {
+      window.DispatchBridge.resumeRecording();
+    } else {
+      console.log('[Mock Bridge] resumeRecording');
+    }
   },
 
   startRecording(): void {
@@ -264,6 +292,20 @@ export const Bridge = {
         }));
       }, 100);
     }
+  },
+
+  unlockAndFocus(normX: number, normY: number, triggerId = Date.now()): void {
+    if (window.DispatchBridge?.unlockAndFocus) {
+      window.DispatchBridge.unlockAndFocus(normX, normY, triggerId);
+      return;
+    }
+    console.log('[Mock Bridge] unlockAndFocus', normX, normY);
+    setTimeout(() => {
+      cameraListeners.forEach(l => l({
+        type: 'focus_result',
+        data: { triggerId, success: true, isLocked: false, hasAf: true, hasAe: true, normX, normY }
+      }));
+    }, 320);
   },
 
   retryCameraInit(): void {

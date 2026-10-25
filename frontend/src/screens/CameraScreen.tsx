@@ -10,7 +10,9 @@ import {
   CheckCircle2,
   Sun,
   Lock,
-  Unlock,
+  Pause,
+  Play,
+  Plus,
   RotateCcw,
   Camera,
   Loader2
@@ -22,12 +24,16 @@ import {
   applyNativeLockState,
   applyUnlockResult,
   beginPointerSession,
+  crossedIntegerZoomBoundary,
   endPointerSession,
   exposureIndexForPointerMove,
   FocusExposureState,
   isCameraLifecycleTransition,
   markLockAttemptTimedOut,
   PointerSession,
+  shouldUnlockAndRefocusOnTap,
+  sliderFractionFromZoomRatio,
+  zoomRatioFromSliderFraction,
 } from '../camera/cameraInteractionState';
 
 interface CameraScreenProps {
@@ -35,11 +41,84 @@ interface CameraScreenProps {
   onRecordingStatusUpdate?: (segmentId: string, status: string, extra?: Partial<RecordingItem>) => void;
 }
 
+/**
+ * Continuous zoom slider shown only while recording. Idle recording-off state
+ * keeps the discrete zoom pills; recording swaps them for this slider.
+ */
+const RecordingZoomSlider: React.FC<{
+  minZoom: number;
+  maxZoom: number;
+  ratio: number;
+  onChange: (ratio: number) => void;
+}> = ({ minZoom, maxZoom, ratio, onChange }) => {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fraction = sliderFractionFromZoomRatio(ratio, minZoom, maxZoom);
+
+  const applyFromClientX = (clientX: number) => {
+    const el = trackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    onChange(zoomRatioFromSliderFraction((clientX - rect.left) / Math.max(1, rect.width), minZoom, maxZoom));
+  };
+
+  return (
+    <div className="mb-6 flex w-full max-w-[340px] items-center gap-3 px-3" data-interactive>
+      <span className="shrink-0 text-[10px] font-mono tabular-nums text-text-muted">
+        {minZoom.toFixed(1)}x
+      </span>
+      <div
+        ref={trackRef}
+        onPointerDown={(e) => {
+          if (e.button !== 0 && e.pointerType === 'mouse') return;
+          try { e.currentTarget.setPointerCapture(e.pointerId); } catch { }
+          setIsDragging(true);
+          applyFromClientX(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (isDragging) applyFromClientX(e.clientX);
+        }}
+        onPointerUp={(e) => {
+          setIsDragging(false);
+          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { }
+        }}
+        onPointerCancel={() => setIsDragging(false)}
+        className="relative h-11 flex-1 cursor-pointer touch-none"
+        role="slider"
+        aria-label="Zoom level"
+        aria-valuemin={minZoom}
+        aria-valuemax={maxZoom}
+        aria-valuenow={ratio}
+      >
+        <div className="absolute left-0 right-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/25" />
+        <div
+          className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white"
+          style={{ width: `${fraction * 100}%` }}
+        />
+        <div
+          className="absolute top-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+          style={{ left: `${fraction * 100}%` }}
+        >
+          <div
+            className={`h-3.5 w-3.5 rounded-full bg-white shadow-[0_0_0_2px_rgba(0,0,0,0.6)] transition-transform duration-100 ${
+              isDragging ? 'scale-125' : 'scale-100'
+            }`}
+          />
+        </div>
+      </div>
+      <span className="min-w-[40px] shrink-0 text-right text-[11px] font-mono tabular-nums text-text-main">
+        {ratio.toFixed(1)}x
+      </span>
+    </div>
+  );
+};
+
 export const CameraScreen: React.FC<CameraScreenProps> = ({ 
   onRecordingComplete,
   onRecordingStatusUpdate 
 }) => {
   const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [torchActive, setTorchActive] = useState(false);
   const [micActive, setMicActive] = useState(true);
@@ -99,6 +178,10 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const lastExposureRequestRef = useRef<number | null>(null);
   const lastSunTapTimeRef = useRef<number>(0);
   const lastTriggerIdRef = useRef(0);
+  const isPausedRef = useRef(false);
+  const lastZoomIntegerRef = useRef(1);
+  const chainedUnlockFocusRef = useRef<number | null>(null);
+  const [lockDimmed, setLockDimmed] = useState(false);
 
   // Synchronize native recording status when running inside Dispatch Android WebView
   useEffect(() => {
@@ -106,6 +189,11 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       const syncRecordingState = () => {
         const recording = Bridge.isRecording();
         setIsRecording(recording);
+        const paused = recording && Bridge.isRecordingPaused();
+        if (paused !== isPausedRef.current) {
+          isPausedRef.current = paused;
+          setIsPaused(paused);
+        }
       };
       syncRecordingState();
       const interval = setInterval(syncRecordingState, 1000);
@@ -153,6 +241,9 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         }
       } else if (event.type === 'focus_result') {
         const result = event.data as FocusResultEvent;
+        if (result.triggerId === chainedUnlockFocusRef.current) {
+          chainedUnlockFocusRef.current = null;
+        }
         if (result.triggerId === lastTriggerIdRef.current && lockTimeoutRef.current) {
           clearTimeout(lockTimeoutRef.current);
           lockTimeoutRef.current = null;
@@ -187,6 +278,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           startFadeTimer(4500);
         }
       } else if (event.type === 'unlock_result') {
+        // A chained unlock+focus tap owns the reticle until its focus_result lands.
+        if (chainedUnlockFocusRef.current !== null) return;
         const success = event.data?.success === true;
         if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
         unlockTimeoutRef.current = null;
@@ -347,6 +440,16 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     };
   }, []);
 
+  // Once a lock is confirmed, keep the reticle at full opacity for one second,
+  // then settle it to ~55% so it stays visible without dominating the preview.
+  useEffect(() => {
+    const locked = focusState?.isLocked === true && focusState.status === 'locked';
+    setLockDimmed(false);
+    if (!locked) return;
+    const t = setTimeout(() => setLockDimmed(true), 1000);
+    return () => clearTimeout(t);
+  }, [focusState?.triggerId, focusState?.isLocked, focusState?.status]);
+
   const startFadeTimer = (ms = 2800) => {
     if (fadeTimeoutRef.current) clearTimeout(fadeTimeoutRef.current);
     fadeTimeoutRef.current = setTimeout(() => {
@@ -416,38 +519,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       unlockTimeoutRef.current = null;
       startFadeTimer(4500);
     }, 1600);
-  };
-
-  const requestUnlock = () => {
-    setFocusState((prev) => prev?.isLocked || prev?.status === 'uncertain' ? { ...prev, status: 'unlocking', error: undefined } : prev);
-    setIsIndicatorVisible(true);
-    Bridge.unlockAeAf();
-    if (unlockTimeoutRef.current) clearTimeout(unlockTimeoutRef.current);
-    unlockTimeoutRef.current = setTimeout(() => {
-      const status = Bridge.getCameraStatus();
-      if (status) {
-        cameraStatusRef.current = status;
-        setCameraStatus(status);
-        setFocusState((prev) => {
-          if (status.isAeAfLocked || status.isAeAfLockUncertain) {
-            const nativeState = applyNativeLockState(prev, status.isAeAfLocked, status);
-            return nativeState ? { ...nativeState, status: status.isAeAfLockUncertain ? 'uncertain' : 'locked', error: 'Unlock confirmation timed out. Try again.' } : prev;
-          }
-          return applyNativeLockState(prev, false, status);
-        });
-        setIsIndicatorVisible(!!status.isAeAfLocked || !!status.isAeAfLockUncertain);
-      } else {
-        setFocusState((prev) => prev?.isLocked
-          ? { ...prev, status: 'locked', error: 'Unlock confirmation timed out. Try again.' }
-          : prev);
-      }
-      unlockTimeoutRef.current = null;
-    }, 4500);
-  };
-
-  const handleUnlockAeAf = (e?: React.MouseEvent | React.PointerEvent) => {
-    e?.stopPropagation();
-    requestUnlock();
   };
 
   const handleResetExposure = (e: React.PointerEvent | React.MouseEvent) => {
@@ -619,9 +690,47 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
   };
 
+  // Single tap on a locked/uncertain reticle: unlock and move focus to the tapped
+  // point, matching the native camera contract.
+  const handleTapUnlockAndFocus = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    const screenNormX = Bridge.isAvailable() && window.innerWidth > 0
+      ? Math.max(0, Math.min(1, e.clientX / window.innerWidth))
+      : Math.max(0, Math.min(1, localX / rect.width));
+    const screenNormY = Bridge.isAvailable() && window.innerHeight > 0
+      ? Math.max(0, Math.min(1, e.clientY / window.innerHeight))
+      : Math.max(0, Math.min(1, localY / rect.height));
+    const triggerId = nextTriggerId();
+    chainedUnlockFocusRef.current = triggerId;
+    Bridge.unlockAndFocus(screenNormX, screenNormY, triggerId);
+    setFocusState({ x: localX, y: localY, screenNormX, screenNormY, status: 'focusing', triggerId, isLocked: false, hasAf: true, hasAe: true, timestamp: triggerId });
+    setIsIndicatorVisible(true);
+    setTimeout(() => {
+      setFocusState((current) => {
+        if (current && current.triggerId === triggerId && current.status === 'focusing') {
+          startFadeTimer(2800);
+          return { ...current, status: 'success' };
+        }
+        return current;
+      });
+    }, 3000);
+  };
+
   const handleViewfinderPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const session = clearPointerInteraction(e.pointerId, true);
-    if (!session) return;
+    if (!session) {
+      // While locked, pointer-down intentionally opens no gesture session; the tap
+      // lands here and must unlock + refocus (unless it hit a real control).
+      if (shouldUnlockAndRefocusOnTap(focusState)) {
+        const target = e.target as HTMLElement | null;
+        if (!target?.closest('button, [data-interactive]')) {
+          handleTapUnlockAndFocus(e);
+        }
+      }
+      return;
+    }
 
     if (session.isExposureSlider) {
       if (!focusState?.isLocked) startFadeTimer(2800);
@@ -719,8 +828,10 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       }
     }
 
+    isPausedRef.current = false;
+    setIsPaused(false);
     timerRef.current = setInterval(() => {
-      setRecordingSeconds(prev => prev + 1);
+      if (!isPausedRef.current) setRecordingSeconds(prev => prev + 1);
     }, 1000);
   };
 
@@ -731,6 +842,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
     const finalSeconds = recordingSeconds;
     setIsRecording(false);
+    isPausedRef.current = false;
+    setIsPaused(false);
     Bridge.stopRecording();
 
     if (Bridge.isAvailable()) {
@@ -821,6 +934,33 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
   };
 
+  const handlePauseToggle = () => {
+    if (!isRecording) return;
+    const next = !isPaused;
+    isPausedRef.current = next;
+    setIsPaused(next);
+    if (next) Bridge.pauseRecording();
+    else Bridge.resumeRecording();
+    const mr = mediaRecorderRef.current;
+    if (mr) {
+      try {
+        if (next && mr.state === 'recording') mr.pause();
+        else if (!next && mr.state === 'paused') mr.resume();
+      } catch { }
+    }
+  };
+
+  const handleSliderZoom = (nextRatio: number) => {
+    const applied = Bridge.setZoom(nextRatio);
+    setZoomLevel(applied);
+    if (crossedIntegerZoomBoundary(lastZoomIntegerRef.current, applied)) {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try { navigator.vibrate(10); } catch { }
+      }
+    }
+    lastZoomIntegerRef.current = Math.round(applied);
+  };
+
   const formatTime = (totalSec: number) => {
     const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
     const s = (totalSec % 60).toString().padStart(2, '0');
@@ -841,6 +981,11 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         @keyframes reticlePulse {
           0%, 100% { opacity: 0.9; transform: scale(1); }
           50% { opacity: 0.55; transform: scale(0.96); }
+        }
+        @keyframes reticleLockPop {
+          0% { transform: scale(1); }
+          45% { transform: scale(1.13); }
+          100% { transform: scale(1); }
         }
       `}</style>
       
@@ -891,10 +1036,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           <div className="border-b border-white/[0.06]" />
           <div className="border-r border-b border-white/[0.06]" />
           <div className="border-r border-b border-white/[0.06] flex items-center justify-center">
-            {/* Center Focus Reticle Guide */}
-            <div className="w-10 h-10 border border-white/15 rounded-lg flex items-center justify-center">
-              <div className="w-1 h-1 rounded-full bg-white/30" />
-            </div>
+            {/* Center Plus Marker */}
+            <Plus size={18} strokeWidth={1.5} className="text-white/40" />
           </div>
           <div className="border-b border-white/[0.06]" />
           <div className="border-r border-b border-white/[0.06]" />
@@ -941,33 +1084,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               
               return (
                 <>
-                  {/* AE/AF Lock Badge + Explicit Unlock Button */}
-                  {(isLocked || isLockUncertain) && (
-                    <div 
-                      className="absolute transform -translate-x-1/2 flex items-center gap-1.5 pointer-events-auto"
-                      style={{
-                        left: `${clampedX}px`,
-                        top: `${clampedY - halfBox - 36}px`,
-                      }}
-                    >
-                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-black shadow-[0_2px_12px_rgba(0,0,0,0.8)] border border-amber-300 animate-in fade-in zoom-in-95 duration-150">
-                        <Lock size={11} strokeWidth={2.8} className="text-black shrink-0" />
-                        <span className="text-[10px] font-mono font-bold tracking-tight uppercase">
-                          {isLockUncertain ? 'LOCK UNCERTAIN' : focusState.status === 'unlocking' ? 'UNLOCKING…' : focusState.hasAe && focusState.hasAf ? 'AE/AF LOCK' : focusState.hasAe ? 'AE LOCK' : 'AF LOCK'}
-                        </span>
-                      </div>
-
-                      <button
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={handleUnlockAeAf}
-                        aria-label="Unlock camera lock"
-                        className="flex items-center justify-center w-11 h-11 rounded-full bg-black/80 border border-white/30 text-white hover:bg-black active:scale-[0.96] shadow-md transition-all"
-                      >
-                        <Unlock size={14} strokeWidth={2.2} />
-                      </button>
-                    </div>
-                  )}
-
                   {/* Focus Failure Toast */}
                   {isFailed && (
                     <div 
@@ -987,39 +1103,61 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                   {/* Focus Reticle Square with 4 Corner Brackets */}
                   <div 
                     key={focusState.triggerId}
-                    className={`absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-150 ${
-                      isDraggingExposure ? 'scale-95' : 'scale-100'
-                    } ${isFocusing ? 'animate-[reticlePulse_600ms_ease-in-out_infinite]' : 'animate-[reticlePop_140ms_ease-out]'}`}
+                    className="absolute pointer-events-none"
                     style={{
                       left: `${clampedX}px`,
                       top: `${clampedY}px`,
                       width: `${boxSize}px`,
                       height: `${boxSize}px`,
+                      transform: `translate(-50%, -50%) scale(${isDraggingExposure ? 0.95 : 1})`,
+                      transition: 'transform 150ms ease',
                     }}
                   >
-                    <svg 
-                      className="w-full h-full drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]" 
-                      viewBox="0 0 64 64" 
-                      fill="none"
+                    <div
+                      className={`w-full h-full ${
+                        isFocusing
+                          ? 'animate-[reticlePulse_600ms_ease-in-out_infinite]'
+                          : isLocked
+                          ? 'animate-[reticleLockPop_320ms_cubic-bezier(0.34,1.56,0.64,1)]'
+                          : 'animate-[reticlePop_140ms_ease-out]'
+                      }`}
+                      style={{
+                        opacity: isLocked && lockDimmed ? 0.55 : 1,
+                        transition: 'opacity 500ms ease',
+                      }}
                     >
-                      {/* Corner Brackets */}
-                      {/* Top-Left */}
-                      <path d="M 4 16 L 4 4 L 16 4" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                      {/* Top-Right */}
-                      <path d="M 48 4 L 60 4 L 60 16" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                      {/* Bottom-Right */}
-                      <path d="M 60 48 L 60 60 L 48 60" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                      {/* Bottom-Left */}
-                      <path d="M 16 60 L 4 60 L 4 48" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                      
-                      {/* Center Dot */}
-                      <circle cx="32" cy="32" r="1.5" fill={reticleColor} />
-                    </svg>
+                      <svg 
+                        className="w-full h-full drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]" 
+                        viewBox="0 0 64 64" 
+                        fill="none"
+                      >
+                        {/* Corner Brackets */}
+                        {/* Top-Left */}
+                        <path d="M 4 16 L 4 4 L 16 4" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        {/* Top-Right */}
+                        <path d="M 48 4 L 60 4 L 60 16" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        {/* Bottom-Right */}
+                        <path d="M 60 48 L 60 60 L 48 60" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        {/* Bottom-Left */}
+                        <path d="M 16 60 L 4 60 L 4 48" stroke={reticleColor} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        
+                        {/* Center Dot (hidden while locked; the lock icon takes the center) */}
+                        {!isLocked && <circle cx="32" cy="32" r="1.5" fill={reticleColor} />}
+                      </svg>
+
+                      {/* Lock icon centered inside the reticle once the lock is confirmed */}
+                      {isLocked && !isFocusing && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <Lock size={15} strokeWidth={2.4} className="text-amber-300 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Exposure Slider Track & Sun */}
                   {exposureInfo.isSupported && (
                     <div 
+                      data-interactive
                       className="absolute pointer-events-auto cursor-ns-resize"
                       style={{
                         left: `${trackX - 16}px`,
@@ -1176,10 +1314,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           {/* Left: Quality & Recording Status & Audio VU */}
           <div className="flex items-center gap-2">
             {isRecording ? (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-danger/20 border border-danger/40 backdrop-blur shadow-[0_0_14px_rgba(239,68,68,0.3)]">
-                <span className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse" />
-                <span className="text-xs font-mono tabular-nums font-bold text-rose-300 tracking-wider">
-                  REC {formatTime(recordingSeconds)}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur ${
+                isPaused
+                  ? 'bg-amber-500/20 border-amber-400/40 shadow-[0_0_14px_rgba(245,158,11,0.3)]'
+                  : 'bg-danger/20 border-danger/40 shadow-[0_0_14px_rgba(239,68,68,0.3)]'
+              }`}>
+                <span className={`w-2.5 h-2.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-danger animate-pulse'}`} />
+                <span className={`text-xs font-mono tabular-nums font-bold tracking-wider ${isPaused ? 'text-amber-300' : 'text-rose-300'}`}>
+                  {isPaused ? 'PAUSED' : 'REC'} {formatTime(recordingSeconds)}
                 </span>
                 {micActive && (
                   <div className="flex items-end gap-0.5 h-3 ml-0.5">
@@ -1271,10 +1413,18 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       {/* BOTTOM CONTROLS DECK */}
       <div className="relative z-10 flex flex-col items-center pb-6 pt-2 bg-gradient-to-t from-black/95 via-black/60 to-transparent">
         
-        {/* Zoom Selector Pills (0.6x, 1x, 2x, 3x) */}
+        {/* Zoom: slider while recording, discrete pills while idle */}
+        {isRecording ? (
+          <RecordingZoomSlider
+            minZoom={cameraStatus.zoom?.minZoom || 1}
+            maxZoom={cameraStatus.zoom?.maxZoom || 5}
+            ratio={zoomLevel}
+            onChange={handleSliderZoom}
+          />
+        ) : (
         <div className="flex items-center gap-1.5 p-1 rounded-full bg-surface-100/90 border border-border backdrop-blur mb-6 shadow-md">
           {lensOptions.map((lvl) => {
-            const isSelected = zoomLevel === lvl;
+            const isSelected = Math.abs(zoomLevel - lvl) < 0.3;
             return (
               <button
                 key={lvl}
@@ -1290,9 +1440,23 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             );
           })}
         </div>
+        )}
 
-        {/* Big Shutter / Record Button */}
-        <div className="flex items-center justify-center">
+        {/* Big Shutter / Record Button with Pause Control */}
+        <div className="flex items-center justify-center gap-7">
+          {isRecording && (
+            <button
+              onClick={handlePauseToggle}
+              aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
+              className="w-14 h-14 rounded-full flex items-center justify-center bg-surface-100/80 border border-border text-text-main backdrop-blur hover:bg-surface-200 active:scale-[0.98] transition-all"
+            >
+              {isPaused ? (
+                <Play size={22} className="text-success fill-current" />
+              ) : (
+                <Pause size={22} className="fill-current" />
+              )}
+            </button>
+          )}
           {isRecording ? (
             <button
               onClick={handleStopRecording}
@@ -1310,12 +1474,17 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               <span className="w-14 h-14 rounded-full bg-danger transition-all hover:bg-rose-500 shadow-md" />
             </button>
           )}
+          {isRecording && <div className="w-14" />}
         </div>
 
         {/* Context Help Text */}
         <div className="mt-3 text-center">
           <span className="text-[11px] font-mono text-text-muted">
-            {isRecording ? 'Tap square to stop & finalize chunk' : 'Tap to focus · Hold to lock AE/AF'}
+            {isRecording
+              ? isPaused
+                ? 'Paused · tap play to resume recording'
+                : 'Slide to zoom · tap square to stop & finalize'
+              : 'Tap to focus · hold to lock · tap again to move'}
           </span>
         </div>
       </div>
