@@ -44,7 +44,10 @@ interface RecordingDao {
     @Query("SELECT * FROM segments ORDER BY createdAt DESC LIMIT 25")
     fun getAllSegmentsFlow(): Flow<List<SegmentEntity>>
 
-    @Query("SELECT * FROM segments ORDER BY createdAt DESC LIMIT 50")
+    @Query("SELECT * FROM segments WHERE sessionId = :sessionId ORDER BY sequenceNumber ASC")
+    suspend fun getSegmentsBySessionId(sessionId: String): List<SegmentEntity>
+
+    @Query("SELECT * FROM segments ORDER BY createdAt DESC LIMIT 500")
     suspend fun getAllSegmentsList(): List<SegmentEntity>
 
     @Query("UPDATE segments SET status = :status WHERE segmentId = :segmentId")
@@ -67,6 +70,12 @@ interface RecordingDao {
 
     @Query("DELETE FROM segments WHERE segmentId = :segmentId")
     suspend fun deleteSegment(segmentId: String)
+
+    @Query("DELETE FROM segments WHERE sessionId = :sessionId")
+    suspend fun deleteSegmentsBySessionId(sessionId: String)
+
+    @Query("DELETE FROM sessions WHERE sessionId = :sessionId")
+    suspend fun deleteSession(sessionId: String)
 
     @Query("SELECT * FROM segments WHERE status IN ('UPLOADED_TO_YOUTUBE', 'PROCESSED_ON_YOUTUBE', 'UPLOADED_AWAITING_PROCESSING') AND status != 'VERIFIED_BY_LAPTOP' ORDER BY sequenceNumber ASC")
     suspend fun getSegmentsAwaitingPcAck(): List<SegmentEntity>

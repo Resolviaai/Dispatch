@@ -510,6 +510,11 @@ class CameraCaptureManager(private val context: Context) {
         onReady: (() -> Unit)? = null,
         onError: ((String) -> Unit)? = null
     ): Int {
+        if (isRecording) {
+            android.util.Log.w("CameraCaptureManager", "Cannot toggle camera lens while recording is active")
+            onError?.invoke("Cannot toggle camera lens while recording is active")
+            return currentLensFacing
+        }
         val nextLens = if (currentLensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {
@@ -548,6 +553,10 @@ class CameraCaptureManager(private val context: Context) {
         previewView: PreviewView,
         onReady: (() -> Unit)? = null
     ) {
+        if (isRecording) {
+            android.util.Log.w("CameraCaptureManager", "Cannot switch camera while active recording is in progress")
+            return
+        }
         val nextLens = if (currentLensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {
@@ -883,16 +892,15 @@ class CameraCaptureManager(private val context: Context) {
      * Sets zoom ratio clamped to camera capabilities (e.g. 1.0f, 2.0f, 3.0f).
      */
     fun setZoom(ratio: Float): Float {
-        val cam = camera ?: run {
-            currentZoomRatio = ratio
-            return ratio
-        }
+        currentZoomRatio = ratio
+        val cam = camera ?: return ratio
         val zoomState = cam.cameraInfo.zoomState.value
         val minZ = zoomState?.minZoomRatio ?: 1.0f
         val maxZ = zoomState?.maxZoomRatio ?: 5.0f
-        val clamped = ratio.coerceIn(minZ, maxZ)
-        currentZoomRatio = clamped
-        cam.cameraControl.setZoomRatio(clamped)
+        if (minZ < maxZ) {
+            val clamped = ratio.coerceIn(minZ, maxZ)
+            cam.cameraControl.setZoomRatio(clamped)
+        }
         return currentZoomRatio
     }
 
@@ -908,7 +916,8 @@ class CameraCaptureManager(private val context: Context) {
         val cam = camera ?: return ZoomInfo(1.0f, 5.0f, currentZoomRatio)
         val zoomState = cam.cameraInfo.zoomState.value
         val minZ = zoomState?.minZoomRatio ?: 1.0f
-        val maxZ = zoomState?.maxZoomRatio ?: 5.0f
+        val rawMax = zoomState?.maxZoomRatio ?: 5.0f
+        val maxZ = if (rawMax > minZ) rawMax else 5.0f
         return ZoomInfo(minZ, maxZ, currentZoomRatio)
     }
 

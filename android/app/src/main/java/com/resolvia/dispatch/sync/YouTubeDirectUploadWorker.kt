@@ -591,13 +591,21 @@ class YouTubeDirectUploadWorker(
 
                     if (recoveryFile != null) {
                         var hasValidVideo = false
+                        var extractedDurationMs = 0L
                         val retriever = MediaMetadataRetriever()
                         try {
                             retriever.setDataSource(recoveryFile.absolutePath)
                             val hasVideo = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
                             val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-                            if (hasVideo == "yes" && duration > 0L) {
-                                hasValidVideo = true
+                            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                            if (hasVideo == "yes" && duration > 0L && width > 0 && height > 0) {
+                                val frame = retriever.getFrameAtTime(0)
+                                if (frame != null) {
+                                    hasValidVideo = true
+                                    extractedDurationMs = duration
+                                    try { frame.recycle() } catch (_: Exception) {}
+                                }
                             }
                         } catch (e: Exception) {
                             android.util.Log.w("YouTubeUploader", "Corrupt .tmp segment ${seg.segmentId}: ${e.message}")
@@ -613,6 +621,11 @@ class YouTubeDirectUploadWorker(
                                 recoveryFile.copyTo(finalMp4, overwrite = true)
                                 recoveryFile.delete()
                             }
+                            val accurateFinalizedAt = if (extractedDurationMs > 0L) {
+                                seg.createdAt + extractedDurationMs
+                            } else {
+                                System.currentTimeMillis()
+                            }
                             db.withTransaction {
                                 dao.updateSegment(
                                     seg.copy(
@@ -620,7 +633,7 @@ class YouTubeDirectUploadWorker(
                                         fileSizeBytes = size,
                                         sha256Hash = sha,
                                         status = "QUEUED_FOR_UPLOAD",
-                                        finalizedAt = System.currentTimeMillis()
+                                        finalizedAt = accurateFinalizedAt
                                     )
                                 )
                                 dao.insertOutbox(

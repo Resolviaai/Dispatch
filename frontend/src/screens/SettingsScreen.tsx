@@ -11,7 +11,6 @@ import {
   UserRound,
   Camera,
   Wifi,
-  ExternalLink,
   Sparkles,
   Key,
   Trash2,
@@ -305,18 +304,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     <div className="w-full h-full flex flex-col bg-canvas text-text-main overflow-hidden select-none">
 
       {/* SCREEN HEADER */}
-      <div className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas">
+      <div className="shrink-0 px-4 pt-4 pb-2 border-b border-border bg-canvas">
         <h1 className="text-lg font-semibold tracking-tight text-text-main flex items-center gap-2">
-          <SettingsIcon size={19} className="text-primary" />
+          <SettingsIcon size={18} className="text-primary" />
           Settings
         </h1>
-        <p className="text-xs text-text-muted mt-0.5">
-          Controls for how Dispatch looks, records, and syncs
-        </p>
       </div>
 
       {/* CONTENT SCROLL AREA */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5">
 
         {/* FEEDBACK BANNER */}
         {feedback && (
@@ -325,6 +321,27 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             <button onClick={() => setFeedback(null)} className="text-xs text-text-muted hover:text-text-main">Dismiss</button>
           </div>
         )}
+
+        {/* 1. ACCOUNT PROFILE ROW */}
+        <section className="rounded-2xl bg-surface border border-border p-3.5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-9 h-9 rounded-full bg-primary-soft border border-primary/30 flex items-center justify-center text-primary shrink-0">
+              <UserRound size={17} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs text-text-muted leading-none">Account</p>
+              <p className="text-sm font-medium text-text-main truncate mt-1">{accountEmail || '…'}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="min-h-[36px] px-3 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-danger active:scale-[0.98] transition-all flex items-center gap-1.5 shrink-0"
+          >
+            <LogOut size={13} />
+            <span>Sign out</span>
+          </button>
+        </section>
 
         {/* 1. APPEARANCE */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
@@ -360,17 +377,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </section>
 
         {/* 2. RECORDING */}
-        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
-          <h2 className="text-base font-semibold tracking-tight text-text-main">Recording</h2>
+        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2.5">
+          <h2 className="text-sm font-semibold tracking-tight text-text-main">Recording</h2>
 
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-2 text-sm text-text-main">
-                <Camera size={15} className="text-text-muted" />
-                Default camera lens
-              </span>
-              <span className="text-xs text-text-muted">Opens with the Record screen</span>
-            </div>
+            <span className="flex items-center gap-1.5 text-xs text-text-secondary">
+              <Camera size={13} className="text-text-muted" />
+              Default lens
+            </span>
             <div className="flex items-center p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Default camera">
               {(['back', 'front'] as const).map((lens) => {
                 const isSelected = defaultLens === lens;
@@ -381,48 +395,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                     role="radio"
                     aria-checked={isSelected}
                     onClick={() => handleLensChange(lens)}
-                    className={`flex-1 min-h-[36px] rounded-lg text-sm font-medium transition-all active:scale-[0.98] ${
+                    className={`flex-1 min-h-[34px] rounded-lg text-xs font-medium transition-all active:scale-[0.98] ${
                       isSelected ? 'bg-primary text-white font-semibold' : 'text-text-secondary hover:text-text-main'
                     }`}
                   >
-                    {lens === 'back' ? 'Back camera' : 'Front camera'}
+                    {lens === 'back' ? 'Back' : 'Front'}
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <p className="text-xs text-text-muted tabular-nums">
-            Captures 1080p FHD · 30&nbsp;FPS · 10-minute auto-saved segments · AAC 48&nbsp;kHz
+          <p className="text-[11px] text-text-muted tabular-nums">
+            1080p · 30&nbsp;FPS · 10m segments
           </p>
-        </section>
-
-        {/* 3. ACCOUNT */}
-        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
-          <h2 className="text-base font-semibold tracking-tight text-text-main">Account</h2>
-          <div className="flex items-center gap-3">
-            <span className="w-10 h-10 rounded-full bg-primary-soft border border-primary/30 flex items-center justify-center text-primary shrink-0">
-              <UserRound size={19} />
-            </span>
-            <div className="min-w-0">
-              <p className="text-xs text-text-muted">Signed in as</p>
-              <p className="text-sm font-medium text-text-main truncate">{accountEmail || '…'}</p>
-            </div>
-          </div>
-          <button onClick={handleSignOut}
-            className="w-full min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-secondary hover:text-danger transition-all duration-150 active:scale-[0.98] flex items-center justify-center gap-2">
-            <LogOut size={15} />
-            Sign out
-          </button>
         </section>
 
         {/* 4. CONNECTED ACCOUNTS (Single service of truth) */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-4">
           <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-semibold tracking-tight text-text-main">Connected Accounts</h2>
-              <p className="text-xs text-text-muted mt-0.5">Publishing destinations and identity binding</p>
-            </div>
+            <h2 className="text-base font-semibold tracking-tight text-text-main">Connected Accounts</h2>
             <button
               onClick={refreshAccounts}
               disabled={isLoadingAccounts}
@@ -440,22 +432,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               <span className="font-mono">{youtubeAccounts.length} connected</span>
             </div>
 
-            {/* Educational Role Architecture Box */}
-            <div className="p-3 rounded-xl bg-surface-2 border border-border text-xs text-text-secondary space-y-1">
-              <p className="font-semibold text-text-main flex items-center gap-1.5">
-                <Sparkles size={13} className="text-primary" />
-                <span>Source Vault vs. Publishing Channel</span>
-              </p>
-              <p className="leading-relaxed text-text-muted">
-                <strong>Raw Ingest Vault (Route A):</strong> Phone uploads unlisted recordings here for your PC Studio to fetch & edit.
-              </p>
-              <p className="leading-relaxed text-text-muted">
-                <strong>Shorts Publisher:</strong> The destination channel where approved vertical clips are published.
-              </p>
-              <p className="text-[11px] text-text-muted italic pt-0.5">
-                Tip: You can use the same channel for both, or connect separate storage and brand channels.
-              </p>
-            </div>
+
 
             {youtubeAccounts.length > 0 ? (
               <div className="space-y-2.5">
@@ -475,8 +452,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                             </div>
                           )}
                           <div className="min-w-0">
-                            <p className="font-medium text-text-main truncate">{acc.account_name}</p>
-                            <p className="text-xs text-text-muted truncate font-mono">{acc.account_email || acc.account_id}</p>
+                            <p className="font-medium text-text-main truncate text-sm">{acc.account_name}</p>
+                            {acc.account_id && acc.account_id !== acc.account_name && acc.account_email !== acc.account_name && (
+                              <p className="text-xs text-text-muted truncate font-mono">{acc.account_email || acc.account_id}</p>
+                            )}
                           </div>
                         </div>
                         <button
@@ -488,7 +467,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                       </div>
 
                       {/* Role Assignment Buttons */}
-                      <div className="flex items-center gap-2 pt-2 border-t border-border/60 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
                           onClick={() => handleToggleRole(acc, 'source_vault')}
@@ -500,7 +479,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                           title="Toggle whether raw footage from phone uploads to this channel"
                         >
                           <span>{isSourceVault ? '✓' : '+'}</span>
-                          <span>Raw Ingest Vault (Route A)</span>
+                          <span>Raw Vault</span>
                         </button>
 
                         <button
@@ -534,168 +513,133 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             </button>
           </div>
 
-          {/* Instagram Accounts */}
-          <div className="pt-3 border-t border-border space-y-2">
+          {/* Social Destinations */}
+          <div className="pt-3 border-t border-border space-y-2.5">
             <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
-              <span className="flex items-center gap-1.5"><InstagramIcon /> Instagram Reels</span>
-              <span className="font-mono">{instagramAccounts.length} connected</span>
+              <span className="flex items-center gap-1.5"><Share2 size={13} className="text-primary" /> Social Destinations</span>
             </div>
 
-            {instagramAccounts.length > 0 ? (
-              <div className="space-y-2">
-                {instagramAccounts.map((acc) => (
-                  <div key={acc.id} className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
-                        <InstagramIcon />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-medium text-text-main truncate">{acc.account_name}</p>
-                        <p className="text-xs text-text-muted truncate font-mono">{acc.account_id}</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDisconnectAccount(acc)}
-                      className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
-                    >
-                      Disconnect
-                    </button>
+            <div className="space-y-2">
+              {/* Instagram */}
+              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
+                    <InstagramIcon />
                   </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-text-muted italic">No Instagram accounts connected yet.</p>
-            )}
-
-            <button
-              onClick={() => handleConnectProvider('instagram')}
-              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
-            >
-              <Plus size={15} />
-              <span>{instagramAccounts.length > 0 ? 'Connect Another Instagram Account' : 'Connect Instagram Account'}</span>
-            </button>
-          </div>
-
-          {/* Facebook Accounts */}
-          <div className="pt-3 border-t border-border space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
-              <span className="flex items-center gap-1.5"><FacebookIcon /> Facebook Pages / Reels</span>
-              <span className="font-mono">{facebookAccounts.length} connected</span>
-            </div>
-
-            {facebookAccounts.length > 0 ? (
-              <div className="space-y-2">
-                {facebookAccounts.map((acc) => (
-                  <div key={acc.id} className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
-                        <FacebookIcon />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-medium text-text-main truncate">{acc.account_name}</p>
-                        <p className="text-xs text-text-muted truncate font-mono">{acc.account_id}</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDisconnectAccount(acc)}
-                      className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
-                    >
-                      Disconnect
-                    </button>
+                  <div className="min-w-0">
+                    <p className="font-medium text-text-main truncate">Instagram Reels</p>
+                    <p className="text-xs text-text-muted truncate">
+                      {instagramAccounts.length > 0 ? instagramAccounts.map(a => a.account_name).join(', ') : 'Not connected'}
+                    </p>
                   </div>
-                ))}
+                </div>
+                {instagramAccounts.length > 0 ? (
+                  <button
+                    onClick={() => handleDisconnectAccount(instagramAccounts[0])}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleConnectProvider('instagram')}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                  >
+                    Connect
+                  </button>
+                )}
               </div>
-            ) : (
-              <p className="text-xs text-text-muted italic">No Facebook accounts connected yet.</p>
-            )}
 
-            <button
-              onClick={() => handleConnectProvider('facebook')}
-              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
-            >
-              <Plus size={15} />
-              <span>{facebookAccounts.length > 0 ? 'Connect Another Facebook Account' : 'Connect Facebook Account'}</span>
-            </button>
-          </div>
+              {/* Facebook */}
+              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
+                    <FacebookIcon />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-text-main truncate">Facebook Pages</p>
+                    <p className="text-xs text-text-muted truncate">
+                      {facebookAccounts.length > 0 ? facebookAccounts.map(a => a.account_name).join(', ') : 'Not connected'}
+                    </p>
+                  </div>
+                </div>
+                {facebookAccounts.length > 0 ? (
+                  <button
+                    onClick={() => handleDisconnectAccount(facebookAccounts[0])}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleConnectProvider('facebook')}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                  >
+                    Connect
+                  </button>
+                )}
+              </div>
 
-          {/* LinkedIn Account (Limit: 1) */}
-          <div className="pt-3 border-t border-border space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
-              <span className="flex items-center gap-1.5"><LinkedInIcon /> LinkedIn</span>
-              <span className="font-mono">{linkedinAccount ? '1 / 1 connected' : '0 / 1 connected'}</span>
-            </div>
-
-            {linkedinAccount ? (
+              {/* LinkedIn */}
               <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
                     <LinkedInIcon />
                   </div>
                   <div className="min-w-0">
-                    <p className="font-medium text-text-main truncate">{linkedinAccount.account_name}</p>
-                    <p className="text-xs text-text-muted truncate font-mono">{linkedinAccount.account_id}</p>
+                    <p className="font-medium text-text-main truncate">LinkedIn</p>
+                    <p className="text-xs text-text-muted truncate">
+                      {linkedinAccount ? linkedinAccount.account_name : 'Not connected'}
+                    </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => handleDisconnectAccount(linkedinAccount)}
-                  className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
-                >
-                  Disconnect
-                </button>
+                {linkedinAccount ? (
+                  <button
+                    onClick={() => handleDisconnectAccount(linkedinAccount)}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleConnectProvider('linkedin')}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                  >
+                    Connect
+                  </button>
+                )}
               </div>
-            ) : (
-              <p className="text-xs text-text-muted italic">No LinkedIn account connected yet (single account limit).</p>
-            )}
 
-            {!linkedinAccount && (
-              <button
-                onClick={() => handleConnectProvider('linkedin')}
-                className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
-              >
-                <Plus size={15} />
-                <span>Connect LinkedIn Account</span>
-              </button>
-            )}
-          </div>
-
-          {/* X (Twitter) Account (Limit: 1) */}
-          <div className="pt-3 border-t border-border space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
-              <span className="flex items-center gap-1.5"><XIcon /> X (Twitter)</span>
-              <span className="font-mono">{twitterAccount ? '1 / 1 connected' : '0 / 1 connected'}</span>
-            </div>
-
-            {twitterAccount ? (
+              {/* X (Twitter) */}
               <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
                     <XIcon />
                   </div>
                   <div className="min-w-0">
-                    <p className="font-medium text-text-main truncate">{twitterAccount.account_name}</p>
-                    <p className="text-xs text-text-muted truncate font-mono">{twitterAccount.account_id}</p>
+                    <p className="font-medium text-text-main truncate">X (Twitter)</p>
+                    <p className="text-xs text-text-muted truncate">
+                      {twitterAccount ? twitterAccount.account_name : 'Not connected'}
+                    </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => handleDisconnectAccount(twitterAccount)}
-                  className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
-                >
-                  Disconnect
-                </button>
+                {twitterAccount ? (
+                  <button
+                    onClick={() => handleDisconnectAccount(twitterAccount)}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleConnectProvider('twitter')}
+                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                  >
+                    Connect
+                  </button>
+                )}
               </div>
-            ) : (
-              <p className="text-xs text-text-muted italic">No X account connected yet (single account limit).</p>
-            )}
-
-            {!twitterAccount && (
-              <button
-                onClick={() => handleConnectProvider('twitter')}
-                className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
-              >
-                <Plus size={15} />
-                <span>Connect X Account</span>
-              </button>
-            )}
+            </div>
           </div>
         </section>
 
@@ -718,8 +662,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             )}
           </div>
 
-          <p className="text-xs text-text-muted leading-relaxed">
-            Provide your own Google Gemini API key to power highlight selection and word-level timestamps without shared host rate limits. Your key is encrypted with AES-256-GCM in the cloud vault.
+          <p className="text-[11px] text-text-muted leading-relaxed">
+            For clip highlight detection · Encrypted in cloud vault
           </p>
 
           {geminiStatus.configured ? (
@@ -772,17 +716,17 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </section>
 
         {/* 6. UPLOADS — network behavior toggle */}
-        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
-          <h2 className="text-base font-semibold tracking-tight text-text-main">Uploads</h2>
+        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2.5">
+          <h2 className="text-sm font-semibold tracking-tight text-text-main">Uploads</h2>
 
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <span className="flex items-center gap-2 text-sm text-text-main">
-                <Wifi size={15} className="text-text-muted" />
-                Upload over Wi-Fi automatically
+              <span className="flex items-center gap-2 text-xs font-medium text-text-main">
+                <Wifi size={14} className="text-text-muted" />
+                Wi-Fi only upload
               </span>
-              <span className="text-xs text-text-muted block mt-0.5">
-                Restricts uploads to unmetered network (never uses mobile data)
+              <span className="text-[11px] text-text-muted block mt-0.5">
+                Never uses mobile data
               </span>
             </div>
 
@@ -807,10 +751,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </section>
 
         {/* 7. STORAGE */}
-        <section className="rounded-2xl bg-surface border border-border p-4 space-y-2">
+        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold tracking-tight text-text-main">Storage</h2>
-            <span className="text-xs font-mono tabular-nums text-text-muted">
+            <h2 className="text-sm font-semibold tracking-tight text-text-main">Storage</h2>
+            <span className="text-[11px] font-mono tabular-nums text-text-muted">
               {storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb)
                 ? <>{storageInfo.freeGb!.toFixed(1)}&nbsp;GB free / {storageInfo.totalGb!.toFixed(1)}&nbsp;GB</>
                 : 'Unavailable'}
@@ -825,8 +769,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                   style={{ width: `${storageUsedPct}%` }}
                 />
               </div>
-              <span className="text-xs text-text-muted block">
-                {storageUsedPct}% used · App-specific recording storage
+              <span className="text-[11px] text-text-muted block">
+                {storageUsedPct}% used · Recordings
               </span>
             </>
           ) : (
@@ -834,25 +778,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               {storageInfo?.error || 'Storage information is loading.'}
             </p>
           )}
-        </section>
-
-        {/* 8. ABOUT */}
-        <section className="rounded-2xl bg-surface border border-border p-4 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold tracking-tight text-text-main">About</h2>
-            <p className="text-xs text-text-muted mt-0.5">
-              Dispatch — record once, publish clips. Your phone records, your PC renders, your accounts publish.
-            </p>
-          </div>
-          <a
-            href="https://github.com/Resolviaai/Dispatch/issues"
-            target="_blank"
-            rel="noreferrer"
-            className="min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-secondary hover:text-text-main flex items-center gap-1.5 shrink-0 transition-all active:scale-[0.98]"
-          >
-            <ExternalLink size={14} />
-            Report issue
-          </a>
         </section>
 
       </div>

@@ -1011,7 +1011,8 @@ fun ActiveCameraViewfinder(
                     modifier = Modifier
                         .size(44.dp)
                         .background(Color(0x66000000), CircleShape)
-                        .clickable {
+                        .clickable(enabled = !isRecording) {
+                            if (isRecording) return@clickable
                             previewViewRef?.let { pv ->
                                 cameraCaptureManager.switchCamera(lifecycleOwner, pv) {
                                     currentLens = cameraCaptureManager.currentLensFacing

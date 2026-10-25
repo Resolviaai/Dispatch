@@ -15,8 +15,8 @@ android {
         applicationId = "com.resolvia.dispatch"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26
-        versionName = "1.1.22"
+        versionCode = 27
+        versionName = "1.1.23"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

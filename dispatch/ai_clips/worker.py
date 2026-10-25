@@ -16,7 +16,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
 import dispatch.config
-from dispatch.config import DEFAULT_PUBLISH_MODE, PROCESSING_DIR
+from dispatch.config import DEFAULT_PUBLISH_MODE, PROCESSING_DIR, GEMINI_API_KEY
 from dispatch.video_engine.renderer import render_clip
 from dispatch.captions import group_words_into_captions, export_to_ass
 from dispatch.captions.presets import get_default_preset_id
@@ -142,6 +142,13 @@ class HighlightWorker:
                 video_id = item["video_id"]
                 try:
                     chunk_id, session_id, segments, duration = self._resolve_chunk_and_transcript(video_id, item)
+
+                    # Cross-boundary highlight support: check for multi-segment session transcript stitching
+                    if session_id:
+                        stitched = self._resolve_session_stitched_transcript(session_id)
+                        if stitched:
+                            segments, duration = stitched
+                            logger.info("Using session-stitched transcript for %s across session %s (total duration: %.1fs)", video_id, session_id, duration)
                     with db.get_db_connection() as conn:
                         cursor = conn.cursor()
                         cursor.execute("SELECT id FROM clips WHERE chunk_id = ?", (chunk_id,))
@@ -170,7 +177,7 @@ class HighlightWorker:
                         from dispatch.config import GEMINI_API_KEY
                         active_render_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
-                    self._render_clips_for_video(video_id, clip_ids, segments, src_path, api_key=active_render_key)
+                    self._render_clips_for_video(video_id, clip_ids, segments, src_path, session_id=session_id, api_key=active_render_key)
                     # Verify rendered outputs exist on disk before marking COMPLETED
                     if clip_ids:
                         all_rendered = True
@@ -228,12 +235,140 @@ class HighlightWorker:
 
         return chunk_id, session_id, segments, duration
 
+    def _resolve_session_stitched_transcript(
+        self,
+        session_id: str
+    ) -> Optional[Tuple[List[Dict[str, Any]], float]]:
+        """If multiple sequence segments exist for a session, stitch their transcripts with cumulative offsets
+        so highlight extraction can seamlessly span segment boundaries."""
+        if not session_id:
+            return None
+        try:
+            session_items = db.get_session_inbox_items(session_id)
+            if len(session_items) <= 1:
+                return None
+            stitched_segments = []
+            total_duration = 0.0
+            for part in session_items:
+                part_dur = float(part.get("duration", 0.0) or 0.0)
+                raw_s = part.get("segments_json")
+                part_segs = []
+                if raw_s:
+                    try:
+                        part_segs = json.loads(raw_s) if isinstance(raw_s, str) else raw_s
+                    except Exception:
+                        pass
+                if not part_segs:
+                    return None
+                for s in part_segs:
+                    offset_s = dict(s)
+                    offset_s["start"] = float(s.get("start", 0.0)) + total_duration
+                    offset_s["end"] = float(s.get("end", 0.0)) + total_duration
+                    if "words" in s and isinstance(s["words"], list):
+                        offset_s["words"] = [
+                            {
+                                **w,
+                                "start": float(w.get("start", 0.0)) + total_duration,
+                                "end": float(w.get("end", 0.0)) + total_duration
+                            }
+                            if isinstance(w, dict) else w
+                            for w in s["words"]
+                        ]
+                    stitched_segments.append(offset_s)
+                total_duration += part_dur
+            return stitched_segments, total_duration
+        except Exception as e:
+            logger.warning("Session transcript stitch error for %s: %s", session_id, e)
+            return None
+
+    def _resolve_clip_media_source(
+        self,
+        clip: Dict[str, Any],
+        default_src_path: Optional[Path],
+        session_items: List[Dict[str, Any]]
+    ) -> Tuple[Optional[Path], float, float, float, float, Optional[Path]]:
+        """Resolve the effective media file and local clip timestamps for multi-part sessions."""
+        c_start = float(clip["start_time"])
+        c_end = float(clip["end_time"])
+        p_start = float(clip["padded_start"]) if clip.get("padded_start") is not None else max(0.0, c_start - 4.0)
+        p_end = float(clip["padded_end"]) if clip.get("padded_end") is not None else (c_end + 4.0)
+
+        if not session_items or len(session_items) <= 1:
+            return default_src_path, c_start, c_end, p_start, p_end, None
+
+        # Build sequence windows with cumulative offsets
+        windows = []
+        curr_offset = 0.0
+        for it in session_items:
+            dur = float(it.get("duration", 0.0) or 0.0)
+            p_str = it.get("local_video_path")
+            p = Path(p_str) if p_str and Path(p_str).exists() else None
+            windows.append({
+                "item": it,
+                "start": curr_offset,
+                "end": curr_offset + dur,
+                "path": p
+            })
+            curr_offset += dur
+
+        # 1. Single segment containment check
+        for w in windows:
+            if c_start >= w["start"] and c_end <= w["end"] and w["path"]:
+                off = w["start"]
+                return w["path"], c_start - off, c_end - off, max(0.0, p_start - off), min(w["end"] - off, p_end - off), None
+
+        # 2. Boundary crossing check across segment transition
+        overlapping = [w for w in windows if w["end"] > p_start and w["start"] < p_end and w["path"]]
+        if len(overlapping) == 1:
+            w = overlapping[0]
+            off = w["start"]
+            return w["path"], max(0.0, c_start - off), c_end - off, max(0.0, p_start - off), p_end - off, None
+
+        if len(overlapping) > 1:
+            try:
+                import tempfile
+                import subprocess
+                from dispatch.config import PROCESSING_DIR
+                PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
+                temp_stitched = tempfile.NamedTemporaryFile(
+                    prefix=f"boundary_stitch_{clip['id']}_", suffix=".mp4", dir=str(PROCESSING_DIR), delete=False
+                )
+                temp_stitched_path = Path(temp_stitched.name)
+                temp_stitched.close()
+
+                concat_txt = temp_stitched_path.with_suffix(".txt")
+                with open(concat_txt, "w", encoding="utf-8") as f:
+                    for w in overlapping:
+                        f.write(f"file '{w['path'].resolve().as_posix()}'\n")
+
+                cmd = [
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", str(concat_txt),
+                    "-c", "copy",
+                    str(temp_stitched_path)
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60)
+                if concat_txt.exists():
+                    concat_txt.unlink()
+
+                if res.returncode == 0 and temp_stitched_path.exists() and temp_stitched_path.stat().st_size > 0:
+                    first_off = overlapping[0]["start"]
+                    return temp_stitched_path, c_start - first_off, c_end - first_off, p_start - first_off, p_end - first_off, temp_stitched_path
+                else:
+                    if temp_stitched_path.exists():
+                        temp_stitched_path.unlink()
+            except Exception as stitch_err:
+                logger.warning("Failed to stitch boundary segments for clip %s: %s", clip["id"], stitch_err)
+
+        return default_src_path, c_start, c_end, p_start, p_end, None
+
     def _render_clips_for_video(
         self,
         video_id: str,
         saved_ids: List[str],
         segments: List[Dict[str, Any]],
         source_video_path: Optional[Path],
+        session_id: Optional[str] = None,
         api_key: Optional[str] = None
     ):
         """Render candidate clips with Stage 2 precision transcription and FFmpeg."""
@@ -245,6 +380,8 @@ class HighlightWorker:
             extract_stage2_clip_audio,
             transcribe_stage2_precision_words,
         )
+
+        session_items = db.get_session_inbox_items(session_id) if session_id else []
 
         for clip_id in saved_ids:
             clip = db.get_clip_by_id(clip_id)
@@ -272,44 +409,45 @@ class HighlightWorker:
                 logger.info("Daily transcribe quota (25/25) reached. Clip %s routed to backlog queue ('queued_transcription').", clip_id)
                 continue
 
-            c_start = float(clip["start_time"])
-            c_end = float(clip["end_time"])
+            (clip_src_path, eff_c_start, eff_c_end, eff_p_start, eff_p_end, temp_cleanup) = (
+                self._resolve_clip_media_source(clip, source_video_path, session_items)
+            )
             range_revision = int(clip.get("range_revision") or 0)
             c_layout = clip.get("layout_mode", "fit_blur")
-            p_start = float(clip["padded_start"]) if clip.get("padded_start") is not None else max(0.0, c_start - 4.0)
-            p_end = float(clip["padded_end"]) if clip.get("padded_end") is not None else (c_end + 4.0)
 
             active_segs: List[Dict[str, Any]] = []
 
             # Stage 2: Precision Word Alignment via gemini-3.5-transcribe
             try:
-                if not source_video_path or not source_video_path.exists():
+                if not clip_src_path or not clip_src_path.exists():
                     raise RuntimeError("Cannot extract bounded Stage 2 audio: source video is unavailable")
                 PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(
                     prefix=f"dispatch_stage2_{clip_id}_", dir=str(PROCESSING_DIR)
                 ) as temp_dir:
                     slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
-                    extract_stage2_clip_audio(source_video_path, p_start, p_end, slice_mp3)
+                    extract_stage2_clip_audio(clip_src_path, eff_p_start, eff_p_end, slice_mp3)
                     stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=api_key)
 
                 words = stage2_res.get("words", [])
                 if words:
                     # 2.2 Word-Snap: tight cut to millisecond start and end of spoken syllables
-                    speech_start = p_start + stage2_res.get("speech_start", 0.0)
-                    speech_end = p_start + stage2_res.get("speech_end", c_end - p_start)
-                    snapped_start = max(p_start, round(speech_start - 0.2, 2))
-                    snapped_end = min(p_end, round(speech_end + 0.3, 2))
+                    speech_start = eff_p_start + stage2_res.get("speech_start", 0.0)
+                    speech_end = eff_p_start + stage2_res.get("speech_end", eff_c_end - eff_p_start)
+                    snapped_start = max(eff_p_start, round(speech_start - 0.2, 2))
+                    snapped_end = min(eff_p_end, round(speech_end + 0.3, 2))
                     range_trimmed = db.update_clip_trim(
                         clip_id, snapped_start, snapped_end,
                         expected_range_revision=range_revision,
                     )
                     if range_trimmed:
-                        c_start = snapped_start
-                        c_end = snapped_end
+                        eff_c_start = snapped_start
+                        eff_c_end = snapped_end
                     latest = db.get_clip_by_id(clip_id)
-                    if not latest or abs(float(latest["start_time"]) - c_start) > 0.01 or abs(float(latest["end_time"]) - c_end) > 0.01:
+                    if not latest or abs(float(latest["start_time"]) - eff_c_start) > 0.01 or abs(float(latest["end_time"]) - eff_c_end) > 0.01:
                         logger.info("Skipping stale Stage 2 result for %s after its range changed", clip_id)
+                        if temp_cleanup and temp_cleanup.exists():
+                            temp_cleanup.unlink(missing_ok=True)
                         continue
                     range_revision = int(latest.get("range_revision") or 0)
                     if not range_trimmed:
@@ -321,9 +459,9 @@ class HighlightWorker:
                     # 5.1 Word-by-Word Caption Data Mapping
                     clean_words = []
                     for w in words:
-                        w_s = round(p_start + w.get("start", 0.0), 3)
-                        w_e = round(p_start + w.get("end", 0.0), 3)
-                        if w_e > c_start and w_s < c_end:
+                        w_s = round(eff_p_start + w.get("start", 0.0), 3)
+                        w_e = round(eff_p_start + w.get("end", 0.0), 3)
+                        if w_e > eff_c_start and w_s < eff_c_end:
                             clean_words.append({
                                 "word": w.get("word", ""),
                                 "start": w_s,
@@ -331,9 +469,9 @@ class HighlightWorker:
                             })
 
                     track = group_words_into_captions(
-                        raw_segments=[{"id": 0, "start": c_start, "end": c_end, "words": clean_words}],
-                        clip_start=c_start,
-                        clip_end=c_end,
+                        raw_segments=[{"id": 0, "start": eff_c_start, "end": eff_c_end, "words": clean_words}],
+                        clip_start=eff_c_start,
+                        clip_end=eff_c_end,
                         clip_id=clip_id,
                         preset_id=get_default_preset_id()
                     )
@@ -341,29 +479,43 @@ class HighlightWorker:
                     track_dict["words"] = clean_words
                     if not db.save_clip_caption_data(
                         clip_id, json.dumps(track_dict), expected_range_revision=range_revision,
-                        source_range_start=c_start, source_range_end=c_end,
+                        source_range_start=eff_c_start, source_range_end=eff_c_end,
                     ):
                         logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                        if temp_cleanup and temp_cleanup.exists():
+                            temp_cleanup.unlink(missing_ok=True)
                         continue
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
                     export_to_ass(track, ass_path)
                     active_segs = clean_words
                 else:
                     # Fallback to coarse Stage 1 segments if Stage 2 found no words
-                    clip_segs = [s for s in segments if s.get("end", 0.0) > c_start and s.get("start", 0.0) < c_end]
+                    clip_segs = [s for s in segments if s.get("end", 0.0) > float(clip["start_time"]) and s.get("start", 0.0) < float(clip["end_time"])]
+                    offset_diff = float(clip["start_time"]) - eff_c_start
+                    if offset_diff != 0.0:
+                        shifted_segs = []
+                        for cs in clip_segs:
+                            scs = dict(cs)
+                            scs["start"] = max(0.0, float(cs.get("start", 0.0)) - offset_diff)
+                            scs["end"] = max(0.0, float(cs.get("end", 0.0)) - offset_diff)
+                            shifted_segs.append(scs)
+                        clip_segs = shifted_segs
+
                     clean_segs = transliterate_segments_to_hinglish(clip_segs)
                     track = group_words_into_captions(
                         raw_segments=clean_segs,
-                        clip_start=c_start,
-                        clip_end=c_end,
+                        clip_start=eff_c_start,
+                        clip_end=eff_c_end,
                         clip_id=clip_id,
                         preset_id=get_default_preset_id()
                     )
                     if not db.save_clip_caption_data(
                         clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
-                        source_range_start=c_start, source_range_end=c_end,
+                        source_range_start=eff_c_start, source_range_end=eff_c_end,
                     ):
                         logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                        if temp_cleanup and temp_cleanup.exists():
+                            temp_cleanup.unlink(missing_ok=True)
                         continue
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
                     export_to_ass(track, ass_path)
@@ -377,24 +529,38 @@ class HighlightWorker:
                         conn.cursor().execute("UPDATE clips SET status = 'queued_transcription' WHERE id = ?", (clip_id,))
                         conn.commit()
                     logger.info("Clip %s routed to backlog queue due to quota exhaustion.", clip_id)
+                    if temp_cleanup and temp_cleanup.exists():
+                        temp_cleanup.unlink(missing_ok=True)
                     continue
 
                 # Otherwise fallback to Stage 1 segments
-                clip_segs = [s for s in segments if s.get("end", 0.0) > c_start and s.get("start", 0.0) < c_end]
+                clip_segs = [s for s in segments if s.get("end", 0.0) > float(clip["start_time"]) and s.get("start", 0.0) < float(clip["end_time"])]
+                offset_diff = float(clip["start_time"]) - eff_c_start
+                if offset_diff != 0.0:
+                    shifted_segs = []
+                    for cs in clip_segs:
+                        scs = dict(cs)
+                        scs["start"] = max(0.0, float(cs.get("start", 0.0)) - offset_diff)
+                        scs["end"] = max(0.0, float(cs.get("end", 0.0)) - offset_diff)
+                        shifted_segs.append(scs)
+                    clip_segs = shifted_segs
+
                 clean_segs = transliterate_segments_to_hinglish(clip_segs)
                 try:
                     track = group_words_into_captions(
                         raw_segments=clean_segs,
-                        clip_start=c_start,
-                        clip_end=c_end,
+                        clip_start=eff_c_start,
+                        clip_end=eff_c_end,
                         clip_id=clip_id,
                         preset_id=get_default_preset_id()
                     )
                     if not db.save_clip_caption_data(
                         clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
-                        source_range_start=c_start, source_range_end=c_end,
+                        source_range_start=eff_c_start, source_range_end=eff_c_end,
                     ):
                         logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                        if temp_cleanup and temp_cleanup.exists():
+                            temp_cleanup.unlink(missing_ok=True)
                         continue
                     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
                     export_to_ass(track, ass_path)
@@ -403,14 +569,14 @@ class HighlightWorker:
                     pass
 
             # 5.2 Animated Pop-Up Subtitle Burner via FFmpeg
-            if source_video_path and source_video_path.exists():
+            if clip_src_path and clip_src_path.exists():
                 try:
-                    logger.info("Auto-rendering clip %s (%.1fs - %.1fs) with FFmpeg...", clip_id, c_start, c_end)
+                    logger.info("Auto-rendering clip %s (%.1fs - %.1fs) with FFmpeg...", clip_id, eff_c_start, eff_c_end)
                     render_clip(
-                        source_video=source_video_path,
+                        source_video=clip_src_path,
                         clip_id=clip_id,
-                        start_time=c_start,
-                        end_time=c_end,
+                        start_time=eff_c_start,
+                        end_time=eff_c_end,
                         aspect_ratio=None,
                         layout_mode=c_layout,
                         segments=active_segs,
@@ -424,6 +590,12 @@ class HighlightWorker:
                     logger.error("Auto-render failed for clip %s: %s", clip_id, e)
             else:
                 logger.warning("Source video file not found on disk for auto-rendering clip %s", clip_id)
+
+            if temp_cleanup and temp_cleanup.exists():
+                try:
+                    temp_cleanup.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def process_video_highlights(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Run Pillar 3 highlight analysis pipeline for a single video.
@@ -446,6 +618,13 @@ class HighlightWorker:
             return None
 
         chunk_id, session_id, segments, duration = self._resolve_chunk_and_transcript(video_id, item)
+
+        # Cross-boundary highlight support: check for multi-segment session transcript stitching
+        if session_id:
+            stitched = self._resolve_session_stitched_transcript(session_id)
+            if stitched:
+                segments, duration = stitched
+                logger.info("Using session-stitched transcript for %s across session %s (total duration: %.1fs)", video_id, session_id, duration)
 
         # Transition to ANALYZING
         db.update_youtube_video(video_id=video_id, status="ANALYZING")
@@ -507,7 +686,7 @@ class HighlightWorker:
                 raise RuntimeError(err_msg)
             active_gemini_key = user_gemini_key
         else:
-            active_gemini_key = os.getenv("GEMINI_API_KEY", "")
+            active_gemini_key = GEMINI_API_KEY
             if not active_gemini_key:
                 err_msg = "GEMINI_API_KEY is not configured or is empty. Cannot extract highlights."
                 db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)

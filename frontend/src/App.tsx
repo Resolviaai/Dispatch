@@ -333,6 +333,7 @@ export const App: React.FC = () => {
               onRetryUpload={handleRetryUpload} 
               onNavigateToClips={handleNavigateToClips}
               onNavigateToRecord={() => setCurrentTab('record')}
+              onDeleteSession={(sessionId) => setRecordings(prev => prev.filter(r => (r.sessionId || 'direct') !== sessionId && r.segmentId !== sessionId))}
               pcHost={pcHost}
             />
           )}

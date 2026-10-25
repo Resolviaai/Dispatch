@@ -121,6 +121,7 @@ declare global {
       setPcHost?: (pcHost: string) => boolean;
       getAuthToken?: () => string;
       openCustomTab?: (url: string) => boolean;
+      deleteSession?: (sessionId: string) => boolean;
       performHaptic?: (type: string) => boolean;
     };
   }
@@ -441,6 +442,18 @@ export const Bridge = {
     if (window.DispatchBridge?.retryUpload) {
       window.DispatchBridge.retryUpload(segmentId);
     }
+  },
+
+  deleteSession(sessionId: string): boolean {
+    if (window.DispatchBridge?.deleteSession) {
+      try {
+        return window.DispatchBridge.deleteSession(sessionId);
+      } catch (e) {
+        console.error('Failed to delete session via bridge:', e);
+        return false;
+      }
+    }
+    return false;
   },
 
   getStorageInfo(): StorageInfo {

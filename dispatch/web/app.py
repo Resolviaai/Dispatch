@@ -2186,6 +2186,15 @@ async def get_youtube_inbox_items():
     """List YouTube Inbox items and their current processing status."""
     return {"items": db.list_youtube_inbox(limit=30)}
 
+@app.delete("/api/youtube/inbox/{video_id}")
+async def delete_youtube_inbox_entry(video_id: str, request: Request):
+    """Delete a session or YouTube video from the local inbox."""
+    verify_dashboard_auth(request)
+    deleted = db.delete_youtube_inbox_item(video_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found in inbox or already deleted")
+    return {"status": "success", "deleted": True}
+
 
 @app.post("/api/youtube/ingest")
 async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):

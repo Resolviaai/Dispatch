@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Slider } from '../components/ui/slider';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Zap, 
   ZapOff, 
@@ -57,140 +58,63 @@ const RecordingZoomSlider: React.FC<{
   ratio: number;
   onChange: (ratio: number) => void;
 }> = ({ minZoom, maxZoom, ratio, onChange }) => {
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
   const lastHapticRatioRef = useRef(ratio);
-  const fraction = sliderFractionFromZoomRatio(ratio, minZoom, maxZoom);
+  const effectiveMin = Math.max(0.5, Number.isFinite(minZoom) ? minZoom : 1.0);
+  const effectiveMax = Math.max(effectiveMin + 2, Number.isFinite(maxZoom) && maxZoom > effectiveMin ? maxZoom : 5.0);
 
-  // Available integer presets
-  const presets = useMemo(() => {
-    const list = [1.0, 2.0, 3.0, 5.0].filter(lvl => lvl >= minZoom - 0.05 && lvl <= maxZoom + 0.05);
-    return list.length > 0 ? list : [minZoom, maxZoom];
-  }, [minZoom, maxZoom]);
-
-  const applyFromClientX = (clientX: number) => {
-    const el = trackRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const newRatio = zoomRatioFromSliderFraction(
-      (clientX - rect.left) / Math.max(1, rect.width),
-      minZoom,
-      maxZoom
-    );
-
-    // Micro-haptic feedback whenever crossing a 0.5x threshold
-    if (Math.abs(Math.floor(newRatio * 2) - Math.floor(lastHapticRatioRef.current * 2)) >= 1) {
+  const handleValueChange = (vals: number[]) => {
+    const nextRatio = Math.round(vals[0] * 10) / 10;
+    if (Math.abs(Math.floor(nextRatio * 2) - Math.floor(lastHapticRatioRef.current * 2)) >= 1) {
       triggerHaptic('zoom_tick');
-      lastHapticRatioRef.current = newRatio;
+      lastHapticRatioRef.current = nextRatio;
     }
-
-    onChange(newRatio);
+    onChange(nextRatio);
   };
 
   return (
     <div
-      className="mb-5 flex w-full max-w-[340px] flex-col gap-2 p-3 rounded-2xl bg-black/70 border border-white/20 backdrop-blur-md shadow-[0_4px_24px_rgba(0,0,0,0.6)]"
+      className="mb-6 flex w-[280px] h-11 items-center gap-2.5 px-3.5 rounded-full bg-black/65 border border-white/20 backdrop-blur-md shadow-[0_2px_12px_rgba(0,0,0,0.5)]"
       data-interactive
     >
-      {/* Top Header: Quick Jump Chips & Precision Readout */}
-      <div className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-1.5">
-          {presets.map(lvl => {
-            const isNear = Math.abs(ratio - lvl) < 0.2;
-            return (
-              <button
-                key={lvl}
-                type="button"
-                onClick={() => {
-                  triggerHaptic('lens_switch');
-                  onChange(lvl);
-                }}
-                className={`min-h-[26px] px-2.5 rounded-full text-xs font-mono font-medium tabular-nums transition-all active:scale-95 ${
-                  isNear
-                    ? 'bg-primary text-white font-semibold shadow-hero-glow'
-                    : 'bg-white/10 hover:bg-white/20 text-white/80'
-                }`}
-              >
-                {lvl}x
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Precision Digital Readout Badge */}
-        <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-primary/20 border border-primary/40 text-primary-light shadow-sm">
-          <span className="text-[11px] font-mono uppercase tracking-wider text-primary/80">Zoom</span>
-          <span className="text-xs font-mono font-bold tabular-nums text-white">
-            {ratio.toFixed(1)}x
-          </span>
-        </div>
-      </div>
-
-      {/* Graduation Ruler Track */}
-      <div
-        ref={trackRef}
-        onPointerDown={e => {
-          if (e.button !== 0 && e.pointerType === 'mouse') return;
-          try {
-            e.currentTarget.setPointerCapture(e.pointerId);
-          } catch {}
-          setIsDragging(true);
-          applyFromClientX(e.clientX);
+      {/* 1x Quick Snap Chip */}
+      <button
+        type="button"
+        onClick={() => {
+          triggerHaptic('lens_switch');
+          onChange(1.0);
         }}
-        onPointerMove={e => {
-          if (isDragging) applyFromClientX(e.clientX);
-        }}
-        onPointerUp={e => {
-          setIsDragging(false);
-          try {
-            e.currentTarget.releasePointerCapture(e.pointerId);
-          } catch {}
-        }}
-        onPointerCancel={() => setIsDragging(false)}
-        className="relative h-10 w-full cursor-pointer touch-none flex items-center"
-        role="slider"
-        aria-label="Continuous zoom level"
-        aria-valuemin={minZoom}
-        aria-valuemax={maxZoom}
-        aria-valuenow={ratio}
+        className={`min-w-[34px] h-7 px-2 rounded-full text-xs font-mono font-medium transition-all active:scale-95 flex items-center justify-center ${
+          Math.abs(ratio - 1.0) < 0.2
+            ? 'bg-primary text-white font-semibold shadow-hero-glow'
+            : 'text-white/80 hover:text-white bg-white/5'
+        }`}
       >
-        {/* Track Base */}
-        <div className="absolute left-0 right-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-white/15 overflow-hidden">
-          {/* Active Gradient Fill Bar */}
-          <div
-            className="h-full bg-gradient-to-r from-blue-600 to-primary rounded-full"
-            style={{ width: `${fraction * 100}%` }}
-          />
-        </div>
+        1x
+      </button>
 
-        {/* Optical Graduation Tick Notches */}
-        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 pointer-events-none flex justify-between px-1">
-          {presets.map(lvl => {
-            const tickFraction = sliderFractionFromZoomRatio(lvl, minZoom, maxZoom);
-            return (
-              <div
-                key={lvl}
-                className="absolute top-1/2 -translate-y-1/2 w-0.5 h-3 bg-white/40 rounded-full"
-                style={{ left: `${tickFraction * 100}%` }}
-              />
-            );
-          })}
-        </div>
+      {/* shadcn / Radix Slider */}
+      <Slider
+        min={effectiveMin}
+        max={effectiveMax}
+        step={0.1}
+        value={[ratio]}
+        onValueChange={handleValueChange}
+        className="flex-1"
+      />
 
-        {/* Precision Thumb Dial */}
-        <div
-          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center pointer-events-none"
-          style={{ left: `${fraction * 100}%` }}
-        >
-          <div
-            className={`w-6 h-6 rounded-full bg-white border-2 border-primary shadow-[0_0_14px_rgba(37,99,235,0.7),0_2px_8px_rgba(0,0,0,0.6)] flex items-center justify-center transition-transform duration-100 ${
-              isDragging ? 'scale-125' : 'scale-100'
-            }`}
-          >
-            <div className="w-2 h-2 rounded-full bg-primary" />
-          </div>
-        </div>
-      </div>
+      {/* Precision Digital Readout & Step Chip */}
+      <button
+        type="button"
+        onClick={() => {
+          triggerHaptic('lens_switch');
+          const target = ratio < 2.0 ? 2.0 : ratio < 3.0 ? 3.0 : ratio < effectiveMax ? effectiveMax : 1.0;
+          onChange(target);
+        }}
+        className="min-w-[42px] h-7 px-2 rounded-full bg-white/10 hover:bg-white/20 text-white font-mono text-xs font-semibold tabular-nums active:scale-95 transition-all flex items-center justify-center"
+        title="Tap to cycle zoom presets (1x, 2x, 3x, 5x)"
+      >
+        {ratio.toFixed(1)}x
+      </button>
     </div>
   );
 };
@@ -1047,14 +971,12 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   };
 
   const handleSliderZoom = (nextRatio: number) => {
-    const applied = Bridge.setZoom(nextRatio);
-    setZoomLevel(applied);
-    if (crossedIntegerZoomBoundary(lastZoomIntegerRef.current, applied)) {
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        try { navigator.vibrate(10); } catch { }
-      }
+    setZoomLevel(nextRatio);
+    Bridge.setZoom(nextRatio);
+    if (crossedIntegerZoomBoundary(lastZoomIntegerRef.current, nextRatio)) {
+      triggerHaptic('zoom_tick');
     }
-    lastZoomIntegerRef.current = Math.round(applied);
+    lastZoomIntegerRef.current = Math.round(nextRatio);
   };
 
   const formatTime = (totalSec: number) => {
@@ -1390,8 +1312,21 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             )}
           </div>
 
-          {/* Right: Quick Toggles (Torch, Mic, Flip) - Biomechanical 44px hitboxes */}
+                    {/* Right: Quick Toggles (Switch camera on left, Flashlight on rightmost) */}
           <div className="flex items-center gap-2">
+            {!isRecording && (
+              <button
+                onClick={() => {
+                  triggerHaptic('lens_switch');
+                  handleSwitchCamera();
+                }}
+                aria-label="Switch Camera"
+                className="w-11 h-11 rounded-full flex items-center justify-center bg-black/65 border border-white/20 text-white hover:bg-black/75 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition-all active:scale-[0.95]"
+              >
+                <SwitchCamera size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
+              </button>
+            )}
+
             <button
               onClick={() => {
                 triggerHaptic('toggle');
@@ -1410,36 +1345,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               ) : (
                 <ZapOff size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
               )}
-            </button>
-
-            <button
-              onClick={() => {
-                triggerHaptic('toggle');
-                handleToggleMic();
-              }}
-              aria-label="Toggle Microphone"
-              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur-md border transition-all active:scale-[0.95] ${
-                micActive 
-                  ? 'bg-black/65 border-white/20 text-white shadow-[0_2px_8px_rgba(0,0,0,0.5)] hover:bg-black/75' 
-                  : 'bg-danger text-white border-danger/60 shadow-[0_0_14px_rgba(239,68,68,0.5)]'
-              }`}
-            >
-              {micActive ? (
-                <Mic size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
-              ) : (
-                <MicOff size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
-              )}
-            </button>
-
-            <button
-              onClick={() => {
-                triggerHaptic('lens_switch');
-                handleSwitchCamera();
-              }}
-              aria-label="Switch Camera"
-              className="w-11 h-11 rounded-full flex items-center justify-center bg-black/65 border border-white/20 text-white hover:bg-black/75 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition-all active:scale-[0.95]"
-            >
-              <SwitchCamera size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
             </button>
           </div>
         </div>
@@ -1507,42 +1412,47 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         )}
 
         {/* Big Shutter / Record Button with Pause Control */}
-        <div className="flex items-center justify-center gap-7">
-{isRecording && (
+        <div className="flex items-center justify-center gap-6">
+          {isRecording && (
             <button
               onClick={handlePauseToggle}
               aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
-              className={`w-16 h-16 rounded-full flex items-center justify-center backdrop-blur-md border transition-all active:scale-[0.94] ${
+              className={`w-14 h-14 rounded-full flex items-center justify-center backdrop-blur-xl border transition-all active:scale-95 shadow-lg ${
                 isPaused
-                  ? 'bg-white border-white text-black shadow-[0_0_24px_rgba(255,255,255,0.35)]'
-                  : 'bg-black/45 border-white/30 text-white hover:bg-black/60'
+                  ? 'bg-white/20 hover:bg-white/30 border-2 border-white text-white shadow-[0_0_18px_rgba(255,255,255,0.4)]'
+                  : 'bg-black/60 hover:bg-black/80 border border-white/30 text-white shadow-[0_2px_12px_rgba(0,0,0,0.5)]'
               }`}
             >
               {isPaused ? (
-                <Play size={24} className="fill-current translate-x-[1px]" />
+                <Play size={20} className="fill-white text-white translate-x-0.5 drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]" />
               ) : (
-                <Pause size={24} strokeWidth={2.4} className="fill-current" />
+                <div className="flex items-center justify-center gap-1.5 pointer-events-none">
+                  <span className="w-1.5 h-5 rounded-full bg-white shadow-sm" />
+                  <span className="w-1.5 h-5 rounded-full bg-white shadow-sm" />
+                </div>
               )}
             </button>
           )}
+
           {isRecording ? (
             <button
               onClick={handleStopRecording}
               aria-label="Stop Recording"
-              className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-danger/90 bg-danger/20 backdrop-blur transition-all active:scale-[0.98] shadow-[0_0_28px_rgba(239,68,68,0.5)]"
+              className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-white/90 bg-black/30 backdrop-blur-md transition-all active:scale-95 hover:border-white shadow-xl"
             >
-              <span className="w-8 h-8 rounded-md bg-danger transition-all hover:bg-rose-400 shadow-md" />
+              <span className="w-8 h-8 rounded-md bg-danger shadow-[0_0_12px_rgba(239,68,68,0.7)] hover:bg-rose-500 transition-colors" />
             </button>
           ) : (
             <button
               onClick={handleStartRecording}
               aria-label="Start Recording"
-              className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-white/80 bg-white/10 backdrop-blur transition-all active:scale-[0.98] hover:border-white shadow-xl"
+              className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-white/80 bg-white/10 backdrop-blur transition-all active:scale-95 hover:border-white shadow-xl"
             >
               <span className="w-14 h-14 rounded-full bg-danger transition-all hover:bg-rose-500 shadow-md" />
             </button>
           )}
-          {isRecording && <div className="w-14" />}
+
+          {isRecording && <div className="w-14 h-14 pointer-events-none" aria-hidden="true" />}
         </div>
       </div>
 

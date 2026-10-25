@@ -455,5 +455,79 @@ class TestPillar3Highlights(unittest.TestCase):
         self.assertEqual(len(outbox), 0)
 
 
+
+    # Test P: Cross-boundary session stitched transcript
+    def test_p_cross_boundary_session_stitched_transcript(self):
+        session_id = "sess_stitched_01"
+        item1 = {
+            "video_id": "yt_part1",
+            "session_id": session_id,
+            "sequence_number": 0,
+            "duration": 600.0,
+            "segments_json": json.dumps([
+                {"start": 10.0, "end": 20.0, "text": "Part one speech", "words": [{"word": "Part", "start": 10.0, "end": 10.5}]}
+            ]),
+            "status": "TRANSCRIBED"
+        }
+        item2 = {
+            "video_id": "yt_part2",
+            "session_id": session_id,
+            "sequence_number": 1,
+            "duration": 400.0,
+            "segments_json": json.dumps([
+                {"start": 5.0, "end": 15.0, "text": "Part two speech", "words": [{"word": "Part", "start": 5.0, "end": 5.5}]}
+            ]),
+            "status": "TRANSCRIBED"
+        }
+        with db.get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute('INSERT INTO youtube_inbox (video_id, title, session_id, sequence_number, duration, segments_json, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                      (item1['video_id'], 'Part 1', item1['session_id'], item1['sequence_number'], item1['duration'], item1['segments_json'], item1['status']))
+            c.execute('INSERT INTO youtube_inbox (video_id, title, session_id, sequence_number, duration, segments_json, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                      (item2['video_id'], 'Part 2', item2['session_id'], item2['sequence_number'], item2['duration'], item2['segments_json'], item2['status']))
+            conn.commit()
+
+        worker = HighlightWorker()
+        res = worker._resolve_session_stitched_transcript(session_id)
+        self.assertIsNotNone(res)
+        stitched_segs, total_dur = res
+        self.assertEqual(total_dur, 1000.0)
+        self.assertEqual(len(stitched_segs), 2)
+        self.assertEqual(stitched_segs[1]["start"], 605.0)
+        self.assertEqual(stitched_segs[1]["end"], 615.0)
+        self.assertEqual(stitched_segs[1]["words"][0]["start"], 605.0)
+
+    # Test Q: Resolve clip media source offsets across session segments
+    def test_q_resolve_clip_media_source_offsets(self):
+        worker = HighlightWorker()
+        p1 = Path(self.temp_dir.name) / "part1.mp4"
+        p2 = Path(self.temp_dir.name) / "part2.mp4"
+        p1.write_bytes(b"dummy1")
+        p2.write_bytes(b"dummy2")
+
+        session_items = [
+            {"video_id": "yt1", "duration": 600.0, "local_video_path": str(p1)},
+            {"video_id": "yt2", "duration": 400.0, "local_video_path": str(p2)},
+        ]
+        clip = {
+            "id": "clip_in_part2",
+            "start_time": 650.0,
+            "end_time": 680.0,
+            "padded_start": 646.0,
+            "padded_end": 684.0,
+        }
+        src_path, eff_s, eff_e, eff_ps, eff_pe, cleanup = worker._resolve_clip_media_source(
+            clip=clip,
+            default_src_path=p1,
+            session_items=session_items
+        )
+        self.assertEqual(src_path, p2)
+        self.assertAlmostEqual(eff_s, 50.0)
+        self.assertAlmostEqual(eff_e, 80.0)
+        self.assertAlmostEqual(eff_ps, 46.0)
+        self.assertAlmostEqual(eff_pe, 84.0)
+        self.assertIsNone(cleanup)
+
+
 if __name__ == "__main__":
     unittest.main()

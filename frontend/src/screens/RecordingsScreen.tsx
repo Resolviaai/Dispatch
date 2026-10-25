@@ -16,12 +16,14 @@ import {
   MoreVertical,
   Check
 } from 'lucide-react';
-import { RecordingItem, apiUrl } from '../bridge';
+import { Bridge, RecordingItem, apiUrl } from '../bridge';
 import { WORKER_BASE } from '../accounts/accountsService';
 import { currentSession } from '../auth/supabase';
 
 interface YouTubeInboxItem {
   video_id: string;
+  session_id?: string;
+  dispatch_id?: string;
   title?: string;
   status: string;
   last_error?: string | null;
@@ -69,6 +71,7 @@ interface RecordingsScreenProps {
   onRetryUpload: (segmentId: string) => void;
   onNavigateToClips?: (sessionId?: string) => void;
   onNavigateToRecord?: () => void;
+  onDeleteSession?: (sessionId: string) => void;
   pcHost?: string;
 }
 
@@ -79,6 +82,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   onRetryUpload,
   onNavigateToClips,
   onNavigateToRecord,
+  onDeleteSession,
   pcHost
 }) => {
   // Navigation & View state
@@ -103,10 +107,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   // Clips & Inbox items
   const [clips, setClips] = useState<{ id: string; session_id?: string; chunk_id?: string; status: string }[]>([]);
   const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage({ text: msg, type });
     setTimeout(() => setToastMessage(null), 3000);
   };
 
@@ -213,7 +217,21 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       const totalDur = items.reduce((acc, it) => acc + (it.durationSeconds || 0), 0);
       const totalBytes = items.reduce((acc, it) => acc + (it.fileSizeBytes || 0), 0);
       const ytId = items.find(it => it.youtubeVideoId)?.youtubeVideoId;
-      const latestStatus = items[0]?.status || 'QUEUED_FOR_UPLOAD';
+
+      // Holistic session status across all constituent segments
+      const statuses = items.map(it => it.status);
+      let sessionStatus = 'QUEUED_FOR_UPLOAD';
+      if (statuses.some(st => st.startsWith('FAILED_') || st.startsWith('ERROR_'))) {
+        sessionStatus = statuses.find(st => st.startsWith('FAILED_') || st.startsWith('ERROR_'))!;
+      } else if (statuses.some(st => st === 'UPLOADING' || st === 'WAITING_FOR_YOUTUBE')) {
+        sessionStatus = 'UPLOADING';
+      } else if (statuses.some(st => st === 'PROCESSING' || st === 'UPLOADED_TO_YOUTUBE' || st === 'PROCESSED_ON_YOUTUBE')) {
+        sessionStatus = 'PROCESSING';
+      } else if (statuses.every(st => st === 'VERIFIED_BY_LAPTOP')) {
+        sessionStatus = 'VERIFIED_BY_LAPTOP';
+      } else if (statuses.some(st => st === 'RECORDING')) {
+        sessionStatus = 'RECORDING';
+      }
 
       groups.push({
         sessionId: sid,
@@ -223,7 +241,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         segments: items,
         clipCount: 0,
         approvedClipCount: 0,
-        status: latestStatus,
+        status: sessionStatus,
         youtubeVideoId: ytId
       });
     });
@@ -269,11 +287,19 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const unifiedSessions: UnifiedSession[] = useMemo(() => {
     const list: UnifiedSession[] = [];
     const seenYtIds = new Set<string>();
+    const seenSessionIds = new Set<string>();
+    const seenSegmentIds = new Set<string>();
 
     // 1. Add native sessions from camera
     nativeSessions.forEach(ns => {
+      seenSessionIds.add(ns.sessionId);
+      if (ns.youtubeVideoId) seenYtIds.add(ns.youtubeVideoId);
+      ns.segments.forEach(seg => {
+        seenSegmentIds.add(seg.segmentId);
+        if (seg.youtubeVideoId) seenYtIds.add(seg.youtubeVideoId);
+      });
+
       const ytId = ns.youtubeVideoId || ns.segments.find(s => s.youtubeVideoId)?.youtubeVideoId;
-      if (ytId) seenYtIds.add(ytId);
 
       const sessClips = clips.filter(c =>
         c.session_id === ns.sessionId ||
@@ -282,15 +308,20 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       );
       const clipCount = sessClips.length;
 
+      const allStatuses = ns.segments.map(s => s.status);
       let status: UnifiedSession['status'] = 'queued';
       if (clipCount > 0) {
         status = 'ready';
-      } else if (ns.status === 'PROCESSING' || ns.status === 'UPLOADING') {
-        status = 'processing';
-      } else if (ns.status === 'FAILED_RETRY') {
+      } else if (allStatuses.some(s => s.startsWith('FAILED_') || s.startsWith('ERROR_') || s === 'FAILED_RETRY')) {
         status = 'failed';
-      } else if (ns.status === 'UPLOADED_TO_YOUTUBE') {
+      } else if (allStatuses.some(s => s === 'UPLOADING' || s === 'WAITING_FOR_YOUTUBE')) {
+        status = 'uploading';
+      } else if (allStatuses.some(s => s === 'PROCESSING' || s === 'UPLOADED_TO_YOUTUBE' || s === 'PROCESSED_ON_YOUTUBE')) {
         status = 'processing';
+      } else if (allStatuses.every(s => s === 'VERIFIED_BY_LAPTOP')) {
+        status = 'ready';
+      } else {
+        status = 'queued';
       }
 
       list.push({
@@ -312,6 +343,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     // 2. Add imported YouTube sessions from inbox
     inboxItems.forEach(item => {
       if (seenYtIds.has(item.video_id)) return;
+      if (item.session_id && seenSessionIds.has(item.session_id)) return;
+      if (item.dispatch_id && seenSegmentIds.has(item.dispatch_id)) return;
 
       const itemClips = clips.filter(c =>
         c.session_id === item.video_id ||
@@ -636,6 +669,56 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     );
   };
 
+  const handleDeleteSession = async (session?: UnifiedSession | null) => {
+    const target = session || showConfirmDelete || currentSessionDetail;
+    if (!target) {
+      setShowConfirmDelete(null);
+      return;
+    }
+    try {
+      if (target.origin === 'phone') {
+        const ok = Bridge.deleteSession(target.id);
+        if (!ok) {
+          showToast('Could not delete session from device.', 'error');
+          return;
+        }
+      }
+      if (pcHost) {
+        try {
+          const res = await fetch(apiUrl(`/api/youtube/inbox/${target.id}`, pcHost), {
+            method: 'DELETE',
+            headers: {
+              ...(Bridge.getAuthToken ? { 'x-auth-token': Bridge.getAuthToken() } : {})
+            }
+          });
+          if (!res.ok && target.origin === 'youtube') {
+            showToast('Could not delete session from PC.', 'error');
+            return;
+          }
+        } catch (e) {
+          if (target.origin === 'youtube') {
+            showToast('Could not reach PC to delete session.', 'error');
+            return;
+          }
+        }
+      }
+      setInboxItems(prev => prev.filter(i => i.video_id !== target.id && (target.rawInbox ? i.video_id !== target.rawInbox.video_id : true)));
+      if (onDeleteSession) {
+        onDeleteSession(target.id);
+      }
+      showToast('Session deleted.', 'success');
+    } catch (err) {
+      console.error('Delete session error:', err);
+      showToast('Could not delete session.', 'error');
+    } finally {
+      setShowConfirmDelete(null);
+      if (selectedSessionId === target.id) {
+        setViewMode('library');
+        setSelectedSessionId(null);
+      }
+    }
+  };
+
   // =========================================================================
   // VIEW: SESSIONS LIBRARY (Minimal, No Separator Lines, Clean Order)
   // =========================================================================
@@ -644,28 +727,29 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       {/* 1. HEADER — title + metadata, refresh button */}
       <header className="shrink-0 px-4 pt-4 pb-2 bg-canvas z-20">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
-              Sessions
-            </h1>
-            <p className="text-xs text-text-muted mt-0.5 tabular-nums truncate flex items-center gap-1.5">
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
+                Sessions
+              </h1>
               {pcStatus.online ? (
-                <>
-                  <span className="w-1.5 h-1.5 rounded-full bg-status-success animate-pulse" />
-                  <span>Studio Online (LAN)</span>
-                </>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold tracking-wide">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  PC Online
+                </span>
               ) : pcStatus.isCloudMode ? (
-                <>
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                  <span>Cloud Active</span>
-                </>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primary/15 border border-primary/30 text-primary text-[11px] font-medium">
+                  <span className="w-2 h-2 rounded-full bg-primary" />
+                  Cloud Active
+                </span>
               ) : (
-                <>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-2 border border-border text-text-muted text-[11px]">
                   <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
-                  <span>Studio Offline</span>
-                </>
+                  PC Offline
+                </span>
               )}
-              <span>&middot;</span>
+            </div>
+            <p className="text-xs text-text-muted tabular-nums truncate flex items-center gap-1.5">
               <span>{readyCount}&nbsp;ready</span>
               <span>&middot;</span>
               <span>{unifiedSessions.length}&nbsp;total</span>
@@ -754,10 +838,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
       {/* TOAST NOTIFICATION STRIP */}
       {toastMessage && (
-        <div className="shrink-0 px-4 py-2 bg-surface-2 border-b border-border flex items-center justify-between gap-3 animate-in fade-in">
-          <span className="text-xs text-text-main truncate flex items-center gap-1.5">
-            <CheckCircle2 size={13} className="text-status-success shrink-0" />
-            <span>{toastMessage}</span>
+        <div className={`shrink-0 px-4 py-2 border-b flex items-center justify-between gap-3 animate-in fade-in ${
+          toastMessage.type === 'error'
+            ? 'bg-rose-500/10 border-rose-500/20 text-rose-300'
+            : 'bg-surface-2 border-border text-text-main'
+        }`}>
+          <span className="text-xs truncate flex items-center gap-1.5">
+            {toastMessage.type === 'error' ? (
+              <AlertCircle size={13} className="text-danger shrink-0" />
+            ) : (
+              <CheckCircle2 size={13} className="text-status-success shrink-0" />
+            )}
+            <span>{toastMessage.text}</span>
           </span>
           <button
             type="button"
@@ -985,14 +1077,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  showToast('Session deleted.');
-                  setShowConfirmDelete(null);
-                  if (selectedSessionId === showConfirmDelete.id) {
-                    setViewMode('library');
-                    setSelectedSessionId(null);
-                  }
-                }}
+                onClick={() => handleDeleteSession(showConfirmDelete)}
                 className="min-h-[44px] px-4 rounded-xl bg-danger hover:bg-red-600 text-white text-xs font-semibold active:scale-[0.98] shadow-sm transition-colors"
               >
                 Delete

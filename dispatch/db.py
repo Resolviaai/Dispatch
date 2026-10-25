@@ -1033,6 +1033,29 @@ def list_youtube_inbox(status: Optional[str] = None, limit: int = 50) -> List[Di
         return [dict(row) for row in cursor.fetchall()]
 
 
+def delete_youtube_inbox_item(video_id: str) -> bool:
+    """Delete an item from youtube_inbox by video_id, dispatch_id, or session_id."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM youtube_inbox WHERE video_id = ? OR dispatch_id = ? OR session_id = ?",
+            (video_id, video_id, video_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_session_inbox_items(session_id: str) -> List[Dict[str, Any]]:
+    """Return all youtube_inbox entries for a session ordered by sequence_number."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM youtube_inbox WHERE session_id = ? ORDER BY sequence_number ASC, discovered_at ASC",
+            (session_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def is_youtube_video_processed(video_id: str) -> bool:
     """Check if a video has already been ingested or completely processed."""
     with get_db_connection() as conn:

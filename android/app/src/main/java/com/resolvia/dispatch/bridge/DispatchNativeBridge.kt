@@ -3,10 +3,15 @@ package com.resolvia.dispatch.bridge
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import android.content.Context
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.os.VibrationEffect
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.room.withTransaction
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -181,6 +186,11 @@ class DispatchNativeBridge(
 
     @JavascriptInterface
     fun switchCamera() {
+        if (segmenterEngine.isSessionActive || cameraCaptureManager.isRecording) {
+            android.util.Log.w("DispatchBridge", "Cannot switch camera while recording is active")
+            notifyCameraStatus("error", "Cannot switch camera while recording is active")
+            return
+        }
         notifyCameraStatus("initializing", null)
         activity.runOnUiThread {
             activity.lifecycleScope.launch {
@@ -240,38 +250,80 @@ class DispatchNativeBridge(
         activity.runOnUiThread {
             try {
                 val view = activity.window.decorView
+                view.isHapticFeedbackEnabled = true
+                val flag = android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING or
+                        android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+
+                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val vm = activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                    vm?.defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION")
+                    activity.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                }
+
                 when (type) {
                     "recording_start" -> {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM, flag)
                         } else {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP, flag)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator?.vibrate(VibrationEffect.createOneShot(35, VibrationEffect.DEFAULT_AMPLITUDE))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            vibrator?.vibrate(35)
                         }
                     }
                     "recording_stop" -> {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.REJECT)
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.REJECT, flag)
                         } else {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS, flag)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 20, 40, 25), -1))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            vibrator?.vibrate(longArrayOf(0, 20, 40, 25), -1)
                         }
                     }
                     "zoom_tick" -> {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.SEGMENT_TICK)
-                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.SEGMENT_TICK, flag)
                         } else {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK, flag)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator?.vibrate(VibrationEffect.createOneShot(8, 80))
                         }
                     }
                     "lens_switch", "toggle" -> {
-                        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP, flag)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator?.vibrate(VibrationEffect.createOneShot(15, VibrationEffect.DEFAULT_AMPLITUDE))
+                        }
                     }
                     "lock" -> {
-                        view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS, flag)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator?.vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
+                        }
                     }
                     else -> {
-                        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP, flag)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator?.vibrate(VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE))
+                        }
                     }
                 }
             } catch (_: Exception) {}
@@ -562,6 +614,64 @@ class DispatchNativeBridge(
         } catch (e: Exception) {
             android.util.Log.e("DispatchBridge", "getRecordings failed: ${e.message}")
             "[]"
+        }
+    }
+
+    @JavascriptInterface
+    fun deleteSession(sessionId: String): Boolean {
+        return try {
+            runBlocking(Dispatchers.IO) {
+                // Reject deletion while session is actively recording or finalizing
+                if ((segmenterEngine.isSessionActive && segmenterEngine.currentSessionId == sessionId) ||
+                    (cameraCaptureManager.isRecording && segmenterEngine.currentSessionId == sessionId) ||
+                    (com.resolvia.dispatch.recorder.RecordingForegroundService.activeSessionId == sessionId)
+                ) {
+                    android.util.Log.w("DispatchBridge", "Cannot delete session $sessionId while active recording or finalization is in progress")
+                    return@runBlocking false
+                }
+
+                // Query ALL segments for this session without the 50-item limit
+                val segments = database.recordingDao().getSegmentsBySessionId(sessionId)
+                var allFilesDeleted = true
+
+                for (s in segments) {
+                    try {
+                        val f = java.io.File(s.filepath)
+                        if (f.exists()) {
+                            val deleted = f.delete()
+                            if (!deleted) {
+                                android.util.Log.e("DispatchBridge", "Failed to delete file on disk: ${s.filepath}")
+                                allFilesDeleted = false
+                            }
+                        }
+                        val tmp = java.io.File(s.filepath.replace(".mp4", ".tmp"))
+                        if (tmp.exists()) {
+                            tmp.delete()
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("DispatchBridge", "Error deleting file ${s.filepath}: ${e.message}")
+                        allFilesDeleted = false
+                    }
+                }
+
+                if (allFilesDeleted) {
+                    database.withTransaction {
+                        for (s in segments) {
+                            database.recordingDao().deleteSegment(s.segmentId)
+                            database.recordingDao().deleteOutboxItem(s.segmentId)
+                        }
+                        database.recordingDao().deleteSegmentsBySessionId(sessionId)
+                        database.recordingDao().deleteSession(sessionId)
+                    }
+                    true
+                } else {
+                    android.util.Log.w("DispatchBridge", "Session $sessionId deletion incomplete: some files could not be removed")
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DispatchBridge", "deleteSession failed: ${e.message}")
+            false
         }
     }
 
