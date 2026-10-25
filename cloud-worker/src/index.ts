@@ -217,7 +217,8 @@ async function runCleanup(env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
+    try {
+      const url = new URL(request.url);
     const reqOrigin = request.headers.get("Origin") || "*";
     if (request.method === "OPTIONS") {
       const allowedOrigin = (url.pathname.startsWith("/admin/") || url.pathname === "/admin")
@@ -672,11 +673,16 @@ export default {
 
     // 1. Google / YouTube Start & Callback
     if (url.pathname === "/oauth/google/start" && request.method === "GET") {
-      const uid = await resolveOAuthUser();
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
-      const state = crypto.randomUUID() + crypto.randomUUID();
-      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
-      return Response.redirect(buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
+      try {
+        const uid = await resolveOAuthUser();
+        if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
+        const state = crypto.randomUUID() + crypto.randomUUID();
+        await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
+        return Response.redirect(buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
+      } catch (err: any) {
+        console.error("Google OAuth start error:", err);
+        return renderOAuthResultHtml("Connection Error", err?.message || "Failed to start Google sign-in. Please retry from Dispatch.", true);
+      }
     }
 
     if (url.pathname === "/oauth/google/callback" && request.method === "GET") {
@@ -744,12 +750,17 @@ export default {
 
     // 2. Instagram Start & Callback
     if (url.pathname === "/oauth/instagram/start" && request.method === "GET") {
-      const uid = await resolveOAuthUser();
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
-      const state = crypto.randomUUID() + crypto.randomUUID();
-      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
-      const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
-      return Response.redirect(buildInstagramAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback", state), 302);
+      try {
+        const uid = await resolveOAuthUser();
+        if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
+        const state = crypto.randomUUID() + crypto.randomUUID();
+        await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
+        const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
+        return Response.redirect(buildInstagramAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback", state), 302);
+      } catch (err: any) {
+        console.error("Instagram OAuth start error:", err);
+        return renderOAuthResultHtml("Connection Error", err?.message || "Failed to start Instagram sign-in. Please retry from Dispatch.", true);
+      }
     }
 
     if (url.pathname === "/oauth/instagram/callback" && request.method === "GET") {
@@ -835,12 +846,17 @@ export default {
 
     // 3. Facebook Start & Callback
     if (url.pathname === "/oauth/facebook/start" && request.method === "GET") {
-      const uid = await resolveOAuthUser();
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
-      const state = crypto.randomUUID() + crypto.randomUUID();
-      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
-      const clientId = env.FACEBOOK_CLIENT_ID || env.INSTAGRAM_CLIENT_ID || "";
-      return Response.redirect(buildFacebookAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/facebook/callback", state), 302);
+      try {
+        const uid = await resolveOAuthUser();
+        if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
+        const state = crypto.randomUUID() + crypto.randomUUID();
+        await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
+        const clientId = env.FACEBOOK_CLIENT_ID || env.INSTAGRAM_CLIENT_ID || "";
+        return Response.redirect(buildFacebookAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/facebook/callback", state), 302);
+      } catch (err: any) {
+        console.error("Facebook OAuth start error:", err);
+        return renderOAuthResultHtml("Connection Error", err?.message || "Failed to start Facebook sign-in. Please retry from Dispatch.", true);
+      }
     }
 
     if (url.pathname === "/oauth/facebook/callback" && request.method === "GET") {
@@ -911,11 +927,16 @@ export default {
 
     // 4. LinkedIn Start & Callback
     if (url.pathname === "/oauth/linkedin/start" && request.method === "GET") {
-      const uid = await resolveOAuthUser();
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
-      const state = crypto.randomUUID() + crypto.randomUUID();
-      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
-      return Response.redirect(buildLinkedInAuthorizeUrl(env.LINKEDIN_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback", state), 302);
+      try {
+        const uid = await resolveOAuthUser();
+        if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
+        const state = crypto.randomUUID() + crypto.randomUUID();
+        await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
+        return Response.redirect(buildLinkedInAuthorizeUrl(env.LINKEDIN_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback", state), 302);
+      } catch (err: any) {
+        console.error("LinkedIn OAuth start error:", err);
+        return renderOAuthResultHtml("Connection Error", err?.message || "Failed to start LinkedIn sign-in. Please retry from Dispatch.", true);
+      }
     }
 
     if (url.pathname === "/oauth/linkedin/callback" && request.method === "GET") {
@@ -983,17 +1004,22 @@ export default {
 
     // 5. X / Twitter (OAuth 2.0 PKCE) Start & Callback
     if (url.pathname === "/oauth/twitter/start" && request.method === "GET") {
-      const uid = await resolveOAuthUser();
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
-      const rawState = crypto.randomUUID() + crypto.randomUUID();
-      const codeVerifier = generateRandomString(48);
-      const codeChallenge = await sha256B64Url(codeVerifier);
-      await rpc(env, "cloud_put_oauth_state", { p_state: rawState, p_user_id: uid });
-      const encryptedState = await encryptToken(env.TOKEN_VAULT_KEY, `${rawState}:::${codeVerifier}`);
-      return Response.redirect(
-        buildTwitterAuthorizeUrl(env.TWITTER_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/twitter/callback", encryptedState, codeChallenge),
-        302
-      );
+      try {
+        const uid = await resolveOAuthUser();
+        if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
+        const rawState = crypto.randomUUID() + crypto.randomUUID();
+        const codeVerifier = generateRandomString(48);
+        const codeChallenge = await sha256B64Url(codeVerifier);
+        await rpc(env, "cloud_put_oauth_state", { p_state: rawState, p_user_id: uid });
+        const encryptedState = await encryptToken(env.TOKEN_VAULT_KEY, `${rawState}:::${codeVerifier}`);
+        return Response.redirect(
+          buildTwitterAuthorizeUrl(env.TWITTER_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/twitter/callback", encryptedState, codeChallenge),
+          302
+        );
+      } catch (err: any) {
+        console.error("Twitter OAuth start error:", err);
+        return renderOAuthResultHtml("Connection Error", err?.message || "Failed to start X (Twitter) sign-in. Please retry from Dispatch.", true);
+      }
     }
 
     if (url.pathname === "/oauth/twitter/callback" && request.method === "GET") {
@@ -1159,8 +1185,7 @@ export default {
     if (!actor) return json(401, { error: "unauthorized" });
     const userId = actor.userId;
 
-    try {
-      if (request.method === "POST" && url.pathname === "/reserve") {
+    if (request.method === "POST" && url.pathname === "/reserve") {
         const body = await readJson<{ kind: string; mime_type: string; expected_bytes: number; client_token: string; clip_id?: string }>(request);
         if (!body?.client_token) return json(400, { error: "client_token required" });
         const invalid = validateReserveInput(body.kind, body.mime_type, body.expected_bytes);
@@ -1269,7 +1294,12 @@ export default {
       }
 
       return json(404, { error: "not found" });
-    } catch (e) {
+    } catch (e: unknown) {
+      console.error("Worker unhandled exception:", e);
+      const isHtml = request.headers.get("accept")?.includes("text/html") || request.method === "GET";
+      if (isHtml) {
+        return renderOAuthResultHtml("Temporary Service Error", (e instanceof Error ? e.message : String(e)) || "An unexpected error occurred. Please retry from Dispatch.", true);
+      }
       return json(500, { error: `worker error: ${e instanceof Error ? e.message : String(e)}` });
     }
   },

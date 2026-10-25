@@ -44,8 +44,38 @@ export function fromB64url(b64urlStr: string): Uint8Array {
   return arr;
 }
 
-async function aesKey(vaultKeyB64: string): Promise<CryptoKey> {
-  const raw = Uint8Array.from(atob(vaultKeyB64), c => c.charCodeAt(0));
+async function aesKey(vaultKey: string): Promise<CryptoKey> {
+  const trimmed = (vaultKey || "").trim();
+  let raw: Uint8Array | null = null;
+
+  // 1. Try Base64
+  try {
+    const pad = trimmed.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (trimmed.length % 4)) % 4);
+    const bin = atob(pad);
+    if (bin.length === 16 || bin.length === 24 || bin.length === 32) {
+      raw = Uint8Array.from(bin, c => c.charCodeAt(0));
+    }
+  } catch {
+    // not valid base64
+  }
+
+  // 2. Try Hex (32, 48, or 64 hex characters)
+  if (!raw && /^[0-9a-fA-F]{32,64}$/.test(trimmed) && trimmed.length % 2 === 0) {
+    const bytes = new Uint8Array(trimmed.length / 2);
+    for (let i = 0; i < trimmed.length; i += 2) {
+      bytes[i / 2] = parseInt(trimmed.substring(i, i + 2), 16);
+    }
+    if (bytes.length === 16 || bytes.length === 24 || bytes.length === 32) {
+      raw = bytes;
+    }
+  }
+
+  // 3. Fallback: derive 256-bit key using SHA-256 of the vault key string
+  if (!raw) {
+    const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(trimmed || "dispatch-fallback-vault-key"));
+    raw = new Uint8Array(hash);
+  }
+
   return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 

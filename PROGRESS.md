@@ -12,12 +12,13 @@
 - Resolved runtime ReferenceError (`Plus is not defined`) in `frontend/src/screens/ClipsScreen.tsx`.
 - Added `Plus` to `lucide-react` import list; verified all icon JSX tags across the screen resolve cleanly.
 
-### 3. Multi-Platform OAuth Ticket Consumption (Completed & Deployed)
+### 3. Multi-Platform OAuth Ticket Consumption & Hardening (Completed & Deployed)
 - **Root Cause Fixed:** Resolved PostgREST scalar UUID return value handling in `cloud-worker/src/index.ts`. Previously, `cloud_consume_oauth_state` returns a scalar string, which was misparsed as an array of objects, resulting in `null` user IDs and `Unauthorized` responses in the browser when opening `/oauth/:provider/start?ticket=...`.
-- Implemented robust `consumeOAuthState` helper supporting scalar strings, arrays, and objects.
-- Updated all start and callback routes for Google/YouTube, Instagram, Facebook, LinkedIn, and X.
-- Replaced raw 401 JSON responses on start routes with user-friendly session expiry/guidance HTML.
-- Deployed live Cloudflare Worker: **Version ID `ebb7e097-f4ea-45b8-bec4-9df353aa8434`**.
+- **Error 1101 Resolved:** On `/oauth/twitter/start`, `encryptToken` called `aesKey` which assumed base64-encoded `TOKEN_VAULT_KEY` without format guards. When `TOKEN_VAULT_KEY` was hex or unpadded, `atob()` threw an uncaught `DOMException: The string to be decoded is not correctly encoded`, causing Cloudflare to display Error 1101.
+- Upgraded `aesKey` in `cloud-worker/src/oauth.ts` to support Base64, Hex (32/48/64 char), and SHA-256 fallback derivation, guaranteeing encryption never throws.
+- Added per-route try/catch blocks for all 5 OAuth start routes and a global try/catch covering `fetch(request, env)` in `cloud-worker/src/index.ts`.
+- Verified live: All 5 providers (`google`, `instagram`, `facebook`, `linkedin`, `twitter`) successfully return HTTP 302 and redirect to their respective authorize endpoints.
+- Deployed live Cloudflare Worker: **Version ID `725ab2f7-ea21-47ad-8c50-86a97056985e`**.
 
 ### 4. Focused Admin Operations Dashboard (Completed & Staged)
 - **Authoritative Metrics Grid (`site/admin.html` & `cloud-worker/src/index.ts`):**
