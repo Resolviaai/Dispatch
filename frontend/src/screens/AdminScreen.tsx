@@ -5,12 +5,16 @@ import { getAuthHeaders, apiUrl } from '../bridge'
 interface AdminUser {
   id: string; email: string; created_at: string;
   last_sign_in: string | null; banned: boolean;
+  quota_gb?: number;
+  quota_bytes?: number;
+  queue_priority?: number;
 }
 
 /** Admin panel: visible only when the backend confirms the admin allowlist.
  *  All permission checks are server-side; this UI only displays state. */
 export const AdminScreen: React.FC<{ pcHost?: string }> = ({ pcHost }) => {
   const [users, setUsers] = useState<AdminUser[] | null>(null)
+  const [poolRemainingGb, setPoolRemainingGb] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
@@ -20,7 +24,11 @@ export const AdminScreen: React.FC<{ pcHost?: string }> = ({ pcHost }) => {
     try {
       const res = await fetch(apiUrl('/api/admin/users', pcHost), { headers: getAuthHeaders() })
       if (!res.ok) throw new Error(res.status === 403 ? 'Admin access required' : `Load failed (${res.status})`)
-      setUsers((await res.json()).users)
+      const data = await res.json()
+      setUsers(data.users)
+      if (typeof data.pool_remaining_gb === 'number') {
+        setPoolRemainingGb(data.pool_remaining_gb)
+      }
     } catch (e: any) {
       setError(e.message || 'Failed to load users')
     }
@@ -46,7 +54,12 @@ export const AdminScreen: React.FC<{ pcHost?: string }> = ({ pcHost }) => {
       <h1 className="text-base font-semibold flex items-center gap-2 mb-1">
         <ShieldIcon size={18} className="text-primary" /> Admin
       </h1>
-      <p className="text-xs text-text-muted mb-4">Registered accounts and status. Secrets are never shown.</p>
+      <p className="text-xs text-text-muted mb-4">
+        Registered accounts and status. Secrets are never shown.
+        {poolRemainingGb !== null && (
+          <span className="ml-2 font-mono text-primary font-medium">({poolRemainingGb}&nbsp;GB pool remaining)</span>
+        )}
+      </p>
       {error && <p role="alert" className="text-xs text-[#EF4444] mb-3">{error}</p>}
       {users === null && !error && <p className="text-sm text-text-muted">Loading…</p>}
       {users !== null && users.length === 0 && <p className="text-sm text-text-muted">No registered users yet.</p>}
@@ -59,6 +72,9 @@ export const AdminScreen: React.FC<{ pcHost?: string }> = ({ pcHost }) => {
                 <p className="text-xs text-text-muted">
                   {u.banned ? 'Disabled' : 'Active'} · joined {String(u.created_at || '').slice(0, 10)}
                   {u.last_sign_in ? ` · last seen ${String(u.last_sign_in).slice(0, 10)}` : ''}
+                </p>
+                <p className="text-[11px] text-text-muted font-mono mt-0.5">
+                  Quota: {u.quota_gb ?? 0.5}&nbsp;GB · Priority: {u.queue_priority ?? 100}
                 </p>
               </div>
               {!u.banned && confirmId === u.id ? (

@@ -159,19 +159,17 @@ export async function initProviderOAuth(jwtToken: string, provider: string): Pro
 }
 
 export async function initGoogleOAuth(jwtToken: string): Promise<{ url: string }> {
-  try {
-    const res = await fetch(`${WORKER_BASE}/oauth/google/init`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${jwtToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-    if (res.ok) {
-      return await res.json() as { url: string };
-    }
-  } catch {
-    // Fall back to direct ticket-less url
+  const res = await fetch(`${WORKER_BASE}/oauth/google/init`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (res.ok) {
+    const data = await res.json() as { url?: string };
+    if (data.url) return { url: data.url };
   }
-  return { url: `${WORKER_BASE}/oauth/google/start?token=${encodeURIComponent(jwtToken)}` };
+  const errData = await res.json().catch(() => ({})) as { error?: string };
+  throw new Error(errData.error || `Google OAuth initialization failed (${res.status})`);
 }

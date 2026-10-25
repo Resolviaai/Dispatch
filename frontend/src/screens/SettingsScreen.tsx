@@ -27,7 +27,7 @@ import {
   GeminiKeyStatus,
   listConnectedAccounts,
   deleteConnectedAccount,
-  connectAccount,
+  initProviderOAuth,
   getGeminiKeyStatus,
   saveGeminiKey,
   deleteGeminiKey,
@@ -96,14 +96,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [isSavingGemini, setIsSavingGemini] = useState(false);
   const [showGeminiInput, setShowGeminiInput] = useState(false);
 
-  // Connection modal state for non-Google providers
-  const [connectingModal, setConnectingModal] = useState<'instagram' | 'linkedin' | 'twitter' | null>(null);
-  const [formAccountId, setFormAccountId] = useState('');
-  const [formAccountName, setFormAccountName] = useState('');
-  const [formToken, setFormToken] = useState('');
-  const [isConnectingAccount, setIsConnectingAccount] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-
+  // State for connected accounts and keys
   const [wifiOnly, setWifiOnly] = useState(true);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -172,63 +165,28 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
   };
 
-  const handleOpenConnect = (provider: 'instagram' | 'linkedin' | 'twitter') => {
-    setConnectingModal(provider);
-    setFormAccountId('');
-    setFormAccountName('');
-    setFormToken('');
-    setConnectionError(null);
-  };
-
-  const handleCloseConnect = () => {
-    setConnectingModal(null);
-    setConnectionError(null);
-  };
-
-  const handleSaveAccount = async () => {
-    if (!jwtToken || !connectingModal) return;
-    const provider = connectingModal;
-    const accountId = formAccountId.trim();
-    const accountName = formAccountName.trim() || accountId;
-    const token = formToken.trim();
-
-    if (!accountId) {
-      setConnectionError('Account identifier is required');
+  const handleConnectProvider = async (provider: 'instagram' | 'linkedin' | 'twitter') => {
+    if (!jwtToken) {
+      setFeedback('Sign in first, then connect your account.');
       return;
     }
-    if (!token) {
-      setConnectionError('Access token is required');
-      return;
-    }
-
-    setIsConnectingAccount(true);
-    setConnectionError(null);
-
-    let credentials: Record<string, unknown> = {};
-    if (provider === 'instagram') {
-      credentials = { access_token: token, account_id: accountId };
-    } else if (provider === 'linkedin') {
-      credentials = { access_token: token, author_urn: accountId };
-    } else if (provider === 'twitter') {
-      credentials = { bearer_token: token, handle: accountId };
-    }
-
-    const res = await connectAccount(jwtToken, {
-      provider,
-      account_id: accountId,
-      account_name: accountName,
-      credentials,
-      metadata: { connected_at: new Date().toISOString() },
-    });
-
-    setIsConnectingAccount(false);
-
-    if (res.ok) {
-      setFeedback(`${accountName} connected successfully.`);
-      handleCloseConnect();
-      refreshAccounts();
-    } else {
-      setConnectionError(res.error || 'Failed to connect account.');
+    const label = provider === 'twitter' ? 'X (Twitter)' : provider.charAt(0).toUpperCase() + provider.slice(1);
+    setFeedback(`Opening ${label} sign-in...`);
+    try {
+      const res = await initProviderOAuth(jwtToken, provider);
+      if (res.url) {
+        const opened = Bridge.openCustomTab(res.url);
+        setFeedback(
+          opened
+            ? `${label} sign-in opened. Approve access, then return here.`
+            : 'Could not open browser. Please check that Chrome is installed and retry.'
+        );
+        setTimeout(refreshAccounts, 8000);
+      } else {
+        setFeedback(`${label} OAuth is not configured on the server yet. Once provider credentials are registered in the cloud worker, one-tap sign-in will be enabled.`);
+      }
+    } catch (e: any) {
+      setFeedback(e.message || `Failed to initiate ${label} sign-in.`);
     }
   };
 
@@ -502,7 +460,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             )}
 
             <button
-              onClick={() => handleOpenConnect('instagram')}
+              onClick={() => handleConnectProvider('instagram')}
               className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
             >
               <Plus size={15} />
@@ -541,7 +499,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
             {!linkedinAccount && (
               <button
-                onClick={() => handleOpenConnect('linkedin')}
+                onClick={() => handleConnectProvider('linkedin')}
                 className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
               >
                 <Plus size={15} />
@@ -581,7 +539,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
             {!twitterAccount && (
               <button
-                onClick={() => handleOpenConnect('twitter')}
+                onClick={() => handleConnectProvider('twitter')}
                 className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
               >
                 <Plus size={15} />
@@ -748,129 +706,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </section>
 
       </div>
-
-      {/* CONNECT ACCOUNT MODAL */}
-      {connectingModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-surface border border-border rounded-2xl p-5 w-full max-w-sm space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {connectingModal === 'instagram' && <InstagramIcon />}
-                {connectingModal === 'linkedin' && <LinkedInIcon />}
-                {connectingModal === 'twitter' && <XIcon />}
-                <h3 className="text-base font-semibold text-text-main">
-                  {connectingModal === 'instagram' && 'Connect Instagram Reels'}
-                  {connectingModal === 'linkedin' && 'Connect LinkedIn'}
-                  {connectingModal === 'twitter' && 'Connect X (Twitter)'}
-                </h3>
-              </div>
-              <button
-                onClick={handleCloseConnect}
-                disabled={isConnectingAccount}
-                className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-95 transition-all"
-                aria-label="Close"
-              >
-                <CloseIcon size={16} />
-              </button>
-            </div>
-
-            <p className="text-xs text-text-muted">
-              {connectingModal === 'instagram' && 'Binds an Instagram Business or Creator account for publishing vertical Reels.'}
-              {connectingModal === 'linkedin' && 'Binds a personal member or organization URN for publishing video posts.'}
-              {connectingModal === 'twitter' && 'Binds an X / Twitter profile for publishing video posts.'}
-            </p>
-
-            {connectionError && (
-              <div className="p-2.5 rounded-lg bg-danger/10 border border-danger/30 text-xs text-danger">
-                {connectionError}
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
-                  {connectingModal === 'instagram' && 'Instagram User ID'}
-                  {connectingModal === 'linkedin' && 'Author URN'}
-                  {connectingModal === 'twitter' && 'X Handle (@username)'}
-                </label>
-                <input
-                  type="text"
-                  value={formAccountId}
-                  onChange={(e) => setFormAccountId(e.target.value)}
-                  placeholder={
-                    connectingModal === 'instagram'
-                      ? '17841400000000000'
-                      : connectingModal === 'linkedin'
-                      ? 'urn:li:person:abcdef'
-                      : '@resolviaai'
-                  }
-                  className="w-full rounded-xl bg-surface-2 border border-border px-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
-                  disabled={isConnectingAccount}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
-                  Display / Account Name
-                </label>
-                <input
-                  type="text"
-                  value={formAccountName}
-                  onChange={(e) => setFormAccountName(e.target.value)}
-                  placeholder="e.g. My Channel or Company"
-                  className="w-full rounded-xl bg-surface-2 border border-border px-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary"
-                  disabled={isConnectingAccount}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
-                  {connectingModal === 'instagram' && 'Graph API Access Token'}
-                  {connectingModal === 'linkedin' && 'Member Access Token'}
-                  {connectingModal === 'twitter' && 'Bearer Token / Access Token'}
-                </label>
-                <input
-                  type="password"
-                  value={formToken}
-                  onChange={(e) => setFormToken(e.target.value)}
-                  placeholder="Paste access token..."
-                  className="w-full rounded-xl bg-surface-2 border border-border px-3 py-2 text-sm text-text-main placeholder:text-text-muted font-mono text-xs focus:outline-none focus:border-primary"
-                  disabled={isConnectingAccount}
-                />
-                <p className="text-[11px] text-text-muted mt-1">
-                  Credentials are encrypted with AES-256-GCM in the vault.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={handleCloseConnect}
-                disabled={isConnectingAccount}
-                className="min-h-[44px] px-4 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-secondary active:scale-[0.98] transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveAccount}
-                disabled={isConnectingAccount}
-                className="min-h-[44px] flex-1 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-50"
-              >
-                {isConnectingAccount ? (
-                  <>
-                    <RefreshCw size={14} className="animate-spin" />
-                    <span>Connecting…</span>
-                  </>
-                ) : (
-                  <span>Save &amp; Connect</span>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

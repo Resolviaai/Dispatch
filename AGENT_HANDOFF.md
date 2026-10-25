@@ -338,3 +338,33 @@ Owner rejected fully-rounded buttons AND chips (screenshots of detail page + cli
   - Android debug unit tests: 27/27 passed.
   - Release APK verified: `release-out/Dispatch.apk` (versionCode 18, SHA-256 cert fingerprint `94f778490fde8ffd2c7e644d0c8169249f2e79829d769b5f71aa0301c5643804`).
 
+## 52. Production Identity Scoping, LAN Auth & Pipeline Hardening (2026-10-25) — v1.1.15-alpha (19)
+- **User Ownership Scoping End-to-End**:
+  - `dispatch/db.py`: Added `user_id` column and indexes to `youtube_inbox`, `clips`, and `publishing_outbox`. Updated `register_youtube_video`, `update_youtube_video`, `save_clip_definitions`, and `approve_clip` to carry user identity throughout the pipeline.
+  - `dispatch/youtube_connections.py`: `RemoteJobPoller._process` passes `job.user_id` into `ingest_video`. Corrected token conversion so a raw refresh token string is returned as `{"refresh_token": decrypted}`.
+  - `dispatch/youtube_inbox/catcher.py`: Persists `user_id` across ingestion and registration.
+  - `dispatch/transcription/worker.py` & `dispatch/ai_clips/worker.py`: Scoped key lookups strictly by `user_id`; eliminated silent fallback to machine-wide key for user items. Highlights extraction and candidate saving enforce user ownership.
+- **Publishing Ownership & Account Enforcement**:
+  - `dispatch/publisher/outbox.py`: User-owned jobs strictly require connected and verified accounts; if account credentials are missing, jobs transition directly to `blocked_needs_auth` rather than falling back to server credentials. `check_processing_jobs` and `reconcile_youtube_job` use account credentials rather than system tokens.
+  - `dispatch/publisher/youtube.py`: Added `build_youtube_service_from_credentials(credentials_data)` helper.
+- **Local API LAN Security Boundary**:
+  - `dispatch/web/app.py`: `/api/clips`, `/api/clips/{id}`, `/clips/{filename}`, and source video routes require Supabase session JWT authentication when accessed from non-loopback hosts (LAN). Clips, media files, and queued transcripts are filtered by `user_id`. Loopback dashboard callers maintain convenient local desktop access.
+  - `frontend/src/bridge.ts`: Updated `getAuthHeaders()` to extract Supabase access token from `localStorage` (`sb-*-auth-token`) and send `Authorization: Bearer <token>`.
+- **R2 Edit-Window Pipeline & Migration Hygiene**:
+  - Migration `20261025000011_user_ownership_and_edit_windows.sql`: Added `edit_window` to `cloud_reserve_upload` allowed kinds (fixing previous `unsupported kind` bug). Added cascade deletion of legacy `youtube_connections` in `cloud_delete_connected_account`. Service-role only execution enforced.
+- **Admin Quota & Social OAuth Cleanliness**:
+  - `cloud-worker/src/index.ts` & `dispatch/web/app.py`: Joined `profiles` in `GET /admin/users` to return `quota_gb`, `quota_bytes`, `queue_priority`, and pool remaining.
+  - `cloud-worker/src/index.ts`: In `/oauth/google/callback`, verified `storeRes.ok` and returned 502 on failure to ensure success is only reported when storage succeeds.
+  - `frontend/src/accounts/accountsService.ts`: Removed fallback to URL query tokens in `initGoogleOAuth` to prevent session token leaks.
+  - `frontend/src/screens/SettingsScreen.tsx`: Removed manual developer token paste modals; one-tap provider OAuth (`initProviderOAuth`) informs users of server-side configuration status.
+  - `frontend/src/screens/AdminScreen.tsx`: Displays per-user quota and priority along with remaining pool status.
+- **Camera Exposure Compensation Serialization**:
+  - `CameraCaptureManager.kt`: Fully serialized `setExposureIndex` (temporary AE unlock ListenableFuture -> compensation index change ListenableFuture -> AE re-lock ListenableFuture -> `onComplete` callback), eliminating camera pipeline race conditions.
+- **Verification & Release Packaging**:
+  - Python tests: 71/71 passed (including new `tests/test_lan_auth_and_ownership.py`).
+  - Worker tests: 29/29 passed (`npm test`).
+  - Frontend: clean test suites, Vite build generated web assets in `android/app/src/main/assets/web`.
+  - Android tests: `testDebugUnitTest` 27/27 passed.
+  - Signed release APK: `android/app/build/outputs/apk/release/app-release.apk` (versionCode 19, versionName 1.1.15, size 11.02 MB, SHA-256 `18eace8dbc6772fdeb350a1e4919bbf8d58b6bccbdcc98319cc783c88dd25776`). Shipped on landing page.
+
+

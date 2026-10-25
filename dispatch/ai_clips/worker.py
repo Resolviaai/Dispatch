@@ -158,7 +158,7 @@ class HighlightWorker:
                                 if cp.exists():
                                     src_path = cp
 
-                    user_id = item.get("user_id") or item.get("channel_id")
+                    user_id = item.get("user_id")
                     active_render_key = ""
                     if user_id:
                         try:
@@ -166,8 +166,9 @@ class HighlightWorker:
                             active_render_key = get_user_gemini_key(user_id) or ""
                         except Exception:
                             pass
-                    from dispatch.config import GEMINI_API_KEY
-                    active_render_key = active_render_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+                    else:
+                        from dispatch.config import GEMINI_API_KEY
+                        active_render_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
                     self._render_clips_for_video(video_id, clip_ids, segments, src_path, api_key=active_render_key)
                     # Verify rendered outputs exist on disk before marking COMPLETED
@@ -490,21 +491,27 @@ class HighlightWorker:
 
         attempt_count = int(item.get("ai_attempt_count") or 0) + 1
 
-        # Resolve user's vaulted Gemini key if available, otherwise read the live env value
-        user_gemini_key = ""
-        user_id = item.get("user_id") or item.get("channel_id")
+        # Resolve user's vaulted Gemini key if available; fail closed if user has no key configured
+        user_id = item.get("user_id")
         if user_id:
+            user_gemini_key = ""
             try:
                 from dispatch.youtube_connections import get_user_gemini_key
                 user_gemini_key = get_user_gemini_key(user_id)
             except Exception as ke:
                 logger.debug("User Gemini key lookup note for %s: %s", user_id, ke)
 
-        active_gemini_key = user_gemini_key or os.getenv("GEMINI_API_KEY", "")
-        if not active_gemini_key:
-            err_msg = "GEMINI_API_KEY is not configured or is empty. Cannot extract highlights."
-            db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
-            raise RuntimeError(err_msg)
+            if not user_gemini_key:
+                err_msg = f"User {user_id} has not configured a Gemini API key in Settings."
+                db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
+                raise RuntimeError(err_msg)
+            active_gemini_key = user_gemini_key
+        else:
+            active_gemini_key = os.getenv("GEMINI_API_KEY", "")
+            if not active_gemini_key:
+                err_msg = "GEMINI_API_KEY is not configured or is empty. Cannot extract highlights."
+                db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
+                raise RuntimeError(err_msg)
 
         try:
             # Strictly call Gemini API with active key (user-vaulted or server fallback)
@@ -526,7 +533,8 @@ class HighlightWorker:
                 session_id=session_id,
                 video_id=video_id,
                 clip_defs=validated_clips,
-                publish_mode=publish_mode
+                publish_mode=publish_mode,
+                user_id=user_id
             )
 
             # Reset error fields on success and transition to CLIPS_DEFINED

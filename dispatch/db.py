@@ -197,6 +197,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 approved_at TIMESTAMP,
                 published_at TIMESTAMP,
+                user_id TEXT,
                 FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE SET NULL
             );
         """)
@@ -227,6 +228,7 @@ def init_db():
                 attempt_count INTEGER DEFAULT 0,
                 last_error TEXT,
                 idempotency_key TEXT UNIQUE NOT NULL,
+                user_id TEXT,
                 remote_id TEXT,
                 remote_url TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -297,7 +299,8 @@ def init_db():
                 next_ai_attempt_at TIMESTAMP,
                 last_ai_error TEXT,
                 source_sha256 TEXT,
-                source_file_size INTEGER
+                source_file_size INTEGER,
+                user_id TEXT
             );
         """)
         cursor.execute("""
@@ -330,6 +333,9 @@ def init_db():
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_sha256 TEXT;")
         if "source_file_size" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_file_size INTEGER;")
+        if "user_id" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN user_id TEXT;");
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_youtube_user_id ON youtube_inbox (user_id);")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
@@ -368,6 +374,9 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_end REAL;")
         if "caption_timing_warning" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN caption_timing_warning TEXT;")
+        if "user_id" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN user_id TEXT;");
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
 
         # Suggestions are immutable candidate metadata. Legacy selected ranges
         # are the only safe backfill source; never rewrite their active bounds.
@@ -398,6 +407,9 @@ def init_db():
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN next_retry_at TIMESTAMP;")
         if "account_id" not in outbox_cols:
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN account_id TEXT;")
+        if "user_id" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN user_id TEXT;");
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_user_id ON publishing_outbox (user_id);")
 
         # Default settings if not already present
         cursor.execute("""
@@ -666,6 +678,7 @@ def approve_clip(
         """, (title, hashtags, publish_mode, target_platforms, layout_mode, clip_id))
 
         # Enqueue to publishing outbox for each selected platform with its bound account_id
+        clip_user_id = clip["user_id"] if "user_id" in clip.keys() else None
         platforms = [p.strip() for p in target_platforms.split(",") if p.strip()]
         account_map = custom_accounts or {}
         for plat in platforms:
@@ -673,9 +686,9 @@ def approve_clip(
             acct_id = account_map.get(plat) or account_map.get(f"{plat}_shorts") or account_map.get("youtube" if plat == "youtube_shorts" else plat)
             cursor.execute("""
                 INSERT OR IGNORE INTO publishing_outbox (
-                    id, clip_id, platform, account_id, status, publish_mode, idempotency_key
-                ) VALUES (?, ?, ?, ?, 'queued', ?, ?)
-            """, (f"pub_{uuid.uuid4().hex[:8]}", clip_id, plat, acct_id, publish_mode, idempotency_key))
+                    id, clip_id, user_id, platform, account_id, status, publish_mode, idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+            """, (f"pub_{uuid.uuid4().hex[:8]}", clip_id, clip_user_id, plat, acct_id, publish_mode, idempotency_key))
 
         conn.commit()
 
@@ -814,10 +827,13 @@ def get_all_rejections(limit: int = 20) -> List[Dict[str, Any]]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_clips_for_review() -> List[Dict[str, Any]]:
+def get_clips_for_review(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM clips WHERE status = 'ready_review' ORDER BY created_at DESC")
+        if user_id:
+            cursor.execute("SELECT * FROM clips WHERE status = 'ready_review' AND user_id = ? ORDER BY created_at DESC", (user_id,))
+        else:
+            cursor.execute("SELECT * FROM clips WHERE status = 'ready_review' ORDER BY created_at DESC")
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -860,7 +876,8 @@ def register_youtube_video(
     session_id: Optional[str] = None,
     sequence_number: Optional[int] = None,
     source_sha256: Optional[str] = None,
-    source_file_size: Optional[int] = None
+    source_file_size: Optional[int] = None,
+    user_id: Optional[str] = None
 ) -> bool:
     """Register discovered YouTube video in inbox idempotently.
     Returns True if newly inserted, False if already present.
@@ -875,9 +892,9 @@ def register_youtube_video(
             cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
 
         cursor.execute("""
-            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status, source_sha256, source_file_size)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED', ?, ?)
-        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, source_sha256, source_file_size))
+            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status, source_sha256, source_file_size, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED', ?, ?, ?)
+        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, source_sha256, source_file_size, user_id))
         conn.commit()
         return True
 
@@ -917,7 +934,8 @@ def update_youtube_video(
     next_ai_attempt_at: Optional[str] = None,
     last_ai_error: Optional[str] = None,
     source_sha256: Optional[str] = None,
-    source_file_size: Optional[int] = None
+    source_file_size: Optional[int] = None,
+    user_id: Optional[str] = None
 ):
     """Update status, paths, errors, or retry schedule on YouTube inbox item."""
     with get_db_connection() as conn:
@@ -982,6 +1000,10 @@ def update_youtube_video(
             updates.append("source_file_size = ?")
             params.append(source_file_size)
 
+        if user_id is not None:
+            updates.append("user_id = ?")
+            params.append(user_id)
+
         if last_error is not None:
             updates.append("last_error = ?")
             params.append(last_error)
@@ -1039,7 +1061,8 @@ def save_clip_definitions(
     video_id: str,
     clip_defs: List[Dict[str, Any]],
     publish_mode: str = "private",
-    platform_targets: str = "youtube"
+    platform_targets: str = "youtube",
+    user_id: Optional[str] = None
 ) -> List[str]:
     """Atomically persist validated clip definitions in a single transaction.
     
@@ -1050,6 +1073,15 @@ def save_clip_definitions(
     """
     saved_clip_ids: List[str] = []
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    effective_user_id = user_id
+    if not effective_user_id and video_id:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT user_id FROM youtube_inbox WHERE video_id = ?", (video_id,))
+            r = c.fetchone()
+            if r and r["user_id"]:
+                effective_user_id = r["user_id"]
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -1083,14 +1115,14 @@ def save_clip_definitions(
                     ai_suggested_start_time, ai_suggested_end_time, range_revision,
                     title, hook, description, hashtags, virality_score,
                     layout_mode, status, publish_mode, platform_targets,
-                    video_path, thumbnail_path, padded_start, padded_end
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?)
+                    video_path, thumbnail_path, padded_start, padded_end, user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?, ?)
             """, (
                 clip_id, session_id, chunk_id, start_t, end_t, duration,
                 start_t, end_t,
                 title, hook, description, hashtags, virality_score,
                 layout_mode, publish_mode, platform_targets,
-                p_start, p_end
+                p_start, p_end, effective_user_id
             ))
             saved_clip_ids.append(clip_id)
 
@@ -1106,16 +1138,24 @@ def save_clip_definitions(
     return saved_clip_ids
 
 
-def get_queued_transcription_clips(limit: int = 50) -> List[Dict[str, Any]]:
+def get_queued_transcription_clips(limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retrieve clips waiting in FIFO backlog for transcription quota reset."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM clips 
-            WHERE status = 'queued_transcription' 
-            ORDER BY created_at ASC 
-            LIMIT ?
-        """, (limit,))
+        if user_id:
+            cursor.execute("""
+                SELECT * FROM clips 
+                WHERE status = 'queued_transcription' AND user_id = ?
+                ORDER BY created_at ASC 
+                LIMIT ?
+            """, (user_id, limit))
+        else:
+            cursor.execute("""
+                SELECT * FROM clips 
+                WHERE status = 'queued_transcription' 
+                ORDER BY created_at ASC 
+                LIMIT ?
+            """, (limit,))
         return [dict(r) for r in cursor.fetchall()]
 
 

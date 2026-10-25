@@ -102,7 +102,7 @@ def get_account_credentials(account_id: str, user_id: Optional[str] = None) -> D
         import json
         if decrypted.startswith("{"):
             return json.loads(decrypted)
-        return {"access_token": decrypted, "refresh_token": decrypted}
+        return {"refresh_token": decrypted}
     except Exception as e:
         logger.debug("Could not retrieve credentials for account %s: %s", account_id, e)
         return {}
@@ -163,7 +163,7 @@ class RemoteJobPoller:
 
     def _process(self, job: RemoteJob) -> None:
         try:
-            result = self.ingest_video(job.youtube_url)
+            result = self.ingest_video(job.youtube_url, user_id=job.user_id)
             status = result.get("status", "FAILED")
             if status in ("DOWNLOADED", "WAITING_FOR_YOUTUBE_PROCESSING", "WAITING_FOR_VISIBILITY_CHECK"):
                 # Ingestion accepted the source; downstream workers own the rest.

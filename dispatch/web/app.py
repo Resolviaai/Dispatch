@@ -141,12 +141,19 @@ app.include_router(sync_router)
 
 
 def get_authenticated_user(request: Request) -> Dict[str, Any]:
-    """Identity boundary: verifies the Supabase JWT from the Authorization header
-    against Supabase itself (signature + expiry validated server-side by Supabase).
+    """Identity boundary: verifies the Supabase JWT from the Authorization header,
+    x-auth-token, or query param against Supabase itself (signature + expiry validated server-side by Supabase).
     Returns {user_id, email}. Fails closed with 401 for missing/invalid tokens.
     Loopback dashboard calls keep their existing device-token path."""
     auth = request.headers.get("authorization") or ""
-    token = auth[7:] if auth.lower().startswith("bearer ") else None
+    token = None
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+    elif request.headers.get("x-auth-token"):
+        token = request.headers.get("x-auth-token").strip()
+    elif request.query_params.get("token"):
+        token = request.query_params.get("token").strip()
+
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
@@ -164,6 +171,30 @@ def get_authenticated_user(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     user = resp.json()
     return {"user_id": user.get("id", ""), "email": user.get("email", "")}
+
+
+def resolve_caller_user_id(request: Request) -> Optional[str]:
+    """Resolve caller identity:
+    - Loopback callers (localhost, 127.0.0.1, ::1) are trusted by default.
+      If a loopback caller supplies a Supabase Bearer token, resolve and return the user_id.
+      Otherwise return None (system/all clips).
+    - Non-loopback callers (LAN) MUST authenticate via Supabase session token.
+    """
+    client_host = request.client.host if request.client else "unknown"
+    if is_trusted_localhost(client_host):
+        auth = request.headers.get("authorization") or ""
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else (request.query_params.get("token") or "")
+        if token:
+            try:
+                user = get_authenticated_user(request)
+                return user.get("user_id") or None
+            except Exception:
+                return None
+        return None
+
+    # LAN caller: strictly require authentication
+    user = get_authenticated_user(request)
+    return user.get("user_id") or None
 
 
 def require_secure_credential_transport(request: Request, client_host: str) -> None:
@@ -386,6 +417,18 @@ async def get_clip_file(filename: str, request: Request):
     target_path = (CLIPS_DIR / filename).resolve()
     if not target_path.is_relative_to(CLIPS_DIR.resolve()):
         raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+
+    caller_user_id = resolve_caller_user_id(request)
+    if caller_user_id:
+        stem = Path(filename).stem
+        clip_cand_id = stem
+        if stem.startswith("thumb_"):
+            clip_cand_id = stem[6:]
+        elif stem.startswith("thumbnail_"):
+            clip_cand_id = stem[10:]
+        cand_clip = db.get_clip_by_id(clip_cand_id)
+        if cand_clip and cand_clip.get("user_id") and cand_clip["user_id"] != caller_user_id:
+            raise HTTPException(status_code=403, detail="Forbidden: Access to another user's clip media is denied")
 
     # If an image thumbnail is requested, ensure freshness on disk against active video
     is_image = filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
@@ -713,9 +756,10 @@ def clip_render_is_stale(clip: Dict[str, Any]) -> bool:
 
 
 @app.get("/api/clips")
-async def list_clips():
+async def list_clips(request: Request):
     """List clips grouped by status with source media URLs and stale render flags."""
-    ready_clips = db.get_clips_for_review()
+    caller_user_id = resolve_caller_user_id(request)
+    ready_clips = db.get_clips_for_review(user_id=caller_user_id)
     for c in ready_clips:
         chunk = db.get_chunk_by_id(c.get("chunk_id")) if c.get("chunk_id") else None
         c["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
@@ -736,17 +780,30 @@ async def list_clips():
 
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT cl.*, 
-                   COALESCE(po.remote_url, CASE WHEN po.remote_id IS NOT NULL THEN 'https://youtu.be/' || po.remote_id END) as remote_url,
-                   po.remote_id
-            FROM clips cl 
-            LEFT JOIN publishing_outbox po ON po.clip_id = cl.id AND po.status = 'published'
-            WHERE cl.status IN ('approved', 'published') 
-            GROUP BY cl.id
-            ORDER BY COALESCE(cl.published_at, cl.approved_at, cl.created_at) DESC 
-            LIMIT 50
-        """)
+        if caller_user_id:
+            cursor.execute("""
+                SELECT cl.*, 
+                       COALESCE(po.remote_url, CASE WHEN po.remote_id IS NOT NULL THEN 'https://youtu.be/' || po.remote_id END) as remote_url,
+                       po.remote_id
+                FROM clips cl 
+                LEFT JOIN publishing_outbox po ON po.clip_id = cl.id AND po.status = 'published'
+                WHERE cl.status IN ('approved', 'published') AND cl.user_id = ?
+                GROUP BY cl.id
+                ORDER BY COALESCE(cl.published_at, cl.approved_at, cl.created_at) DESC 
+                LIMIT 50
+            """, (caller_user_id,))
+        else:
+            cursor.execute("""
+                SELECT cl.*, 
+                       COALESCE(po.remote_url, CASE WHEN po.remote_id IS NOT NULL THEN 'https://youtu.be/' || po.remote_id END) as remote_url,
+                       po.remote_id
+                FROM clips cl 
+                LEFT JOIN publishing_outbox po ON po.clip_id = cl.id AND po.status = 'published'
+                WHERE cl.status IN ('approved', 'published') 
+                GROUP BY cl.id
+                ORDER BY COALESCE(cl.published_at, cl.approved_at, cl.created_at) DESC 
+                LIMIT 50
+            """)
         published_clips = [dict(r) for r in cursor.fetchall()]
         for c in published_clips:
             populate_clip_media_urls(c)
@@ -759,7 +816,7 @@ async def list_clips():
             c["target_aspect"] = ctx["target_aspect"]
             c["is_render_stale"] = clip_render_is_stale(c)
 
-    queued_clips = db.get_queued_transcription_clips(limit=50)
+    queued_clips = db.get_queued_transcription_clips(limit=50, user_id=caller_user_id)
     queue_stats = db.get_transcription_queue_stats()
 
     return {
@@ -771,11 +828,14 @@ async def list_clips():
 
 
 @app.get("/api/clips/{clip_id}")
-async def get_clip_detail(clip_id: str):
+async def get_clip_detail(clip_id: str, request: Request):
     """Return single clip metadata with source URL and render status."""
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
     populate_clip_media_urls(clip)
     chunk = db.get_chunk_by_id(clip.get("chunk_id")) if clip.get("chunk_id") else None
     clip["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
@@ -795,7 +855,10 @@ async def get_clip_source_media(clip_id: str, request: Request):
     Supports HTTP Range requests (206 Partial Content) for smooth HTML5 video scrubbing
     and conditional RFC 9111 revalidation (ETag, 304 Not Modified).
     """
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
+    if clip and caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: Access to another user's source media is denied")
     source_path = None
     headers = {
         "Accept-Ranges": "bytes",
@@ -2352,15 +2415,41 @@ async def admin_list_users(request: Request):
     if not key:
         raise HTTPException(status_code=503, detail="Supabase not configured")
     import httpx
-    resp = httpx.get(f"{os.getenv('SUPABASE_URL', '')}/auth/v1/admin/users?per_page=100",
-                     headers={"apikey": key, "Authorization": f"Bearer {key}"}, timeout=15.0)
-    if resp.status_code != 200:
+    auth_resp = httpx.get(f"{os.getenv('SUPABASE_URL', '')}/auth/v1/admin/users?per_page=100",
+                          headers={"apikey": key, "Authorization": f"Bearer {key}"}, timeout=15.0)
+    if auth_resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Could not list users")
-    users = [{"id": u.get("id"), "email": u.get("email"),
-              "created_at": u.get("created_at"), "last_sign_in": u.get("last_sign_in_at"),
-              "banned": bool(u.get("banned_until"))}
-             for u in resp.json().get("users", [])]
-    return {"users": users}  # operational metadata only - no tokens or secrets
+    prof_resp = httpx.get(f"{os.getenv('SUPABASE_URL', '')}/rest/v1/profiles?select=user_id,storage_quota_bytes,queue_priority",
+                          headers={"apikey": key, "Authorization": f"Bearer {key}"}, timeout=15.0)
+    prof_map = {}
+    total_allocated = 0
+    if prof_resp.status_code == 200:
+        for p in prof_resp.json():
+            uid = p.get("user_id")
+            if uid:
+                prof_map[uid] = p
+                total_allocated += int(p.get("storage_quota_bytes") or 0)
+    pool_remaining = max(0, 10_000_000_000 - total_allocated)
+    pool_remaining_gb = round(pool_remaining / 1_000_000_000, 2)
+
+    users = []
+    for u in auth_resp.json().get("users", []):
+        uid = u.get("id")
+        p = prof_map.get(uid, {})
+        q_bytes = int(p.get("storage_quota_bytes") or 0)
+        q_gb = round(q_bytes / 1_000_000_000, 2)
+        prio = int(p.get("queue_priority") or 100)
+        users.append({
+            "id": uid,
+            "email": u.get("email"),
+            "created_at": u.get("created_at"),
+            "last_sign_in": u.get("last_sign_in_at"),
+            "banned": bool(u.get("banned_until")),
+            "quota_gb": q_gb,
+            "quota_bytes": q_bytes,
+            "queue_priority": prio,
+        })
+    return {"users": users, "pool_remaining_gb": pool_remaining_gb, "pool_total_gb": 10.0}
 
 
 @app.post("/api/admin/users/{user_id}/ban")

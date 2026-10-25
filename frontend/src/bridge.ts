@@ -510,5 +510,25 @@ export function getAuthHeaders(custom?: Record<string, string>): Record<string, 
   if (token && token.trim().length > 0) {
     headers['x-auth-token'] = token.trim();
   }
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key && ((key.startsWith('sb-') && key.endsWith('-auth-token')) || key === 'supabase.auth.token')) {
+          const raw = window.localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const accessToken = parsed.access_token || parsed?.currentSession?.access_token;
+            if (accessToken && typeof accessToken === 'string') {
+              headers['Authorization'] = `Bearer ${accessToken.trim()}`;
+              break;
+            }
+          }
+        }
+      }
+    } catch {
+      // LocalStorage access may be restricted in some sandboxes
+    }
+  }
   return headers;
 }

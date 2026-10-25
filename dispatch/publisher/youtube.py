@@ -7,6 +7,29 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger("dispatch.publisher.youtube")
 
 
+def build_youtube_service_from_credentials(credentials_data: Dict[str, Any]):
+    """Build a Google YouTube v3 Resource object from credentials_data dict."""
+    from googleapiclient.discovery import build
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+
+    ref_tok = credentials_data.get("refresh_token") or credentials_data.get("token")
+    acc_tok = credentials_data.get("access_token")
+    creds = Credentials(
+        token=acc_tok,
+        refresh_token=ref_tok,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+        client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+    )
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleAuthRequest())
+        except Exception as refresh_err:
+            logger.warning("Failed to refresh account-specific YouTube OAuth token: %s", refresh_err)
+    return build("youtube", "v3", credentials=creds)
+
+
 def upload_youtube_short(
     video_path: Path,
     title: str,

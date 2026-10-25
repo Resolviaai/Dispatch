@@ -248,7 +248,8 @@ class YouTubeInboxCatcher:
         url_or_id: str,
         dispatch_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        sequence_number: Optional[int] = None
+        sequence_number: Optional[int] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Pillar 1: Dedicated YouTube Ingestion & Media Validation.
 
@@ -302,7 +303,8 @@ class YouTubeInboxCatcher:
                 video_id=video_id,
                 dispatch_id=dispatch_id,
                 session_id=session_id,
-                sequence_number=sequence_number
+                sequence_number=sequence_number,
+                user_id=user_id
             )
         finally:
             with _INGEST_INFLIGHT_LOCK:
@@ -313,7 +315,8 @@ class YouTubeInboxCatcher:
         video_id: str,
         dispatch_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        sequence_number: Optional[int] = None
+        sequence_number: Optional[int] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Pillar 1 run body. Caller must hold the per-video in-flight slot from ingest_video()."""
         from dispatch.ingestion.validator import probe_video
@@ -350,7 +353,8 @@ class YouTubeInboxCatcher:
                 session_id=session_id,
                 sequence_number=sequence_number,
                 source_sha256=s_sha,
-                source_file_size=s_sz
+                source_file_size=s_sz,
+                user_id=user_id
             )
         except Exception as e:
             logger.warning("Could not fetch remote info for video %s (%s). Registering placeholder.", video_id, e)
@@ -359,7 +363,8 @@ class YouTubeInboxCatcher:
                 title=f"YouTube Video {video_id}",
                 dispatch_id=dispatch_id,
                 session_id=session_id,
-                sequence_number=sequence_number
+                sequence_number=sequence_number,
+                user_id=user_id
             )
 
         db.update_youtube_video(
@@ -369,7 +374,8 @@ class YouTubeInboxCatcher:
             session_id=session_id,
             sequence_number=sequence_number,
             source_sha256=s_sha,
-            source_file_size=s_sz
+            source_file_size=s_sz,
+            user_id=user_id
         )
 
         # 1.5 Authoritative YouTube Data API status check before download attempt

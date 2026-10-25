@@ -230,14 +230,41 @@ export default {
         return json(200, { is_admin: true, email: user.email }, adminOrigin);
       }
       if (url.pathname === "/admin/users" && request.method === "GET") {
-        const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?per_page=100`, { headers: S });
-        if (!res.ok) return json(502, { error: `list failed: ${res.status}` }, adminOrigin);
-        const data = await res.json() as { users?: Array<Record<string, unknown>> };
-        const users = (data.users ?? []).map(u => ({
-          id: u.id, email: u.email, created_at: u.created_at,
-          last_sign_in: u.last_sign_in_at, banned: !!u.banned_until,
-        }));
-        return json(200, { users }, adminOrigin); // operational metadata only, no tokens
+        const [authRes, profRes] = await Promise.all([
+          fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?per_page=100`, { headers: S }),
+          fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,storage_quota_bytes,queue_priority`, { headers: S })
+        ]);
+        if (!authRes.ok) return json(502, { error: `list failed: ${authRes.status}` }, adminOrigin);
+        const authData = await authRes.json() as { users?: Array<Record<string, unknown>> };
+        const profilesList = profRes.ok ? (await profRes.json() as Array<Record<string, unknown>>) : [];
+        const profileMap = new Map<string, Record<string, unknown>>();
+        let totalAllocatedBytes = 0;
+        for (const p of profilesList) {
+          const pUid = String(p.user_id || "");
+          profileMap.set(pUid, p);
+          totalAllocatedBytes += Number(p.storage_quota_bytes || 0);
+        }
+        const POOL_TOTAL_BYTES = 10_000_000_000;
+        const poolRemainingBytes = Math.max(0, POOL_TOTAL_BYTES - totalAllocatedBytes);
+        const poolRemainingGb = Math.round((poolRemainingBytes / 1_000_000_000) * 100) / 100;
+
+        const users = (authData.users ?? []).map(u => {
+          const prof = profileMap.get(String(u.id)) || {};
+          const qBytes = Number(prof.storage_quota_bytes || 0);
+          const qGb = Math.round((qBytes / 1_000_000_000) * 100) / 100;
+          const prio = Number(prof.queue_priority || 100);
+          return {
+            id: u.id,
+            email: u.email,
+            created_at: u.created_at,
+            last_sign_in: u.last_sign_in_at,
+            banned: !!u.banned_until,
+            quota_gb: qGb,
+            quota_bytes: qBytes,
+            queue_priority: prio,
+          };
+        });
+        return json(200, { users, pool_remaining_gb: poolRemainingGb, pool_total_gb: 10 }, adminOrigin); // operational metadata only, no tokens
       }
       const userAction = url.pathname.match(/^\/admin\/users\/([0-9a-fA-F-]{36})\/(ban|unban|quota|priority)$/);
       if (userAction && request.method === "POST") {
@@ -514,7 +541,7 @@ export default {
       } catch { /* channel fetch optional */ }
 
       // Store in connected_accounts
-      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -528,6 +555,11 @@ export default {
           p_metadata: { channel_id: channelId, channel_title: channelTitle },
         }),
       });
+
+      if (!storeRes.ok) {
+        return new Response("<html><body style='font-family:sans-serif;background:#161616;color:#F5F5F5;text-align:center;padding-top:20vh'><h2>Connection failed</h2><p>Failed to save connected account token. Please try again.</p></body></html>",
+          { status: 502, headers: { "content-type": "text/html" } });
+      }
 
       // Backward compatibility with legacy single-row youtube_connections
       await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_refresh_token`, {

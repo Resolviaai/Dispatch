@@ -98,10 +98,23 @@ def is_ambiguous_network_error(exc: Exception) -> bool:
 
 def reconcile_youtube_job(job: Dict[str, Any]) -> Dict[str, Any]:
     """Query YouTube Data API search for dispatch_idempotency_key to determine if video was uploaded."""
-    from dispatch.youtube_inbox.oauth import get_youtube_service
-    service = get_youtube_service()
+    service = None
+    account_id = job.get("account_id")
+    user_id = job.get("user_id")
+    if account_id:
+        try:
+            from dispatch.youtube_connections import get_account_credentials
+            creds = get_account_credentials(account_id, user_id=user_id)
+            if creds:
+                from dispatch.publisher.youtube import build_youtube_service_from_credentials
+                service = build_youtube_service_from_credentials(creds)
+        except Exception as e:
+            logger.debug("Credentials lookup for reconcile job %s: %s", account_id, e)
+    if not service and not user_id:
+        from dispatch.youtube_inbox.oauth import get_youtube_service
+        service = get_youtube_service()
     if not service:
-        return {"reconciled": False, "reason": "YouTube service unavailable"}
+        return {"reconciled": False, "reason": "YouTube service unavailable or unconfigured credentials"}
 
     idempotency_key = job.get("idempotency_key") or f"idem_{job['clip_id']}_{job['platform']}"
     marker = f"dispatch_idempotency_key:{idempotency_key}"
@@ -158,28 +171,52 @@ def _process_outbox_queue_internal() -> int:
             processing_jobs = [dict(r) for r in cursor.fetchall()]
         for pjob in processing_jobs:
             if pjob.get("platform") in ("youtube", "youtube_shorts") and pjob.get("remote_id"):
-                from dispatch.youtube_inbox.oauth import get_youtube_service
-                svc = get_youtube_service()
+                svc = None
+                p_creds = {}
+                account_id = pjob.get("account_id")
+                user_id = pjob.get("user_id")
+                if account_id:
+                    try:
+                        from dispatch.youtube_connections import get_account_credentials
+                        p_creds = get_account_credentials(account_id, user_id=user_id)
+                    except Exception as ce:
+                        logger.debug("Account credentials lookup for processing job %s: %s", account_id, ce)
+                if p_creds:
+                    from dispatch.publisher.youtube import build_youtube_service_from_credentials
+                    svc = build_youtube_service_from_credentials(p_creds)
+                elif not user_id:
+                    from dispatch.youtube_inbox.oauth import get_youtube_service
+                    svc = get_youtube_service()
+
                 if svc:
-                    s_resp = svc.videos().list(part="status", id=pjob["remote_id"]).execute()
-                    items = s_resp.get("items", [])
-                    if items:
-                        st = items[0].get("status", {}).get("uploadStatus")
-                        if st == "processed":
-                            with db.get_db_connection() as conn:
-                                conn.execute("""
-                                    UPDATE publishing_outbox 
-                                    SET status = 'published', updated_at = CURRENT_TIMESTAMP, published_at = CURRENT_TIMESTAMP
-                                    WHERE id = ?
-                                """, (pjob["id"],))
-                            check_and_finalize_clip(pjob["clip_id"], Path(pjob.get("video_path") or f"storage/clips/{pjob['clip_id']}.mp4"))
-                        elif st in ("failed", "rejected"):
-                            with db.get_db_connection() as conn:
-                                conn.execute("""
-                                    UPDATE publishing_outbox 
-                                    SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP
-                                    WHERE id = ?
-                                """, (f"YouTube processing {st}: {items[0].get('status', {}).get('rejectionReason', 'unknown')}", pjob["id"]))
+                    try:
+                        s_resp = svc.videos().list(part="status", id=pjob["remote_id"]).execute()
+                        items = s_resp.get("items", [])
+                        if items:
+                            st = items[0].get("status", {}).get("uploadStatus")
+                            if st == "processed":
+                                with db.get_db_connection() as conn:
+                                    conn.execute("""
+                                        UPDATE publishing_outbox 
+                                        SET status = 'published', updated_at = CURRENT_TIMESTAMP, published_at = CURRENT_TIMESTAMP
+                                        WHERE id = ?
+                                    """, (pjob["id"],))
+                                check_and_finalize_clip(pjob["clip_id"], Path(pjob.get("video_path") or f"storage/clips/{pjob['clip_id']}.mp4"))
+                            elif st in ("failed", "rejected"):
+                                with db.get_db_connection() as conn:
+                                    conn.execute("""
+                                        UPDATE publishing_outbox 
+                                        SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                                        WHERE id = ?
+                                    """, (f"YouTube processing {st}: {items[0].get('status', {}).get('rejectionReason', 'unknown')}", pjob["id"]))
+                    except Exception as q_err:
+                        logger.warning("Failed checking processing status for job %s: %s", pjob["id"], q_err)
+                        with db.get_db_connection() as conn:
+                            conn.execute("""
+                                UPDATE publishing_outbox SET last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                            """, (f"Status query error: {q_err}", pjob["id"]))
+                else:
+                    logger.warning("No credentials available to check status of processing job %s", pjob["id"])
     except Exception as e:
         logger.debug("Processing status check note: %s", e)
 
@@ -266,13 +303,27 @@ def _process_outbox_queue_internal() -> int:
 
             # Retrieve bound account credentials if account_id is present
             account_id = job.get("account_id")
+            user_id = job.get("user_id")
             account_creds = {}
             if account_id:
                 try:
                     from dispatch.youtube_connections import get_account_credentials
-                    account_creds = get_account_credentials(account_id)
+                    account_creds = get_account_credentials(account_id, user_id=user_id)
                 except Exception as ce:
                     logger.debug("Account credentials lookup note for %s: %s", account_id, ce)
+
+            if user_id and (not account_id or not account_creds):
+                err_msg = f"User-owned job {job_id} requires a connected and verified {platform} account. No valid credentials found."
+                logger.warning("%s (status -> blocked_needs_auth)", err_msg)
+                with db.get_db_connection() as conn:
+                    conn.execute("""
+                        UPDATE publishing_outbox 
+                        SET status = 'blocked_needs_auth',
+                            updated_at = CURRENT_TIMESTAMP,
+                            last_error = ?
+                        WHERE id = ?
+                    """, (err_msg, job_id))
+                continue
 
             if platform in ("youtube", "youtube_shorts"):
                 privacy = "public" if publish_mode == "public" else ("unlisted" if publish_mode == "unlisted" else "private")
