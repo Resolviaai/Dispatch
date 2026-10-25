@@ -136,12 +136,36 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
   };
 
+  const triggerOAuthPolling = () => {
+    [2000, 4000, 7000, 11000, 16000, 22000, 30000].forEach(delay => {
+      setTimeout(refreshAccounts, delay);
+    });
+  };
+
   useEffect(() => {
     if (jwtToken) {
       refreshAccounts();
     }
     setWifiOnly(Bridge.getWifiOnly());
     setStorageInfo(Bridge.getStorageInfo());
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && jwtToken) {
+        refreshAccounts();
+      }
+    };
+    const handleFocus = () => {
+      if (jwtToken) {
+        refreshAccounts();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [jwtToken, pcHost]);
 
   const handleConnectYouTube = async () => {
@@ -158,7 +182,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           ? 'Google sign-in opened. Select your account and approve access, then return here.'
           : 'Could not open browser. Check that Chrome is installed and retry.'
       );
-      setTimeout(refreshAccounts, 8000);
+      triggerOAuthPolling();
     } catch (e: any) {
       setFeedback(e.message || 'Failed to start Google sign-in.');
     }
@@ -191,7 +215,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             ? `${label} sign-in opened. Approve access, then return here.`
             : 'Could not open browser. Please check that Chrome is installed and retry.'
         );
-        setTimeout(refreshAccounts, 8000);
+        triggerOAuthPolling();
       } else {
         setFeedback(res.error || `${label} connection could not be initiated.`);
       }

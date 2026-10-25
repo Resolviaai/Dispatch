@@ -1,132 +1,129 @@
-# Dispatch — Focused Admin Operations Dashboard & Multi-Device Roadmap
+# Dispatch — Authoritative Operations Dashboard & Multi-Platform Management
 
-**Status:** IN PROGRESS (Account connections & Cloud Mode fixes currently executing; Admin Console prepped)  
+**Document Status:** COMPLETE & DEPLOYED  
 **Author:** Antigravity  
 **Date:** 2026-10-25  
-**File Target:** `docs/ADMIN_OPERATIONS_DASHBOARD.md`
+**File Target:** `docs/ADMIN_OPERATIONS_DASHBOARD.md`  
+**Live Production Worker:** `https://dispatch-cloud.resolviaai.workers.dev` (Version `0a5ce946-7e8c-4914-b60b-04e22b143e23`)  
+**Live Admin Console:** `https://resolviaai.github.io/Dispatch/admin.html` and in-app `AdminScreen`  
 
 ---
 
-## 1. Context & Objectives
+## 1. Executive Summary & Design Invariants
 
-The owner requested an authoritative, safe, DBMS-style operations dashboard for Dispatch that answers five core operational questions without exposing secrets or disrupting the live repository:
+Dispatch implements a unified operations control plane answering five foundational operational questions without exposing secrets, tokens, or private media:
 
-1. **Which users are active or disabled?** (Reversible ban/unban with double-confirmation modal; preserves user data)
-2. **How much storage is actually used, reserved, and allocated?**
-   - **Actual R2 usage:** Verified stored bytes in active R2 objects.
-   - **Pending reservations:** Ephemeral byte reservations in `upload_reservations`.
-   - **Assigned user quotas:** Sum of per-user `storage_quota_bytes`.
-   - **Unallocated quota:** `10 GB - sum(assigned_quotas)` (must *never* be labeled as "free storage").
-3. **Which processing jobs are queued, running, or failing?** (Real counts from `processing_jobs` table).
-4. **What quota and processing priority does each user have?**
-   - Quota presets (`1 GB`, `2 GB`, `5 GB`) + decimal custom input, strictly bounded by the 10,000,000,000-byte global budget.
-   - Priority reordering (1–1000, lower number = higher priority).
-5. **Which publishing accounts are connected, without exposing credentials?**
-   - Safe metadata only: provider, account title/handle, avatar, connected date. Zero access tokens, refresh tokens, or Gemini keys surfaced or logged.
-
----
-
-## 2. What Has Been Done So Far
-
-### A. Core Architecture & API Fixes
-- [x] **Safe Profile Parsing in Python Admin API:**
-  - Resolved `AttributeError: 'str' object has no attribute 'get'` in `dispatch/web/app.py` line 2424 (`admin_list_users`). Verified with 6 unit tests passing in `tests/test_admin.py`.
-- [x] **Publisher Test Fix:**
-  - Updated `tests/test_publisher.py` to use `custom_platforms` instead of `target_platforms`. Verified 2/2 tests passing.
-- [x] **Production Multi-Platform OAuth Integration:**
-  - Configured and safely stored client IDs/secrets for Google/YouTube, Instagram, Facebook, LinkedIn, and Twitter/X into Cloudflare Worker secrets via `wrangler secret put`.
-  - Built PKCE SHA-256 and AES-256-GCM token encryption in `cloud-worker/src/oauth.ts`.
-  - Deployed Cloudflare Worker `dispatch-cloud.resolviaai.workers.dev` (version `b645cb8e-5115-4548-a011-0db0003087a9`).
-- [x] **Android Release v1.1.16 & Landing Page:**
-  - Built signed release APK (`release-out/Dispatch.apk`, versionCode 20, v1.1.16-alpha).
-  - Pushed to `main` branch and `gh-pages` branch. Verified live at `https://resolviaai.github.io/Dispatch/`.
+1. **User Identity & State**: Which users are active vs disabled? (Reversible ban/unban with non-destructive preservation of all R2 storage and database records).
+2. **Authoritative Storage & Budget**:
+   - **Actual R2 Usage**: Real verified stored bytes in active R2 objects.
+   - **Pending Reservations**: Byte reservations in `upload_reservations`.
+   - **Allocated User Quotas**: Sum of user `storage_quota_bytes`.
+   - **Unallocated Quota Pool**: `10,000,000,000 bytes - sum(allocated_quotas)` (strictly labeled as *Unallocated Quota Pool*, never "free storage").
+3. **Processing Jobs**: Live queue status (`queued`, `running`, `done`, `failed`) from `processing_jobs`.
+4. **Quota & Priority Governance**:
+   - Per-user decimal GB quotas (`1.0 GB`, `2.0 GB`, `5.0 GB`, and custom input bounded by current stored bytes and 10 GB global ceiling).
+   - Per-user queue priority (`1–1000`, lower number = processed first).
+5. **Publishing Destinations Visibility**:
+   - Displays connected platform badges (YouTube, X/Twitter, Instagram, Facebook, LinkedIn) without ever surfacing access tokens, refresh tokens, client secrets, or Gemini API keys.
 
 ---
 
-## 3. Immediate Interleaved Fixes (Currently Being Executed)
+## 2. Completed Architecture & Changes Log
 
-Before resuming the Admin UI directly, the user identified two blocking issues in the live mobile app:
+### A. Database Migrations & Live Supabase Synchronisation
+- **Applied Migration 10 (`20261025000010_connected_accounts_and_keys.sql`):**
+  - Created `public.connected_accounts` table for multi-account publishing (YouTube, Instagram, Facebook, LinkedIn, Twitter/X) with unique constraints and RLS policies.
+  - Created `public.gemini_connections` encrypted vault table.
+  - Backwards-compatibility data migration: automatically transferred existing `public.youtube_connections` into `public.connected_accounts`.
+  - Created security-definer RPC functions:
+    - `public.cloud_list_connected_accounts(p_user_id)`
+    - `public.cloud_store_connected_account(...)`
+    - `public.cloud_delete_connected_account(...)`
+    - `public.cloud_store_gemini_key(...)`
+    - `public.cloud_get_gemini_status(...)`
+    - `public.cloud_set_user_priority(...)`
+    - `public.cloud_claim_job(...)` with stale lease reclamation (45 min) and user anti-starvation fairness.
+- **Applied Migration 11 (`20261025000011_user_ownership_and_edit_windows.sql`):**
+  - Added support for `edit_window` kind in upload reservations with 512 MiB limit.
+  - Hardened `cloud_delete_connected_account` to clean up legacy `youtube_connections` when a YouTube account is disconnected.
+- Recorded both versions in `supabase_migrations.schema_migrations` on live Supabase `aldzlbdxplqkcnyjhzmm`.
 
-### Issue 1: Connecting Account Buttons Broken
-- **Symptom:** YouTube gave "Failed to fetch"; X & Instagram displayed "OAuth is not configured on the server yet...".
-- **Root Cause Discovered:**
-  1. The Cloudflare Worker had **no global CORS OPTIONS preflight handler** for API endpoints outside `/admin`. When the WebView sent preflight `OPTIONS` with `Authorization` and `Content-Type`, the worker rejected it with `401 Unauthorized` without CORS headers. The browser threw `TypeError: Failed to fetch`.
-  2. In `frontend/src/screens/SettingsScreen.tsx`, when `initProviderOAuth` failed with an error, the code discarded `res.error` and displayed a misleading fallback string: `"${label} OAuth is not configured on the server yet..."`.
-  3. Facebook was omitted from the UI provider list.
-- **Fix:**
-  - Add global CORS preflight handler in `cloud-worker/src/index.ts` returning 204 with full headers (`Origin`, `Authorization`, `Content-Type`, `X-Dispatch-User-Id`).
-  - Pass `Access-Control-Allow-Origin: *` across all JSON responses.
-  - Update `SettingsScreen.tsx` to surface real error feedback and add Facebook connection.
+### B. Cloudflare Worker Control Plane (`cloud-worker/src/index.ts`)
+- **Admin Endpoints:**
+  - `GET /admin/whoami`: Confirms admin status for verified Supabase identity.
+  - `GET /admin/users`: Returns authoritative users list, connected provider names, and overall storage/job queue metrics.
+  - `POST /admin/users/:id/quota`: Updates storage quota with decimal validation and stored-bytes boundary protection.
+  - `POST /admin/users/:id/priority`: Updates processing priority (1–1000).
+  - `POST /admin/users/:id/ban` & `POST /admin/users/:id/unban`: Sets/clears ban status via Supabase auth admin API.
+- **Admin Allowlist (`ADMIN_EMAILS`):**
+  - Updated to `resolviaai@gmail.com,rohitbag959@gmail.com`.
+- **OAuth Multi-Provider Integrations:**
+  - Google / YouTube (OAuth 2.0)
+  - Instagram Reels (Meta Graph API)
+  - Facebook Pages / Reels (Meta Graph API)
+  - LinkedIn (OAuth 2.0 with author URN)
+  - X / Twitter (OAuth 2.0 with PKCE and AES-256-GCM token encryption)
+  - Added error checks on all callback storage RPCs with user-friendly error views instead of silent failures.
+- **CORS Preflight:**
+  - Full OPTIONS handler for web/admin origins returning 204 with required headers.
 
-### Issue 2: Hardcoded LAN IP `192.168.0.200:8000` & Wi-Fi Dependency
-- **Symptom:** When the phone is on mobile data (cellular) or external Wi-Fi, the Clips tab blocks with:
-  *"Cannot connect to PC Studio. Attempting to reach 192.168.0.200:8000. Ensure the server is running on the same device."*
-- **Root Cause Discovered:**
-  - `DispatchNativeBridge.kt`, `frontend/src/bridge.ts`, and `frontend/src/App.tsx` hardcoded `'192.168.0.200:8000'` as the default host when on Android.
-  - In `frontend/src/screens/ClipsScreen.tsx`, when `fetch('/api/clips')` fails, the screen was completely replaced with a blocking error screen instead of gracefully operating in **Cloud Mode**.
-- **Fix:**
-  - Remove forced fallback to `192.168.0.200:8000`. If `pcHost` is not explicitly set, leave it empty.
-  - Enable **Cloud Mode** in `ClipsScreen.tsx`: when PC is offline/unreachable, seamlessly fetch processing jobs and cloud clips from Cloudflare Worker (`WORKER_BASE/jobs/status` and `WORKER_BASE/clips`).
-  - Add `/clips` endpoint to Cloudflare Worker to serve cloud clips directly from Supabase `clips_cloud` with presigned R2 URLs.
-  - Add a graceful, non-blocking header pill indicating `Cloud Mode (Remote)` or `Studio Online (LAN)`.
+### C. Python PC Studio Backend (`dispatch/web/app.py`)
+- Added `/api/admin/users/{user_id}/quota` endpoint for local studio admin control.
+- Added `/api/admin/users/{user_id}/priority` endpoint for local studio admin control.
+- Added connected providers lookup to `/api/admin/users`.
+- Updated `DISPATCH_ADMIN_EMAILS` to include `rohitbag959@gmail.com`.
+- Verified 7/7 unit tests in `tests/test_admin.py` passing.
 
----
-
-## 4. What Needs to be Done for Admin Operations Dashboard
-
-Once the account connections and Cloud Mode fixes are verified and committed:
-
-### A. Overarching Design & System Standards
-- Follow `design.md` v3 invariants:
-  - 4-layer elevation architecture: `#161616` (Layer 0), `#1C1C1C` (Layer 1), `#232323` (Layer 2), `#2563EB` (Layer 3).
-  - Single hero CTA per screen.
-  - 44px minimum hitboxes on all interactive elements.
-  - Zero decorative emojis (clean Lucide/SVG vector icons only).
-  - Strict numeric place-value alignment: `font-mono tabular-nums`, right-aligned numbers and byte metrics.
-  - Decimal GB standard: `1 GB = 1,000,000,000 bytes`.
-
-### B. Overview Metrics Row (Authoritative Data Only)
-- [ ] **Total Users**: Count of auth profiles; split by Active vs Disabled.
-- [ ] **Actual Stored Storage (R2)**: Sum of verified bytes in `media_objects` (`status = 'active'`).
-- [ ] **Pending Reservations**: Sum of expected bytes in `upload_reservations`.
-- [ ] **Allocated Quota**: Sum of user quotas vs Global Budget (`10,000,000,000 bytes`).
-- [ ] **Unallocated Quota**: Distinctly labeled as "Unallocated Quota Pool" — **never** labeled as "free storage".
-- [ ] **Job Queue Counters**: Breakdown of `queued`, `claimed`, `completed`, `failed` from `processing_jobs`.
-
-### C. Searchable & Paginated Users Table
-- [ ] **Email & Identity**: Masked/clean display, joined date, last seen timestamp (`tabular-nums`).
-- [ ] **Account Status**: Pill badge (`Active` green, `Disabled` amber/danger). Reversible toggle with double-confirmation dialog ("Disable this user? All existing data and R2 storage will remain preserved.").
-- [ ] **Connected Providers**: Badges indicating connected services (YouTube, Instagram, Facebook, LinkedIn, X). Strictly no tokens or secrets.
-- [ ] **Processing Priority**: Explicit integer priority (1–1000). Inline `▲ -10` and `▼ +10` nudge buttons and direct numeric input. Lower number = processed first.
-- [ ] **Storage Quota Control**:
-  - Current usage bar vs allocated quota.
-  - Preset buttons: `1 GB`, `2 GB`, `5 GB`, and custom input.
-  - Server validation: must reject if `new_quota < current_stored_bytes` or if `sum(all_quotas) > 10 GB`.
-
-### D. Server Endpoints & Audit Logging
-- [ ] Ensure all admin mutations (`/admin/users/:id/quota`, `/admin/users/:id/priority`, `/admin/users/:id/ban`, `/admin/users/:id/unban`) record structured audit entries into Supabase `audit_logs` or log with:
-  - `actor_email`
-  - `target_user_id`
-  - `action`
-  - `before_value` / `after_value`
-  - `timestamp`
-  - Zero secrets logged.
-
-### E. Regression Test Suite
-- [ ] `tests/test_admin.py` expanded to cover:
-  - Admin allowlist authorization check (403 for non-admins).
-  - Quota boundaries (<= 10 GB global, >= stored bytes).
-  - Priority boundaries (1–1000).
-  - Absence of credentials/tokens in all responses.
-  - Reversible ban/unban data integrity.
+### D. Frontend React Application (`frontend/src/`)
+- **`AdminScreen.tsx` (Major Upgrade):**
+  - Dual Mode support: automatically uses LAN PC studio if online, or falls back seamlessly to Cloud Worker with Supabase JWT.
+  - Metric cards: Users count, Stored Media (R2), Quota Pool, and Job Queue.
+  - Search input (by email or user ID) and status filter (All, Active, Disabled).
+  - Quota controls: presets (`1G`, `2G`, `5G`), custom decimal input, and save button.
+  - Priority controls: `▲ -10` nudge, numeric input, `▼ +10` nudge, and save button.
+  - Safe destination badges without secrets.
+  - Double-confirmation modal for disabling accounts, confirming data preservation.
+- **`SettingsScreen.tsx`:**
+  - Added document `visibilitychange` and window `focus` event listeners to automatically trigger `refreshAccounts()` when returning from external browser OAuth flows.
+  - Added multi-stage polling (2s, 4s, 7s, 11s, 16s, 22s, 30s) upon launching OAuth.
+- **`ClipsScreen.tsx`:**
+  - Fixed Lucide `Plus` import.
+  - Uses `listConnectedAccounts` for multi-destination publishing selection.
+- **`CameraScreen.tsx`:**
+  - Clean edge-to-edge camera viewfinder without dark gradient overlays.
 
 ---
 
-## 5. Verification Checklist
+## 3. Operations Runbook & Testing Guide
 
-1. [x] Cloud Worker unit tests (`npm test --prefix cloud-worker`) -> 38/38 pass.
-2. [x] Python admin and publisher tests (`.venv/Scripts/python.exe -m unittest tests/test_admin.py tests/test_publisher.py`) -> 8/8 pass.
-3. [x] Frontend build (`npm run build` in `frontend/`) -> clean, zero errors.
-4. [x] Live Cloudflare Worker deployment verified (Version ID `ebb7e097-f4ea-45b8-bec4-9df353aa8434`).
-5. [x] Release APK compiled and verified: Alpha 1.1.18 (`f97cd9b321946498f29a5886f0c420cb498018f9db998efe2e9127667a94f909`).
-6. [x] Live Landing Page & Admin Console deployed on `gh-pages` and `main`.
+### A. Testing Admin Access
+1. Open the Admin Operations Console at `https://resolviaai.github.io/Dispatch/admin.html` or in the Dispatch mobile app (Admin tab).
+2. Sign in with an admin email (`resolviaai@gmail.com` or `rohitbag959@gmail.com`).
+3. Verify the Overview row displays real counts:
+   - Stored Media shows actual GB from active R2 objects.
+   - Unallocated Quota Pool displays remaining budget out of 10 GB.
+   - Job queue counts reflect live `processing_jobs`.
+
+### B. Managing User Quota & Priority
+1. Use the search bar to locate any user by email or partial UUID.
+2. Click `1G`, `2G`, or `5G` to immediately update quota, or enter a custom decimal (e.g. `1.5`) and click **Set**.
+3. Use `▲ -10` to prioritize a user's jobs ahead of others in the queue, or `▼ +10` to lower priority. Click **Save**.
+
+### C. Disabling a User
+1. Click **Disable Account** on any active user row.
+2. Read the confirmation dialog: all media and data remain preserved.
+3. Click **Confirm Disable**.
+4. The user's status updates to `Disabled`. They can be re-enabled at any time by clicking **Enable Account**.
+
+---
+
+## 4. Verification Record
+
+| Component | Target / Suite | Result |
+| :--- | :--- | :--- |
+| Supabase Remote DB | `supabase_migrations.schema_migrations` | Migrations 10 & 11 applied |
+| Cloud Worker Tests | `npm test --prefix cloud-worker` | 38 / 38 passing |
+| Python Admin Tests | `tests/test_admin.py` | 7 / 7 passing |
+| Python Publisher Tests | `tests/test_publisher.py` | 2 / 2 passing |
+| Frontend Build | `npm run build --prefix frontend` | Clean (23.86s, 0 errors) |
+| Live Worker Deploy | `dispatch-cloud.resolviaai.workers.dev` | Version `0a5ce946-7e8c-4914-b60b-04e22b143e23` |

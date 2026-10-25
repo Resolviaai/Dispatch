@@ -729,7 +729,7 @@ export default {
         }
       } catch { /* channel fetch optional */ }
 
-      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -738,6 +738,11 @@ export default {
           p_metadata: { channel_id: channelId, channel_title: channelTitle },
         }),
       });
+      if (!storeRes.ok) {
+        const errText = await storeRes.text().catch(() => "");
+        console.error("Failed to store YouTube account:", storeRes.status, errText);
+        return renderOAuthResultHtml("Database Error", `Failed to save YouTube account: ${errText.slice(0, 150)}`, true);
+      }
 
       await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_refresh_token`, {
         method: "POST",
@@ -831,7 +836,7 @@ export default {
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
-      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -840,6 +845,11 @@ export default {
           p_metadata: { ig_user_id: igUserId, page_id: pageId, username: igUsername },
         }),
       });
+      if (!storeRes.ok) {
+        const errText = await storeRes.text().catch(() => "");
+        console.error("Failed to store Instagram account:", storeRes.status, errText);
+        return renderOAuthResultHtml("Database Error", `Failed to save Instagram account: ${errText.slice(0, 150)}`, true);
+      }
 
       return renderOAuthResultHtml("Instagram Connected", `Account "${igUsername}" connected successfully! You can return to Dispatch.`);
     }
@@ -912,7 +922,7 @@ export default {
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
-      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -921,6 +931,11 @@ export default {
           p_metadata: { page_id: pageId, title: pageTitle },
         }),
       });
+      if (!storeRes.ok) {
+        const errText = await storeRes.text().catch(() => "");
+        console.error("Failed to store Facebook account:", storeRes.status, errText);
+        return renderOAuthResultHtml("Database Error", `Failed to save Facebook account: ${errText.slice(0, 150)}`, true);
+      }
 
       return renderOAuthResultHtml("Facebook Connected", `Page "${pageTitle}" connected successfully! You can return to Dispatch.`);
     }
@@ -989,7 +1004,7 @@ export default {
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
-      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -998,6 +1013,11 @@ export default {
           p_metadata: { author_urn: authorUrn, name: profileName },
         }),
       });
+      if (!storeRes.ok) {
+        const errText = await storeRes.text().catch(() => "");
+        console.error("Failed to store LinkedIn account:", storeRes.status, errText);
+        return renderOAuthResultHtml("Database Error", `Failed to save LinkedIn account: ${errText.slice(0, 150)}`, true);
+      }
 
       return renderOAuthResultHtml("LinkedIn Connected", `Profile "${profileName}" connected successfully! You can return to Dispatch.`);
     }
@@ -1088,7 +1108,7 @@ export default {
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
-      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -1097,6 +1117,11 @@ export default {
           p_metadata: { twitter_id: twitterId, handle: twitterHandle },
         }),
       });
+      if (!storeRes.ok) {
+        const errText = await storeRes.text().catch(() => "");
+        console.error("Failed to store Twitter/X account:", storeRes.status, errText);
+        return renderOAuthResultHtml("Database Error", `Failed to save X account: ${errText.slice(0, 150)}`, true);
+      }
 
       return renderOAuthResultHtml("X (Twitter) Connected", `Account "${twitterHandle}" connected successfully! You can return to Dispatch.`);
     }

@@ -46,6 +46,28 @@ class TestAdminAuthorization(unittest.TestCase):
             self.assertEqual(client.post("/api/admin/users/u1/ban").status_code, 200)
             self.assertEqual(client.post("/api/admin/users/u1/unban").status_code, 200)
 
+    def test_admin_quota_and_priority_control(self):
+        with auth_as("resolviaai@gmail.com"), \
+             patch("httpx.post", return_value=MagicMock(status_code=200, json=lambda: {})):
+            # Valid quota
+            res = client.post("/api/admin/users/u1/quota", json={"quota_gb": 2.5})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["quota_gb"], 2.5)
+            self.assertEqual(res.json()["quota_bytes"], 2_500_000_000)
+
+            # Invalid quota (out of bounds)
+            self.assertEqual(client.post("/api/admin/users/u1/quota", json={"quota_gb": 15}).status_code, 400)
+            self.assertEqual(client.post("/api/admin/users/u1/quota", json={"quota_gb": -1}).status_code, 400)
+
+            # Valid priority
+            p_res = client.post("/api/admin/users/u1/priority", json={"priority": 50})
+            self.assertEqual(p_res.status_code, 200)
+            self.assertEqual(p_res.json()["priority"], 50)
+
+            # Invalid priority (out of bounds)
+            self.assertEqual(client.post("/api/admin/users/u1/priority", json={"priority": 0}).status_code, 400)
+            self.assertEqual(client.post("/api/admin/users/u1/priority", json={"priority": 1001}).status_code, 400)
+
     def test_whoami_reports_admin_status(self):
         with auth_as("resolviaai@gmail.com"):
             self.assertTrue(client.get("/api/admin/whoami").json()["is_admin"])

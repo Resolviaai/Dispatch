@@ -2485,6 +2485,65 @@ async def admin_unban_user(user_id: str, request: Request):
     return {"status": "active"}
 
 
+@app.post("/api/admin/users/{user_id}/quota")
+async def admin_set_user_quota(user_id: str, request: Request):
+    require_admin(request)
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not key:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    body = await request.json()
+    try:
+        gb = float(body.get("quota_gb", 0))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="quota_gb must be a number between 0.1 and 10")
+    if gb <= 0 or gb > 10.0:
+        raise HTTPException(status_code=400, detail="quota_gb must be between 0.1 and 10 (decimal GB)")
+    quota_bytes = round(gb * 1_000_000_000)
+    import httpx
+    resp = httpx.post(f"{os.getenv('SUPABASE_URL', '')}/rest/v1/rpc/cloud_set_user_quota",
+                      headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                      json={"p_user_id": user_id, "p_quota_bytes": quota_bytes},
+                      timeout=15.0)
+    if resp.status_code not in (200, 204):
+        err = ""
+        try:
+            err = resp.json().get("message")
+        except Exception:
+            err = resp.text
+        raise HTTPException(status_code=400, detail=err or "Quota update failed")
+    logger.info("Admin set quota for user %s to %s GB", user_id, gb)
+    return {"quota_gb": gb, "quota_bytes": quota_bytes}
+
+
+@app.post("/api/admin/users/{user_id}/priority")
+async def admin_set_user_priority(user_id: str, request: Request):
+    require_admin(request)
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not key:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    body = await request.json()
+    try:
+        prio = int(body.get("priority", 100))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="priority must be an integer between 1 and 1000")
+    if prio < 1 or prio > 1000:
+        raise HTTPException(status_code=400, detail="priority must be an integer between 1 and 1000")
+    import httpx
+    resp = httpx.post(f"{os.getenv('SUPABASE_URL', '')}/rest/v1/rpc/cloud_set_user_priority",
+                      headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                      json={"p_user_id": user_id, "p_priority": prio},
+                      timeout=15.0)
+    if resp.status_code not in (200, 204):
+        err = ""
+        try:
+            err = resp.json().get("message")
+        except Exception:
+            err = resp.text
+        raise HTTPException(status_code=502, detail=err or "Priority update failed")
+    logger.info("Admin set priority for user %s to %s", user_id, prio)
+    return {"priority": prio}
+
+
 @app.get("/api/admin/stats")
 async def admin_stats(request: Request):
     """High-level processing counters from the local store (no user content)."""
