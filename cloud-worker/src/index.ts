@@ -268,13 +268,22 @@ export default {
         return json(200, { is_admin: true, email: user.email }, adminOrigin);
       }
       if (url.pathname === "/admin/users" && request.method === "GET") {
-        const [authRes, profRes] = await Promise.all([
+        const [authRes, profRes, mediaRes, resvRes, jobsRes, accsRes] = await Promise.all([
           fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?per_page=100`, { headers: S }),
-          fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,storage_quota_bytes,queue_priority`, { headers: S })
+          fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=user_id,storage_quota_bytes,queue_priority`, { headers: S }),
+          fetch(`${env.SUPABASE_URL}/rest/v1/media_objects?status=eq.active&select=user_id,byte_count`, { headers: S }),
+          fetch(`${env.SUPABASE_URL}/rest/v1/upload_reservations?select=expected_bytes`, { headers: S }),
+          fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?select=id,status,youtube_url,created_at&order=created_at.desc&limit=50`, { headers: S }),
+          fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?select=user_id,provider,account_name`, { headers: S }),
         ]);
         if (!authRes.ok) return json(502, { error: `list failed: ${authRes.status}` }, adminOrigin);
         const authData = await authRes.json() as { users?: Array<Record<string, unknown>> };
         const profilesList = profRes.ok ? (await profRes.json() as Array<Record<string, unknown>>) : [];
+        const mediaList = mediaRes.ok ? (await mediaRes.json() as Array<{ user_id: string; byte_count: number }>) : [];
+        const reservationsList = resvRes.ok ? (await resvRes.json() as Array<{ expected_bytes: number }>) : [];
+        const jobsList = jobsRes.ok ? (await jobsRes.json() as Array<{ id: string; status: string; youtube_url?: string; created_at?: string }>) : [];
+        const accountsList = accsRes.ok ? (await accsRes.json() as Array<{ user_id: string; provider: string; account_name: string }>) : [];
+
         const profileMap = new Map<string, Record<string, unknown>>();
         let totalAllocatedBytes = 0;
         for (const p of profilesList) {
@@ -282,27 +291,107 @@ export default {
           profileMap.set(pUid, p);
           totalAllocatedBytes += Number(p.storage_quota_bytes || 0);
         }
+
+        // Aggregate actual R2 bytes by user
+        const userUsageMap = new Map<string, number>();
+        let totalActualStoredBytes = 0;
+        for (const m of mediaList) {
+          const uId = String(m.user_id || "");
+          const bytes = Number(m.byte_count || 0);
+          userUsageMap.set(uId, (userUsageMap.get(uId) || 0) + bytes);
+          totalActualStoredBytes += bytes;
+        }
+
+        // Aggregate pending reservations
+        let totalPendingReservedBytes = 0;
+        for (const r of reservationsList) {
+          totalPendingReservedBytes += Number(r.expected_bytes || 0);
+        }
+
+        // Aggregate connected provider names by user (zero tokens or secrets)
+        const userProvidersMap = new Map<string, string[]>();
+        for (const a of accountsList) {
+          const uId = String(a.user_id || "");
+          const prov = String(a.provider || "").toLowerCase();
+          if (prov) {
+            const list = userProvidersMap.get(uId) || [];
+            if (!list.includes(prov)) list.push(prov);
+            userProvidersMap.set(uId, list);
+          }
+        }
+
+        // Aggregate processing jobs
+        const jobCounts = { queued: 0, running: 0, completed: 0, failed: 0, total: jobsList.length };
+        for (const j of jobsList) {
+          if (j.status === "queued") jobCounts.queued++;
+          else if (j.status === "claimed") jobCounts.running++;
+          else if (j.status === "completed") jobCounts.completed++;
+          else if (j.status === "failed") jobCounts.failed++;
+        }
+
         const POOL_TOTAL_BYTES = 10_000_000_000;
-        const poolRemainingBytes = Math.max(0, POOL_TOTAL_BYTES - totalAllocatedBytes);
-        const poolRemainingGb = Math.round((poolRemainingBytes / 1_000_000_000) * 100) / 100;
+        const unallocatedQuotaBytes = Math.max(0, POOL_TOTAL_BYTES - totalAllocatedBytes);
+        const unallocatedQuotaGb = Math.round((unallocatedQuotaBytes / 1_000_000_000) * 100) / 100;
+        const totalAllocatedGb = Math.round((totalAllocatedBytes / 1_000_000_000) * 100) / 100;
+        const actualStoredGb = Math.round((totalActualStoredBytes / 1_000_000_000) * 100) / 100;
+        const pendingReservedGb = Math.round((totalPendingReservedBytes / 1_000_000_000) * 100) / 100;
+
+        let activeUsersCount = 0;
+        let disabledUsersCount = 0;
 
         const users = (authData.users ?? []).map(u => {
+          const isBanned = !!u.banned_until;
+          if (isBanned) disabledUsersCount++;
+          else activeUsersCount++;
+
           const prof = profileMap.get(String(u.id)) || {};
-          const qBytes = Number(prof.storage_quota_bytes || 0);
+          const qBytes = Number(prof.storage_quota_bytes || 2_000_000_000);
           const qGb = Math.round((qBytes / 1_000_000_000) * 100) / 100;
+          const uBytes = userUsageMap.get(String(u.id)) || 0;
+          const uGb = Math.round((uBytes / 1_000_000_000) * 100) / 100;
           const prio = Number(prof.queue_priority || 100);
+          const providers = userProvidersMap.get(String(u.id)) || [];
+
           return {
             id: u.id,
             email: u.email,
             created_at: u.created_at,
             last_sign_in: u.last_sign_in_at,
-            banned: !!u.banned_until,
+            banned: isBanned,
             quota_gb: qGb,
             quota_bytes: qBytes,
+            used_gb: uGb,
+            used_bytes: uBytes,
             queue_priority: prio,
+            connected_providers: providers,
           };
         });
-        return json(200, { users, pool_remaining_gb: poolRemainingGb, pool_total_gb: 10 }, adminOrigin); // operational metadata only, no tokens
+
+        return json(200, {
+          users,
+          overview: {
+            user_counts: {
+              total: users.length,
+              active: activeUsersCount,
+              disabled: disabledUsersCount,
+            },
+            storage: {
+              actual_stored_bytes: totalActualStoredBytes,
+              actual_stored_gb: actualStoredGb,
+              pending_reserved_bytes: totalPendingReservedBytes,
+              pending_reserved_gb: pendingReservedGb,
+              allocated_quota_bytes: totalAllocatedBytes,
+              allocated_quota_gb: totalAllocatedGb,
+              unallocated_quota_bytes: unallocatedQuotaBytes,
+              unallocated_quota_gb: unallocatedQuotaGb,
+              global_budget_bytes: POOL_TOTAL_BYTES,
+              global_budget_gb: 10.0,
+            },
+            jobs: jobCounts,
+          },
+          pool_remaining_gb: unallocatedQuotaGb,
+          pool_total_gb: 10,
+        }, adminOrigin);
       }
       const userAction = url.pathname.match(/^\/admin\/users\/([0-9a-fA-F-]{36})\/(ban|unban|quota|priority)$/);
       if (userAction && request.method === "POST") {
@@ -311,27 +400,51 @@ export default {
           const body = await request.json().catch(() => ({})) as { quota_gb?: number };
           const gb = Number(body.quota_gb);
           if (!Number.isFinite(gb) || gb <= 0 || gb > 10) {
-            return json(400, { error: "quota_gb must be between 0 and 10 (decimal GB)" }, adminOrigin);
+            return json(400, { error: "quota_gb must be between 0.1 and 10 (decimal GB)" }, adminOrigin);
           }
           const quotaBytes = Math.round(gb * 1_000_000_000);
+
+          // Guard against reducing quota below currently stored bytes
+          const mediaCheck = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${uid}&status=eq.active&select=byte_count`,
+            { headers: S }
+          );
+          if (mediaCheck.ok) {
+            const objs = await mediaCheck.json() as Array<{ byte_count: number }>;
+            const currentStored = objs.reduce((sum, o) => sum + Number(o.byte_count || 0), 0);
+            if (quotaBytes < currentStored) {
+              const storedGb = Math.round((currentStored / 1_000_000_000) * 100) / 100;
+              return json(400, { error: `Cannot reduce quota to ${gb} GB: user currently has ${storedGb} GB of stored media.` }, adminOrigin);
+            }
+          }
+
           const qres = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_set_user_quota`, {
             method: "POST", headers: S,
             body: JSON.stringify({ p_target_user: uid, p_quota_bytes: quotaBytes }),
           });
-          if (!qres.ok) return json(502, { error: `quota update failed: ${qres.status}` }, adminOrigin);
+          if (!qres.ok) {
+            const errData = await qres.json().catch(() => ({})) as { message?: string; details?: string };
+            const errMsg = errData.message || errData.details || `quota update failed (${qres.status})`;
+            return json(400, { error: errMsg }, adminOrigin);
+          }
+          console.log(JSON.stringify({ audit: true, actor: user.email, target_user: uid, action: "set_quota", quota_gb: gb, quota_bytes: quotaBytes }));
           return json(200, { quota_gb: gb, quota_bytes: quotaBytes }, adminOrigin);
         }
         if (action === "priority") {
           const body = await request.json().catch(() => ({})) as { priority?: number };
           const prio = Number(body.priority);
           if (!Number.isInteger(prio) || prio < 1 || prio > 1000) {
-            return json(400, { error: "priority must be an integer between 1 and 1000" }, adminOrigin);
+            return json(400, { error: "priority must be an integer between 1 and 1000 (lower number runs first)" }, adminOrigin);
           }
           const pres = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_set_user_priority`, {
             method: "POST", headers: S,
             body: JSON.stringify({ p_user_id: uid, p_priority: prio }),
           });
-          if (!pres.ok) return json(502, { error: `priority update failed: ${pres.status}` }, adminOrigin);
+          if (!pres.ok) {
+            const errData = await pres.json().catch(() => ({})) as { message?: string };
+            return json(502, { error: errData.message || `priority update failed: ${pres.status}` }, adminOrigin);
+          }
+          console.log(JSON.stringify({ audit: true, actor: user.email, target_user: uid, action: "set_priority", priority: prio }));
           return json(200, { priority: prio }, adminOrigin);
         }
         const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${uid}`, {
@@ -339,6 +452,7 @@ export default {
           body: JSON.stringify({ ban_duration: action === "ban" ? "876000h" : "none" }),
         });
         if (!res.ok) return json(502, { error: `${action} failed: ${res.status}` }, adminOrigin);
+        console.log(JSON.stringify({ audit: true, actor: user.email, target_user: uid, action }));
         return json(200, { status: action === "ban" ? "banned" : "active" }, adminOrigin);
       }
       return json(404, { error: "not found" }, adminOrigin);
@@ -505,18 +619,48 @@ export default {
       });
     }
 
+    // Helper: consume single-use oauth state/ticket and return user_id
+    async function consumeOAuthState(pState: string): Promise<string | null> {
+      try {
+        const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+          method: "POST",
+          headers: {
+            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ p_state: pState }),
+        });
+        if (!consumeRes.ok) {
+          console.error(`cloud_consume_oauth_state failed: HTTP ${consumeRes.status}`);
+          return null;
+        }
+        const consumed = await consumeRes.json() as unknown;
+        if (typeof consumed === "string" && consumed.trim().length > 0) return consumed.trim();
+        if (Array.isArray(consumed) && consumed.length > 0) {
+          const first = consumed[0];
+          if (typeof first === "string" && first.trim().length > 0) return first.trim();
+          if (typeof first === "object" && first !== null) {
+            const val = (first as Record<string, unknown>).cloud_consume_oauth_state;
+            if (typeof val === "string" && val.trim().length > 0) return val.trim();
+          }
+        }
+        if (typeof consumed === "object" && consumed !== null) {
+          const val = (consumed as Record<string, unknown>).cloud_consume_oauth_state;
+          if (typeof val === "string" && val.trim().length > 0) return val.trim();
+        }
+        return null;
+      } catch (err) {
+        console.error("cloud_consume_oauth_state error:", err);
+        return null;
+      }
+    }
+
     // Helper: resolve user ID from ticket or JWT query token
     async function resolveOAuthUser(): Promise<string | null> {
       const ticket = url.searchParams.get("ticket");
       if (ticket) {
-        const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
-          method: "POST",
-          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-          body: JSON.stringify({ p_state: "ticket:" + ticket }),
-        });
-        const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
-        const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
-        return (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+        return await consumeOAuthState("ticket:" + ticket);
       }
       const qsToken = url.searchParams.get("token");
       const reqForAuth = qsToken
@@ -529,7 +673,7 @@ export default {
     // 1. Google / YouTube Start & Callback
     if (url.pathname === "/oauth/google/start" && request.method === "GET") {
       const uid = await resolveOAuthUser();
-      if (!uid) return json(401, { error: "unauthorized" });
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
       const state = crypto.randomUUID() + crypto.randomUUID();
       await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
       return Response.redirect(buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
@@ -539,14 +683,7 @@ export default {
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
-      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
-        method: "POST",
-        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ p_state: state }),
-      });
-      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
-      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
-      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      const uid = await consumeOAuthState(state);
       if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired or was already used. Please retry from Dispatch.", true);
 
       const tokRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -608,7 +745,7 @@ export default {
     // 2. Instagram Start & Callback
     if (url.pathname === "/oauth/instagram/start" && request.method === "GET") {
       const uid = await resolveOAuthUser();
-      if (!uid) return json(401, { error: "unauthorized" });
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
       const state = crypto.randomUUID() + crypto.randomUUID();
       await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
       const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
@@ -619,15 +756,8 @@ export default {
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
-      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
-        method: "POST",
-        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ p_state: state }),
-      });
-      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
-      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
-      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
+      const uid = await consumeOAuthState(state);
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired or was already used. Please retry from Dispatch.", true);
 
       const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
       const clientSecret = env.INSTAGRAM_CLIENT_SECRET || env.FACEBOOK_CLIENT_SECRET || "";
@@ -706,7 +836,7 @@ export default {
     // 3. Facebook Start & Callback
     if (url.pathname === "/oauth/facebook/start" && request.method === "GET") {
       const uid = await resolveOAuthUser();
-      if (!uid) return json(401, { error: "unauthorized" });
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
       const state = crypto.randomUUID() + crypto.randomUUID();
       await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
       const clientId = env.FACEBOOK_CLIENT_ID || env.INSTAGRAM_CLIENT_ID || "";
@@ -717,15 +847,8 @@ export default {
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
-      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
-        method: "POST",
-        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ p_state: state }),
-      });
-      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
-      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
-      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
+      const uid = await consumeOAuthState(state);
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired or was already used. Please retry from Dispatch.", true);
 
       const clientId = env.FACEBOOK_CLIENT_ID || env.INSTAGRAM_CLIENT_ID || "";
       const clientSecret = env.FACEBOOK_CLIENT_SECRET || env.INSTAGRAM_CLIENT_SECRET || "";
@@ -789,7 +912,7 @@ export default {
     // 4. LinkedIn Start & Callback
     if (url.pathname === "/oauth/linkedin/start" && request.method === "GET") {
       const uid = await resolveOAuthUser();
-      if (!uid) return json(401, { error: "unauthorized" });
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
       const state = crypto.randomUUID() + crypto.randomUUID();
       await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
       return Response.redirect(buildLinkedInAuthorizeUrl(env.LINKEDIN_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback", state), 302);
@@ -799,15 +922,8 @@ export default {
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
-      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
-        method: "POST",
-        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ p_state: state }),
-      });
-      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
-      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
-      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
-      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
+      const uid = await consumeOAuthState(state);
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired or was already used. Please retry from Dispatch.", true);
 
       const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback";
       const tokRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
@@ -868,7 +984,7 @@ export default {
     // 5. X / Twitter (OAuth 2.0 PKCE) Start & Callback
     if (url.pathname === "/oauth/twitter/start" && request.method === "GET") {
       const uid = await resolveOAuthUser();
-      if (!uid) return json(401, { error: "unauthorized" });
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
       const rawState = crypto.randomUUID() + crypto.randomUUID();
       const codeVerifier = generateRandomString(48);
       const codeChallenge = await sha256B64Url(codeVerifier);
@@ -896,14 +1012,7 @@ export default {
         return renderOAuthResultHtml("Invalid State", "State validation failed.", true);
       }
 
-      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
-        method: "POST",
-        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ p_state: rawState }),
-      });
-      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
-      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
-      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      const uid = await consumeOAuthState(rawState);
       if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
 
       const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/twitter/callback";

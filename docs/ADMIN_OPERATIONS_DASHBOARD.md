@@ -124,8 +124,9 @@ Once the account connections and Cloud Mode fixes are verified and committed:
 
 ## 5. Verification Checklist
 
-1. [ ] Cloud Worker unit tests (`npm test --prefix cloud-worker`) -> 100% pass.
-2. [ ] Python admin and publisher tests (`.venv/Scripts/python.exe -m unittest tests/test_admin.py tests/test_publisher.py`) -> 100% pass.
-3. [ ] Frontend build (`npm run build` in `frontend/`) -> clean, zero errors.
-4. [ ] Live Cloudflare Worker deployment verified via curl.
-5. [ ] Release APK compiled and verified.
+1. [x] Cloud Worker unit tests (`npm test --prefix cloud-worker`) -> 38/38 pass.
+2. [x] Python admin and publisher tests (`.venv/Scripts/python.exe -m unittest tests/test_admin.py tests/test_publisher.py`) -> 8/8 pass.
+3. [x] Frontend build (`npm run build` in `frontend/`) -> clean, zero errors.
+4. [x] Live Cloudflare Worker deployment verified (Version ID `ebb7e097-f4ea-45b8-bec4-9df353aa8434`).
+5. [x] Release APK compiled and verified: Alpha 1.1.18 (`f97cd9b321946498f29a5886f0c420cb498018f9db998efe2e9127667a94f909`).
+6. [x] Live Landing Page & Admin Console deployed on `gh-pages` and `main`.

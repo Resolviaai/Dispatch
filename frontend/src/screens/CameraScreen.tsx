@@ -1277,7 +1277,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         onPointerDown={(e) => e.stopPropagation()}
         onPointerMove={(e) => e.stopPropagation()}
         onPointerUp={(e) => e.stopPropagation()}
-        className="relative z-10 flex flex-col px-5 pt-4 pb-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent gap-2"
+        className="relative z-10 flex flex-col px-5 pt-4 pb-2 bg-transparent gap-2"
       >
         <div className="flex items-center justify-between">
           {/* Left: Quality & Recording Status & Audio VU */}
@@ -1380,7 +1380,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       )}
 
       {/* BOTTOM CONTROLS DECK */}
-      <div className="relative z-10 flex flex-col items-center pb-6 pt-2 bg-gradient-to-t from-black/95 via-black/60 to-transparent">
+      <div className="relative z-10 flex flex-col items-center pb-6 pt-2 bg-transparent">
         
         {/* Zoom: slider while recording, discrete pills while idle */}
         {isRecording ? (

@@ -1,3 +1,55 @@
+# Current Checkpoint — 2026-10-25 (Alpha 1.1.18: Camera Clean Viewfinder, Clip Editor Fix, OAuth Ticket Resolution, & DBMS Admin Console)
+
+**Branch:** `main` | **Target Releases:** `v1.1.18-alpha` (Release APK signed & verified)  
+**Tracking Specification:** `docs/ADMIN_OPERATIONS_DASHBOARD.md`
+
+### 1. Camera Viewfinder Polish (Completed)
+- Removed `bg-gradient-to-b from-black/85 via-black/45 to-transparent` and `bg-gradient-to-t from-black/95 via-black/60 to-transparent` from `frontend/src/screens/CameraScreen.tsx`.
+- The camera viewfinder is now 100% clean and transparent with zero top/bottom black vignettes against white or bright backgrounds.
+- All controls, status pills, and zoom selectors retain their accessible frosted backdrops and borders.
+
+### 2. Clip Editor Runtime Fix (Completed)
+- Resolved runtime ReferenceError (`Plus is not defined`) in `frontend/src/screens/ClipsScreen.tsx`.
+- Added `Plus` to `lucide-react` import list; verified all icon JSX tags across the screen resolve cleanly.
+
+### 3. Multi-Platform OAuth Ticket Consumption (Completed & Deployed)
+- **Root Cause Fixed:** Resolved PostgREST scalar UUID return value handling in `cloud-worker/src/index.ts`. Previously, `cloud_consume_oauth_state` returns a scalar string, which was misparsed as an array of objects, resulting in `null` user IDs and `Unauthorized` responses in the browser when opening `/oauth/:provider/start?ticket=...`.
+- Implemented robust `consumeOAuthState` helper supporting scalar strings, arrays, and objects.
+- Updated all start and callback routes for Google/YouTube, Instagram, Facebook, LinkedIn, and X.
+- Replaced raw 401 JSON responses on start routes with user-friendly session expiry/guidance HTML.
+- Deployed live Cloudflare Worker: **Version ID `ebb7e097-f4ea-45b8-bec4-9df353aa8434`**.
+
+### 4. Focused Admin Operations Dashboard (Completed & Staged)
+- **Authoritative Metrics Grid (`site/admin.html` & `cloud-worker/src/index.ts`):**
+  - **Total/Active/Disabled Users:** Live counts from Supabase auth with reversible status tracking.
+  - **Actual R2 Usage vs Pending Reservations:** Aggregates verified active object byte counts from `media_objects` (`status = 'active'`) and ephemeral reservations from `upload_reservations`.
+  - **Allocated Quotas vs Unallocated Pool:** Strict calculation of allocated user quotas vs the 10,000,000,000-byte global pool (`10 GB - sum(assigned)`). Explicitly labeled as **Unallocated Quota Pool** (never called "free storage").
+  - **Processing Jobs Breakdown:** Live counters for `queued`, `running` (`claimed`), `completed`, and `failed` jobs.
+- **Searchable & Filterable User List:**
+  - Real-time search by email or UUID; filter by Active/Disabled.
+  - Displays user identity, joined/last-seen timestamps, storage consumption bar, and connected provider badges (YouTube, Instagram, Facebook, LinkedIn, X).
+  - Strictly **zero secrets** (no access tokens, refresh tokens, or Gemini keys) exposed in API or DOM.
+- **Per-User Quota Management:**
+  - Presets (`1 GB`, `2 GB`, `5 GB`) + decimal custom input (strictly enforcing decimal standard: `1 GB = 1,000,000,000 bytes`).
+  - Server-side guard prevents reducing quota below currently stored bytes and prevents exceeding global 10 GB budget.
+  - Detailed, truthful server error feedback surfaced in UI.
+- **Processing Priority Reordering:**
+  - Accessible nudge controls (`▲ -10` / `▼ +10`) and numeric input (1–1000). Lower numbers processed first.
+- **Explicit & Reversible Account Disabling:**
+  - Confirmation modal prevents accidental lockouts; clearly confirms data preservation.
+- **Audit Logging:**
+  - Structured audit records logged for quota, priority, ban, and unban changes with actor, target, timestamp, and safe values.
+
+### 5. Automated Verification Results
+- `cloud-worker` unit tests: **38/38 passed** (`npm test --prefix cloud-worker`).
+- Python admin & publisher tests: **8/8 passed** (`tests/test_admin.py`, `tests/test_publisher.py`).
+- Frontend Vite build: **Clean build in 15.1s** (`index-CirC51ex.js` / `index-6D1YrKkq.css`).
+- Android release APK: Verified signed release build (`v1.1.18`, versionCode 22, SHA-256 `f97cd9b321946498f29a5886f0c420cb498018f9db998efe2e9127667a94f909`).
+- Cloudflare Worker: Deployed live (`ebb7e097-f4ea-45b8-bec4-9df353aa8434`).
+- Landing page & Admin console deployed live on GitHub Pages (`https://resolviaai.github.io/Dispatch/` and `https://resolviaai.github.io/Dispatch/admin.html`).
+
+---
+
 # Current Handoff for Antigravity — 2026-10-23 (verification run)
 
 This checkpoint supersedes older status and test-count notes below. Branch `main`, HEAD `55b17909f6124dd965030654da77db1b5e49ab59` (synced with `origin/main`; includes the two doc/cleanup commits on top of the `79444b7` reliability work — see the 2026-10-23 verification note further down).

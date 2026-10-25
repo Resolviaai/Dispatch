@@ -42,6 +42,9 @@ function env() {
     },
     R2_S3_ACCESS_KEY_ID: "ak", R2_S3_SECRET_ACCESS_KEY: "sk",
     R2_BUCKET_NAME: "clips", R2_ACCOUNT_ID: "acct",
+    TOKEN_VAULT_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    YOUTUBE_CLIENT_ID: "yt-client-id",
+    TWITTER_CLIENT_ID: "tw-client-id",
   };
 }
 const pcHeaders = (uid = USER_A) => ({ "Authorization": "Bearer pc-token", "X-Dispatch-User-Id": uid, "content-type": "application/json" });
@@ -339,6 +342,41 @@ test("oauth multi-provider init creates tickets for instagram, linkedin, twitter
   }
 });
 
+test("oauth google start resolves user from ticket scalar string response and redirects 302", async () => {
+  // PostgREST returns scalar string for returns uuid
+  supabase.set("/rpc/cloud_consume_oauth_state", { method: "POST", fn: () => ({ body: USER_A }) });
+  supabase.set("/rpc/cloud_put_oauth_state", { method: "POST", fn: () => ({ body: null }) });
+  const res = await worker.fetch(new Request("https://w.test/oauth/google/start?ticket=test-ticket-123", {
+    method: "GET"
+  }), env());
+  assert.equal(res.status, 302);
+  const location = res.headers.get("Location");
+  assert.ok(location.includes("accounts.google.com"));
+});
+
+test("oauth twitter start resolves user from ticket array/object response and redirects 302", async () => {
+  // PostgREST alternate array-of-objects return
+  supabase.set("/rpc/cloud_consume_oauth_state", { method: "POST", fn: () => ({ body: [{ cloud_consume_oauth_state: USER_A }] }) });
+  supabase.set("/rpc/cloud_put_oauth_state", { method: "POST", fn: () => ({ body: null }) });
+  const res = await worker.fetch(new Request("https://w.test/oauth/twitter/start?ticket=test-ticket-456", {
+    method: "GET"
+  }), env());
+  assert.equal(res.status, 302);
+  const location = res.headers.get("Location");
+  assert.ok(location.includes("twitter.com"));
+});
+
+test("oauth start with expired or invalid ticket returns session expired HTML", async () => {
+  supabase.set("/rpc/cloud_consume_oauth_state", { method: "POST", fn: () => ({ body: null }) });
+  const res = await worker.fetch(new Request("https://w.test/oauth/google/start?ticket=expired-ticket", {
+    method: "GET"
+  }), env());
+  assert.equal(res.status, 400);
+  const html = await res.text();
+  assert.ok(html.includes("Session Expired"));
+  assert.ok(html.includes("Authorization ticket expired or already used"));
+});
+
 test("global CORS options preflight returns 204 with valid allow-origin", async () => {
   const res = await worker.fetch(new Request("https://w.test/oauth/google/init", {
     method: "OPTIONS",
@@ -377,5 +415,165 @@ test("cloud clips endpoint returns ready and approved clips", async () => {
   assert.equal(body.recent_approved[0].title, "Published Clip");
   assert.equal(body.queue_stats.queued_count, 1);
   assert.equal(body.cloud_mode, true);
+});
+
+test("admin users endpoint returns authoritative metrics, storage breakdown, and connected provider names without secrets", async () => {
+  const adminEnv = {
+    ...env(),
+    ADMIN_EMAILS: "admin@resolvia.ai",
+    SITE_ORIGIN: "https://resolviaai.github.io",
+  };
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "admin@resolvia.ai" } }) });
+  supabase.set("/auth/v1/admin/users", {
+    method: "GET",
+    fn: () => ({
+      body: {
+        users: [
+          { id: USER_A, email: "admin@resolvia.ai", created_at: "2026-10-24T00:00:00Z", banned_until: null },
+          { id: USER_B, email: "creator@test.com", created_at: "2026-10-25T00:00:00Z", banned_until: "2030-01-01" },
+        ]
+      }
+    })
+  });
+  supabase.set("/rest/v1/profiles", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { user_id: USER_A, storage_quota_bytes: 2000000000, queue_priority: 50 },
+        { user_id: USER_B, storage_quota_bytes: 3000000000, queue_priority: 120 },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/media_objects?status=eq.active", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { user_id: USER_A, byte_count: 500000000 },
+        { user_id: USER_B, byte_count: 800000000 },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/upload_reservations", {
+    method: "GET",
+    fn: () => ({ body: [{ expected_bytes: 200000000 }] })
+  });
+  supabase.set("/rest/v1/processing_jobs", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { id: "j1", status: "queued" },
+        { id: "j2", status: "claimed" },
+        { id: "j3", status: "completed" },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/connected_accounts", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { user_id: USER_A, provider: "youtube", account_name: "Channel A" },
+        { user_id: USER_B, provider: "instagram", account_name: "Insta B" },
+      ]
+    })
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/admin/users", {
+    method: "GET",
+    headers: { "Authorization": "Bearer any-token" },
+  }), adminEnv);
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.users.length, 2);
+
+  // Authoritative metrics verification
+  assert.equal(data.overview.user_counts.total, 2);
+  assert.equal(data.overview.user_counts.active, 1);
+  assert.equal(data.overview.user_counts.disabled, 1);
+
+  assert.equal(data.overview.storage.actual_stored_bytes, 1300000000);
+  assert.equal(data.overview.storage.actual_stored_gb, 1.3);
+  assert.equal(data.overview.storage.pending_reserved_bytes, 200000000);
+  assert.equal(data.overview.storage.allocated_quota_bytes, 5000000000);
+  assert.equal(data.overview.storage.allocated_quota_gb, 5.0);
+  assert.equal(data.overview.storage.unallocated_quota_bytes, 5000000000);
+  assert.equal(data.overview.storage.unallocated_quota_gb, 5.0);
+
+  assert.equal(data.overview.jobs.queued, 1);
+  assert.equal(data.overview.jobs.running, 1);
+  assert.equal(data.overview.jobs.completed, 1);
+
+  // Per user metadata & connected providers
+  const userA = data.users.find(u => u.id === USER_A);
+  assert.deepEqual(userA.connected_providers, ["youtube"]);
+  assert.equal(userA.used_gb, 0.5);
+  assert.equal(userA.quota_gb, 2.0);
+  assert.equal(userA.queue_priority, 50);
+
+  // Security: ensure no secrets or tokens exist in response
+  const rawBody = JSON.stringify(data);
+  assert.ok(!rawBody.includes("client_secret"));
+  assert.ok(!rawBody.includes("refresh_token"));
+  assert.ok(!rawBody.includes("access_token"));
+  assert.ok(!rawBody.includes("token_vault"));
+});
+
+test("admin quota update rejects invalid inputs and reductions below stored media", async () => {
+  const adminEnv = {
+    ...env(),
+    ADMIN_EMAILS: "admin@resolvia.ai",
+  };
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "admin@resolvia.ai" } }) });
+
+  // Out of bounds: 0 or >10 GB
+  const resBad = await worker.fetch(new Request(`https://w.test/admin/users/${USER_B}/quota`, {
+    method: "POST",
+    headers: { "Authorization": "Bearer any-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ quota_gb: 15 }),
+  }), adminEnv);
+  assert.equal(resBad.status, 400);
+
+  // Cannot reduce below currently stored media (user has 3 GB stored)
+  supabase.set(`/rest/v1/media_objects?user_id=eq.${USER_B}&status=eq.active&select=byte_count`, {
+    method: "GET",
+    fn: () => ({ body: [{ byte_count: 3000000000 }] }),
+  });
+  const resReduce = await worker.fetch(new Request(`https://w.test/admin/users/${USER_B}/quota`, {
+    method: "POST",
+    headers: { "Authorization": "Bearer any-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ quota_gb: 2.0 }),
+  }), adminEnv);
+  assert.equal(resReduce.status, 400);
+  const errBody = await resReduce.json();
+  assert.ok(errBody.error.includes("Cannot reduce quota"));
+});
+
+test("admin priority update rejects numbers outside 1-1000", async () => {
+  const adminEnv = { ...env(), ADMIN_EMAILS: "admin@resolvia.ai" };
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "admin@resolvia.ai" } }) });
+
+  const resZero = await worker.fetch(new Request(`https://w.test/admin/users/${USER_B}/priority`, {
+    method: "POST",
+    headers: { "Authorization": "Bearer any-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ priority: 0 }),
+  }), adminEnv);
+  assert.equal(resZero.status, 400);
+
+  const resHigh = await worker.fetch(new Request(`https://w.test/admin/users/${USER_B}/priority`, {
+    method: "POST",
+    headers: { "Authorization": "Bearer any-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ priority: 1001 }),
+  }), adminEnv);
+  assert.equal(resHigh.status, 400);
+
+  supabase.set("/rest/v1/rpc/cloud_set_user_priority", { method: "POST", fn: () => ({ body: null }) });
+  const resGood = await worker.fetch(new Request(`https://w.test/admin/users/${USER_B}/priority`, {
+    method: "POST",
+    headers: { "Authorization": "Bearer any-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ priority: 75 }),
+  }), adminEnv);
+  assert.equal(resGood.status, 200);
+  const data = await resGood.json();
+  assert.equal(data.priority, 75);
 });
 

@@ -34,6 +34,7 @@ import {
   CheckCheck,
   ExternalLink,
   Cloud,
+  Plus,
 } from 'lucide-react';
 import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig } from '../captions/types';
 import { normalizeCaptionTrack } from '../captions/normalizeTrack';
