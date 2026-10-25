@@ -58,7 +58,10 @@ export function buildAuthorizeUrl(clientId: string, redirectUri: string, state: 
     redirect_uri: redirectUri,
     response_type: "code",
     access_type: "offline",
-    prompt: "consent",
+    // select_account: always shows Google's account picker so returning users see
+    // their on-device accounts instead of silently re-authorizing a stale choice.
+    // consent: re-issues the refresh_token on every connect (revocation-safe).
+    prompt: "consent select_account",
     include_granted_scopes: "true",
     scope: SCOPES.join(" "),
     state,

@@ -91,21 +91,32 @@ const RecordingZoomSlider: React.FC<{
         aria-valuemax={maxZoom}
         aria-valuenow={ratio}
       >
+        {/* Track base + filled portion */}
         <div className="absolute left-0 right-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/25" />
         <div
           className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white"
           style={{ width: `${fraction * 100}%` }}
         />
+        {/* Thumb: solid dot with dark ring, grows while dragging */}
         <div
           className="absolute top-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
           style={{ left: `${fraction * 100}%` }}
         >
           <div
-            className={`h-3.5 w-3.5 rounded-full bg-white shadow-[0_0_0_2px_rgba(0,0,0,0.6)] transition-transform duration-100 ${
-              isDragging ? 'scale-125' : 'scale-100'
+            className={`h-4 w-4 rounded-full bg-white shadow-[0_0_0_2px_rgba(0,0,0,0.55),0_2px_8px_rgba(0,0,0,0.45)] transition-transform duration-100 ${
+              isDragging ? 'scale-110' : 'scale-100'
             }`}
           />
         </div>
+        {/* Live value bubble above the thumb while dragging */}
+        {isDragging && (
+          <div
+            className="pointer-events-none absolute -translate-x-1/2 rounded-md bg-black/80 px-2 py-0.5 text-xs font-mono tabular-nums text-white shadow-lg"
+            style={{ left: `${fraction * 100}%`, top: '-6px', transform: 'translate(-50%, -100%)' }}
+          >
+            {ratio.toFixed(1)}x
+          </div>
+        )}
       </div>
       <span className="min-w-[40px] shrink-0 text-right text-xs font-mono tabular-nums text-text-main">
         {ratio.toFixed(1)}x
@@ -534,11 +545,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       unlockTimeoutRef.current = null;
       startFadeTimer(4500);
     }, 1600);
-  };
-
-  const handleResetExposure = (e: React.PointerEvent | React.MouseEvent) => {
-    e.stopPropagation();
-    requestExposureIndex(0);
   };
 
   const handleExposureSliderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -983,8 +989,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   };
 
   // Compute EV EV display string (e.g. +1.0 EV, 0.0 EV, -0.5 EV)
-  const currentEvFormatted = (exposureIndex * exposureInfo.stepEv).toFixed(1);
-  const evPrefix = exposureIndex > 0 ? '+' : '';
 
   return (
     <div className={`relative w-full h-full flex flex-col justify-between ${Bridge.isAvailable() ? 'bg-transparent' : 'bg-studio'} text-text-main overflow-hidden select-none font-sans`}>
@@ -1089,32 +1093,12 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               const isFocusing = focusState.status === 'focusing' || focusState.status === 'locking';
               const isLocked = focusState.status === 'locked' || focusState.isLocked;
               const isLockUncertain = focusState.status === 'uncertain';
-              const isFailed = focusState.status === 'failed' || isLockUncertain;
-
-              const reticleColor = isFailed 
-                ? '#EF4444' 
-                : isLocked 
-                ? '#F59E0B' 
-                : '#FACC15';
+              // Native camera behaviour: a failed tap is silent — the reticle never
+              // turns red; only a confirmed lock changes it to amber.
+              const reticleColor = isLocked ? '#F59E0B' : '#FACC15';
               
               return (
                 <>
-                  {/* Focus Failure Toast */}
-                  {isFailed && (
-                    <div 
-                      className="absolute transform -translate-x-1/2 flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/90 text-white shadow-lg pointer-events-none animate-in fade-in duration-150"
-                      style={{
-                        left: `${clampedX}px`,
-                        top: `${clampedY - halfBox - 28}px`,
-                      }}
-                    >
-                      <AlertCircle size={10} strokeWidth={2.5} />
-                      <span className="text-[9px] font-mono font-bold uppercase tracking-wide" title={focusState.error || undefined}>
-                        {focusState.error || 'FOCUS OR LOCK FAILED'}
-                      </span>
-                    </div>
-                  )}
-
                   {/* Focus Reticle Square with 4 Corner Brackets */}
                   <div 
                     key={focusState.triggerId}
@@ -1218,38 +1202,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                             <Sun size={20} className="text-amber-400 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)] fill-amber-400/30" strokeWidth={2} />
                           </div>
                         </div>
-
-                        {/* EV readout bubble while dragging or non-zero */}
-                        {(isDraggingExposure || exposureIndex !== 0) && (
-                          <div 
-                            className="absolute -translate-y-1/2 px-1.5 py-0.5 rounded bg-black/85 border border-white/20 text-[9px] font-mono text-amber-300 tabular-nums shadow-lg pointer-events-none whitespace-nowrap"
-                            style={{
-                              left: placeSliderOnLeft ? '-42px' : '18px',
-                              top: `${sunY - trackTop}px`,
-                            }}
-                          >
-                            {evPrefix}{currentEvFormatted} EV
-                          </div>
-                        )}
                       </div>
                     </div>
-                  )}
-                  {exposureInfo.isSupported && exposureIndex !== 0 && (
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={handleResetExposure}
-                      aria-label="Reset exposure to zero"
-                      title="Reset exposure to 0 EV"
-                      className="absolute pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/30 bg-black/80 text-white hover:bg-black active:scale-[0.98] transition-all"
-                      style={{
-                        left: `${Math.max(22, Math.min(cw - 22, trackX))}px`,
-                        top: `${Math.min(ch - 22, trackBottom + 12)}px`,
-                        transform: 'translate(-50%, -50%)',
-                      }}
-                    >
-                      <RotateCcw size={14} />
-                    </button>
                   )}
                   {exposureError && (
                     <div
@@ -1459,16 +1413,20 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
         {/* Big Shutter / Record Button with Pause Control */}
         <div className="flex items-center justify-center gap-7">
-          {isRecording && (
+{isRecording && (
             <button
               onClick={handlePauseToggle}
               aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
-              className="w-14 h-14 rounded-full flex items-center justify-center bg-surface-100/80 border border-border text-text-main backdrop-blur hover:bg-surface-200 active:scale-[0.98] transition-all"
+              className={`w-16 h-16 rounded-full flex items-center justify-center backdrop-blur-md border transition-all active:scale-[0.94] ${
+                isPaused
+                  ? 'bg-white border-white text-black shadow-[0_0_24px_rgba(255,255,255,0.35)]'
+                  : 'bg-black/45 border-white/30 text-white hover:bg-black/60'
+              }`}
             >
               {isPaused ? (
-                <Play size={22} className="text-success fill-current" />
+                <Play size={24} className="fill-current translate-x-[1px]" />
               ) : (
-                <Pause size={22} className="fill-current" />
+                <Pause size={24} strokeWidth={2.4} className="fill-current" />
               )}
             </button>
           )}
@@ -1490,17 +1448,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             </button>
           )}
           {isRecording && <div className="w-14" />}
-        </div>
-
-        {/* Context Help Text */}
-        <div className="mt-3 text-center">
-          <span className="text-xs text-text-muted">
-            {isRecording
-              ? isPaused
-                ? 'Paused · tap play to resume recording'
-                : 'Slide to zoom · tap square to stop & finalize'
-              : 'Tap to focus · hold to lock · tap again to move'}
-          </span>
         </div>
       </div>
 

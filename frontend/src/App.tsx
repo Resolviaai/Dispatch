@@ -351,7 +351,7 @@ export const App: React.FC = () => {
           )}
 
           {currentTab === 'settings' && (
-            <SettingsScreen pcHost={pcHost} onPcHostChange={setPcHost} />
+            <SettingsScreen pcHost={pcHost} />
           )}
         </div>
 

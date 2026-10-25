@@ -4,7 +4,6 @@ import {
   Youtube,
   LogOut,
   ShieldAlert,
-  RefreshCw,
   Monitor,
   Moon,
   Sun,
@@ -12,7 +11,6 @@ import {
   UserRound,
   Camera,
   Wifi,
-  Laptop,
   ExternalLink,
 } from 'lucide-react';
 import { Bridge, StorageInfo, apiUrl } from '../bridge';
@@ -20,7 +18,6 @@ import { getThemePreference, setThemePreference, ThemePreference } from '../them
 
 interface SettingsScreenProps {
   pcHost?: string;
-  onPcHostChange?: (host: string) => void;
 }
 
 const DEFAULT_LENS_KEY = 'dispatch_default_lens';
@@ -42,7 +39,7 @@ export function setDefaultLensPref(lens: 'back' | 'front') {
  * account sign-out, YouTube connect/disconnect, PC address with live test,
  * upload network toggle. Static facts are compressed to one metadata line.
  */
-export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000', onPcHostChange }) => {
+export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000' }) => {
   const [youtubeState, setYoutubeState] = useState<{
     connected: boolean;
     channelTitle: string;
@@ -58,7 +55,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [wifiOnly, setWifiOnly] = useState(true);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [inputHost, setInputHost] = useState(pcHost);
   const [themePref, setThemePref] = useState<ThemePreference>(() => getThemePreference());
   const [defaultLens, setDefaultLens] = useState<'back' | 'front'>(() => getDefaultLensPref());
   const isNativeAndroid = Bridge.isAvailable();
@@ -108,8 +104,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     setWifiOnly(Bridge.getWifiOnly());
     setStorageInfo(Bridge.getStorageInfo());
   }, [pcHost]);
-
-  useEffect(() => setInputHost(pcHost), [pcHost]);
 
   const handleConnectYouTube = async () => {
     if (Bridge.isAvailable()) {
@@ -193,34 +187,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
     setYoutubeState({ connected: false, channelTitle: '', channelId: '' });
     setFeedback('YouTube disconnected.');
-  };
-
-  const [isSavingHost, setIsSavingHost] = useState(false);
-
-  const handleSaveHost = async () => {
-    const clean = inputHost.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
-    if (!clean) return;
-
-    setIsSavingHost(true);
-    setFeedback(`Testing connection to ${clean}…`);
-
-    // Synchronize to native EncryptedSharedPreferences and WebView localStorage
-    Bridge.setPcHost(clean);
-    if (onPcHostChange) onPcHostChange(clean);
-
-    try {
-      const res = await Bridge.pingPc(clean);
-      if (res.success) {
-        setFeedback(`Connected to PC Studio at ${clean} (Online)`);
-      } else {
-        setFeedback(`Saved ${clean}. Ping: ${res.message}. Ensure PC server is running and on same Wi-Fi.`);
-      }
-    } catch {
-      // Truthful state: the host WAS saved, but the connection test failed.
-      setFeedback(`Saved ${clean}. Connection test failed - check the PC server is running.`);
-    } finally {
-      setIsSavingHost(false);
-    }
   };
 
   const [accountEmail, setAccountEmail] = useState('');
@@ -441,38 +407,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           )}
         </section>
 
-        {/* 5. SYNC & PC — host control + network toggle together */}
+        {/* 5. UPLOADS — network behavior toggle */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
-          <h2 className="text-base font-semibold tracking-tight text-text-main">Sync &amp; PC</h2>
+          <h2 className="text-base font-semibold tracking-tight text-text-main">Uploads</h2>
 
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm font-medium text-text-main" htmlFor="pc-host">
-              <Laptop size={15} className="text-text-muted" />
-              PC address
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                id="pc-host"
-                value={inputHost}
-                onChange={(event) => setInputHost(event.target.value)}
-                placeholder="192.168.0.200:8000"
-                autoCapitalize="none"
-                autoCorrect="off"
-                className="flex-1 min-w-0 min-h-[44px] rounded-xl bg-surface-2 border border-border px-3 text-sm font-mono text-text-main placeholder:text-text-muted focus:outline-none focus:border-border-strong"
-              />
-              <button
-                type="button"
-                onClick={handleSaveHost}
-                disabled={isSavingHost}
-                className="min-h-[44px] px-3.5 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main transition-all duration-150 active:scale-[0.98] disabled:opacity-50 flex items-center gap-2 shrink-0"
-              >
-                {isSavingHost ? <RefreshCw size={14} className="animate-spin text-primary" /> : null}
-                <span>{isSavingHost ? 'Testing…' : 'Save & test'}</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-4 pt-1">
+          <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               <span className="flex items-center gap-2 text-sm text-text-main">
                 <Wifi size={15} className="text-text-muted" />
