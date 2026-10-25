@@ -27,7 +27,7 @@ type:
   metadata: "12px / 400 / 130%"
   mono: "12px / 500 / tabular-nums — durations, sizes, timestamps (right-aligned)"
   button: "14px / 600"
-spacing: { grid: 4, page-margin: 16, card-padding: 16, section-gap: 32, radii: "card 16, inner 12/8, buttons 12, inputs 10, sheet-top 20, chips full" }
+spacing: { grid: 4, page-margin: 16, card-padding: 16, section-gap: 32, radii: "card 16, inner 12/8, buttons 12, inputs 10, sheet-top 20, chips 8 (OWNER OVERRIDE: not fully rounded — Rohit rejected pill chips and pill buttons; keep chips 8px, buttons 12px, circular ONLY for icon-only buttons)" }
 targets: { min: "44px tall", tabs: "44x64", chips: "32px tall / 13px text" }
 ---
 

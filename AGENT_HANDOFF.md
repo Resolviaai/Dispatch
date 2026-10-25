@@ -282,3 +282,9 @@ Owner sent the two comparison screenshots (Dispatch 1.1.11 build vs YouTube Stud
 - Chip order: All → Ready → Uploaded (default filter stays 'ready').
 - Row status pill block deleted; retention folded into the metadata line (`88% · 9h ago · 5d left` / `· Cloud only`); `isReady` local removed. Status now lives in the filter chips + detail page, exactly like Studio's visibility handling.
 - Verified live in emulator via screenshot (divider-free rows, correct chip order, clean metadata). Shipped v1.1.12-alpha (16), stable URL hash-verified, landing live at 1.1.12.
+
+## 49. Radius consistency per owner decision (2026-10-25) — v1.1.13-alpha (17)
+Owner rejected fully-rounded buttons AND chips (screenshots of detail page + clips list). Design system §2.4 already said "buttons 12px, chips/pills fully rounded" — the buttons were my violation; the chips the owner now overrode.
+- Action buttons (Edit / Publish / Watch on YouTube / Retry / Refresh / Show all) → `rounded-xl` (12px). Filter chips + framing chips → `rounded-lg` (8px). Circular stays ONLY for icon-only buttons (refresh/back/kebab/play) and switches.
+- **design.md radii token updated with the owner override** ("chips 8, buttons 12, circular only for icon-only") so future passes never revert it.
+- Verified in emulator on the detail page (screenshot-cropped): Edit/Publish 12px, framing chips 8px. Shipped v1.1.13-alpha (17), stable URL hash-verified, landing live at 1.1.13.

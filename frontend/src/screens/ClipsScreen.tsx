@@ -2182,7 +2182,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 type="button"
                 onClick={() => setFilterStatus(chip.id)}
                 aria-pressed={isSelected}
-                className={`h-8 shrink-0 px-3 rounded-full text-[13px] font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                className={`h-8 shrink-0 px-3 rounded-lg text-[13px] font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
                   isSelected
                     ? 'chip-selected'
                     : 'bg-surface-2 text-text-secondary hover:text-text-main'
@@ -2217,7 +2217,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <button
               type="button"
               onClick={onClearSessionFilter}
-              className="shrink-0 min-h-[32px] px-3 rounded-full bg-surface-2 text-xs font-medium text-text-secondary hover:text-text-main flex items-center gap-1 active:scale-[0.98] transition-all"
+              className="shrink-0 min-h-[32px] px-3 rounded-lg bg-surface-2 text-xs font-medium text-text-secondary hover:text-text-main flex items-center gap-1 active:scale-[0.98] transition-all"
             >
               <X size={12} />
               Show all
@@ -2264,7 +2264,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <button
                 type="button"
                 onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-6 rounded-full bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
+                className="mt-5 min-h-[44px] px-6 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
               >
                 <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
                 <span>Retry</span>
@@ -2282,7 +2282,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <button
                 type="button"
                 onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-6 rounded-full bg-surface-2 text-sm font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
+                className="mt-5 min-h-[44px] px-6 rounded-xl bg-surface-2 text-sm font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
               >
                 <RefreshCw size={15} />
                 <span>Refresh</span>
@@ -2542,7 +2542,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setViewMode('studio')}
-                className="min-h-[44px] rounded-full bg-surface-2 hover:bg-surface-3 text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               >
                 <Scissors size={15} className="text-primary" />
                 <span>Edit</span>
@@ -2556,7 +2556,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     const url = currentClip.remote_url || `https://youtu.be/${currentClip.remote_id}`;
                     window.open(url, '_blank', 'noopener,noreferrer');
                   }}
-                  className="min-h-[44px] rounded-full bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
                 >
                   <ExternalLink size={14} />
                   <span>Watch on YouTube</span>
@@ -2565,7 +2565,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => setViewMode('publish')}
-                  className="min-h-[44px] rounded-full bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
                 >
                   <Send size={14} />
                   <span>Publish</span>
@@ -2596,7 +2596,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         key={opt.id}
                         type="button"
                         onClick={() => handleLayoutChange(opt.id)}
-                        className={`h-8 px-3 rounded-full text-[13px] font-medium whitespace-nowrap active:scale-[0.98] transition-all flex-1 min-w-[64px] ${layoutMode === opt.id
+                        className={`h-8 px-3 rounded-lg text-[13px] font-medium whitespace-nowrap active:scale-[0.98] transition-all flex-1 min-w-[64px] ${layoutMode === opt.id
                           ? 'chip-selected font-semibold'
                           : 'bg-surface-2 text-text-secondary hover:text-text-main'
                           }`}
