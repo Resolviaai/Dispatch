@@ -38,18 +38,18 @@ export class ScreenErrorBoundary extends React.Component<ScreenErrorBoundaryProp
     }
 
     return (
-      <main role="alert" className="h-full w-full flex flex-col items-center justify-center gap-3 bg-studio px-6 text-center text-text-main">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-danger/30 bg-surface-100 text-danger">
+      <main role="alert" className="h-full w-full flex flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-text-main">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl border chip-danger border bg-surface text-status-danger">
           <AlertCircle size={21} />
         </div>
-        <h2 className="text-sm font-semibold">{this.props.title}</h2>
-        <p className="max-w-xl break-words text-xs text-text-secondary">
+        <h2 className="text-base font-semibold tracking-tight">{this.props.title}</h2>
+        <p className="max-w-xl break-words text-sm text-text-secondary">
           {error.message || 'An unexpected rendering error occurred.'}
         </p>
         <button
           type="button"
           onClick={this.retry}
-          className="min-h-11 px-4 rounded-lg bg-primary text-white text-xs font-semibold shadow-hero-glow hover:bg-primary-hover active:scale-[0.98] transition-all flex items-center gap-2"
+          className="min-h-[44px] px-4 rounded-xl bg-primary text-white text-sm font-semibold shadow-hero-glow hover:bg-primary-hover active:scale-[0.98] transition-all flex items-center gap-2"
         >
           <RotateCw size={13} />
           <span>Retry screen</span>

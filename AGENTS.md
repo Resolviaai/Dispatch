@@ -1,8 +1,10 @@
 # Dispatch UI/UX & Mobile Engineering Invariants
 
 > **Scope:** Repository-wide frontend constitution (Web Review Studio & Android Native Jetpack Compose).  
-> **Source Specification:** `c:\CODE\Dispatch\DESIGN_SYSTEM.md`  
-> **Curriculum Baseline:** Forensic synthesis of 10 Mobile UI/UX Video Masterclasses (`design_research/`) + LeadMiner Design Tokens + CapCut Interaction Model.
+> **Source Specification:** `design.md` (Design System **v3**, summarized from `dispatch-design-system-v3.md`).  
+> **v3 overrides:** where this file or `DESIGN_SYSTEM.md` (v2) disagrees with `design.md`, **v3 wins**. Key v3 deltas: mobile body text is **14px** (12px is metadata-only), a four-layer token system with a **light theme** (Settings → Appearance), status tints via the `.chip-*` utilities, and red is reserved strictly for destructive + recording states.
+> **When creating or modifying any UI, read and follow `design.md` first.** The caption studio / studio workstation (`frontend/src/captions/*`, `frontend/src/studio/*`) is deliberately untouched by the v3 redesign — do not restyle it without the owner's explicit instruction.
+> **Curriculum Baseline:** Forensic synthesis of 29 Mobile UI/UX video masterclasses (`workspace/dispatch-design-system/extract/`) + live YouTube mobile observation + CapCut interaction model.
 
 Every agent working on frontend code, layout templates, components, and Android Compose views in this repository must strictly adhere to the following architectural rules:
 

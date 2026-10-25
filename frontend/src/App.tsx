@@ -252,13 +252,13 @@ export const App: React.FC = () => {
     <AuthGate>{(session) => (
     <div className={`h-[100dvh] w-full ${isNative && currentTab === 'record' ? 'bg-transparent' : 'bg-studio'} text-text-main flex flex-col items-center overflow-hidden p-0 md:py-2 md:px-3 font-sans`}>
       
-      {/* DESKTOP REVIEW CONTROL HEADER (Layer 1: Surface 100) */}
-      <header className="hidden md:flex shrink-0 items-center justify-between w-full max-w-5xl mb-1.5 px-3 py-1.5 rounded-xl bg-surface-100 border border-border shadow-sm">
+      {/* DESKTOP REVIEW CONTROL HEADER (Layer 1: Surface) */}
+      <header className="hidden md:flex shrink-0 items-center justify-between w-full max-w-5xl mb-1.5 px-3 py-1.5 rounded-xl bg-surface-100 border border-border">
         <div className="flex items-center gap-2.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-success shadow-[0_0_8px_#22C55E]" />
+          <div className="w-2.5 h-2.5 rounded-full bg-success shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
           <div>
-            <span className="text-xs font-semibold tracking-tight text-text-main">DISPATCH · CREATOR ENGINE & STUDIO</span>
-            <span className="text-[10px] font-mono text-text-secondary block">Single UI Source of Truth · Full PC Review & Mobile Shell</span>
+            <span className="text-sm font-semibold tracking-tight text-text-main">Dispatch · Creator Engine &amp; Studio</span>
+            <span className="text-xs text-text-secondary block">Single UI source of truth · Full PC review &amp; mobile shell</span>
           </div>
         </div>
 
@@ -268,13 +268,13 @@ export const App: React.FC = () => {
               setIsMobileFrame(true);
               if (typeof localStorage !== 'undefined') localStorage.setItem('dispatch_view_mode', 'mobile');
             }}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition-all active:scale-[0.98] ${
-              isMobileFrame 
-                ? 'bg-primary/15 border border-primary/50 text-[#60A5FA] font-medium shadow-hero-sm' 
+            className={`flex items-center gap-1.5 min-h-[36px] px-2.5 rounded-lg text-sm transition-all active:scale-[0.98] ${
+              isMobileFrame
+                ? 'bg-primary-soft border border-primary/50 text-text-main font-semibold'
                 : 'text-text-secondary hover:text-text-main hover:bg-surface-200 border border-transparent'
             }`}
           >
-            <Smartphone size={13} />
+            <Smartphone size={14} />
             POCO C65 (393×852)
           </button>
 
@@ -283,13 +283,13 @@ export const App: React.FC = () => {
               setIsMobileFrame(false);
               if (typeof localStorage !== 'undefined') localStorage.setItem('dispatch_view_mode', 'desktop');
             }}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition-all active:scale-[0.98] ${
-              !isMobileFrame 
-                ? 'bg-primary/15 border border-primary/50 text-[#60A5FA] font-medium shadow-hero-sm' 
+            className={`flex items-center gap-1.5 min-h-[36px] px-2.5 rounded-lg text-sm transition-all active:scale-[0.98] ${
+              !isMobileFrame
+                ? 'bg-primary-soft border border-primary/50 text-text-main font-semibold'
                 : 'text-text-secondary hover:text-text-main hover:bg-surface-200 border border-transparent'
             }`}
           >
-            <Monitor size={13} />
+            <Monitor size={14} />
             Laptop / PC Studio (Wide)
           </button>
         </div>
@@ -306,15 +306,12 @@ export const App: React.FC = () => {
         >
           {/* MOBILE HARDWARE NOTCH & STATUS BAR (Only shown in PC desktop browser preview, hidden on Android device) */}
           {isMobileFrame && !isNative && (
-            <div className="shrink-0 h-9 px-5 flex items-center justify-between text-xs font-mono text-text-secondary select-none z-30 bg-surface-100/90 border-b border-border/40 backdrop-blur">
-              <span className="font-semibold text-[12px] text-text-main">{timeStr || '12:00'}</span>
-              <div className="w-20 h-3.5 rounded-full bg-studio mx-auto hidden md:block border border-border/40" />
+            <div className="shrink-0 h-9 px-5 flex items-center justify-between text-xs text-text-secondary select-none z-30 bg-surface-100/90 border-b border-border/40 backdrop-blur">
+              <span className="font-semibold text-text-main tabular-nums">{timeStr || '12:00'}</span>
+              <div className="w-20 h-3.5 rounded-full bg-canvas mx-auto hidden md:block border border-border/40" />
               <div className="flex items-center gap-1.5">
-                <Wifi size={12} className="text-text-secondary" />
-                <div className="flex items-center text-[10px] gap-0.5 tabular-nums">
-                  <span>94%</span>
-                  <Battery size={12} className="text-success" />
-                </div>
+                <Wifi size={13} className="text-text-secondary" />
+                <Battery size={15} className="text-success" />
               </div>
             </div>
           )}
@@ -365,7 +362,7 @@ export const App: React.FC = () => {
 
         {/* HOME INDICATOR BAR (Only in desktop browser preview, hidden on Android device) */}
         {isMobileFrame && !isNative && (
-          <div className={`h-4 ${isEditorOpen ? 'bg-[#16191E]' : 'bg-surface-100'} flex items-center justify-center shrink-0`}>
+          <div className={`h-4 ${isEditorOpen ? 'bg-canvas' : 'bg-surface-100'} flex items-center justify-center shrink-0`}>
             <div className="w-32 h-1 rounded-full bg-surface-300" />
           </div>
         )}

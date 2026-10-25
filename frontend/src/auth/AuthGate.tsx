@@ -24,7 +24,7 @@ export function AuthGate({ children }: { children: (session: Session) => React.R
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-canvas">
         <span className="text-text-muted text-sm">Loading…</span>
       </div>
     )
@@ -54,38 +54,38 @@ export function AuthGate({ children }: { children: (session: Session) => React.R
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <form onSubmit={submit} className="w-full max-w-sm bg-surface-100 border border-border rounded-2xl p-6">
+    <div className="min-h-screen flex items-center justify-center bg-canvas px-4">
+      <form onSubmit={submit} className="w-full max-w-sm bg-surface border border-border rounded-2xl p-6">
         <div className="flex items-center gap-3 mb-6">
           <span className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           </span>
-          <h1 className="text-lg font-semibold text-text-main">Dispatch</h1>
+          <h1 className="text-lg font-semibold tracking-tight text-text-main">Dispatch</h1>
         </div>
-        <h2 className="text-sm font-medium text-text-main mb-4">
+        <h2 className="text-sm font-medium text-text-main mb-5">
           {mode === 'signin' ? 'Sign in to your account' : 'Create your account'}
         </h2>
         <label htmlFor="auth-email" className="block text-xs text-text-secondary mb-1">Email</label>
         <input id="auth-email" type="email" required autoComplete="email" value={email}
           onChange={e => setEmail(e.target.value)}
-          className="w-full min-h-[44px] px-3 rounded-lg bg-surface-200 border border-border text-text-main mb-3" />
+          className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 border border-border text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-border-strong mb-3" />
         <label htmlFor="auth-password" className="block text-xs text-text-secondary mb-1">Password</label>
         <input id="auth-password" type="password" required autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
           minLength={8} value={password} onChange={e => setPassword(e.target.value)}
-          className="w-full min-h-[44px] px-3 rounded-lg bg-surface-200 border border-border text-text-main mb-4" />
-        {error && <p role="alert" className="text-xs text-[#EF4444] mb-3">{error}</p>}
-        {notice && <p role="status" className="text-xs text-[#22C55E] mb-3">{notice}</p>}
+          className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 border border-border text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-border-strong mb-4" />
+        {error && <p role="alert" className="text-sm text-danger mb-3">{error}</p>}
+        {notice && <p role="status" className="text-sm text-success mb-3">{notice}</p>}
         <button type="submit" disabled={busy || !email || password.length < 8}
-          className="w-full min-h-[48px] rounded-lg bg-primary text-white font-semibold active:scale-[0.98] transition-all duration-150 disabled:opacity-40">
+          className="w-full min-h-[48px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold shadow-hero-glow active:scale-[0.98] transition-all duration-150 disabled:opacity-40">
           {busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Create account'}
         </button>
         <div className="flex items-center justify-between mt-4">
           <button type="button" onClick={() => { setMode(m => m === 'signin' ? 'signup' : 'signin'); setError(null); setNotice(null) }}
-            className="text-xs text-primary-h hover:underline">
+            className="text-sm text-primary hover:underline">
             {mode === 'signin' ? 'Need an account? Sign up' : 'Have an account? Sign in'}
           </button>
           {session === null && (
-            <button type="button" onClick={() => signOut()} className="text-xs text-text-muted hover:underline">Clear session</button>
+            <button type="button" onClick={() => signOut()} className="text-xs text-text-muted hover:underline hover:text-text-secondary">Clear session</button>
           )}
         </div>
       </form>

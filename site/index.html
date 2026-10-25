@@ -11,10 +11,10 @@
 <meta name="theme-color" content="#161616">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
-:root{--bg:#161616;--surface:#1C1C1C;--border:#2E2E2E;--well:#232323;--well2:#282828;--primary:#2563EB;--primary-h:#3B82F6;--text:#F5F5F5;--muted:#A3A3A3;--ok:#22C55E;--warn:#F59E0B}
+:root{color-scheme:dark;--bg:#161616;--surface:#1C1C1C;--border:#2E2E2E;--well:#232323;--well2:#282828;--primary:#2563EB;--primary-h:#1D4ED8;--text:#F5F5F5;--muted:#A3A3A3;--ok:#22C55E;--warn:#F59E0B}
 *{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--text);font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
 .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
 header{border-bottom:1px solid var(--border);padding:18px 0}
 .nav{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -61,6 +61,8 @@ footer a{color:var(--muted);text-decoration:none;display:block;padding:3px 0}
 footer a:hover{color:var(--primary-h)}
 .skip{position:absolute;left:-9999px}
 .skip:focus{left:0;top:0;background:var(--primary);color:#fff;padding:10px 16px;z-index:99;border-radius:0 0 8px 0}
+.cta:focus-visible,.link:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:8px}
+input:focus-visible,button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 </style>
 </head>
 <body>
@@ -83,7 +85,7 @@ footer a:hover{color:var(--primary-h)}
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Download the Android app
     </a>
-    <span class="cta-sub">Alpha 1.1.7 &middot; ~11&nbsp;MB &middot; Android 8.0+ &middot; <a class="link" href="#install">install help</a></span>
+    <span class="cta-sub">Alpha 1.1.8 &middot; ~11&nbsp;MB &middot; Android 8.0+ &middot; <a class="link" href="#install">install help</a></span>
   </div>
 
   <section id="how-it-works">
@@ -170,7 +172,7 @@ footer a:hover{color:var(--primary-h)}
 
   <section class="download-cta">
     <h2>Ready to try it?</h2>
-    <p class="sub">Alpha 1.1.7 — native camera feel: tap-to-focus with sun-dial exposure, long-press AE/AF lock with tap-to-move, pause & resume recording, and a recording zoom slider. Signed; installs over previous alphas.</p>
+    <p class="sub">Alpha 1.1.8 — design system v3: dark + light themes with an instant Appearance picker, unified tokens, bigger 14px body text, AA-safe status chips, and a cleaner publish sheet. Editor untouched. Signed; installs over previous alphas.</p>
     <a class="cta" href="https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk" download>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Download Dispatch.apk

@@ -64,7 +64,7 @@ const RecordingZoomSlider: React.FC<{
 
   return (
     <div className="mb-6 flex w-full max-w-[340px] items-center gap-3 px-3" data-interactive>
-      <span className="shrink-0 text-[10px] font-mono tabular-nums text-text-muted">
+      <span className="shrink-0 text-xs font-mono tabular-nums text-text-muted">
         {minZoom.toFixed(1)}x
       </span>
       <div
@@ -106,7 +106,7 @@ const RecordingZoomSlider: React.FC<{
           />
         </div>
       </div>
-      <span className="min-w-[40px] shrink-0 text-right text-[11px] font-mono tabular-nums text-text-main">
+      <span className="min-w-[40px] shrink-0 text-right text-xs font-mono tabular-nums text-text-main">
         {ratio.toFixed(1)}x
       </span>
     </div>
@@ -1022,7 +1022,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               Tap to focus, drag exposure, double-tap the sun to reset, or hold to lock AE/AF.
             </p>
             {webcamError && (
-              <span className="text-[10px] text-text-muted mt-2 font-mono">
+              <span className="text-xs text-text-muted mt-2 font-mono">
                 Web preview active ({webcamError})
               </span>
             )}
@@ -1239,7 +1239,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                   {exposureError && (
                     <div
                       role="status"
-                      className="absolute pointer-events-none left-1/2 bottom-5 -translate-x-1/2 rounded-lg border border-danger/40 bg-surface-100 px-3 py-2 text-center text-[10px] text-danger"
+                      className="absolute pointer-events-none left-1/2 bottom-5 -translate-x-1/2 rounded-lg chip-danger border bg-surface px-3 py-2 text-center text-xs font-medium"
                     >
                       {exposureError}
                     </div>
@@ -1257,7 +1257,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               <Loader2 className="w-7 h-7 text-primary animate-spin" />
             </div>
             <p className="text-sm font-semibold text-text-main">Initializing Camera</p>
-            <p className="text-xs text-text-secondary mt-1 font-mono">
+            <p className="text-xs text-text-secondary mt-1">
               Configuring 1080p FHD sensor…
             </p>
           </div>
@@ -1270,7 +1270,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               <Camera className="w-8 h-8 text-amber-400" />
             </div>
             <h3 className="text-base font-semibold text-text-main">Camera Permission Required</h3>
-            <p className="text-xs text-text-secondary mt-2 max-w-[280px] leading-relaxed">
+            <p className="text-sm text-text-secondary mt-2 max-w-[280px] leading-relaxed">
               Dispatch requires camera permission to capture video sessions and generate instant creator clips.
             </p>
             <button
@@ -1289,7 +1289,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               <AlertCircle className="w-8 h-8 text-danger" />
             </div>
             <h3 className="text-base font-semibold text-text-main">Camera Unavailable</h3>
-            <p className="text-xs text-text-secondary mt-2 max-w-[280px] leading-relaxed">
+            <p className="text-sm text-text-secondary mt-2 max-w-[280px] leading-relaxed">
               {cameraStatus.error || "The camera sensor could not be initialized. Another application might be using it."}
             </p>
             <button
@@ -1334,7 +1334,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             ) : (
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-surface-100/90 border border-border backdrop-blur">
                 <span className="w-2 h-2 rounded-full bg-success" />
-                <span className="text-[11px] font-mono tabular-nums text-text-secondary font-medium">1080P 30FPS</span>
+                <span className="text-xs tabular-nums text-text-secondary font-medium">1080P 30FPS</span>
                 {micActive && (
                   <div className="flex items-end gap-0.5 h-2.5 opacity-60">
                     <span className="w-0.5 h-1.5 bg-text-muted rounded-full" />
@@ -1385,7 +1385,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
         {/* Audio Disabled Warning Banner (When camera works but mic permission denied) */}
         {cameraStatus.isAudioEnabled === false && (
-          <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-mono animate-in fade-in">
+          <div className="flex items-center justify-between px-3 py-1.5 rounded-lg chip-warning border text-xs font-medium animate-in fade-in">
             <div className="flex items-center gap-1.5 truncate">
               <MicOff size={12} className="shrink-0" />
               <span className="truncate">Audio disabled (Microphone permission required)</span>
@@ -1404,7 +1404,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       {recentSavedSegment && (
         <div className="relative z-10 mx-4 my-2 p-3 rounded-xl bg-surface-100 border border-border backdrop-blur flex items-center gap-2.5 shadow-xl animate-in fade-in slide-in-from-top-2">
           <CheckCircle2 size={16} className="text-success shrink-0" />
-          <span className="text-[11px] font-mono tabular-nums text-text-main truncate">
+          <span className="text-sm tabular-nums text-text-main truncate">
             {recentSavedSegment}
           </span>
         </div>
@@ -1429,7 +1429,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               <button
                 key={lvl}
                 onClick={() => handleSetZoom(lvl)}
-                className={`min-w-[44px] min-h-[32px] py-1 px-3 rounded-full text-xs font-mono tabular-nums transition-all active:scale-[0.98] ${
+                className={`min-w-[44px] min-h-[32px] py-1 px-3 rounded-full text-sm tabular-nums transition-all active:scale-[0.98] ${
                   isSelected 
                     ? 'bg-primary text-white font-semibold shadow-hero-sm' 
                     : 'text-text-secondary hover:text-text-main'
@@ -1479,7 +1479,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
         {/* Context Help Text */}
         <div className="mt-3 text-center">
-          <span className="text-[11px] font-mono text-text-muted">
+          <span className="text-xs text-text-muted">
             {isRecording
               ? isPaused
                 ? 'Paused · tap play to resume recording'

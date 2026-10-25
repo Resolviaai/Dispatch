@@ -376,37 +376,37 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const renderSessionStatusBadge = (session: SessionGroup) => {    switch (session.status) {
       case 'UPLOADED_TO_YOUTUBE':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34D399]" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-success">
+            <span className="w-1.5 h-1.5 rounded-full bg-current" />
             Uploaded
           </span>
         );
       case 'UPLOADING':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-blue-500/15 border border-blue-500/30 text-blue-300">
-            <RotateCw size={10} className="text-blue-400 animate-spin" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-info">
+            <RotateCw size={11} className="animate-spin" />
             Uploading…
           </span>
         );
       case 'PROCESSING':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300">
-            <RotateCw size={10} className="text-amber-400 animate-spin" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-warning">
+            <RotateCw size={11} className="animate-spin" />
             Processing…
           </span>
         );
       case 'FAILED_RETRY':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-red-500/15 border border-red-500/30 text-red-300">
-            <AlertCircle size={10} className="text-red-400" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-danger">
+            <AlertCircle size={11} />
             Needs Retry
           </span>
         );
       case 'QUEUED_FOR_UPLOAD':
       default:
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono tabular-nums font-semibold bg-surface-200 border border-border text-text-muted">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border bg-surface-200 border-border text-text-muted">
+            <span className="w-1.5 h-1.5 rounded-full bg-warning" />
             Queued
           </span>
         );
@@ -416,96 +416,97 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const renderImportStatusBadge = (status: string) => {
     if (status === 'CLIPS_CREATED' || status === 'COMPLETED') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 shrink-0">
-          <CheckCircle2 size={10} className="text-emerald-400" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-success shrink-0">
+          <CheckCircle2 size={11} />
           Clips Ready
         </span>
       );
     }
     if (status === 'FAILED' || status === 'STALLED_YOUTUBE_PROCESSING') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-red-500/15 border border-red-500/30 text-red-300 shrink-0">
-          <AlertCircle size={10} className="text-red-400" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-danger shrink-0">
+          <AlertCircle size={11} />
           {status === 'FAILED' ? 'Failed' : 'Stalled'}
         </span>
       );
     }
     if (status === 'DISCOVERED') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-surface-200 border border-border text-text-muted shrink-0">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border bg-surface-200 border-border text-text-muted shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-warning" />
           Queued
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300 shrink-0">
-        <RotateCw size={10} className="text-amber-400 animate-spin" />
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-warning shrink-0">
+        <RotateCw size={11} className="animate-spin" />
         Processing…
       </span>
     );
   };
 
   return (
-    <div className="w-full h-full flex flex-col bg-studio text-text-main overflow-hidden select-none font-sans">
+    <div className="w-full h-full flex flex-col bg-canvas text-text-main overflow-hidden select-none">
       
-      {/* 1. SCREEN HEADER (Layer 0 Base) */}
-      <div className="shrink-0 px-4 pt-3.5 pb-2.5 border-b border-border bg-studio space-y-3">
+      {/* 1. SCREEN HEADER (Canvas layer) */}
+      <div className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-base font-semibold tracking-tight text-text-main flex items-center gap-2">
+            <h1 className="text-lg font-semibold tracking-tight text-text-main flex items-center gap-2">
               {(clipsStale || inboxStale) && (
-                <span role="status" className="ml-1 px-2 py-0.5 rounded-full bg-[#F59E0B]/10 border border-[#F59E0B]/40 text-[#F59E0B] text-xs font-medium normal-case">
-                  Cached - refresh failed
+                <span role="status" className="px-2 py-0.5 rounded-full border text-xs font-medium chip-warning">
+                  Cached — refresh failed
                 </span>
               )}
-              <Film size={18} className="text-primary shrink-0" />
-              <span>Recorded Sessions</span>
+              <Film size={19} className="text-primary shrink-0" />
+              <span>Sessions</span>
             </h1>
-            <p className="text-[11px] font-mono tabular-nums text-text-muted mt-0.5">
+            <p className="text-xs text-text-muted mt-0.5 tabular-nums">
               Raw multi-segment footage filmed from mobile hardware
             </p>
           </div>
 
-          {/* YouTube Connection Status Pill (Biomechanical 44px Hitbox) */}
+          {/* YouTube Connection Status Pill (44px hitbox) */}
           <button
             type="button"
             onClick={onNavigateToSettings}
-            className="flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-[11px] font-mono tabular-nums transition-all duration-150 active:scale-[0.98]"
+            className="flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-3 border border-border text-sm text-text-secondary transition-all duration-150 active:scale-[0.98]"
             title="Manage YouTube Cloud Integration"
           >
-            <span className={`w-2 h-2 rounded-full shrink-0 ${isYouTubeConnected ? 'bg-emerald-400 shadow-[0_0_8px_#34D399]' : 'bg-red-400'}`} />
-            <span className="text-text-secondary font-medium">{isYouTubeConnected ? 'YouTube' : 'No YouTube'}</span>
+            <span className={`w-2 h-2 rounded-full shrink-0 ${isYouTubeConnected ? 'bg-success' : 'bg-danger'}`} />
+            <span className="font-medium">{isYouTubeConnected ? 'YouTube' : 'No YouTube'}</span>
           </button>
         </div>
 
-        {/* Operational Metrics Bar: 3 Clean Chips */}
+        {/* Operational Metrics Bar: numeric chips */}
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200/80 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200 border border-border text-xs text-text-secondary">
             <Film size={12} className="text-primary shrink-0" />
-            <span>{sessions.length}&nbsp;{sessions.length === 1 ? 'session' : 'sessions'}</span>
+            <span className="font-mono tabular-nums">{sessions.length}&nbsp;{sessions.length === 1 ? 'session' : 'sessions'}</span>
           </div>
 
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200/80 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200 border border-border text-xs text-text-secondary">
             <Clock size={12} className="text-text-muted shrink-0" />
-            <span>{formatTotalTime(totalFootageDuration)}&nbsp;footage</span>
+            <span className="font-mono tabular-nums">{formatTotalTime(totalFootageDuration)}&nbsp;footage</span>
           </div>
 
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200/80 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200 border border-border text-xs text-text-secondary">
             <HardDrive size={12} className="text-text-muted shrink-0" />
-            <span>{formatBytes(totalStorageBytes)}&nbsp;storage</span>
+            <span className="font-mono tabular-nums">{formatBytes(totalStorageBytes)}&nbsp;storage</span>
           </div>
         </div>
 
-        {/* Segmented Filter Control (Concentric & 44px Hitboxes) */}
+        {/* Segmented Filter Control (selected segment inverts via accent) */}
         {sessions.length > 0 && (
-          <div className="flex items-center p-1 rounded-xl bg-surface-200 border border-border">
+          <div className="flex items-center p-1 rounded-xl bg-surface-200 border border-border" role="tablist" aria-label="Filter sessions">
             <button
               type="button"
               onClick={() => setFilter('all')}
-              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+              aria-selected={filter === 'all'}
+              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-sm tabular-nums transition-all duration-150 active:scale-[0.98] ${
                 filter === 'all'
-                  ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
+                  ? 'bg-primary text-white font-semibold'
                   : 'text-text-muted hover:text-text-main'
               }`}
             >
@@ -514,9 +515,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <button
               type="button"
               onClick={() => setFilter('queued')}
-              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+              aria-selected={filter === 'queued'}
+              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-sm tabular-nums transition-all duration-150 active:scale-[0.98] ${
                 filter === 'queued'
-                  ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
+                  ? 'bg-primary text-white font-semibold'
                   : 'text-text-muted hover:text-text-main'
               }`}
             >
@@ -525,9 +527,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <button
               type="button"
               onClick={() => setFilter('uploaded')}
-              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-xs font-mono tabular-nums transition-all duration-150 active:scale-[0.98] ${
+              aria-selected={filter === 'uploaded'}
+              className={`flex-1 min-h-[44px] py-1.5 px-3 rounded-lg text-sm tabular-nums transition-all duration-150 active:scale-[0.98] ${
                 filter === 'uploaded'
-                  ? 'bg-surface-100 text-white font-semibold border border-border shadow-sm'
+                  ? 'bg-primary text-white font-semibold'
                   : 'text-text-muted hover:text-text-main'
               }`}
             >
@@ -541,13 +544,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       {!isYouTubeConnected && recordings.length > 0 && (
         <div 
           onClick={onNavigateToSettings}
-          className="mx-4 mt-3 p-3 min-h-[44px] rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between cursor-pointer hover:bg-amber-500/15 transition-all duration-150 active:scale-[0.98]"
+          className="mx-4 mt-3 p-3 min-h-[44px] rounded-xl chip-warning border flex items-center justify-between cursor-pointer hover:opacity-85 transition-all duration-150 active:scale-[0.98]"
         >
-          <div className="flex items-center gap-2 text-amber-300">
+          <div className="flex items-center gap-2 text-status-warning">
             <AlertCircle size={15} className="shrink-0" />
             <span className="text-[11px] font-mono">YouTube not connected. Chunks safely stored on device.</span>
           </div>
-          <span className="text-xs font-mono text-amber-400 font-semibold underline shrink-0 ml-2">Connect</span>
+          <span className="text-sm font-semibold underline shrink-0 ml-2 text-status-warning">Connect</span>
         </div>
       )}
 
@@ -558,11 +561,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         <div className="rounded-2xl bg-surface-100 border border-border p-3.5 space-y-2.5">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-surface-200 border border-border flex items-center justify-center shrink-0">
-              <Youtube size={15} className="text-red-400" />
+              <Youtube size={15} className="text-danger" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-xs font-semibold text-text-main">Import from YouTube</h2>
-              <p className="text-[10px] text-text-muted leading-relaxed">
+              <h2 className="text-sm font-semibold text-text-main">Import from YouTube</h2>
+              <p className="text-xs text-text-muted leading-relaxed">
                 Record with your normal camera, upload to YouTube, then paste the link here.
               </p>
             </div>
@@ -584,12 +587,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               placeholder="https://youtube.com/watch?v=…"
               disabled={importState === 'submitting'}
               aria-label="YouTube video link"
-              className="flex-1 min-w-0 min-h-[44px] px-3 py-2 rounded-lg bg-surface-200 border border-border text-xs font-mono text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary disabled:opacity-50"
+              className="flex-1 min-w-0 min-h-[44px] px-3 py-2 rounded-lg bg-surface-200 border border-border text-sm font-mono text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary disabled:opacity-50"
             />
             <button
               type="submit"
               disabled={importState === 'submitting' || !importUrl.trim()}
-              className="min-h-[44px] px-4 py-2 rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-xs font-semibold text-text-main flex items-center gap-1.5 shrink-0 transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
+              className="min-h-[44px] px-4 py-2 rounded-lg bg-surface-200 hover:bg-surface-300 border border-border text-sm font-semibold text-text-main flex items-center gap-1.5 shrink-0 transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
             >
               {importState === 'submitting'
                 ? <RotateCw size={13} className="animate-spin" />
@@ -599,13 +602,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
           </form>
 
           {importState === 'error' && importError && (
-            <p className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2.5 py-2 flex items-start gap-1.5">
+            <p className="text-xs chip-danger border rounded-lg px-2.5 py-2 flex items-start gap-1.5">
               <AlertCircle size={13} className="shrink-0 mt-0.5" />
               <span className="break-words">{importError}</span>
             </p>
           )}
           {importState === 'queued' && importNotice && (
-            <p className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-2.5 py-2 break-words">
+            <p className="text-xs chip-success border rounded-lg px-2.5 py-2 break-words">
               {importNotice}
             </p>
           )}
@@ -614,7 +617,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         {/* IMPORTED YOUTUBE SESSIONS (existing youtube_inbox records, live status) */}
         {importedItems.length > 0 && (
           <div className="space-y-2">
-            <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted font-semibold">
+            <span className="text-xs uppercase tracking-wider text-text-muted font-semibold">
               Imported YouTube Sessions ({importedItems.length})
             </span>
             {importedItems.map((item) => {
@@ -624,8 +627,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 <div key={item.video_id} className="rounded-xl bg-surface-100 border border-border p-3 space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <h3 className="text-xs font-semibold text-text-main truncate">{item.title || `YouTube ${item.video_id}`}</h3>
-                      <p className="text-[10px] font-mono tabular-nums text-text-muted mt-0.5">
+                      <h3 className="text-sm font-semibold text-text-main truncate">{item.title || `YouTube ${item.video_id}`}</h3>
+                      <p className="text-xs font-mono tabular-nums text-text-muted mt-0.5">
                         ID: {item.video_id}{item.duration ? ` · ${formatDuration(item.duration)}` : ''}
                       </p>
                     </div>
@@ -634,7 +637,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   {isFailed && (
                     <div className="space-y-2">
                       {item.last_error && (
-                        <p className="text-[10px] font-mono text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2.5 py-2 break-words">
+                        <p className="text-xs font-mono chip-danger border rounded-lg px-2.5 py-2 break-words">
                           {item.last_error}
                         </p>
                       )}
@@ -642,7 +645,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                         type="button"
                         onClick={() => handleImportSubmit(`https://youtu.be/${item.video_id}`)}
                         disabled={importState === 'submitting'}
-                        className="min-h-[44px] px-3 py-2 rounded-lg bg-red-500/15 border border-red-500/30 text-xs text-red-300 hover:bg-red-500/25 flex items-center gap-1.5 transition-all duration-150 active:scale-[0.98] disabled:opacity-50"
+                        className="min-h-[44px] px-3 py-2 rounded-lg chip-danger border text-xs font-medium hover:opacity-85 flex items-center gap-1.5 transition-all duration-150 active:scale-[0.98] disabled:opacity-50"
                       >
                         <RotateCw size={12} />
                         <span>Retry Import</span>
@@ -650,7 +653,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                     </div>
                   )}
                   {isReady && (
-                    <p className="text-[10px] font-mono text-emerald-300">
+                    <p className="text-xs text-status-success">
                       Clips are in the review queue.
                     </p>
                   )}
@@ -666,18 +669,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <div className="w-14 h-14 rounded-2xl bg-surface-200 border border-border flex items-center justify-center mb-4 shadow-inner">
               <Film className="w-7 h-7 text-primary" />
             </div>
-            <h2 className="text-sm font-semibold text-text-main">No Recorded Sessions Yet</h2>
-            <p className="text-xs text-text-muted mt-1.5 max-w-[280px] leading-relaxed">
+            <h2 className="text-base font-semibold tracking-tight text-text-main">No Recorded Sessions Yet</h2>
+            <p className="text-sm text-text-secondary mt-1.5 max-w-[280px] leading-relaxed">
               Continuous footage recorded from the Record tab will appear here, grouped into organized filming sessions.
             </p>
-            <div className="mt-4 px-3 py-1.5 rounded-lg bg-surface-200 border border-border text-[11px] font-mono tabular-nums text-text-secondary">
+            <div className="mt-4 px-3 py-1.5 rounded-lg bg-surface-200 border border-border text-xs font-mono tabular-nums text-text-secondary">
               DCIM/Dispatch · 1080p FHD Capture
             </div>
             {onNavigateToRecord && (
               <button
                 type="button"
                 onClick={onNavigateToRecord}
-                className="mt-5 min-h-[44px] px-5 py-2 rounded-xl bg-primary hover:bg-blue-600 text-white text-xs font-semibold shadow-hero-glow flex items-center gap-2 active:scale-[0.98] transition-all"
+                className="mt-5 min-h-[44px] px-5 py-2 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold shadow-hero-glow flex items-center gap-2 active:scale-[0.98] transition-all"
               >
                 <Camera size={15} />
                 <span>Start Filming</span>
@@ -692,7 +695,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             return (
               <div
                 key={session.sessionId}
-                className="rounded-2xl bg-surface-100 border border-border overflow-hidden transition-all duration-150 hover:border-border-strong shadow-card"
+                className="rounded-2xl bg-surface-100 border border-border overflow-hidden transition-all duration-150 hover:border-border-strong"
               >
                 {/* SESSION HEADER TRIGGER */}
                 <div 
@@ -709,7 +712,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                         {formatSessionDate(session.createdAt)}
                       </h2>
 
-                      <div className="flex items-center gap-2 mt-0.5 text-[11px] font-mono tabular-nums text-text-muted flex-wrap">
+                      <div className="flex items-center gap-2 mt-0.5 text-xs font-mono tabular-nums text-text-muted flex-wrap">
                         <span className="flex items-center gap-1">
                           <Clock size={11} className="text-text-muted shrink-0" />
                           <span>{formatDuration(session.totalDuration)}</span>
@@ -755,7 +758,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                           {session.clipCount} Generated {session.clipCount === 1 ? 'Clip' : 'Clips'} Ready
                         </span>
                         {session.approvedClipCount > 0 && (
-                          <span className="text-[10px] font-mono tabular-nums text-emerald-400 block">
+                          <span className="text-xs tabular-nums text-status-success block">
                             {session.approvedClipCount} published to YouTube
                           </span>
                         )}
@@ -766,7 +769,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => onNavigateToClips(session.sessionId)}
-                        className="min-h-[44px] px-3.5 py-2 rounded-lg bg-primary hover:bg-blue-600 text-white text-xs font-semibold shadow-hero-glow flex items-center gap-1.5 shrink-0 transition-all active:scale-[0.98]"
+                        className="min-h-[44px] px-3.5 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-semibold shadow-hero-glow flex items-center gap-1.5 shrink-0 transition-all active:scale-[0.98]"
                       >
                         <span>Open in Clips</span>
                         <ExternalLink size={13} />
@@ -779,10 +782,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 {isExpanded && (
                   <div className="px-3.5 pb-3.5 pt-1 border-t border-border/60 space-y-3 animate-in fade-in duration-150">
                     <div className="flex items-center justify-between pt-1">
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted font-semibold">
+                      <span className="text-xs uppercase tracking-wider text-text-muted font-semibold">
                         Raw Footage ({session.segments.length}&nbsp;{session.segments.length === 1 ? 'segment' : 'segments'})
                       </span>
-                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-medium">
+                      <span className="text-xs font-medium px-2 py-0.5 rounded border chip-success border">
                         Unedited Originals
                       </span>
                     </div>
@@ -830,7 +833,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
                               {/* OVERLAY BADGES */}
                               <div className="absolute top-2 left-2 pointer-events-none flex items-center gap-1.5">
-                                <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[10px] font-mono text-emerald-400 font-semibold tracking-wide uppercase">
+                                <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[10px] font-mono text-white font-semibold tracking-wide uppercase">
                                   Raw #{segment.sequenceNumber || idx + 1}
                                 </span>
                                 <span className="px-2 py-0.5 rounded bg-black/80 backdrop-blur border border-border text-[10px] font-mono tabular-nums font-semibold text-white">
@@ -858,14 +861,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
                                 <div className="flex items-center gap-1.5">
-                                  <span className="px-1.5 py-0.5 rounded bg-surface-300 border border-border text-[10px] font-mono text-text-muted">
+                                  <span className="px-1.5 py-0.5 rounded bg-surface-300 border border-border text-xs font-mono text-text-muted">
                                     #{segment.sequenceNumber || idx + 1}
                                   </span>
                                   <span className="text-xs font-mono font-medium text-text-main truncate">
                                     {segment.filename}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-2 mt-1 text-[10px] font-mono tabular-nums text-text-muted">
+                                <div className="flex items-center gap-2 mt-1 text-xs font-mono tabular-nums text-text-muted">
                                   <span>{formatTimeAgo(segment.createdAt)}</span>
                                   <span>·</span>
                                   <span>{formatBytes(segment.fileSizeBytes)}</span>
@@ -882,7 +885,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                                   <a
                                     href={segment.videoUrl!.startsWith('http') ? segment.videoUrl : apiUrl(segment.videoUrl!)}
                                     download={segment.filename}
-                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-surface-300 hover:bg-surface-400 border border-border text-xs text-text-secondary hover:text-text-main transition-all active:scale-[0.98]"
+                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-surface-3 hover:bg-surface-3 border border-border text-xs text-text-secondary hover:text-text-main transition-all active:scale-[0.98]"
                                     title="Download Original Raw Video"
                                   >
                                     <Download size={13} />
@@ -895,7 +898,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                                     href={`https://youtu.be/${segment.youtubeVideoId}`}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-xs text-red-300 transition-all active:scale-[0.98]"
+                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg chip-danger border text-xs font-medium hover:opacity-85 transition-all active:scale-[0.98]"
                                   >
                                     <ExternalLink size={13} />
                                     <span>YouTube</span>
@@ -906,7 +909,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onRetryUpload(segment.segmentId)}
-                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg bg-red-500/15 border border-red-500/30 text-xs text-red-300 hover:bg-red-500/25 active:scale-[0.98] transition-all"
+                                    className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg chip-danger border text-xs font-medium hover:opacity-85 active:scale-[0.98] transition-all"
                                   >
                                     <RotateCw size={12} />
                                     <span>Retry Upload</span>
@@ -917,7 +920,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                               <button
                                 type="button"
                                 onClick={() => toggleExpandDetail(segment.segmentId)}
-                                className="min-h-[44px] px-2.5 py-2 rounded-lg text-text-muted hover:text-text-main flex items-center gap-1 text-[11px] font-mono transition-all active:scale-[0.98]"
+                                className="min-h-[44px] px-2.5 py-2 rounded-lg text-text-muted hover:text-text-main flex items-center gap-1 text-xs transition-all active:scale-[0.98]"
                               >
                                 <span>{isDetailExpanded ? 'Hide' : 'Info'}</span>
                                 {isDetailExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
@@ -926,7 +929,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
                             {/* TECHNICAL DETAILS DRAWER */}
                             {isDetailExpanded && (
-                              <div className="p-2.5 rounded-lg bg-surface-300 border border-border text-[10px] font-mono tabular-nums space-y-1 text-text-muted">
+                              <div className="p-2.5 rounded-lg bg-surface-3 border border-border text-xs font-mono tabular-nums space-y-1 text-text-muted">
                                 <div className="flex justify-between">
                                   <span>Segment ID:</span>
                                   <span className="text-text-main font-semibold">{segment.segmentId}</span>
@@ -970,7 +973,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             className="w-full max-w-3xl bg-surface-100 border border-border rounded-2xl overflow-hidden shadow-2xl"
           >
             <div className="flex items-center justify-between p-3.5 border-b border-border">
-              <span className="text-xs font-mono font-semibold text-text-main truncate pr-3">
+              <span className="text-sm font-semibold text-text-main truncate pr-3">
                 {modalVideo.title}
               </span>
               <button 

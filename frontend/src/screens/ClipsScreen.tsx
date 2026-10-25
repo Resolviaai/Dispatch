@@ -2133,9 +2133,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // VIEW 1: CLIPS LIBRARY (Landing View of Clips Tab)
   // =========================================================================
   const renderLibraryView = () => (
-    <div className="w-full h-full flex flex-col bg-studio overflow-hidden">
+    <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
       {/* 1. COMPACT HEADER */}
-      <header className="shrink-0 px-3.5 pt-3 pb-2 border-b border-border bg-[#16191E] z-20">
+      <header className="shrink-0 px-3.5 pt-3 pb-2 border-b border-border bg-canvas z-20">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-8 h-8 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center shrink-0">
@@ -2143,19 +2143,19 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-[15px] font-semibold tracking-tight text-text-main truncate leading-tight">
+                <h1 className="text-lg font-semibold tracking-tight text-text-main truncate leading-tight">
                   Clips
                 </h1>
                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono tabular-nums border ${
                   (isPcOnline ?? !connectionError)
-                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                    : 'bg-red-500/10 border-red-500/20 text-red-400'
+                    ? 'chip-success border'
+                    : 'chip-danger border'
                 }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${(isPcOnline ?? !connectionError) ? 'bg-emerald-400 shadow-[0_0_6px_#34D399]' : 'bg-red-400'}`} />
+                  <span className={`w-1.5 h-1.5 rounded-full bg-current ${(isPcOnline ?? !connectionError) ? 'text-status-success' : 'text-status-danger'}`} />
                   {(isPcOnline ?? !connectionError) ? 'Studio Online' : 'Offline'}
                 </span>
               </div>
-              <p className="text-[11px] text-text-secondary truncate">
+              <p className="text-xs text-text-secondary truncate">
                 {readyClips.length} ready to review &bull; {allClips.length} total from {uniqueSessionCount} session{uniqueSessionCount === 1 ? '' : 's'}
               </p>
             </div>
@@ -2183,9 +2183,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               key={tab.id}
               type="button"
               onClick={() => setFilterStatus(tab.id)}
-              className={`min-h-[34px] px-3 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all ${filterStatus === tab.id
-                ? 'bg-primary/20 border-primary text-text-main shadow-hero-sm'
-                : 'bg-surface-200 border-border text-text-muted hover:text-text-secondary'
+              className={`min-h-[32px] px-3 rounded-full border text-[13px] font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all ${filterStatus === tab.id
+                ? 'bg-primary-soft border-primary/40 text-primary'
+                : 'bg-surface-200 border-border text-text-secondary hover:text-text-main'
                 }`}
             >
               <span>{tab.label}</span>
@@ -2199,15 +2199,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
       {/* 4.2 BACKLOG QUEUE DEPTH ALERT BANNER */}
       {queueStats && queueStats.queued_count > 0 && (
-        <div className="shrink-0 mx-3.5 mt-2.5 p-2.5 rounded-xl bg-surface-200 border border-amber-500/30 flex items-center justify-between gap-2.5 z-20 shadow-sm">
+        <div className="shrink-0 mx-3.5 mt-2.5 p-2.5 rounded-xl bg-surface-200 border chip-warning flex items-center justify-between gap-2.5 z-20">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-6 h-6 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+            <div className="w-6 h-6 rounded-lg chip-warning border flex items-center justify-center shrink-0">
               <Clock size={13} className="text-amber-400" />
             </div>
             <div className="min-w-0">
               <p className="text-[12px] font-semibold text-text-main truncate">
                 <span className="font-mono tabular-nums">{queueStats.ready_count}</span> clips ready &middot;{' '}
-                <span className="text-amber-400 font-mono tabular-nums">{queueStats.queued_count}</span> queued for tomorrow's reset
+                <span className="text-status-warning font-mono tabular-nums">{queueStats.queued_count}</span> queued for tomorrow's reset
               </p>
               <p className="text-[10px] text-text-muted font-mono tabular-nums">
                 Daily free tier quota ({queueStats.daily_quota_used}/{queueStats.daily_quota_max} requests) reached &middot; FIFO auto-drain at midnight UTC
@@ -2275,17 +2275,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           connectionError ? (
             /* Connection Error State */
             <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
-              <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-red-500/30 flex items-center justify-center mb-4 text-red-400">
+              <div className="w-16 h-16 rounded-2xl bg-surface-100 border chip-danger flex items-center justify-center mb-4 text-status-danger">
                 <WifiOff size={26} />
               </div>
-              <h2 className="text-[17px] font-semibold tracking-tight text-text-main">Cannot connect to PC Studio</h2>
-              <p className="text-[12px] text-text-secondary mt-1.5 max-w-[290px] leading-relaxed">
+              <h2 className="text-base font-semibold tracking-tight text-text-main">Cannot connect to PC Studio</h2>
+              <p className="text-sm text-text-secondary mt-1.5 max-w-[290px] leading-relaxed">
                 Attempting to reach <span className="font-mono text-text-main">{pcHost}</span>. Ensure your PC Dispatch server is running and both devices are on the same Wi-Fi network.
               </p>
               <button
                 type="button"
                 onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-5 rounded-xl bg-primary text-white text-[13px] font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-sm"
+                className="mt-5 min-h-[44px] px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
               >
                 <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
                 <span>Retry Connection</span>
@@ -2297,14 +2297,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <div className="w-16 h-16 rounded-2xl bg-surface-100 border border-border flex items-center justify-center mb-4 text-text-muted">
                 <Film size={26} />
               </div>
-              <h2 className="text-[17px] font-semibold tracking-tight text-text-main">No clips yet</h2>
-              <p className="text-[12px] text-text-secondary mt-1.5 max-w-[280px]">
+              <h2 className="text-base font-semibold tracking-tight text-text-main">No clips yet</h2>
+              <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
                 Dispatch will show generated clips here after processing a recording session.
               </p>
               <button
                 type="button"
                 onClick={fetchClips}
-                className="mt-5 min-h-[44px] px-5 rounded-xl bg-surface-200 border border-border text-[13px] font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
+                className="mt-5 min-h-[44px] px-5 rounded-xl bg-surface-200 border border-border text-sm font-semibold text-text-main active:scale-[0.98] transition-all flex items-center gap-2"
               >
                 <RefreshCw size={15} />
                 <span>Refresh Clips</span>
@@ -2397,11 +2397,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                       {/* Center: Metadata */}
                       <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
                         <div>
-                          <h3 className="text-[13px] font-semibold text-text-main leading-snug line-clamp-2">
+                          <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
                             {clip.title || clip.hook || 'Untitled Clip'}
                           </h3>
                           {clip.hook && clip.title !== clip.hook && (
-                            <p className="text-[11px] text-text-secondary mt-0.5 line-clamp-1 italic">
+                            <p className="text-xs text-text-secondary mt-0.5 line-clamp-1 italic">
                               &ldquo;{clip.hook}&rdquo;
                             </p>
                           )}
@@ -2410,14 +2410,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         <div className="flex flex-wrap items-center gap-1.5 mt-2">
                           {/* Virality score if present */}
                           {typeof clip.virality_score === 'number' && clip.virality_score > 0 && (
-                            <span className="font-mono tabular-nums text-[10px] px-1.5 py-0.5 rounded bg-primary/10 border border-primary/25 text-[#60A5FA] font-semibold flex items-center gap-1">
+                            <span className="font-mono tabular-nums text-xs px-1.5 py-0.5 rounded bg-primary/10 border border-primary/25 text-primary font-semibold flex items-center gap-1">
                               <Sparkles size={10} />
                               {clip.virality_score}%
                             </span>
                           )}
 
                           {/* Source session label */}
-                          <span className="font-mono text-[10px] text-text-muted">
+                          <span className="font-mono text-xs text-text-muted">
                             {clip.session_id ? clip.session_id.replace('sess_', '#') : 'Direct'}
                           </span>
                         </div>
@@ -2427,9 +2427,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                       <div className="shrink-0 flex flex-col justify-between items-end pl-1">
                         <div className="flex flex-col items-end gap-1">
                           <span
-                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${isReady
+                            className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${isReady
                               ? 'bg-primary/15 text-primary border-primary/30'
-                              : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              : 'chip-success border'
                               }`}
                           >
                             {isReady ? 'Ready' : 'Uploaded'}
@@ -2437,13 +2437,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
                           {isUploaded && (
                             clip.is_cloud_only ? (
-                              <span className="font-mono text-[9px] text-sky-400 flex items-center gap-1" title="Local MP4 purged after 7-day retention. Thumbnail & live YouTube link preserved permanently.">
+                              <span className="font-mono text-xs text-status-info flex items-center gap-1" title="Local MP4 purged after 7-day retention. Thumbnail & live YouTube link preserved permanently.">
                                 <Cloud size={9} />
                                 <span>Cloud Only</span>
                               </span>
                             ) : (
                               <span
-                                className="font-mono tabular-nums text-[9px] text-text-muted"
+                                className="font-mono tabular-nums text-xs text-text-muted"
                                 title="Local video auto-deletes 7 days after upload to reclaim disk space, keeping thumbnail and YouTube link permanently"
                               >
                                 {daysLeft}d left
@@ -2460,7 +2460,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                                 e.stopPropagation();
                                 window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
                               }}
-                              className="min-h-[36px] px-2 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 text-[10px] font-semibold flex items-center gap-1 active:scale-95 transition-all"
+                              className="min-h-[36px] px-2.5 rounded-lg bg-surface-200 hover:bg-surface-3 border border-border text-text-secondary hover:text-text-main text-xs font-semibold flex items-center gap-1 active:scale-95 transition-all"
                               title="Open live video on YouTube"
                             >
                               <ExternalLink size={11} />
@@ -2502,9 +2502,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const progressPct = Math.min(100, Math.max(0, (currentTime / Math.max(1, duration || currentClip.duration || 40)) * 100));
 
     return (
-      <div className="w-full h-full flex flex-col bg-studio overflow-hidden">
+      <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
         {/* TOP BAR (Target: 48–52px high, 36–40px touch buttons) */}
-        <header className="shrink-0 h-[50px] px-3 border-b border-border bg-[#16191E] z-20 flex items-center justify-between gap-2">
+        <header className="shrink-0 h-[50px] px-3 border-b border-border bg-canvas z-20 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -2519,10 +2519,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <ChevronLeft size={18} />
             </button>
             <div className="min-w-0">
-              <h2 className="text-[14px] font-semibold tracking-tight text-text-main truncate leading-tight">
+              <h2 className="text-base font-semibold tracking-tight text-text-main truncate leading-tight">
                 {currentClip.title || 'Clip Detail'}
               </h2>
-              <div className="text-[10px] text-text-secondary truncate font-mono">
+              <div className="text-xs text-text-muted truncate font-mono">
                 {currentClip.session_id ? `Source: ${currentClip.session_id}` : 'Dispatch Review'}
               </div>
             </div>
@@ -2579,10 +2579,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           <div className="w-full shrink-0 space-y-2">
             {/* Cloud Only 7-Day Retention Notice */}
             {currentClip.is_cloud_only && (
-              <div className="w-full px-3 py-2 rounded-xl bg-sky-500/10 border border-sky-500/25 flex items-center justify-between gap-2">
+              <div className="w-full px-3 py-2 rounded-xl chip-info border flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <Cloud size={14} className="text-sky-400 shrink-0" />
-                  <span className="text-[11px] text-sky-200 truncate font-mono">
+                  <Cloud size={14} className="shrink-0" />
+                  <span className="text-xs truncate font-mono">
                     Local MP4 deleted after 7d retention. Live on YouTube.
                   </span>
                 </div>
@@ -2593,7 +2593,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                       const url = currentClip.remote_url || `https://youtu.be/${currentClip.remote_id}`;
                       window.open(url, '_blank', 'noopener,noreferrer');
                     }}
-                    className="min-h-[28px] px-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[10px] font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition-all"
+                    className="min-h-[32px] px-2.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition-all"
                   >
                     <ExternalLink size={11} />
                     <span>Watch</span>
@@ -2631,7 +2631,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   onPointerDown={(e) => e.stopPropagation()}
                   className="creator-scrubber w-full"
                   style={{
-                    '--track-bg': `linear-gradient(to right, #2563EB ${progressPct}%, #282828 ${progressPct}%)`,
+                    '--track-bg': `linear-gradient(to right, var(--ds-accent) ${progressPct}%, var(--ds-surface-3) ${progressPct}%)`,
                   } as React.CSSProperties}
                   aria-label="Seek video playback"
                 />
@@ -2651,7 +2651,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setViewMode('studio')}
-                className="h-[42px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-[12px] font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                className="min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-3 border border-border text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               >
                 <Scissors size={15} className="text-primary" />
                 <span>Edit</span>
@@ -2665,7 +2665,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     const url = currentClip.remote_url || `https://youtu.be/${currentClip.remote_id}`;
                     window.open(url, '_blank', 'noopener,noreferrer');
                   }}
-                  className="h-[42px] rounded-xl bg-red-600 hover:bg-red-500 text-white text-[12px] font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
                 >
                   <ExternalLink size={14} />
                   <span>Watch on YouTube</span>
@@ -2674,11 +2674,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => setViewMode('publish')}
-                  className="h-[42px] rounded-xl bg-primary hover:bg-primary-hover text-white text-[12px] font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
                 >
                   <Send size={14} />
                   <span>Publish</span>
-                  <span className="text-[10px] opacity-80 font-mono capitalize">({publishMode})</span>
+                  <span className="text-xs opacity-80 font-mono capitalize">({publishMode})</span>
                 </button>
               )}
             </section>
@@ -2705,9 +2705,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         key={opt.id}
                         type="button"
                         onClick={() => handleLayoutChange(opt.id)}
-                        className={`h-[34px] px-2.5 rounded-lg border text-[11px] font-medium whitespace-nowrap active:scale-[0.98] transition-all flex-1 min-w-[64px] ${layoutMode === opt.id
-                          ? 'bg-primary/20 border-primary text-text-main font-semibold shadow-hero-sm'
-                          : 'bg-surface-200 border-border text-text-secondary hover:bg-surface-300'
+                        className={`min-h-[34px] px-2.5 rounded-full border text-[13px] font-medium whitespace-nowrap active:scale-[0.98] transition-all flex-1 min-w-[64px] ${layoutMode === opt.id
+                          ? 'bg-primary-soft border-primary/40 text-primary font-semibold'
+                          : 'bg-surface-200 border-border text-text-secondary hover:text-text-main'
                           }`}
                         title={opt.description}
                       >
@@ -2757,7 +2757,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     return (
       <div className="w-full h-full flex flex-col bg-[#0D1014] text-text-main overflow-hidden select-none relative">
         {/* 1. COMPACT TOP TOOLBAR (Back · Title · Done) */}
-        <header className="shrink-0 h-10 px-3 border-b border-[#232832] bg-[#16191E] z-20 flex items-center justify-between gap-2">
+        <header className="shrink-0 h-10 px-3 border-b border-[#232832] bg-canvas z-20 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -3190,9 +3190,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (!currentClip) return null;
 
     return (
-      <div className="w-full h-full flex flex-col bg-studio overflow-hidden">
+      <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
         {/* PUBLISH TOP BAR */}
-        <header className="shrink-0 px-3 pt-2.5 pb-2 border-b border-border bg-[#16191E] z-20 flex items-center justify-between gap-2">
+        <header className="shrink-0 px-3 pt-2.5 pb-2 border-b border-border bg-canvas z-20 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -3203,10 +3203,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <ChevronLeft size={18} />
             </button>
             <div className="min-w-0">
-              <h2 className="text-[14px] font-semibold tracking-tight text-text-main truncate leading-tight">
+              <h2 className="text-base font-semibold tracking-tight text-text-main truncate leading-tight">
                 Publish Clip
               </h2>
-              <div className="text-[10px] text-text-secondary truncate font-mono">
+              <div className="text-xs text-text-muted truncate">
                 {currentClip.title}
               </div>
             </div>
@@ -3214,18 +3214,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         </header>
 
         {/* PUBLISH SCROLL MAIN */}
-        <main className="flex-1 min-h-0 overflow-y-auto px-3.5 py-3 space-y-3.5 pb-28">
-          {/* Platform Selector */}
+        <main className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-5 pb-28">
+          {/* Platform Selector — destination rows with pill toggles (v3 publish sheet) */}
           <section className="space-y-1.5">
-            <div className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider">
+            <div className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
               Destinations
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-2xl bg-surface-100 border border-border divide-y divide-border/60">
               {[
-                { id: 'youtube_shorts', label: 'YouTube Shorts', icon: <YouTubeShortsIcon />, badge: 'thumbnails.set' },
-                { id: 'instagram', label: 'Instagram Reels', icon: <InstagramIcon />, badge: 'cover_url' },
-                { id: 'linkedin', label: 'LinkedIn Video', icon: <LinkedInIcon />, badge: 'video_thumb' },
-                { id: 'x', label: 'X / Twitter', icon: <XIcon />, badge: 'native' },
+                { id: 'youtube_shorts', label: 'YouTube Shorts', icon: <YouTubeShortsIcon /> },
+                { id: 'instagram', label: 'Instagram Reels', icon: <InstagramIcon /> },
+                { id: 'linkedin', label: 'LinkedIn Video', icon: <LinkedInIcon /> },
+                { id: 'x', label: 'X / Twitter', icon: <XIcon /> },
               ].map((p) => {
                 const isSelected = selectedPlatforms.includes(p.id);
                 return (
@@ -3233,27 +3233,28 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     key={p.id}
                     type="button"
                     onClick={() => togglePlatform(p.id)}
-                    className={`min-h-[44px] p-2.5 rounded-xl border text-[11px] font-medium flex items-center justify-between active:scale-[0.98] transition-all ${isSelected
-                      ? 'bg-primary/15 border-primary text-text-main shadow-hero-sm font-semibold'
-                      : 'bg-surface-100 border-border text-text-muted hover:text-text-secondary'
-                      }`}
+                    aria-pressed={isSelected}
+                    className={`w-full min-h-[52px] px-3 flex items-center justify-between gap-3 text-left text-sm transition-all active:scale-[0.99] ${isSelected ? 'text-text-main' : 'text-text-secondary hover:text-text-main'}`}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
                       {p.icon}
-                      <span>{p.label}</span>
+                      <span className="font-medium truncate">{p.label}</span>
                     </div>
-                    {isSelected && <Check size={14} className="text-primary" />}
+                    {/* Pill toggle: on = accent, knob right (v3) */}
+                    <span className={`w-11 h-6 rounded-full p-0.5 flex items-center transition-colors duration-150 shrink-0 ${isSelected ? 'bg-primary justify-end' : 'bg-surface-3 border border-border justify-start'}`}>
+                      <span className="w-5 h-5 rounded-full bg-white shadow-sm" />
+                    </span>
                   </button>
                 );
               })}
             </div>
           </section>
 
-          {/* Visibility / Privacy Selector */}
+          {/* Visibility / Privacy Selector — segmented, selected inverts via accent */}
           <section className="space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] font-semibold text-text-secondary uppercase tracking-wider">
+            <div className="flex items-center justify-between text-xs font-semibold text-text-secondary uppercase tracking-wider">
               <span>Visibility</span>
-              <span className="font-mono text-[10px] text-primary lowercase tracking-normal font-medium">
+              <span className="font-mono text-primary normal-case tracking-normal font-medium">
                 {publishMode === 'private' && 'Only you can view'}
                 {publishMode === 'unlisted' && 'Anyone with link can view'}
                 {publishMode === 'public' && 'Publicly visible to everyone'}
@@ -3271,16 +3272,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     key={m.id}
                     type="button"
                     onClick={() => setPublishMode(m.id as 'private' | 'unlisted' | 'public')}
-                    className={`min-h-[46px] p-2 rounded-xl border flex flex-col items-center justify-center gap-1 active:scale-[0.98] transition-all ${isSelected
-                      ? 'bg-primary/15 border-primary text-text-main shadow-hero-sm font-semibold'
-                      : 'bg-surface-100 border-border text-text-muted hover:text-text-secondary'
-                      }`}
+                    aria-pressed={isSelected}
+                    className={`min-h-[52px] p-2 rounded-xl border flex flex-col items-center justify-center gap-1 active:scale-[0.98] transition-all ${isSelected
+                      ? 'bg-primary border-primary text-white font-semibold'
+                      : 'bg-surface-100 border-border text-text-secondary hover:text-text-main'
+                    }`}
                   >
-                    <div className="flex items-center gap-1.5">
-                      <span className={isSelected ? 'text-primary' : 'text-text-muted'}>{m.icon}</span>
-                      <span className="text-[12px]">{m.label}</span>
+                    <div className="flex items-center gap-1.5 text-sm">
+                      {m.icon}
+                      <span>{m.label}</span>
                     </div>
-                    <span className="text-[9px] text-text-muted font-sans">{m.desc}</span>
+                    <span className={`text-xs ${isSelected ? 'text-white/80' : 'text-text-muted'}`}>{m.desc}</span>
                   </button>
                 );
               })}
@@ -3290,46 +3292,46 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           {/* Content Fields */}
           <section className="space-y-2.5">
             <div>
-              <label className="text-[11px] font-semibold text-text-secondary block mb-1">
+              <label className="text-xs font-semibold text-text-secondary block mb-1">
                 Publishing Title
               </label>
               <input
                 type="text"
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
-                className="w-full min-h-[42px] rounded-xl bg-surface-100 border border-border px-3 text-[12px] text-text-main outline-none focus:border-primary font-sans"
+                className="w-full min-h-[44px] rounded-xl bg-surface-100 border border-border px-3 text-sm text-text-main outline-none focus:border-border-strong"
                 placeholder="Title for publishing"
               />
             </div>
 
             <div>
-              <label className="text-[11px] font-semibold text-text-secondary block mb-1">
-                Description & #hashtags
+              <label className="text-xs font-semibold text-text-secondary block mb-1">
+                Description &amp; #hashtags
               </label>
               <textarea
                 value={captionDraft}
                 onChange={(e) => setCaptionDraft(e.target.value)}
                 rows={4}
-                className="w-full rounded-xl bg-surface-100 border border-border p-3 text-[12px] text-text-main outline-none focus:border-primary resize-none font-sans"
+                className="w-full rounded-xl bg-surface-100 border border-border p-3 text-sm text-text-main outline-none focus:border-border-strong resize-none"
                 placeholder="Description, credits and hashtags"
               />
             </div>
           </section>
         </main>
 
-        {/* STICKY PUBLISH ACTION FOOTER */}
-        <footer className="shrink-0 border-t border-border bg-[#16191E] px-3.5 py-2.5 z-30">
+        {/* STICKY PUBLISH ACTION FOOTER — hero CTA with destination count inside (v3) */}
+        <footer className="shrink-0 border-t border-border bg-canvas px-4 py-2.5 z-30">
           <button
             type="button"
             onClick={handleApprove}
             disabled={isSubmitting || selectedPlatforms.length === 0}
-            className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-[13px] font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
+            className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
           >
             <Send size={15} />
             <span>
               {isSubmitting
                 ? 'Publishing…'
-                : `Approve & Publish (${publishMode.charAt(0).toUpperCase() + publishMode.slice(1)})`}
+                : `Publish to ${selectedPlatforms.length} ${selectedPlatforms.length === 1 ? 'destination' : 'destinations'} · ${publishMode}`}
             </span>
           </button>
         </footer>
@@ -3350,13 +3352,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       >
         <div
           onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-sm rounded-t-3xl sm:rounded-2xl bg-[#16191E] border border-border p-4 pb-8 sm:pb-4 space-y-3.5 shadow-2xl max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom-4 duration-200"
+          className="w-full max-w-sm rounded-t-3xl sm:rounded-2xl bg-canvas border border-border p-4 pb-8 sm:pb-4 space-y-3.5 shadow-2xl max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom-4 duration-200"
         >
           {/* Mobile Sheet Handle */}
           <div className="w-10 h-1 rounded-full bg-surface-300/60 mx-auto -mt-1 mb-1 sm:hidden" />
 
           <div className="flex items-center justify-between pb-2 border-b border-border/70">
-            <h3 className="text-[14px] font-semibold text-text-main">Clip Options</h3>
+            <h3 className="text-base font-semibold tracking-tight text-text-main">Clip Options</h3>
             <button
               type="button"
               onClick={() => setIsMoreModalOpen(false)}
@@ -3367,7 +3369,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           </div>
 
           {copiedNotice && (
-            <div className="px-3 py-1.5 rounded-lg bg-primary/20 border border-primary/40 text-[11px] text-primary flex items-center gap-1.5">
+            <div className="px-3 py-1.5 rounded-lg bg-primary-soft border border-primary/40 text-xs text-primary flex items-center gap-1.5">
               <Check size={12} />
               <span>{copiedNotice}</span>
             </div>
@@ -3377,7 +3379,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <button
               type="button"
               onClick={() => handleCopy(currentClip.id, 'Clip ID')}
-              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center justify-between text-[12px] font-medium text-text-main active:scale-[0.98]"
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center justify-between text-sm font-medium text-text-main active:scale-[0.98]"
             >
               <div className="flex items-center gap-2">
                 <Copy size={14} className="text-text-muted" />
@@ -3392,7 +3394,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <button
                 type="button"
                 onClick={() => handleCopy(currentClip.session_id!, 'Session ID')}
-                className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center justify-between text-[12px] font-medium text-text-main active:scale-[0.98]"
+                className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center justify-between text-sm font-medium text-text-main active:scale-[0.98]"
               >
                 <div className="flex items-center gap-2">
                   <Layers size={14} className="text-text-muted" />
@@ -3410,7 +3412,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 setIsMoreModalOpen(false);
                 setViewMode('studio');
               }}
-              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-[12px] font-medium text-text-main active:scale-[0.98]"
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-sm font-medium text-text-main active:scale-[0.98]"
             >
               <Scissors size={14} className="text-text-muted" />
               <span>Open in Caption Studio</span>
@@ -3422,7 +3424,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 setIsMoreModalOpen(false);
                 setViewMode('publish');
               }}
-              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-[12px] font-medium text-text-main active:scale-[0.98]"
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-sm font-medium text-text-main active:scale-[0.98]"
             >
               <Share2 size={14} className="text-text-muted" />
               <span>Publish Destinations</span>
@@ -3433,7 +3435,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 type="button"
                 onClick={() => handlePromptReject(currentClip)}
                 disabled={isSubmitting}
-                className="w-full min-h-[44px] px-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 flex items-center justify-center gap-2 text-[12px] font-semibold text-red-400 active:scale-[0.98] transition-all"
+                className="w-full min-h-[44px] px-3 rounded-xl chip-danger border flex items-center justify-center gap-2 text-sm font-semibold hover:opacity-85 active:scale-[0.98] transition-all"
               >
                 <Trash2 size={14} />
                 <span>Reject Clip</span>
@@ -3458,23 +3460,23 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       >
         <div
           onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-sm rounded-t-3xl sm:rounded-2xl bg-[#16191E] border border-border p-5 pb-8 sm:pb-5 space-y-4 shadow-2xl animate-in slide-in-from-bottom-4 duration-200"
+          className="w-full max-w-sm rounded-t-3xl sm:rounded-2xl bg-canvas border border-border p-5 pb-8 sm:pb-5 space-y-4 shadow-2xl animate-in slide-in-from-bottom-4 duration-200"
         >
           {/* Mobile Sheet Handle */}
           <div className="w-10 h-1 rounded-full bg-surface-300/60 mx-auto -mt-2 mb-2 sm:hidden" />
 
           <div className="flex items-start gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0 text-red-400">
+            <div className="w-11 h-11 rounded-2xl chip-danger border flex items-center justify-center shrink-0">
               <Trash2 size={20} />
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="text-[15px] font-semibold text-text-main leading-tight">
-                Reject & Delete Clip?
+              <h3 className="text-base font-semibold tracking-tight text-text-main leading-tight">
+                Reject &amp; Delete Clip?
               </h3>
-              <p className="text-[12px] text-text-secondary mt-1 leading-relaxed">
+              <p className="text-sm text-text-secondary mt-1 leading-relaxed">
                 Are you sure you want to reject <span className="text-text-main font-semibold">&ldquo;{clipToReject.title || clipToReject.hook || 'this clip'}&rdquo;</span>?
               </p>
-              <p className="text-[11px] text-red-400/90 mt-1.5 leading-snug">
+              <p className="text-xs text-status-danger mt-1.5 leading-snug">
                 This will immediately delete the rendered MP4 and thumbnail files from your storage. This action cannot be undone.
               </p>
             </div>
@@ -3485,7 +3487,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               type="button"
               onClick={() => setClipToReject(null)}
               disabled={isSubmitting}
-              className="min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-[13px] font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
+              className="min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-3 border border-border text-text-main text-sm font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
             >
               Cancel
             </button>
@@ -3493,7 +3495,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               type="button"
               onClick={handleConfirmReject}
               disabled={isSubmitting}
-              className="min-h-[44px] rounded-xl bg-red-600 hover:bg-red-500 text-white text-[13px] font-semibold flex items-center justify-center gap-1.5 shadow-hero-sm active:scale-[0.98] transition-all disabled:opacity-50"
+              className="min-h-[44px] rounded-xl bg-danger hover:opacity-90 text-white text-sm font-semibold flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-50"
             >
               {isSubmitting ? (
                 <RotateCw size={14} className="animate-spin" />
@@ -3510,7 +3512,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // Main Render Routing
   return (
-    <div className="w-full h-full bg-studio text-text-main flex flex-col overflow-hidden select-none">
+    <div className="w-full h-full bg-canvas text-text-main flex flex-col overflow-hidden select-none">
       {viewMode === 'library' && renderLibraryView()}
       {viewMode === 'detail' && renderDetailView()}
       {viewMode === 'studio' && renderStudioView()}
