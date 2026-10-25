@@ -2,10 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Settings as SettingsIcon,
   Youtube,
-  Wifi,
   LogOut,
-  Sliders,
-  HardDrive,
   ShieldAlert,
   RefreshCw,
   Monitor,
@@ -13,6 +10,10 @@ import {
   Sun,
   Check,
   UserRound,
+  Camera,
+  Wifi,
+  Laptop,
+  ExternalLink,
 } from 'lucide-react';
 import { Bridge, StorageInfo, apiUrl } from '../bridge';
 import { getThemePreference, setThemePreference, ThemePreference } from '../theme';
@@ -22,10 +23,24 @@ interface SettingsScreenProps {
   onPcHostChange?: (host: string) => void;
 }
 
+const DEFAULT_LENS_KEY = 'dispatch_default_lens';
+
+export function getDefaultLensPref(): 'back' | 'front' {
+  if (typeof localStorage === 'undefined') return 'back';
+  return localStorage.getItem(DEFAULT_LENS_KEY) === 'front' ? 'front' : 'back';
+}
+
+export function setDefaultLensPref(lens: 'back' | 'front') {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(DEFAULT_LENS_KEY, lens);
+  }
+}
+
 /**
- * Settings (Design System v3 §2.7.6): Appearance picker (device/dark/light),
- * account, connections, network, recording profile, storage. Lists + toggles,
- * one section per concern, 14px body / 12px metadata, 16px section titles.
+ * Settings (Design System v3 §2.7.6) — a control panel, not a data sheet.
+ * Every section carries an actionable control: theme picker, default camera,
+ * account sign-out, YouTube connect/disconnect, PC address with live test,
+ * upload network toggle. Static facts are compressed to one metadata line.
  */
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000', onPcHostChange }) => {
   const [youtubeState, setYoutubeState] = useState<{
@@ -45,6 +60,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [feedback, setFeedback] = useState<string | null>(null);
   const [inputHost, setInputHost] = useState(pcHost);
   const [themePref, setThemePref] = useState<ThemePreference>(() => getThemePreference());
+  const [defaultLens, setDefaultLens] = useState<'back' | 'front'>(() => getDefaultLensPref());
   const isNativeAndroid = Bridge.isAvailable();
 
   const fetchYouTubeStatus = async () => {
@@ -97,8 +113,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
   const handleConnectYouTube = async () => {
     if (Bridge.isAvailable()) {
-      // 2026-10-24 architecture pivot: YouTube sign-in happens ON THIS PHONE via
-      // Google OAuth; the PC never transfers credentials or pairing codes.
       // On-device OAuth: Custom Tab to the Dispatch Worker's Google consent flow.
       // The Supabase access token (short-lived) binds the authorization to this user.
       const { currentSession } = await import('../auth/supabase');
@@ -109,14 +123,27 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
       }
       const openTab: any = (window as any).DispatchBridge?.openCustomTab;
       const url = `https://dispatch-cloud.resolviaai.workers.dev/oauth/google/start?token=${encodeURIComponent(sess.access_token)}`;
+      let opened = false;
       if (typeof openTab === 'function') {
-        openTab(url);
-        setFeedback('Google sign-in opened. Approve access, then return here.');
-        setTimeout(fetchYouTubeStatus, 8000);
-        return;
+        try {
+          opened = openTab(url) !== false;
+        } catch {
+          opened = false;
+        }
       }
-      window.open(url, '_blank');
-      setFeedback('Google sign-in opened in your browser. Approve access, then return here.');
+      if (!opened) {
+        // Fallback for devices without a Custom Tab handler: system browser.
+        try {
+          opened = !!window.open(url, '_blank');
+        } catch {
+          opened = false;
+        }
+      }
+      setFeedback(
+        opened
+          ? 'Google sign-in opened. Approve access, then return here.'
+          : 'Could not open the browser on this device. Check that a browser is installed and retry.'
+      );
       setTimeout(fetchYouTubeStatus, 8000);
       return;
     }
@@ -208,7 +235,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   };
 
   const themeOptions: { id: ThemePreference; label: string; desc: string; icon: React.ReactNode }[] = [
-    { id: 'device', label: 'Use device theme', desc: 'Follows your phone\'s setting', icon: <Monitor size={16} /> },
+    { id: 'device', label: 'Use device theme', desc: 'Follows your phone\u2019s setting', icon: <Monitor size={16} /> },
     { id: 'dark', label: 'Dark', desc: 'Studio charcoal', icon: <Moon size={16} /> },
     { id: 'light', label: 'Light', desc: 'Bright daylight', icon: <Sun size={16} /> },
   ];
@@ -216,6 +243,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const handleThemeChange = (pref: ThemePreference) => {
     setThemePref(pref);
     setThemePreference(pref); // instant recolour, no reload
+  };
+
+  const handleLensChange = (lens: 'back' | 'front') => {
+    setDefaultLens(lens);
+    setDefaultLensPref(lens); // applied next time the Record screen opens
   };
 
   const storageUsedPct = storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb) && storageInfo.totalGb! > 0
@@ -232,7 +264,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           Settings
         </h1>
         <p className="text-xs text-text-muted mt-0.5">
-          Appearance, accounts &amp; recording preferences
+          Controls for how Dispatch looks, records, and syncs
         </p>
       </div>
 
@@ -241,15 +273,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
         {/* FEEDBACK BANNER */}
         {feedback && (
-          <div role="status" className="p-3 rounded-xl bg-surface-100 border border-border text-sm text-text-secondary">
+          <div role="status" className="p-3 rounded-xl bg-surface border border-border text-sm text-text-secondary">
             {feedback}
           </div>
         )}
 
         {/* 1. APPEARANCE */}
-        <section className="rounded-2xl bg-surface-100 border border-border p-4 space-y-3">
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
           <h2 className="text-base font-semibold tracking-tight text-text-main">Appearance</h2>
-          <p className="text-xs text-text-muted">Switching recolours the app instantly — no reload.</p>
           <div className="space-y-2" role="radiogroup" aria-label="Theme">
             {themeOptions.map((opt) => {
               const isSelected = themePref === opt.id;
@@ -263,7 +294,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                   className={`w-full min-h-[44px] flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-left transition-all active:scale-[0.98] ${
                     isSelected
                       ? 'bg-primary-soft border-primary/50 text-text-main'
-                      : 'bg-surface-200 border-border text-text-secondary hover:text-text-main hover:border-border-strong'
+                      : 'bg-surface-2 border-border text-text-secondary hover:text-text-main hover:border-border-strong'
                   }`}
                 >
                   <span className="flex items-center gap-3 min-w-0">
@@ -280,8 +311,47 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 2. ACCOUNT */}
-        <section className="rounded-2xl bg-surface-100 border border-border p-4 space-y-3">
+        {/* 2. RECORDING — real controls, facts compressed */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
+          <h2 className="text-base font-semibold tracking-tight text-text-main">Recording</h2>
+
+          {/* Default camera control */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="flex items-center gap-2 text-sm font-medium text-text-main">
+                <Camera size={15} className="text-text-muted" />
+                Default camera
+              </span>
+              <span className="text-xs text-text-muted">Opens with the Record screen</span>
+            </div>
+            <div className="flex items-center p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Default camera">
+              {(['back', 'front'] as const).map((lens) => {
+                const isSelected = defaultLens === lens;
+                return (
+                  <button
+                    key={lens}
+                    type="button"
+                    role="radio"
+                    aria-checked={isSelected}
+                    onClick={() => handleLensChange(lens)}
+                    className={`flex-1 min-h-[36px] rounded-lg text-sm font-medium transition-all active:scale-[0.98] ${
+                      isSelected ? 'bg-primary text-white font-semibold' : 'text-text-secondary hover:text-text-main'
+                    }`}
+                  >
+                    {lens === 'back' ? 'Back camera' : 'Front camera'}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <p className="text-xs text-text-muted tabular-nums">
+            Captures 1080p FHD · 30&nbsp;FPS · 10-minute auto-saved segments · AAC 48&nbsp;kHz
+          </p>
+        </section>
+
+        {/* 3. ACCOUNT */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
           <h2 className="text-base font-semibold tracking-tight text-text-main">Account</h2>
           <div className="flex items-center gap-3">
             <span className="w-10 h-10 rounded-full bg-primary-soft border border-primary/30 flex items-center justify-center text-primary shrink-0">
@@ -293,14 +363,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             </div>
           </div>
           <button onClick={handleSignOut}
-            className="w-full min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-sm font-medium text-text-secondary hover:text-danger transition-all duration-150 active:scale-[0.98] flex items-center justify-center gap-2">
+            className="w-full min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-secondary hover:text-danger transition-all duration-150 active:scale-[0.98] flex items-center justify-center gap-2">
             <LogOut size={15} />
             Sign out
           </button>
         </section>
 
-        {/* 3. YOUTUBE CONNECTION */}
-        <section className="rounded-2xl bg-surface-100 border border-border p-4 space-y-3">
+        {/* 4. YOUTUBE */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold tracking-tight text-text-main">YouTube</h2>
 
@@ -317,13 +387,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             )}
           </div>
 
-          <p className="text-sm text-text-secondary leading-relaxed">
-            Recordings upload directly as unlisted videos tagged <code className="text-primary font-mono text-xs">[DISPATCH]</code> for PC pipeline ingestion.
-          </p>
-
           {youtubeState.connected ? (
             <div className="space-y-2 pt-1">
-              <div className="p-3 rounded-xl bg-surface-200 border border-border flex items-center justify-between gap-3 text-sm">
+              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
                 <span className="text-text-muted shrink-0">Channel</span>
                 <span className="text-status-success font-medium truncate">
                   {youtubeState.channelTitle || 'Dispatch Authenticated'}
@@ -332,7 +398,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
               <button
                 onClick={handleDisconnectYouTube}
-                className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-secondary hover:text-danger text-sm flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98]"
+                className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-secondary hover:text-danger text-sm flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98]"
               >
                 <LogOut size={15} />
                 <span>Disconnect Account</span>
@@ -340,42 +406,21 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             </div>
           ) : isNativeAndroid ? (
             <div className="space-y-3 pt-1">
-              <label className="block text-sm font-medium text-text-main" htmlFor="pc-host">
-                PC address
-              </label>
-              <input
-                id="pc-host"
-                value={inputHost}
-                onChange={(event) => setInputHost(event.target.value)}
-                placeholder="192.168.0.200:8000"
-                autoCapitalize="none"
-                autoCorrect="off"
-                className="w-full min-h-[44px] rounded-xl bg-surface-200 border border-border px-3 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:border-border-strong"
-              />
-              <button
-                type="button"
-                onClick={handleSaveHost}
-                disabled={isSavingHost}
-                className="w-full min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-sm font-medium transition-all duration-150 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {isSavingHost ? <RefreshCw size={15} className="animate-spin text-primary" /> : null}
-                <span>{isSavingHost ? 'Verifying host…' : 'Save PC address'}</span>
-              </button>
-
               <p className="text-sm text-text-secondary leading-relaxed">
                 Connect your own YouTube account with Google sign-in on this phone. Recordings upload to your channel as unlisted for PC processing.
               </p>
               <button
                 onClick={handleConnectYouTube}
-                className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow"
+                disabled={isChecking}
+                className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all duration-150 active:scale-[0.98] shadow-hero-glow disabled:opacity-50"
               >
                 <Youtube size={16} />
                 <span>Connect YouTube (Google sign-in)</span>
               </button>
-              <div className="rounded-xl bg-surface-200 border border-border p-3 flex gap-2">
+              <div className="rounded-xl bg-surface-2 border border-border p-3 flex gap-2">
                 <ShieldAlert size={16} className="shrink-0 text-primary mt-0.5" />
                 <p className="text-xs text-text-muted leading-relaxed">
-                  You approve access in Google's own screen. Tokens stay encrypted on the PC backend — never over plain HTTP.
+                  You approve access in Google&rsquo;s own screen. Tokens stay encrypted on the PC backend — never over plain HTTP.
                 </p>
               </div>
             </div>
@@ -396,13 +441,41 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           )}
         </section>
 
-        {/* 4. NETWORK & UPLOAD */}
-        <section className="rounded-2xl bg-surface-100 border border-border p-4 space-y-3">
-          <h2 className="text-base font-semibold tracking-tight text-text-main">Network &amp; Upload</h2>
+        {/* 5. SYNC & PC — host control + network toggle together */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
+          <h2 className="text-base font-semibold tracking-tight text-text-main">Sync &amp; PC</h2>
+
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-medium text-text-main" htmlFor="pc-host">
+              <Laptop size={15} className="text-text-muted" />
+              PC address
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id="pc-host"
+                value={inputHost}
+                onChange={(event) => setInputHost(event.target.value)}
+                placeholder="192.168.0.200:8000"
+                autoCapitalize="none"
+                autoCorrect="off"
+                className="flex-1 min-w-0 min-h-[44px] rounded-xl bg-surface-2 border border-border px-3 text-sm font-mono text-text-main placeholder:text-text-muted focus:outline-none focus:border-border-strong"
+              />
+              <button
+                type="button"
+                onClick={handleSaveHost}
+                disabled={isSavingHost}
+                className="min-h-[44px] px-3.5 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main transition-all duration-150 active:scale-[0.98] disabled:opacity-50 flex items-center gap-2 shrink-0"
+              >
+                {isSavingHost ? <RefreshCw size={14} className="animate-spin text-primary" /> : null}
+                <span>{isSavingHost ? 'Testing…' : 'Save & test'}</span>
+              </button>
+            </div>
+          </div>
 
           <div className="flex items-center justify-between gap-4 pt-1">
             <div className="min-w-0">
-              <span className="text-sm text-text-main block">
+              <span className="flex items-center gap-2 text-sm text-text-main">
+                <Wifi size={15} className="text-text-muted" />
                 Upload over Wi-Fi automatically
               </span>
               <span className="text-xs text-text-muted block mt-0.5">
@@ -431,28 +504,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 5. RECORDING PROFILE */}
-        <section className="rounded-2xl bg-surface-100 border border-border p-4 space-y-2.5">
-          <h2 className="text-base font-semibold tracking-tight text-text-main">Recording Profile</h2>
-
-          <div className="space-y-1.5 text-sm tabular-nums text-text-muted pt-1">
-            <div className="flex justify-between p-2.5 rounded-xl bg-surface-200 border border-border/60">
-              <span>Resolution</span>
-              <span className="text-text-main font-medium font-mono">1080p FHD · 30&nbsp;FPS</span>
-            </div>
-            <div className="flex justify-between p-2.5 rounded-xl bg-surface-200 border border-border/60">
-              <span>Segment Roll</span>
-              <span className="text-text-main font-medium">Seamless boundary</span>
-            </div>
-            <div className="flex justify-between p-2.5 rounded-xl bg-surface-200 border border-border/60">
-              <span>Audio Codec</span>
-              <span className="text-text-main font-medium font-mono">AAC 48&nbsp;kHz Stereo</span>
-            </div>
-          </div>
-        </section>
-
         {/* 6. STORAGE */}
-        <section className="rounded-2xl bg-surface-100 border border-border p-4 space-y-2">
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold tracking-tight text-text-main">Storage</h2>
             <span className="text-xs font-mono tabular-nums text-text-muted">
@@ -479,6 +532,25 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               {storageInfo?.error || 'Storage information is loading.'}
             </p>
           )}
+        </section>
+
+        {/* 7. ABOUT — one line of truth */}
+        <section className="rounded-2xl bg-surface border border-border p-4 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold tracking-tight text-text-main">About</h2>
+            <p className="text-xs text-text-muted mt-0.5">
+              Dispatch — record once, publish clips. Your phone records, your PC renders, your accounts publish.
+            </p>
+          </div>
+          <a
+            href="https://github.com/Resolviaai/Dispatch/issues"
+            target="_blank"
+            rel="noreferrer"
+            className="min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-secondary hover:text-text-main flex items-center gap-1.5 shrink-0 transition-all active:scale-[0.98]"
+          >
+            <ExternalLink size={14} />
+            Report issue
+          </a>
         </section>
 
       </div>

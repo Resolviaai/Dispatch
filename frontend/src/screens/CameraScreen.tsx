@@ -18,6 +18,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent, ExposureResultEvent } from '../bridge';
+import { getDefaultLensPref } from './SettingsScreen';
 import {
   applyExposureResult,
   applyFocusResult,
@@ -182,6 +183,20 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const lastZoomIntegerRef = useRef(1);
   const chainedUnlockFocusRef = useRef<number | null>(null);
   const [lockDimmed, setLockDimmed] = useState(false);
+
+  // Apply the user's default camera choice (Settings → Recording) once, when the
+  // camera is first ready. A ref guard ensures we never fight a manual flip.
+  const appliedDefaultLensRef = useRef(false);
+  useEffect(() => {
+    if (appliedDefaultLensRef.current) return;
+    if (cameraStatus.status !== 'ready') return;
+    appliedDefaultLensRef.current = true;
+    const wanted = getDefaultLensPref();
+    if (wanted === 'front' && cameraFacing === 'back') {
+      setCameraFacing('front');
+      Bridge.switchCamera();
+    }
+  }, [cameraStatus.status, cameraFacing]);
 
   // Synchronize native recording status when running inside Dispatch Android WebView
   useEffect(() => {
