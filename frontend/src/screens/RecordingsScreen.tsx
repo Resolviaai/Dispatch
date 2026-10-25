@@ -10,15 +10,11 @@ import {
   Play,
   Youtube,
   CheckCircle2,
-  Search,
   Copy,
   Trash2,
-  Download,
   Camera,
   MoreVertical,
-  Layers,
-  Check,
-  Cloud
+  Check
 } from 'lucide-react';
 import { RecordingItem, apiUrl } from '../bridge';
 import { WORKER_BASE } from '../accounts/accountsService';
@@ -89,8 +85,6 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [viewMode, setViewMode] = useState<ViewMode>('library');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterStatus>('all');
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<UnifiedSession | null>(null);
 
@@ -113,7 +107,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
   // Helper: check PC Studio and Cloud connectivity
@@ -135,7 +129,6 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     if (lanOnline) {
       setPcStatus({ online: true, checking: false, isCloudMode: false });
     } else {
-      // Check if signed into Cloud
       const sess = await currentSession().catch(() => null);
       setPcStatus({ online: false, checking: false, isCloudMode: !!sess?.access_token });
     }
@@ -272,7 +265,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${timeStr}`;
   };
 
-  // UNIFIED SESSIONS MODEL: Merges native phone recordings and YouTube inbox imports
+  // UNIFIED SESSIONS MODEL: Merges native phone recordings and YouTube inbox items
   const unifiedSessions: UnifiedSession[] = useMemo(() => {
     const list: UnifiedSession[] = [];
     const seenYtIds = new Set<string>();
@@ -364,25 +357,15 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return unifiedSessions.find(s => s.id === selectedSessionId) || null;
   }, [unifiedSessions, selectedSessionId]);
 
-  // Tab Filtering & Search Filtering
+  // Tab Filtering (Clean, zero search overhead)
   const filteredSessions = useMemo(() => {
     return unifiedSessions.filter(s => {
-      const matchFilter =
-        filter === 'all' ||
-        (filter === 'ready' && s.status === 'ready') ||
-        (filter === 'processing' && s.status === 'processing') ||
-        (filter === 'queued' && (s.status === 'queued' || s.status === 'failed'));
-
-      const q = searchQuery.trim().toLowerCase();
-      const matchSearch =
-        !q ||
-        s.title.toLowerCase().includes(q) ||
-        s.id.toLowerCase().includes(q) ||
-        (s.youtubeVideoId && s.youtubeVideoId.toLowerCase().includes(q));
-
-      return matchFilter && matchSearch;
+      if (filter === 'ready') return s.status === 'ready';
+      if (filter === 'processing') return s.status === 'processing';
+      if (filter === 'queued') return s.status === 'queued' || s.status === 'failed';
+      return true;
     });
-  }, [unifiedSessions, filter, searchQuery]);
+  }, [unifiedSessions, filter]);
 
   // Counts for tabs
   const readyCount = unifiedSessions.filter(s => s.status === 'ready').length;
@@ -402,7 +385,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     const videoId = extractVideoId(value);
     if (!videoId) {
       setImportState('error');
-      setImportError('Enter a valid YouTube video URL or 11-character video ID.');
+      setImportError('Enter a valid YouTube video link or ID.');
       return;
     }
     setImportState('submitting');
@@ -412,14 +395,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       const sess = await currentSession().catch(() => null);
       let res: Response;
       if (sess?.access_token) {
-        // Submit via Cloud Worker (works on cellular, other Wi-Fi, or anywhere)
         res = await fetch(`${WORKER_BASE}/jobs/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
           body: JSON.stringify({ url: value })
         });
       } else {
-        // Direct LAN PC companion submit
         res = await fetch(apiUrl('/api/youtube/ingest', pcHost), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -430,16 +411,16 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       if (res.ok) {
         setImportState('queued');
         setImportUrl('');
-        showToast(`Video queued! Your PC Studio will download & extract clips.`);
+        showToast('Video added! Your PC will create clips.');
         fetchInbox();
       } else {
         const body = await res.json().catch(() => ({}));
         setImportState('error');
-        setImportError(body.error || `Import failed (${res.status})`);
+        setImportError(body.error || `Failed to add video (${res.status})`);
       }
     } catch (e: any) {
       setImportState('error');
-      setImportError(e.message || 'Network error submitting video.');
+      setImportError(e.message || 'Network error.');
     } finally {
       setTimeout(() => setImportState('idle'), 3000);
     }
@@ -447,11 +428,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard?.writeText(text);
-    showToast(`${label} copied to clipboard`);
+    showToast(`${label} copied`);
   };
 
   // =========================================================================
-  // VIEW: SESSION DETAILS PAGE (Full Screen, identical aesthetic to Clips detail)
+  // VIEW: SESSION DETAILS PAGE (Full Screen workstation)
   // =========================================================================
   const renderDetailView = () => {
     if (!currentSessionDetail) return null;
@@ -462,7 +443,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
     return (
       <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
-        {/* TOP BAR — 56px, ghost circular buttons matching ClipsScreen */}
+        {/* TOP BAR — 56px, ghost circular buttons */}
         <header className="shrink-0 h-14 px-2 border-b border-border bg-canvas z-20 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 min-w-0">
             <button
@@ -472,7 +453,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 setSelectedSessionId(null);
               }}
               className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
-              title="Back to Sessions"
+              title="Back"
               aria-label="Back"
             >
               <ChevronLeft size={20} />
@@ -482,7 +463,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 {s.title}
               </h2>
               <div className="text-xs text-text-muted truncate tabular-nums flex items-center gap-1.5">
-                <span>{s.origin === 'phone' ? 'Camera Session' : 'YouTube Ingest'}</span>
+                <span>{s.origin === 'phone' ? 'Camera Recording' : 'YouTube Video'}</span>
                 <span>&middot;</span>
                 <span className="font-mono">#{s.id.slice(0, 8)}</span>
               </div>
@@ -539,16 +520,16 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   <Film size={22} />
                 </div>
                 <p className="text-xs font-medium text-text-secondary">
-                  {isProcessing ? 'AI Processing Active on PC Companion' : 'Queued for Ingestion'}
+                  {isProcessing ? 'Making clips on PC…' : 'Waiting for PC'}
                 </p>
                 <p className="text-[11px] text-text-muted max-w-[260px] mx-auto">
-                  Footage is stored safely. Your companion PC will download, transcribe, and extract vertical clips.
+                  Your PC will automatically create vertical clips from this video.
                 </p>
               </div>
             )}
           </div>
 
-          {/* COMPACT METRICS ROW (Clean 1-line strip, matching design tokens) */}
+          {/* COMPACT METRICS ROW */}
           <div className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border text-xs">
             <div className="space-y-0.5">
               <span className="text-[10px] uppercase font-semibold text-text-muted block">Duration</span>
@@ -562,7 +543,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <div className="space-y-0.5 text-center">
               <span className="text-[10px] uppercase font-semibold text-text-muted block">Storage</span>
               <span className="font-mono font-semibold tabular-nums text-text-main">
-                {s.totalBytes > 0 ? formatBytes(s.totalBytes) : 'YouTube Cloud'}
+                {s.totalBytes > 0 ? formatBytes(s.totalBytes) : 'YouTube'}
               </span>
             </div>
 
@@ -594,7 +575,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 className="w-full min-h-[46px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
               >
                 <Sparkles size={16} />
-                <span>Open Studio ({s.clipCount}&nbsp;{s.clipCount === 1 ? 'clip' : 'clips'})</span>
+                <span>View {s.clipCount}&nbsp;{s.clipCount === 1 ? 'Clip' : 'Clips'}</span>
               </button>
             ) : (
               <button
@@ -603,12 +584,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   checkPcStudio();
                   fetchInbox();
                   fetchClips();
-                  showToast('Checking PC Studio queue status…');
+                  showToast('Checking PC status…');
                 }}
                 className="w-full min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               >
                 <RotateCw size={14} className={pcStatus.checking ? 'animate-spin' : ''} />
-                <span>Check PC Studio Queue Status</span>
+                <span>Check PC Status</span>
               </button>
             )}
 
@@ -617,7 +598,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 type="button"
                 onClick={() => {
                   const text = s.youtubeVideoId ? `https://youtu.be/${s.youtubeVideoId}` : s.id;
-                  handleCopy(text, 'Session link');
+                  handleCopy(text, 'Link');
                 }}
                 className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
               >
@@ -631,7 +612,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   if (s.youtubeVideoId) {
                     handleImportSubmit(`https://youtu.be/${s.youtubeVideoId}`);
                   } else {
-                    showToast('Re-processing session on PC Studio…');
+                    showToast('Re-processing on PC…');
                   }
                 }}
                 className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
@@ -656,12 +637,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   };
 
   // =========================================================================
-  // VIEW: SESSIONS LIBRARY (Flat, clean, matching ClipsScreen architecture)
+  // VIEW: SESSIONS LIBRARY (Minimal, No Separator Lines, Clean Order)
   // =========================================================================
   const renderLibraryView = () => (
     <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
-      {/* HEADER — title + metadata, actions matching ClipsScreen */}
-      <header className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas z-20">
+      {/* 1. HEADER — title + metadata, refresh button */}
+      <header className="shrink-0 px-4 pt-4 pb-2 bg-canvas z-20">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
@@ -691,60 +672,59 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             </p>
           </div>
 
-          {/* Top right actions: Search toggle icon + Refresh */}
-          <div className="flex items-center gap-1 -mr-2">
-            <button
-              type="button"
-              onClick={() => setIsSearchOpen(!isSearchOpen)}
-              aria-label="Search sessions"
-              className={`w-11 h-11 rounded-full flex items-center justify-center active:scale-[0.95] transition-all ${
-                isSearchOpen ? 'text-primary bg-primary-soft' : 'text-text-secondary hover:text-text-main hover:bg-surface-2'
-              }`}
-            >
-              <Search size={18} />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                checkPcStudio();
-                fetchClips();
-                fetchInbox();
-              }}
-              disabled={pcStatus.checking}
-              aria-label="Refresh sessions"
-              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
-            >
-              <RotateCw size={18} className={pcStatus.checking ? 'animate-spin' : ''} />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              checkPcStudio();
+              fetchClips();
+              fetchInbox();
+            }}
+            disabled={pcStatus.checking}
+            aria-label="Refresh sessions"
+            className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all -mr-2"
+          >
+            <RotateCw size={18} className={pcStatus.checking ? 'animate-spin' : ''} />
+          </button>
         </div>
+      </header>
 
-        {/* Collapsible search bar */}
-        {isSearchOpen && (
-          <div className="mt-3 relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search sessions by title, date, or ID…"
-              autoFocus
-              className="w-full min-h-[36px] pl-8 pr-8 rounded-lg bg-surface-2 border border-border text-xs text-text-main placeholder:text-text-muted outline-none focus:border-primary"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main"
-              >
-                <X size={13} />
-              </button>
+      {/* 2. YOUTUBE URL PASTE BOX (Above the filter chips, simple plain English) */}
+      <div className="shrink-0 px-4 pt-1 pb-2 bg-canvas">
+        <div className="flex items-center gap-2 p-1.5 pl-3 rounded-xl bg-surface-2 border border-border focus-within:border-primary transition-all">
+          <Youtube size={18} className="text-danger shrink-0" />
+          <input
+            type="url"
+            value={importUrl}
+            onChange={e => setImportUrl(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleImportSubmit();
+            }}
+            placeholder="Paste YouTube link…"
+            className="flex-1 bg-transparent text-xs text-text-main placeholder:text-text-muted outline-none min-w-0"
+          />
+          <button
+            type="button"
+            onClick={() => handleImportSubmit()}
+            disabled={!importUrl.trim() || importState === 'submitting'}
+            className="min-h-[36px] px-4 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold active:scale-[0.98] transition-all shrink-0 flex items-center gap-1 shadow-sm disabled:opacity-40"
+          >
+            {importState === 'submitting' && (
+              <RotateCw size={13} className="animate-spin" />
             )}
-          </div>
+            <span>Add</span>
+          </button>
+        </div>
+        {importError && (
+          <p className="mt-1.5 text-xs text-danger flex items-center gap-1">
+            <AlertCircle size={12} />
+            <span>{importError}</span>
+          </p>
         )}
+      </div>
 
-        {/* FILTER CHIPS — uniform pills, matching ClipsScreen */}
-        <div className="mt-3 flex items-center gap-2 overflow-x-auto no-scrollbar">
+      {/* 3. FILTER CHIPS (Positioned cleanly BELOW the YouTube URL box) */}
+      <div className="shrink-0 px-4 pb-3 bg-canvas">
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
           {[
             { id: 'all' as FilterStatus, label: 'All', count: unifiedSessions.length },
             { id: 'ready' as FilterStatus, label: 'Ready', count: readyCount },
@@ -770,42 +750,6 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             );
           })}
         </div>
-      </header>
-
-      {/* PROMINENT IMPORT YOUTUBE VIDEO BAR (Dedicated high-visibility input dock) */}
-      <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border bg-canvas">
-        <div className="flex items-center gap-2 p-1.5 pl-3 rounded-xl bg-surface-2 border border-border focus-within:border-primary transition-all">
-          <Youtube size={18} className="text-danger shrink-0" />
-          <input
-            type="url"
-            value={importUrl}
-            onChange={e => setImportUrl(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') handleImportSubmit();
-            }}
-            placeholder="Paste YouTube URL to ingest & extract clips…"
-            className="flex-1 bg-transparent text-xs text-text-main placeholder:text-text-muted outline-none min-w-0"
-          />
-          <button
-            type="button"
-            onClick={() => handleImportSubmit()}
-            disabled={!importUrl.trim() || importState === 'submitting'}
-            className="min-h-[36px] px-3.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold active:scale-[0.98] transition-all shrink-0 flex items-center gap-1.5 shadow-hero-glow disabled:opacity-40"
-          >
-            {importState === 'submitting' ? (
-              <RotateCw size={13} className="animate-spin" />
-            ) : (
-              <Download size={13} />
-            )}
-            <span>Import</span>
-          </button>
-        </div>
-        {importError && (
-          <p className="mt-1.5 text-xs text-danger flex items-center gap-1">
-            <AlertCircle size={12} />
-            <span>{importError}</span>
-          </p>
-        )}
       </div>
 
       {/* TOAST NOTIFICATION STRIP */}
@@ -825,22 +769,20 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         </div>
       )}
 
-      {/* SESSIONS LIST — flat rows on canvas, separated by dividers (matching ClipsScreen) */}
-      <main className="flex-1 min-h-0 overflow-y-auto pb-24">
+      {/* 4. SESSIONS LIST — completely free of separator lines */}
+      <main className="flex-1 min-h-0 overflow-y-auto px-4 pb-24 space-y-1">
         {filteredSessions.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
             <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
               <Film size={24} />
             </div>
             <h2 className="text-base font-semibold tracking-tight text-text-main">
-              {searchQuery ? 'No matching sessions' : 'No sessions recorded yet'}
+              No sessions found
             </h2>
             <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
-              {searchQuery
-                ? 'Try searching with a different date, title, or video ID.'
-                : 'Film a session with your camera or paste a YouTube URL above to extract clips.'}
+              Record with your camera or paste a YouTube link above to create clips.
             </p>
-            {onNavigateToRecord && !searchQuery && (
+            {onNavigateToRecord && (
               <button
                 type="button"
                 onClick={onNavigateToRecord}
@@ -852,92 +794,90 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             )}
           </div>
         ) : (
-          <div className="px-4">
-            {filteredSessions.map(session => {
-              const ytId = session.youtubeVideoId;
-              const isReady = session.status === 'ready';
-              const isProcessing = session.status === 'processing';
+          filteredSessions.map(session => {
+            const ytId = session.youtubeVideoId;
+            const isReady = session.status === 'ready';
+            const isProcessing = session.status === 'processing';
 
-              return (
-                <div
-                  key={session.id}
-                  onClick={() => {
-                    setSelectedSessionId(session.id);
-                    setViewMode('detail');
-                  }}
-                  className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors border-b border-border/50"
-                >
-                  {/* 16:9 Thumbnail Stage */}
-                  <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
-                    <Film size={16} className="text-white/40" />
-                    {ytId ? (
-                      <img
-                        src={`https://img.youtube.com/vi/${ytId}/mqdefault.jpg`}
-                        alt=""
-                        className="absolute inset-0 w-full h-full object-cover"
-                        loading="lazy"
-                        onError={e => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
-                    ) : session.videoUrl ? (
-                      <video
-                        src={session.videoUrl.startsWith('http') ? session.videoUrl : apiUrl(session.videoUrl, pcHost)}
-                        className="absolute inset-0 w-full h-full object-cover"
-                        preload="metadata"
-                      />
-                    ) : null}
+            return (
+              <div
+                key={session.id}
+                onClick={() => {
+                  setSelectedSessionId(session.id);
+                  setViewMode('detail');
+                }}
+                className="group w-full py-2.5 flex items-start gap-3 cursor-pointer hover:bg-surface-2/40 active:bg-surface-2 transition-colors rounded-xl px-1 select-none"
+              >
+                {/* 16:9 Thumbnail Stage */}
+                <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
+                  <Film size={16} className="text-white/40" />
+                  {ytId ? (
+                    <img
+                      src={`https://img.youtube.com/vi/${ytId}/mqdefault.jpg`}
+                      alt=""
+                      className="absolute inset-0 w-full h-full object-cover"
+                      loading="lazy"
+                      onError={e => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  ) : session.videoUrl ? (
+                    <video
+                      src={session.videoUrl.startsWith('http') ? session.videoUrl : apiUrl(session.videoUrl, pcHost)}
+                      className="absolute inset-0 w-full h-full object-cover"
+                      preload="metadata"
+                    />
+                  ) : null}
 
-                    {/* Origin Badge */}
-                    <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 text-white text-[9px] font-medium flex items-center gap-0.5">
-                      {session.origin === 'phone' ? <Camera size={8} /> : <Youtube size={8} className="text-danger" />}
-                      <span>{session.origin === 'phone' ? 'Camera' : 'YouTube'}</span>
-                    </span>
+                  {/* Origin Badge */}
+                  <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 text-white text-[9px] font-medium flex items-center gap-0.5">
+                    {session.origin === 'phone' ? <Camera size={8} /> : <Youtube size={8} className="text-danger" />}
+                    <span>{session.origin === 'phone' ? 'Camera' : 'YouTube'}</span>
+                  </span>
 
-                    {/* Duration badge */}
-                    <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
-                      {formatDuration(session.totalDuration)}
-                    </span>
-                  </div>
-
-                  {/* Title + Metadata */}
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
-                      {session.title}
-                    </h3>
-
-                    <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted tabular-nums truncate">
-                      <span>{session.totalBytes > 0 ? formatBytes(session.totalBytes) : 'YouTube'}</span>
-                      <span>&middot;</span>
-                      {isReady ? (
-                        <span className="text-status-success font-medium">Ready</span>
-                      ) : isProcessing ? (
-                        <span className="text-status-warning font-medium">Processing</span>
-                      ) : session.status === 'failed' ? (
-                        <span className="text-danger font-medium">Failed</span>
-                      ) : (
-                        <span>Queued</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Kebab — circular ghost button */}
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setSelectedSessionId(session.id);
-                      setIsOptionsModalOpen(true);
-                    }}
-                    aria-label="More options"
-                    className="-mr-2 w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
-                  >
-                    <MoreVertical size={18} />
-                  </button>
+                  {/* Duration badge */}
+                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
+                    {formatDuration(session.totalDuration)}
+                  </span>
                 </div>
-              );
-            })}
-          </div>
+
+                {/* Title + Metadata */}
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
+                    {session.title}
+                  </h3>
+
+                  <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted tabular-nums truncate">
+                    <span>{session.totalBytes > 0 ? formatBytes(session.totalBytes) : 'YouTube'}</span>
+                    <span>&middot;</span>
+                    {isReady ? (
+                      <span className="text-status-success font-medium">Ready</span>
+                    ) : isProcessing ? (
+                      <span className="text-status-warning font-medium">Processing</span>
+                    ) : session.status === 'failed' ? (
+                      <span className="text-danger font-medium">Failed</span>
+                    ) : (
+                      <span>Queued</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Kebab — circular ghost button */}
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation();
+                    setSelectedSessionId(session.id);
+                    setIsOptionsModalOpen(true);
+                  }}
+                  aria-label="Options"
+                  className="-mr-1 w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+                >
+                  <MoreVertical size={18} />
+                </button>
+              </div>
+            );
+          })
         )}
       </main>
     </div>
@@ -948,18 +888,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       {viewMode === 'library' && renderLibraryView()}
       {viewMode === 'detail' && renderDetailView()}
 
-      {/* OPTIONS MODAL (For kebab clicks) */}
+      {/* OPTIONS MODAL (100% Solid, Opaque Layer 1 Surface) */}
       {isOptionsModalOpen && currentSessionDetail && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-surface-1 border border-border p-5 space-y-2.5 shadow-xl animate-in fade-in">
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-surface border border-border p-4 space-y-2 shadow-2xl animate-in fade-in">
             <div className="flex items-center justify-between pb-2 border-b border-border">
-              <h3 className="text-sm font-semibold text-text-main line-clamp-1">
+              <h3 className="text-sm font-semibold text-text-main truncate pr-2">
                 {currentSessionDetail.title}
               </h3>
               <button
                 type="button"
                 onClick={() => setIsOptionsModalOpen(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-text-muted hover:text-text-main"
+                className="w-8 h-8 rounded-full flex items-center justify-center text-text-muted hover:text-text-main shrink-0"
               >
                 <X size={14} />
               </button>
@@ -971,13 +911,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 const text = currentSessionDetail.youtubeVideoId
                   ? `https://youtu.be/${currentSessionDetail.youtubeVideoId}`
                   : currentSessionDetail.id;
-                handleCopy(text, 'Session link');
+                handleCopy(text, 'Link');
                 setIsOptionsModalOpen(false);
               }}
               className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
             >
               <Copy size={14} />
-              <span>Copy Link / ID</span>
+              <span>Copy Link</span>
             </button>
 
             {currentSessionDetail.youtubeVideoId && (
@@ -999,14 +939,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 if (currentSessionDetail.youtubeVideoId) {
                   handleImportSubmit(`https://youtu.be/${currentSessionDetail.youtubeVideoId}`);
                 } else {
-                  showToast('Re-processing session on PC Studio…');
+                  showToast('Re-processing session…');
                 }
                 setIsOptionsModalOpen(false);
               }}
               className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
             >
               <RotateCw size={14} />
-              <span>Re-process on PC Studio</span>
+              <span>Re-process</span>
             </button>
 
             <button
@@ -1015,47 +955,47 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 setShowConfirmDelete(currentSessionDetail);
                 setIsOptionsModalOpen(false);
               }}
-              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary flex items-center gap-2 transition-all active:scale-[0.98]"
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-danger/15 hover:text-danger text-xs font-medium text-danger flex items-center gap-2 transition-all active:scale-[0.98]"
             >
               <Trash2 size={14} />
-              <span>Dismiss Session</span>
+              <span>Delete Session</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* CONFIRM DELETE DIALOG */}
+      {/* CONFIRM DELETE DIALOG (100% Solid, Opaque Layer 1 Surface) */}
       {showConfirmDelete && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-surface-1 border border-border p-5 space-y-3 shadow-xl">
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-surface border border-border p-5 space-y-3 shadow-2xl animate-in fade-in">
             <div className="flex items-center gap-2 text-danger font-semibold text-sm">
               <AlertCircle size={16} />
-              <span>Dismiss Session?</span>
+              <span>Delete Session?</span>
             </div>
-            <p className="text-xs text-text-muted leading-relaxed">
-              Remove <strong className="text-text-main">{showConfirmDelete.title}</strong> from your active sessions view. Any existing clips already generated remain safely stored in your Clips library.
+            <p className="text-xs text-text-secondary leading-relaxed">
+              Delete <strong className="text-text-main">{showConfirmDelete.title}</strong> from Sessions? Your existing clips will stay saved in the Clips tab.
             </p>
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setShowConfirmDelete(null)}
-                className="min-h-[44px] px-4 rounded-xl bg-surface-2 text-xs font-medium text-text-main active:scale-[0.98]"
+                className="min-h-[44px] px-4 rounded-xl bg-surface-2 border border-border text-xs font-medium text-text-main active:scale-[0.98] hover:bg-surface-3 transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  showToast('Session dismissed.');
+                  showToast('Session deleted.');
                   setShowConfirmDelete(null);
                   if (selectedSessionId === showConfirmDelete.id) {
                     setViewMode('library');
                     setSelectedSessionId(null);
                   }
                 }}
-                className="min-h-[44px] px-4 rounded-xl bg-danger text-white text-xs font-semibold active:scale-[0.98]"
+                className="min-h-[44px] px-4 rounded-xl bg-danger hover:bg-red-600 text-white text-xs font-semibold active:scale-[0.98] shadow-sm transition-colors"
               >
-                Confirm Dismiss
+                Delete
               </button>
             </div>
           </div>
