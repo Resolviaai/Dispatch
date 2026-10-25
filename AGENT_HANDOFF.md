@@ -225,3 +225,10 @@ Owner's pasted `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET` (.env, from the earli
 
 ## 41. Bounded hybrid editing + dynamic quotas (2026-10-25) — implemented, uncommitted
 Implementation per owner brief: temporary edit windows (60s context, 300s cap, 720p30 2500k proxy verified for duration/audio/dimensions), Stage 2 transcription separated (max_input_seconds param; final clips unchanged), source-relative transcript cache, dynamic per-user quotas (integer bytes, global-budget-checked, decimal-GB admin UI), `edit_window` kind in Worker. Tests: edit_windows 19/19, combined scoped battery 71/71, worker 24/24 + tsc, frontend green, git diff --check clean. NOT deployed to production Supabase/Worker; NOT committed (owner review). Details: docs/BOUNDED_EDITING_20261025.md. Next: owner review → apply 0009 → deploy worker → phone editor consumption of staged windows.
+
+## 42. v1.1.6 shipped + everything applied live (2026-10-25)
+- Migration 0009 APPLIED live (edit_windows + window_transcripts verified, zero client grants — service-role only; 30 cloud_* functions).
+- Worker deployed (8f5a9d6a → quota routes live): dynamic quota round-trip VERIFIED LIVE — set 1.5 GB → 1,500,000,000 bytes; restored 2.0 GB; 15 GB correctly rejected 400.
+- **v1.1.6-alpha (versionCode 10) published** — signature = trusted 94f778…3804, aapt-verified com.resolvia.dispatch 1.1.6; stable URL hash-matched; landing page shows 1.1.6 (both deployed).
+- PC server restarted on latest code (LAN-bound 0.0.0.0:8000, dashboard 200, all 4 workers + remote poller active).
+- Everything committed + pushed through `984aa0b`; tree clean.
