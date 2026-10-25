@@ -17,7 +17,7 @@ import {
   Camera,
   Loader2
 } from 'lucide-react';
-import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent, ExposureResultEvent } from '../bridge';
+import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent, ExposureResultEvent, triggerHaptic } from '../bridge';
 import { getDefaultLensPref } from './SettingsScreen';
 import {
   applyExposureResult,
@@ -46,6 +46,11 @@ interface CameraScreenProps {
  * Continuous zoom slider shown only while recording. Idle recording-off state
  * keeps the discrete zoom pills; recording swaps them for this slider.
  */
+/**
+ * Continuous zoom slider shown only while recording.
+ * Studio-grade, high-contrast, frosted glass capsule with preset jump chips,
+ * optical graduation marks, glowing digital readout, and tactile micro-ticks.
+ */
 const RecordingZoomSlider: React.FC<{
   minZoom: number;
   maxZoom: number;
@@ -54,73 +59,138 @@ const RecordingZoomSlider: React.FC<{
 }> = ({ minZoom, maxZoom, ratio, onChange }) => {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const lastHapticRatioRef = useRef(ratio);
   const fraction = sliderFractionFromZoomRatio(ratio, minZoom, maxZoom);
+
+  // Available integer presets
+  const presets = useMemo(() => {
+    const list = [1.0, 2.0, 3.0, 5.0].filter(lvl => lvl >= minZoom - 0.05 && lvl <= maxZoom + 0.05);
+    return list.length > 0 ? list : [minZoom, maxZoom];
+  }, [minZoom, maxZoom]);
 
   const applyFromClientX = (clientX: number) => {
     const el = trackRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    onChange(zoomRatioFromSliderFraction((clientX - rect.left) / Math.max(1, rect.width), minZoom, maxZoom));
+    const newRatio = zoomRatioFromSliderFraction(
+      (clientX - rect.left) / Math.max(1, rect.width),
+      minZoom,
+      maxZoom
+    );
+
+    // Micro-haptic feedback whenever crossing a 0.5x threshold
+    if (Math.abs(Math.floor(newRatio * 2) - Math.floor(lastHapticRatioRef.current * 2)) >= 1) {
+      triggerHaptic('zoom_tick');
+      lastHapticRatioRef.current = newRatio;
+    }
+
+    onChange(newRatio);
   };
 
   return (
-    <div className="mb-6 flex w-full max-w-[340px] items-center gap-3 px-3" data-interactive>
-      <span className="shrink-0 text-xs font-mono tabular-nums text-text-muted">
-        {minZoom.toFixed(1)}x
-      </span>
+    <div
+      className="mb-5 flex w-full max-w-[340px] flex-col gap-2 p-3 rounded-2xl bg-black/70 border border-white/20 backdrop-blur-md shadow-[0_4px_24px_rgba(0,0,0,0.6)]"
+      data-interactive
+    >
+      {/* Top Header: Quick Jump Chips & Precision Readout */}
+      <div className="flex items-center justify-between px-1">
+        <div className="flex items-center gap-1.5">
+          {presets.map(lvl => {
+            const isNear = Math.abs(ratio - lvl) < 0.2;
+            return (
+              <button
+                key={lvl}
+                type="button"
+                onClick={() => {
+                  triggerHaptic('lens_switch');
+                  onChange(lvl);
+                }}
+                className={`min-h-[26px] px-2.5 rounded-full text-xs font-mono font-medium tabular-nums transition-all active:scale-95 ${
+                  isNear
+                    ? 'bg-primary text-white font-semibold shadow-hero-glow'
+                    : 'bg-white/10 hover:bg-white/20 text-white/80'
+                }`}
+              >
+                {lvl}x
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Precision Digital Readout Badge */}
+        <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-primary/20 border border-primary/40 text-primary-light shadow-sm">
+          <span className="text-[11px] font-mono uppercase tracking-wider text-primary/80">Zoom</span>
+          <span className="text-xs font-mono font-bold tabular-nums text-white">
+            {ratio.toFixed(1)}x
+          </span>
+        </div>
+      </div>
+
+      {/* Graduation Ruler Track */}
       <div
         ref={trackRef}
-        onPointerDown={(e) => {
+        onPointerDown={e => {
           if (e.button !== 0 && e.pointerType === 'mouse') return;
-          try { e.currentTarget.setPointerCapture(e.pointerId); } catch { }
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {}
           setIsDragging(true);
           applyFromClientX(e.clientX);
         }}
-        onPointerMove={(e) => {
+        onPointerMove={e => {
           if (isDragging) applyFromClientX(e.clientX);
         }}
-        onPointerUp={(e) => {
+        onPointerUp={e => {
           setIsDragging(false);
-          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { }
+          try {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          } catch {}
         }}
         onPointerCancel={() => setIsDragging(false)}
-        className="relative h-11 flex-1 cursor-pointer touch-none"
+        className="relative h-10 w-full cursor-pointer touch-none flex items-center"
         role="slider"
-        aria-label="Zoom level"
+        aria-label="Continuous zoom level"
         aria-valuemin={minZoom}
         aria-valuemax={maxZoom}
         aria-valuenow={ratio}
       >
-        {/* Track base + filled portion */}
-        <div className="absolute left-0 right-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/25" />
+        {/* Track Base */}
+        <div className="absolute left-0 right-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-white/15 overflow-hidden">
+          {/* Active Gradient Fill Bar */}
+          <div
+            className="h-full bg-gradient-to-r from-blue-600 to-primary rounded-full"
+            style={{ width: `${fraction * 100}%` }}
+          />
+        </div>
+
+        {/* Optical Graduation Tick Notches */}
+        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 pointer-events-none flex justify-between px-1">
+          {presets.map(lvl => {
+            const tickFraction = sliderFractionFromZoomRatio(lvl, minZoom, maxZoom);
+            return (
+              <div
+                key={lvl}
+                className="absolute top-1/2 -translate-y-1/2 w-0.5 h-3 bg-white/40 rounded-full"
+                style={{ left: `${tickFraction * 100}%` }}
+              />
+            );
+          })}
+        </div>
+
+        {/* Precision Thumb Dial */}
         <div
-          className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white"
-          style={{ width: `${fraction * 100}%` }}
-        />
-        {/* Thumb: solid dot with dark ring, grows while dragging */}
-        <div
-          className="absolute top-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center pointer-events-none"
           style={{ left: `${fraction * 100}%` }}
         >
           <div
-            className={`h-4 w-4 rounded-full bg-white shadow-[0_0_0_2px_rgba(0,0,0,0.55),0_2px_8px_rgba(0,0,0,0.45)] transition-transform duration-100 ${
-              isDragging ? 'scale-110' : 'scale-100'
+            className={`w-6 h-6 rounded-full bg-white border-2 border-primary shadow-[0_0_14px_rgba(37,99,235,0.7),0_2px_8px_rgba(0,0,0,0.6)] flex items-center justify-center transition-transform duration-100 ${
+              isDragging ? 'scale-125' : 'scale-100'
             }`}
-          />
-        </div>
-        {/* Live value bubble above the thumb while dragging */}
-        {isDragging && (
-          <div
-            className="pointer-events-none absolute -translate-x-1/2 rounded-md bg-black/80 px-2 py-0.5 text-xs font-mono tabular-nums text-white shadow-lg"
-            style={{ left: `${fraction * 100}%`, top: '-6px', transform: 'translate(-50%, -100%)' }}
           >
-            {ratio.toFixed(1)}x
+            <div className="w-2 h-2 rounded-full bg-primary" />
           </div>
-        )}
+        </div>
       </div>
-      <span className="min-w-[40px] shrink-0 text-right text-xs font-mono tabular-nums text-text-main">
-        {ratio.toFixed(1)}x
-      </span>
     </div>
   );
 };
@@ -667,7 +737,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       });
       setIsIndicatorVisible(true);
       try {
-        const accepted = Bridge.lockAeAfAtPoint(screenNormX, screenNormY, triggerId);
+        triggerHaptic('lock');
+      const accepted = Bridge.lockAeAfAtPoint(screenNormX, screenNormY, triggerId);
         if (!accepted) {
           setFocusState((prev) => prev?.triggerId === triggerId
             ? { ...prev, status: 'failed', error: 'Camera rejected the AE/AF lock request' }
@@ -773,6 +844,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       ? Math.max(0, Math.min(1, e.clientY / window.innerHeight))
       : Math.max(0, Math.min(1, localY / rect.height));
     const triggerId = nextTriggerId();
+    triggerHaptic('tick');
     Bridge.focusOnPoint(screenNormX, screenNormY, triggerId);
     setFocusState({ x: localX, y: localY, screenNormX, screenNormY, status: 'focusing', triggerId, isLocked: false, hasAf: true, hasAe: true, timestamp: triggerId });
     setIsIndicatorVisible(true);
@@ -823,6 +895,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   };
 
   const handleStartRecording = () => {
+    triggerHaptic('recording_start');
     setIsRecording(true);
     setRecordingSeconds(0);
     setRecentSavedSegment(null);
@@ -857,6 +930,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   };
 
   const handleStopRecording = () => {
+    triggerHaptic('recording_stop');
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -956,6 +1030,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   };
 
   const handlePauseToggle = () => {
+    triggerHaptic('toggle');
     if (!isRecording) return;
     const next = !isPaused;
     isPausedRef.current = next;
@@ -1301,14 +1376,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                 )}
               </div>
             ) : (
-              <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-surface-100/90 border border-border backdrop-blur">
-                <span className="w-2 h-2 rounded-full bg-success" />
-                <span className="text-xs tabular-nums text-text-secondary font-medium">1080P 30FPS</span>
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-black/65 border border-white/20 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] text-white">
+                <span className="w-2 h-2 rounded-full bg-success drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]" />
+                <span className="text-xs tabular-nums font-semibold tracking-wide drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">1080P 30FPS</span>
                 {micActive && (
-                  <div className="flex items-end gap-0.5 h-2.5 opacity-60">
-                    <span className="w-0.5 h-1.5 bg-text-muted rounded-full" />
-                    <span className="w-0.5 h-2.5 bg-text-muted rounded-full" />
-                    <span className="w-0.5 h-1 bg-text-muted rounded-full" />
+                  <div className="flex items-end gap-0.5 h-2.5 opacity-80">
+                    <span className="w-0.5 h-1.5 bg-white rounded-full" />
+                    <span className="w-0.5 h-2.5 bg-white rounded-full" />
+                    <span className="w-0.5 h-1 bg-white rounded-full" />
                   </div>
                 )}
               </div>
@@ -1318,36 +1393,53 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
           {/* Right: Quick Toggles (Torch, Mic, Flip) - Biomechanical 44px hitboxes */}
           <div className="flex items-center gap-2">
             <button
-              onClick={handleToggleTorch}
+              onClick={() => {
+                triggerHaptic('toggle');
+                handleToggleTorch();
+              }}
               disabled={cameraFacing === 'front'}
               aria-label="Toggle Torch"
-              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur transition-all active:scale-[0.98] ${
+              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur-md border transition-all active:scale-[0.95] ${
                 torchActive 
-                  ? 'bg-amber-400 text-black shadow-[0_0_12px_rgba(251,191,36,0.5)]' 
-                  : 'bg-surface-100/80 border border-border text-text-main hover:bg-surface-200 disabled:opacity-30'
+                  ? 'bg-amber-400 text-black border-amber-300 shadow-[0_0_14px_rgba(251,191,36,0.6)]' 
+                  : 'bg-black/65 border-white/20 text-white shadow-[0_2px_8px_rgba(0,0,0,0.5)] hover:bg-black/75 disabled:opacity-30'
               }`}
             >
-              {torchActive ? <Zap size={18} fill="currentColor" /> : <ZapOff size={18} />}
+              {torchActive ? (
+                <Zap size={18} fill="currentColor" className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" />
+              ) : (
+                <ZapOff size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
+              )}
             </button>
 
             <button
-              onClick={handleToggleMic}
+              onClick={() => {
+                triggerHaptic('toggle');
+                handleToggleMic();
+              }}
               aria-label="Toggle Microphone"
-              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur transition-all active:scale-[0.98] ${
+              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur-md border transition-all active:scale-[0.95] ${
                 micActive 
-                  ? 'bg-surface-100/80 border border-border text-text-main hover:bg-surface-200' 
-                  : 'bg-danger text-white shadow-[0_0_12px_rgba(239,68,68,0.4)]'
+                  ? 'bg-black/65 border-white/20 text-white shadow-[0_2px_8px_rgba(0,0,0,0.5)] hover:bg-black/75' 
+                  : 'bg-danger text-white border-danger/60 shadow-[0_0_14px_rgba(239,68,68,0.5)]'
               }`}
             >
-              {micActive ? <Mic size={18} /> : <MicOff size={18} />}
+              {micActive ? (
+                <Mic size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
+              ) : (
+                <MicOff size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
+              )}
             </button>
 
             <button
-              onClick={handleSwitchCamera}
+              onClick={() => {
+                triggerHaptic('lens_switch');
+                handleSwitchCamera();
+              }}
               aria-label="Switch Camera"
-              className="w-11 h-11 rounded-full flex items-center justify-center bg-surface-100/80 border border-border text-text-main hover:bg-surface-200 backdrop-blur transition-all active:scale-[0.98]"
+              className="w-11 h-11 rounded-full flex items-center justify-center bg-black/65 border border-white/20 text-white hover:bg-black/75 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition-all active:scale-[0.95]"
             >
-              <SwitchCamera size={18} />
+              <SwitchCamera size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
             </button>
           </div>
         </div>
@@ -1391,17 +1483,20 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             onChange={handleSliderZoom}
           />
         ) : (
-        <div className="flex items-center gap-1.5 p-1 rounded-full bg-surface-100/90 border border-border backdrop-blur mb-6 shadow-md">
+        <div className="flex items-center gap-1.5 p-1 rounded-full bg-black/65 border border-white/20 backdrop-blur-md mb-6 shadow-[0_2px_12px_rgba(0,0,0,0.5)]">
           {lensOptions.map((lvl) => {
             const isSelected = Math.abs(zoomLevel - lvl) < 0.3;
             return (
               <button
                 key={lvl}
-                onClick={() => handleSetZoom(lvl)}
-                className={`min-w-[44px] min-h-[32px] py-1 px-3 rounded-full text-sm tabular-nums transition-all active:scale-[0.98] ${
+                onClick={() => {
+                  triggerHaptic('lens_switch');
+                  handleSetZoom(lvl);
+                }}
+                className={`min-w-[44px] min-h-[34px] py-1 px-3 rounded-full text-sm tabular-nums transition-all active:scale-[0.98] ${
                   isSelected 
-                    ? 'bg-primary text-white font-semibold shadow-hero-sm' 
-                    : 'text-text-secondary hover:text-text-main'
+                    ? 'bg-primary text-white font-semibold shadow-hero-glow drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]' 
+                    : 'text-white/80 hover:text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]'
                 }`}
               >
                 {lvl}x

@@ -121,6 +121,7 @@ declare global {
       setPcHost?: (pcHost: string) => boolean;
       getAuthToken?: () => string;
       openCustomTab?: (url: string) => boolean;
+      performHaptic?: (type: string) => boolean;
     };
   }
 }
@@ -151,7 +152,55 @@ if (typeof window !== 'undefined') {
   }) as EventListener);
 }
 
+export type HapticFeedbackType =
+  | 'recording_start'
+  | 'recording_stop'
+  | 'zoom_tick'
+  | 'lens_switch'
+  | 'toggle'
+  | 'lock'
+  | 'tick';
+
+export function triggerHaptic(type: HapticFeedbackType = 'tick') {
+  try {
+    if (typeof window !== 'undefined' && window.DispatchBridge?.performHaptic) {
+      window.DispatchBridge.performHaptic(type);
+    }
+  } catch {}
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      switch (type) {
+        case 'recording_start':
+          navigator.vibrate(25);
+          break;
+        case 'recording_stop':
+          navigator.vibrate([15, 40, 20]);
+          break;
+        case 'zoom_tick':
+          navigator.vibrate(5);
+          break;
+        case 'lens_switch':
+          navigator.vibrate(10);
+          break;
+        case 'toggle':
+          navigator.vibrate(12);
+          break;
+        case 'lock':
+          navigator.vibrate([20, 40, 15]);
+          break;
+        default:
+          navigator.vibrate(8);
+      }
+    }
+  } catch {}
+}
+
 export const Bridge = {
+  performHaptic(type: HapticFeedbackType = 'tick'): boolean {
+    triggerHaptic(type);
+    return true;
+  },
   isAvailable(): boolean {
     return typeof window !== 'undefined' && (
       !!(window as any).DispatchBridge ||

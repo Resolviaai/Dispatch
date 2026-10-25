@@ -235,6 +235,50 @@ class DispatchNativeBridge(
         return obj.toString()
     }
 
+    @JavascriptInterface
+    fun performHaptic(type: String = "light"): Boolean {
+        activity.runOnUiThread {
+            try {
+                val view = activity.window.decorView
+                when (type) {
+                    "recording_start" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+                        } else {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                        }
+                    }
+                    "recording_stop" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.REJECT)
+                        } else {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                        }
+                    }
+                    "zoom_tick" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.SEGMENT_TICK)
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+                        } else {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                        }
+                    }
+                    "lens_switch", "toggle" -> {
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                    "lock" -> {
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                    }
+                    else -> {
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return true
+    }
+
     fun sendCameraEvent(eventType: String, data: JsonObject) {
         activity.runOnUiThread {
             val payload = data.toString()

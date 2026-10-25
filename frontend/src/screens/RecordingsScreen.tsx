@@ -3,26 +3,22 @@ import {
   Film,
   RotateCw,
   ExternalLink,
-  ChevronDown,
-  ChevronUp,
+  ChevronLeft,
   AlertCircle,
-  Video,
-  Download,
   X,
   Sparkles,
-  Clock,
-  HardDrive,
-  Camera,
   Play,
   Youtube,
   CheckCircle2,
   Search,
   Copy,
   Trash2,
-  Laptop,
-  Cloud,
+  Download,
+  Camera,
+  MoreVertical,
   Layers,
-  ArrowRight
+  Check,
+  Cloud
 } from 'lucide-react';
 import { RecordingItem, apiUrl } from '../bridge';
 import { WORKER_BASE } from '../accounts/accountsService';
@@ -67,6 +63,9 @@ export interface UnifiedSession {
   rawInbox?: YouTubeInboxItem;
 }
 
+type ViewMode = 'library' | 'detail';
+type FilterStatus = 'all' | 'ready' | 'processing' | 'queued';
+
 interface RecordingsScreenProps {
   recordings: RecordingItem[];
   isYouTubeConnected: boolean;
@@ -86,25 +85,26 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   onNavigateToRecord,
   pcHost
 }) => {
-  // Navigation & Filter state
-  const [filter, setFilter] = useState<'all' | 'ready' | 'processing' | 'queued'>('all');
+  // Navigation & View state
+  const [viewMode, setViewMode] = useState<ViewMode>('library');
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterStatus>('all');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeSessionDetail, setActiveSessionDetail] = useState<UnifiedSession | null>(null);
+  const [isOptionsModalOpen, setIsOptionsModalOpen] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<UnifiedSession | null>(null);
 
-  // PC Studio live connection status
+  // Connection status (LAN vs Cloud Relay)
   const [pcStatus, setPcStatus] = useState<{
     online: boolean;
     checking: boolean;
-    lastPing?: number;
-  }>({ online: false, checking: false });
+    isCloudMode: boolean;
+  }>({ online: false, checking: false, isCloudMode: false });
 
-  // YouTube import state
-  const [showImportForm, setShowImportForm] = useState(false);
+  // YouTube Ingest URL State
   const [importUrl, setImportUrl] = useState('');
   const [importState, setImportState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle');
   const [importError, setImportError] = useState<string | null>(null);
-  const [importNotice, setImportNotice] = useState<string | null>(null);
 
   // Clips & Inbox items
   const [clips, setClips] = useState<{ id: string; session_id?: string; chunk_id?: string; status: string }[]>([]);
@@ -113,93 +113,96 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 4000);
+    setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Helper: check PC Studio reachability
+  // Helper: check PC Studio and Cloud connectivity
   const checkPcStudio = async () => {
-    if (!pcHost) {
-      setPcStatus({ online: false, checking: false });
-      return;
-    }
     setPcStatus(prev => ({ ...prev, checking: true }));
-    try {
-      const res = await fetch(apiUrl('/api/status', pcHost), {
-        signal: AbortSignal.timeout(2500)
-      });
-      setPcStatus({ online: res.ok, checking: false, lastPing: Date.now() });
-    } catch {
-      setPcStatus({ online: false, checking: false, lastPing: Date.now() });
+    let lanOnline = false;
+
+    if (pcHost) {
+      try {
+        const res = await fetch(apiUrl('/api/status', pcHost), {
+          signal: AbortSignal.timeout(2000)
+        });
+        lanOnline = res.ok;
+      } catch {
+        lanOnline = false;
+      }
+    }
+
+    if (lanOnline) {
+      setPcStatus({ online: true, checking: false, isCloudMode: false });
+    } else {
+      // Check if signed into Cloud
+      const sess = await currentSession().catch(() => null);
+      setPcStatus({ online: false, checking: false, isCloudMode: !!sess?.access_token });
     }
   };
 
   useEffect(() => {
     checkPcStudio();
-    const interval = setInterval(checkPcStudio, 6000);
+    const interval = setInterval(checkPcStudio, 8000);
     return () => clearInterval(interval);
   }, [pcHost]);
 
-  // Fetch Clips to enrich session cards with real clip counts
-  useEffect(() => {
-    let isMounted = true;
-    const fetchClips = async () => {
-      try {
-        if (pcHost && pcStatus.online) {
-          const res = await fetch(apiUrl('/api/clips', pcHost));
-          if (res.ok && isMounted) {
-            const data = await res.json();
-            const ready = Array.isArray(data.ready) ? data.ready : [];
-            const approved = Array.isArray(data.recent_approved) ? data.recent_approved : [];
-            setClips([...ready, ...approved]);
-            return;
-          }
+  // Fetch Clips to enrich session items with real clip counts
+  const fetchClips = async () => {
+    try {
+      if (pcHost && pcStatus.online) {
+        const res = await fetch(apiUrl('/api/clips', pcHost));
+        if (res.ok) {
+          const data = await res.json();
+          const ready = Array.isArray(data.ready) ? data.ready : [];
+          const approved = Array.isArray(data.recent_approved) ? data.recent_approved : [];
+          setClips([...ready, ...approved]);
+          return;
         }
-        // Cloud fallback
-        const sess = await currentSession();
-        if (sess?.access_token) {
-          const res = await fetch(`${WORKER_BASE}/clips`, {
-            headers: { Authorization: `Bearer ${sess.access_token}` }
-          });
-          if (res.ok && isMounted) {
-            const data = await res.json();
-            const cloudClips = Array.isArray(data.clips) ? data.clips : [];
-            setClips(cloudClips);
-          }
-        }
-      } catch {
-        /* keep cached clips */
       }
-    };
+      // Cloud fallback (for cellular / remote)
+      const sess = await currentSession().catch(() => null);
+      if (sess?.access_token) {
+        const res = await fetch(`${WORKER_BASE}/clips`, {
+          headers: { Authorization: `Bearer ${sess.access_token}` },
+          signal: AbortSignal.timeout(4000)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const cloudClips = Array.isArray(data.clips) ? data.clips : [];
+          setClips(cloudClips);
+        }
+      }
+    } catch {
+      /* keep cached clips */
+    }
+  };
+
+  useEffect(() => {
     fetchClips();
-    const interval = setInterval(fetchClips, 5000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
+    const interval = setInterval(fetchClips, 6000);
+    return () => clearInterval(interval);
   }, [pcHost, pcStatus.online]);
 
   // Fetch YouTube inbox items
-  useEffect(() => {
-    let isMounted = true;
-    const fetchInbox = async () => {
-      try {
-        if (pcHost && pcStatus.online) {
-          const res = await fetch(apiUrl('/api/youtube/inbox', pcHost));
-          if (res.ok && isMounted) {
-            const data = await res.json();
-            setInboxItems(Array.isArray(data.items) ? data.items : []);
-          }
+  const fetchInbox = async () => {
+    try {
+      if (pcHost && pcStatus.online) {
+        const res = await fetch(apiUrl('/api/youtube/inbox', pcHost));
+        if (res.ok) {
+          const data = await res.json();
+          setInboxItems(Array.isArray(data.items) ? data.items : []);
         }
-      } catch {
-        /* keep cached items */
       }
-    };
+    } catch {
+      /* keep cached items */
+    }
+  };
+
+  useEffect(() => {
     fetchInbox();
     const interval = setInterval(fetchInbox, 6000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [pcHost, pcStatus.online]);
 
   // Group native recordings into session groups
@@ -219,54 +222,41 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       const ytId = items.find(it => it.youtubeVideoId)?.youtubeVideoId;
       const latestStatus = items[0]?.status || 'QUEUED_FOR_UPLOAD';
 
-      let status: SessionGroup['status'] = 'QUEUED_FOR_UPLOAD';
-      if (items.some(it => it.status === 'UPLOADED_TO_YOUTUBE' || it.status === 'PROCESSED_ON_YOUTUBE')) {
-        status = 'UPLOADED_TO_YOUTUBE';
-      } else if (items.some(it => it.status === 'UPLOADING')) {
-        status = 'UPLOADING';
-      } else if (items.some(it => it.status === 'FAILED_RETRY')) {
-        status = 'FAILED_RETRY';
-      }
-
       groups.push({
         sessionId: sid,
-        createdAt: items[0]?.createdAt || Date.now(),
+        createdAt: items[0].createdAt,
         totalDuration: totalDur,
         totalBytes,
         segments: items,
         clipCount: 0,
         approvedClipCount: 0,
-        status,
+        status: latestStatus,
         youtubeVideoId: ytId
       });
     });
 
-    return groups.sort((a, b) => b.createdAt - a.createdAt);
+    groups.sort((a, b) => b.createdAt - a.createdAt);
+    return groups;
   }, [recordings]);
 
-  // Format Helpers
-  const formatDuration = (sec?: number) => {
-    if (!sec || sec <= 0) return '00:00';
-    const m = Math.floor(sec / 60).toString().padStart(2, '0');
-    const s = Math.floor(sec % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
+  // Clean raw titles (strip internal [DISPATCH] prefixes)
+  const cleanTitle = (raw: string): string => {
+    return raw.replace(/^\[DISPATCH\]\s*[-:–—]?\s*/i, '').trim() || raw;
   };
 
-  const formatTotalTime = (totalSec: number) => {
-    if (totalSec <= 0) return '0\u00a0s';
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = Math.floor(totalSec % 60);
-    if (h > 0) return `${h}\u00a0h ${m}\u00a0m`;
-    if (m > 0) return `${m}\u00a0m ${s}\u00a0s`;
-    return `${s}\u00a0s`;
+  const formatDuration = (sec: number) => {
+    const s = Math.round(sec);
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m.toString().padStart(2, '0')}:${rem.toString().padStart(2, '0')}`;
   };
 
   const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0\u00a0B';
-    const mb = bytes / (1024 * 1024);
-    if (mb < 1) return `${Math.round(bytes / 1024)}\u00a0KB`;
-    if (mb >= 1024) return `${(mb / 1024).toFixed(2)}\u00a0GB`;
+    if (!bytes || bytes <= 0) return '0\u00a0B';
+    const mb = bytes / 1_000_000;
+    if (mb >= 1000) {
+      return `${(mb / 1000).toFixed(2)}\u00a0GB`;
+    }
     return `${mb.toFixed(1)}\u00a0MB`;
   };
 
@@ -307,7 +297,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       } else if (ns.status === 'FAILED_RETRY') {
         status = 'failed';
       } else if (ns.status === 'UPLOADED_TO_YOUTUBE') {
-        status = 'processing'; // waiting for PC to extract clips
+        status = 'processing';
       }
 
       list.push({
@@ -328,7 +318,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
     // 2. Add imported YouTube sessions from inbox
     inboxItems.forEach(item => {
-      if (seenYtIds.has(item.video_id)) return; // prevent duplicate if already represented
+      if (seenYtIds.has(item.video_id)) return;
 
       const itemClips = clips.filter(c =>
         c.session_id === item.video_id ||
@@ -347,36 +337,41 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         status = 'processing';
       }
 
+      const displayTitle = item.title ? cleanTitle(item.title) : `YouTube ${item.video_id}`;
+
       list.push({
         id: item.video_id,
-        title: item.title || `YouTube ${item.video_id}`,
+        title: displayTitle,
         origin: 'youtube',
         createdAt: item.discovered_at ? new Date(item.discovered_at).getTime() : Date.now(),
         totalDuration: item.duration || 0,
         totalBytes: 0,
         status,
-        clipCount: Math.max(clipCount, status === 'ready' ? 1 : 0),
+        clipCount,
         youtubeVideoId: item.video_id,
         errorMessage: item.last_error,
         rawInbox: item
       });
     });
 
-    // Sort by newest first
-    return list.sort((a, b) => b.createdAt - a.createdAt);
+    list.sort((a, b) => b.createdAt - a.createdAt);
+    return list;
   }, [nativeSessions, inboxItems, clips]);
 
-  // Filter & Search Logic
+  // Active Session Detail item
+  const currentSessionDetail = useMemo(() => {
+    if (!selectedSessionId) return null;
+    return unifiedSessions.find(s => s.id === selectedSessionId) || null;
+  }, [unifiedSessions, selectedSessionId]);
+
+  // Tab Filtering & Search Filtering
   const filteredSessions = useMemo(() => {
     return unifiedSessions.filter(s => {
       const matchFilter =
-        filter === 'all'
-          ? true
-          : filter === 'ready'
-          ? s.status === 'ready'
-          : filter === 'processing'
-          ? s.status === 'processing'
-          : s.status === 'queued' || s.status === 'failed';
+        filter === 'all' ||
+        (filter === 'ready' && s.status === 'ready') ||
+        (filter === 'processing' && s.status === 'processing') ||
+        (filter === 'queued' && (s.status === 'queued' || s.status === 'failed'));
 
       const q = searchQuery.trim().toLowerCase();
       const matchSearch =
@@ -393,8 +388,6 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const readyCount = unifiedSessions.filter(s => s.status === 'ready').length;
   const processingCount = unifiedSessions.filter(s => s.status === 'processing').length;
   const queuedCount = unifiedSessions.filter(s => s.status === 'queued' || s.status === 'failed').length;
-  const totalFootageDuration = unifiedSessions.reduce((acc, s) => acc + s.totalDuration, 0);
-  const totalStorageBytes = unifiedSessions.reduce((acc, s) => acc + s.totalBytes, 0);
 
   // YouTube Link Extraction & Submission
   const extractVideoId = (raw: string): string | null => {
@@ -409,24 +402,24 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     const videoId = extractVideoId(value);
     if (!videoId) {
       setImportState('error');
-      setImportNotice(null);
-      setImportError('Enter a valid YouTube link (e.g. https://youtu.be/XXXXXXXXXXX) or 11-char ID.');
+      setImportError('Enter a valid YouTube video URL or 11-character video ID.');
       return;
     }
     setImportState('submitting');
     setImportError(null);
-    setImportNotice(null);
 
     try {
-      const sess = await currentSession();
+      const sess = await currentSession().catch(() => null);
       let res: Response;
       if (sess?.access_token) {
+        // Submit via Cloud Worker (works on cellular, other Wi-Fi, or anywhere)
         res = await fetch(`${WORKER_BASE}/jobs/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
           body: JSON.stringify({ url: value })
         });
       } else {
+        // Direct LAN PC companion submit
         res = await fetch(apiUrl('/api/youtube/ingest', pcHost), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -437,9 +430,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       if (res.ok) {
         setImportState('queued');
         setImportUrl('');
-        setImportNotice(`YouTube video ${videoId} submitted to PC queue.`);
-        setShowImportForm(false);
-        showToast('Video submitted! Your PC will fetch and extract clips.');
+        showToast(`Video queued! Your PC Studio will download & extract clips.`);
+        fetchInbox();
       } else {
         const body = await res.json().catch(() => ({}));
         setImportState('error');
@@ -448,431 +440,153 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     } catch (e: any) {
       setImportState('error');
       setImportError(e.message || 'Network error submitting video.');
+    } finally {
+      setTimeout(() => setImportState('idle'), 3000);
     }
   };
 
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard?.writeText(text);
-    showToast(`${label} copied to clipboard.`);
+    showToast(`${label} copied to clipboard`);
   };
 
-  return (
-    <div className="w-full h-full flex flex-col bg-canvas text-text-main overflow-hidden select-none">
-      {/* 1. SCREEN HEADER */}
-      <div className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <Film size={19} className="text-primary shrink-0" />
-              <h1 className="text-lg font-semibold tracking-tight text-text-main">Sessions</h1>
-              <span className="px-2 py-0.5 rounded-full bg-surface-200 border border-border text-[11px] font-mono font-medium text-text-secondary">
-                {unifiedSessions.length} total
-              </span>
-            </div>
-            <p className="text-xs text-text-muted mt-0.5">
-              Raw filming sessions and YouTube video ingest queue
-            </p>
-          </div>
+  // =========================================================================
+  // VIEW: SESSION DETAILS PAGE (Full Screen, identical aesthetic to Clips detail)
+  // =========================================================================
+  const renderDetailView = () => {
+    if (!currentSessionDetail) return null;
+    const s = currentSessionDetail;
+    const ytId = s.youtubeVideoId;
+    const isReady = s.status === 'ready';
+    const isProcessing = s.status === 'processing';
 
-          <div className="flex items-center gap-2">
+    return (
+      <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
+        {/* TOP BAR — 56px, ghost circular buttons matching ClipsScreen */}
+        <header className="shrink-0 h-14 px-2 border-b border-border bg-canvas z-20 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 min-w-0">
             <button
               type="button"
-              onClick={() => setShowImportForm(!showImportForm)}
-              className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-xs font-medium text-text-main transition-all active:scale-[0.98]"
-              title="Import YouTube Video"
+              onClick={() => {
+                setViewMode('library');
+                setSelectedSessionId(null);
+              }}
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+              title="Back to Sessions"
+              aria-label="Back"
             >
-              <Youtube size={14} className="text-danger" />
-              <span>Import URL</span>
+              <ChevronLeft size={20} />
             </button>
-          </div>
-        </div>
-
-        {/* 2. PC STUDIO ONLINE / CLOUD RELAY BANNER (The rightful home for PC connection status) */}
-        <div
-          onClick={checkPcStudio}
-          className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-colors cursor-pointer active:scale-[0.99] ${
-            pcStatus.online
-              ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400'
-              : 'bg-surface-200/90 border-border text-text-secondary'
-          }`}
-          title="Tap to re-check PC Studio connection"
-        >
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-              pcStatus.online ? 'bg-emerald-500/20 text-emerald-400' : 'bg-surface-3 text-text-muted'
-            }`}>
-              {pcStatus.online ? <Laptop size={15} /> : <Cloud size={15} />}
-            </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold tracking-tight">
-                  {pcStatus.online ? 'PC Studio Online (LAN Linked)' : 'Cloud Relay Mode (PC Standby)'}
-                </span>
-                <span className={`w-1.5 h-1.5 rounded-full ${pcStatus.online ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              <h2 className="text-base font-semibold tracking-tight text-text-main truncate leading-tight">
+                {s.title}
+              </h2>
+              <div className="text-xs text-text-muted truncate tabular-nums flex items-center gap-1.5">
+                <span>{s.origin === 'phone' ? 'Camera Session' : 'YouTube Ingest'}</span>
+                <span>&middot;</span>
+                <span className="font-mono">#{s.id.slice(0, 8)}</span>
               </div>
-              <p className="text-[11px] text-text-muted truncate mt-0.5">
-                {pcStatus.online
-                  ? `Active at ${pcHost || 'localhost:8000'} — Ready to process raw footage`
-                  : 'PC is offline. Sessions stay safely queued on device/cloud and auto-ingest when PC runs.'}
-              </p>
             </div>
           </div>
+
           <button
             type="button"
-            className="p-1 text-text-muted hover:text-text-main shrink-0"
-            title="Refresh connection"
+            onClick={() => setIsOptionsModalOpen(true)}
+            className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+            title="Options"
+            aria-label="Options"
           >
-            <RotateCw size={13} className={pcStatus.checking ? 'animate-spin' : ''} />
+            <MoreVertical size={18} />
           </button>
-        </div>
+        </header>
 
-        {/* 3. Operational Metrics Strip */}
-        <div className="flex items-center gap-2 flex-wrap text-xs">
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200 border border-border text-text-secondary">
-            <Clock size={12} className="text-text-muted shrink-0" />
-            <span className="font-mono tabular-nums">{formatTotalTime(totalFootageDuration)}&nbsp;raw</span>
-          </div>
-
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200 border border-border text-text-secondary">
-            <HardDrive size={12} className="text-text-muted shrink-0" />
-            <span className="font-mono tabular-nums">{formatBytes(totalStorageBytes)}&nbsp;stored</span>
-          </div>
-
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-200 border border-border text-text-secondary">
-            <Layers size={12} className="text-primary shrink-0" />
-            <span className="font-mono tabular-nums">{readyCount}&nbsp;ready with clips</span>
-          </div>
-        </div>
-
-        {/* 4. Search and Filter Chips Bar */}
-        <div className="flex flex-col sm:flex-row gap-2 pt-1">
-          <div className="relative flex-1">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search sessions by title, date, or ID…"
-              className="w-full min-h-[36px] pl-8 pr-3 rounded-lg bg-surface-200 border border-border text-xs text-text-main placeholder:text-text-muted outline-none focus:border-primary"
-            />
-          </div>
-
-          <div className="flex items-center gap-1.5 shrink-0" role="tablist">
-            {[
-              { id: 'all', label: `All (${unifiedSessions.length})` },
-              { id: 'ready', label: `Clips Ready (${readyCount})` },
-              { id: 'processing', label: `Processing (${processingCount})` },
-              { id: 'queued', label: `Queued (${queuedCount})` },
-            ].map(tab => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setFilter(tab.id as any)}
-                className={`min-h-[36px] px-2.5 rounded-lg text-xs font-semibold tabular-nums transition-all active:scale-[0.98] border ${
-                  filter === tab.id
-                    ? 'bg-primary text-white border-primary shadow-sm'
-                    : 'bg-surface-200 border-border text-text-secondary hover:text-text-main'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 5. OPTIONAL POP-DOWN IMPORT FORM */}
-      {showImportForm && (
-        <div className="mx-4 mt-3 p-3.5 rounded-2xl bg-surface-100 border border-border space-y-2.5 shadow-md">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Youtube size={15} className="text-danger" />
-              <h2 className="text-xs font-semibold text-text-main">Import YouTube Link for Ingestion</h2>
-            </div>
-            <button
-              onClick={() => setShowImportForm(false)}
-              className="p-1 rounded-md text-text-muted hover:text-text-main"
-            >
-              <X size={14} />
-            </button>
-          </div>
-
-          <form
-            onSubmit={e => {
-              e.preventDefault();
-              handleImportSubmit();
-            }}
-            className="flex items-center gap-2"
-          >
-            <input
-              type="text"
-              inputMode="url"
-              value={importUrl}
-              onChange={e => {
-                setImportUrl(e.target.value);
-                if (importState === 'error') setImportState('idle');
-              }}
-              placeholder="https://youtube.com/watch?v=…"
-              disabled={importState === 'submitting'}
-              className="flex-1 min-w-0 min-h-[44px] px-3 py-2 rounded-lg bg-surface-200 border border-border text-xs font-mono text-text-main placeholder:text-text-muted focus:outline-none focus:border-primary disabled:opacity-50"
-            />
-            <button
-              type="submit"
-              disabled={importState === 'submitting' || !importUrl.trim()}
-              className="min-h-[44px] px-4 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center gap-1.5 shrink-0 active:scale-[0.98] disabled:opacity-40"
-            >
-              {importState === 'submitting' ? <RotateCw size={13} className="animate-spin" /> : <Download size={13} />}
-              <span>Import</span>
-            </button>
-          </form>
-
-          {importError && (
-            <p className="text-xs chip-danger border rounded-lg p-2 flex items-center gap-1.5">
-              <AlertCircle size={13} className="shrink-0" />
-              <span>{importError}</span>
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* TOAST FEEDBACK */}
-      {toastMessage && (
-        <div className="mx-4 mt-2 p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium flex items-center gap-2">
-          <CheckCircle2 size={14} />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
-      {/* 6. SESSIONS FEED (Single Unified Card Grid) */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {filteredSessions.length === 0 ? (
-          <div className="h-full min-h-[260px] flex flex-col items-center justify-center text-center p-8 rounded-2xl bg-surface-100 border border-border">
-            <div className="w-12 h-12 rounded-2xl bg-surface-200 border border-border flex items-center justify-center mb-3">
-              <Film className="w-6 h-6 text-primary" />
-            </div>
-            <h2 className="text-sm font-semibold text-text-main">No Matching Sessions</h2>
-            <p className="text-xs text-text-muted mt-1 max-w-[260px]">
-              {searchQuery ? 'No sessions matched your search terms.' : 'Filmed camera recordings and imported YouTube videos will appear here.'}
-            </p>
-            {onNavigateToRecord && !searchQuery && (
-              <button
-                type="button"
-                onClick={onNavigateToRecord}
-                className="mt-4 min-h-[44px] px-4 py-2 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center gap-2 active:scale-[0.98]"
-              >
-                <Camera size={14} />
-                <span>Start Recording</span>
-              </button>
+        {/* DETAIL MAIN VIEWPORT */}
+        <main className="flex-1 min-h-0 flex flex-col px-4 pt-3 pb-4 gap-4 overflow-y-auto">
+          {/* VIDEO / MEDIA STAGE */}
+          <div className="w-full aspect-video rounded-xl bg-black overflow-hidden border border-border relative flex items-center justify-center shrink-0 shadow-sm">
+            {s.videoUrl ? (
+              <video
+                src={s.videoUrl.startsWith('http') ? s.videoUrl : apiUrl(s.videoUrl, pcHost)}
+                controls
+                className="w-full h-full object-contain"
+                preload="metadata"
+              />
+            ) : ytId ? (
+              <div className="w-full h-full relative group">
+                <img
+                  src={`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`}
+                  alt="Video thumbnail"
+                  className="w-full h-full object-cover"
+                />
+                <a
+                  href={`https://youtu.be/${ytId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="absolute inset-0 bg-black/40 hover:bg-black/50 transition-colors flex flex-col items-center justify-center text-white gap-2"
+                >
+                  <div className="w-12 h-12 rounded-full bg-danger flex items-center justify-center shadow-lg group-hover:scale-105 active:scale-95 transition-transform">
+                    <Play size={20} className="fill-white translate-x-0.5" />
+                  </div>
+                  <span className="text-xs font-semibold flex items-center gap-1 bg-black/70 px-2.5 py-1 rounded-full">
+                    <span>Watch on YouTube</span>
+                    <ExternalLink size={11} />
+                  </span>
+                </a>
+              </div>
+            ) : (
+              <div className="text-center p-6 text-text-muted space-y-2">
+                <div className="w-12 h-12 rounded-full bg-surface-2 flex items-center justify-center mx-auto text-text-secondary">
+                  <Film size={22} />
+                </div>
+                <p className="text-xs font-medium text-text-secondary">
+                  {isProcessing ? 'AI Processing Active on PC Companion' : 'Queued for Ingestion'}
+                </p>
+                <p className="text-[11px] text-text-muted max-w-[260px] mx-auto">
+                  Footage is stored safely. Your companion PC will download, transcribe, and extract vertical clips.
+                </p>
+              </div>
             )}
           </div>
-        ) : (
-          filteredSessions.map(session => {
-            const ytId = session.youtubeVideoId;
-            const isReady = session.status === 'ready';
-            const isProcessing = session.status === 'processing';
 
-            return (
-              <div
-                key={session.id}
-                onClick={() => setActiveSessionDetail(session)}
-                className="p-3 rounded-2xl bg-surface-100 hover:bg-surface-200/80 border border-border flex items-start gap-3 cursor-pointer select-none transition-all active:scale-[0.99]"
-              >
-                {/* 16:9 Aspect Ratio Thumbnail */}
-                <div className="w-[110px] sm:w-[130px] aspect-video shrink-0 rounded-xl overflow-hidden bg-surface-200 border border-border relative flex items-center justify-center group">
-                  {ytId ? (
-                    <img
-                      src={`https://img.youtube.com/vi/${ytId}/mqdefault.jpg`}
-                      alt="Thumbnail"
-                      className="w-full h-full object-cover"
-                      loading="lazy"
-                    />
-                  ) : session.videoUrl ? (
-                    <video
-                      src={session.videoUrl.startsWith('http') ? session.videoUrl : apiUrl(session.videoUrl)}
-                      className="w-full h-full object-cover"
-                      preload="metadata"
-                    />
-                  ) : (
-                    <Film size={20} className="text-text-muted" />
-                  )}
-
-                  {/* Play icon overlay on hover */}
-                  <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Play size={16} className="text-white fill-white" />
-                  </div>
-
-                  {/* Duration overlay badge */}
-                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/80 text-[10px] font-mono tabular-nums font-semibold text-white pointer-events-none">
-                    {formatDuration(session.totalDuration)}
-                  </span>
-                </div>
-
-                {/* Session Metadata & Status */}
-                <div className="flex-1 min-w-0 flex flex-col justify-between self-stretch">
-                  <div className="space-y-1">
-                    <div className="flex items-start justify-between gap-1.5">
-                      <h2 className="text-sm font-semibold text-text-main line-clamp-1 leading-snug">
-                        {session.title}
-                      </h2>
-                      {/* Status Chip */}
-                      {isReady ? (
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wide uppercase bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 shrink-0 flex items-center gap-1">
-                          <CheckCircle2 size={10} />
-                          <span>{session.clipCount}&nbsp;Clips</span>
-                        </span>
-                      ) : isProcessing ? (
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wide uppercase bg-amber-500/10 border border-amber-500/30 text-amber-400 shrink-0 flex items-center gap-1">
-                          <RotateCw size={10} className="animate-spin" />
-                          <span>Processing</span>
-                        </span>
-                      ) : session.status === 'failed' ? (
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wide uppercase bg-danger/10 border border-danger/30 text-danger shrink-0 flex items-center gap-1">
-                          <AlertCircle size={10} />
-                          <span>Needs Retry</span>
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wide uppercase bg-surface-200 border border-border text-text-muted shrink-0">
-                          Queued
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 text-[11px] text-text-muted font-mono flex-wrap">
-                      <span className="px-1.5 py-0.2 rounded bg-surface-200 text-text-secondary text-[10px]">
-                        {session.origin === 'phone' ? 'Phone Camera' : 'YouTube Direct'}
-                      </span>
-                      {session.totalBytes > 0 && <span>{formatBytes(session.totalBytes)}</span>}
-                      {ytId && <span>ID: {ytId.slice(0, 8)}…</span>}
-                    </div>
-                  </div>
-
-                  {/* Bottom Action Prompt */}
-                  <div className="flex items-center justify-between pt-1 text-xs">
-                    <span className="text-[11px] text-text-muted truncate">
-                      {isReady
-                        ? 'Tap to inspect & open clips'
-                        : isProcessing
-                        ? 'AI transcription active on PC'
-                        : 'Waiting for PC ingest'}
-                    </span>
-                    <span className="text-primary text-xs font-medium flex items-center gap-0.5 group-hover:translate-x-0.5 transition-transform">
-                      <span>Details</span>
-                      <ArrowRight size={11} />
-                    </span>
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* 7. INTERACTIVE SESSION DETAIL & CRUD BOTTOM SHEET */}
-      {activeSessionDetail && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-2xl bg-surface-100 border border-border p-5 space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-200">
-            {/* Modal Header */}
-            <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
-              <div>
-                <span className="text-[10px] uppercase tracking-wider font-semibold text-text-muted block">
-                  {activeSessionDetail.origin === 'phone' ? 'Camera Recording Session' : 'Imported YouTube Video'}
-                </span>
-                <h2 className="text-base font-semibold text-text-main line-clamp-1 mt-0.5">
-                  {activeSessionDetail.title}
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveSessionDetail(null)}
-                className="w-8 h-8 rounded-full bg-surface-200 hover:bg-surface-300 flex items-center justify-center text-text-muted hover:text-text-main"
-              >
-                <X size={15} />
-              </button>
+          {/* COMPACT METRICS ROW (Clean 1-line strip, matching design tokens) */}
+          <div className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border text-xs">
+            <div className="space-y-0.5">
+              <span className="text-[10px] uppercase font-semibold text-text-muted block">Duration</span>
+              <span className="font-mono font-semibold tabular-nums text-text-main">
+                {formatDuration(s.totalDuration)}
+              </span>
             </div>
 
-            {/* Video Player Preview */}
-            <div className="w-full aspect-video rounded-xl bg-black overflow-hidden border border-border relative flex items-center justify-center">
-              {activeSessionDetail.videoUrl ? (
-                <video
-                  src={activeSessionDetail.videoUrl.startsWith('http') ? activeSessionDetail.videoUrl : apiUrl(activeSessionDetail.videoUrl)}
-                  controls
-                  className="w-full h-full object-contain"
-                  preload="metadata"
-                />
-              ) : activeSessionDetail.youtubeVideoId ? (
-                <div className="w-full h-full relative group">
-                  <img
-                    src={`https://img.youtube.com/vi/${activeSessionDetail.youtubeVideoId}/hqdefault.jpg`}
-                    alt="Preview"
-                    className="w-full h-full object-cover"
-                  />
-                  <a
-                    href={`https://youtu.be/${activeSessionDetail.youtubeVideoId}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center text-white gap-2"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-danger flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform">
-                      <Play size={20} className="fill-white translate-x-0.5" />
-                    </div>
-                    <span className="text-xs font-semibold flex items-center gap-1">
-                      <span>Watch Unlisted on YouTube</span>
-                      <ExternalLink size={12} />
-                    </span>
-                  </a>
-                </div>
-              ) : (
-                <div className="text-center p-4 text-text-muted space-y-1">
-                  <Film size={28} className="mx-auto" />
-                  <p className="text-xs">No direct video player preview available</p>
-                </div>
-              )}
+            <div className="h-6 w-px bg-border" />
+
+            <div className="space-y-0.5 text-center">
+              <span className="text-[10px] uppercase font-semibold text-text-muted block">Storage</span>
+              <span className="font-mono font-semibold tabular-nums text-text-main">
+                {s.totalBytes > 0 ? formatBytes(s.totalBytes) : 'YouTube Cloud'}
+              </span>
             </div>
 
-            {/* Session Stats Grid */}
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="p-2.5 rounded-xl bg-surface-200 border border-border">
-                <span className="text-[10px] text-text-muted uppercase block">Duration</span>
-                <span className="text-xs font-bold font-mono text-text-main">
-                  {formatDuration(activeSessionDetail.totalDuration)}
-                </span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-surface-200 border border-border">
-                <span className="text-[10px] text-text-muted uppercase block">Storage</span>
-                <span className="text-xs font-bold font-mono text-text-main">
-                  {activeSessionDetail.totalBytes > 0 ? formatBytes(activeSessionDetail.totalBytes) : 'YouTube Cloud'}
-                </span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-surface-200 border border-border">
-                <span className="text-[10px] text-text-muted uppercase block">Clips Generated</span>
-                <span className="text-xs font-bold font-mono text-primary">
-                  {activeSessionDetail.clipCount}
-                </span>
-              </div>
-            </div>
+            <div className="h-6 w-px bg-border" />
 
-            {/* Status & Processing Description */}
-            <div className="p-3 rounded-xl bg-surface-200 border border-border text-xs space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-text-secondary">AI Editing Pipeline Status</span>
-                <span className="font-mono text-[11px] text-text-muted uppercase">{activeSessionDetail.status}</span>
-              </div>
-              <p className="text-text-muted text-[11px] leading-relaxed">
-                {activeSessionDetail.status === 'ready'
-                  ? `AI transcription completed. ${activeSessionDetail.clipCount} high-engagement clips extracted and ready for captioning.`
-                  : activeSessionDetail.status === 'processing'
-                  ? 'PC Studio is currently transcribing audio and ranking viral highlights.'
-                  : 'Session safely queued. When your PC Studio runs Dispatch, it will automatically download and render clips.'}
-              </p>
+            <div className="space-y-0.5 text-right">
+              <span className="text-[10px] uppercase font-semibold text-text-muted block">Status</span>
+              <span className={`text-xs font-semibold tabular-nums ${
+                isReady ? 'text-status-success' : isProcessing ? 'text-status-warning' : 'text-text-secondary'
+              }`}>
+                {isReady ? `Ready (${s.clipCount} clips)` : isProcessing ? 'Processing' : 'Queued'}
+              </span>
             </div>
+          </div>
 
-            {/* PRIMARY HERO CTA: View Clips in Studio */}
-            {activeSessionDetail.clipCount > 0 ? (
+          {/* PRIMARY HERO CTA & WORKSTATION ACTIONS */}
+          <div className="space-y-2.5 pt-1">
+            {isReady ? (
               <button
                 type="button"
                 onClick={() => {
-                  const sid = activeSessionDetail.id;
-                  setActiveSessionDetail(null);
+                  const sid = s.id;
+                  setViewMode('library');
+                  setSelectedSessionId(null);
                   if (onNavigateToClips) {
                     onNavigateToClips(sid);
                   }
@@ -880,48 +594,47 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 className="w-full min-h-[46px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
               >
                 <Sparkles size={16} />
-                <span>View {activeSessionDetail.clipCount} Clips in Review Studio</span>
+                <span>Open Studio ({s.clipCount}&nbsp;{s.clipCount === 1 ? 'clip' : 'clips'})</span>
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => {
                   checkPcStudio();
-                  showToast('Re-checking PC Studio queue status…');
+                  fetchInbox();
+                  fetchClips();
+                  showToast('Checking PC Studio queue status…');
                 }}
-                className="w-full min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-xs font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                className="w-full min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               >
                 <RotateCw size={14} className={pcStatus.checking ? 'animate-spin' : ''} />
                 <span>Check PC Studio Queue Status</span>
               </button>
             )}
 
-            {/* SECONDARY CRUD ACTIONS */}
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => {
-                  const text = activeSessionDetail.youtubeVideoId
-                    ? `https://youtu.be/${activeSessionDetail.youtubeVideoId}`
-                    : activeSessionDetail.id;
-                  handleCopy(text, 'Session reference');
+                  const text = s.youtubeVideoId ? `https://youtu.be/${s.youtubeVideoId}` : s.id;
+                  handleCopy(text, 'Session link');
                 }}
-                className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
               >
                 <Copy size={13} />
-                <span>Copy Link / ID</span>
+                <span>Copy Link</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => {
-                  if (activeSessionDetail.youtubeVideoId) {
-                    handleImportSubmit(`https://youtu.be/${activeSessionDetail.youtubeVideoId}`);
+                  if (s.youtubeVideoId) {
+                    handleImportSubmit(`https://youtu.be/${s.youtubeVideoId}`);
                   } else {
-                    showToast('Re-processing native camera session…');
+                    showToast('Re-processing session on PC Studio…');
                   }
                 }}
-                className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
               >
                 <RotateCw size={13} />
                 <span>Re-process</span>
@@ -929,21 +642,392 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowConfirmDelete(activeSessionDetail)}
-                className="min-h-[44px] px-3.5 rounded-xl bg-surface-200 hover:bg-danger/20 hover:text-danger border border-border text-xs font-medium text-text-secondary flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                onClick={() => setShowConfirmDelete(s)}
+                className="min-h-[44px] px-3.5 rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger border border-border text-xs font-medium text-text-secondary flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
                 title="Delete Session"
               >
                 <Trash2 size={14} />
               </button>
             </div>
           </div>
+        </main>
+      </div>
+    );
+  };
+
+  // =========================================================================
+  // VIEW: SESSIONS LIBRARY (Flat, clean, matching ClipsScreen architecture)
+  // =========================================================================
+  const renderLibraryView = () => (
+    <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
+      {/* HEADER — title + metadata, actions matching ClipsScreen */}
+      <header className="shrink-0 px-4 pt-4 pb-3 border-b border-border bg-canvas z-20">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
+              Sessions
+            </h1>
+            <p className="text-xs text-text-muted mt-0.5 tabular-nums truncate flex items-center gap-1.5">
+              {pcStatus.online ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-status-success animate-pulse" />
+                  <span>Studio Online (LAN)</span>
+                </>
+              ) : pcStatus.isCloudMode ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  <span>Cloud Active</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
+                  <span>Studio Offline</span>
+                </>
+              )}
+              <span>&middot;</span>
+              <span>{readyCount}&nbsp;ready</span>
+              <span>&middot;</span>
+              <span>{unifiedSessions.length}&nbsp;total</span>
+            </p>
+          </div>
+
+          {/* Top right actions: Search toggle icon + Refresh */}
+          <div className="flex items-center gap-1 -mr-2">
+            <button
+              type="button"
+              onClick={() => setIsSearchOpen(!isSearchOpen)}
+              aria-label="Search sessions"
+              className={`w-11 h-11 rounded-full flex items-center justify-center active:scale-[0.95] transition-all ${
+                isSearchOpen ? 'text-primary bg-primary-soft' : 'text-text-secondary hover:text-text-main hover:bg-surface-2'
+              }`}
+            >
+              <Search size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                checkPcStudio();
+                fetchClips();
+                fetchInbox();
+              }}
+              disabled={pcStatus.checking}
+              aria-label="Refresh sessions"
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+            >
+              <RotateCw size={18} className={pcStatus.checking ? 'animate-spin' : ''} />
+            </button>
+          </div>
+        </div>
+
+        {/* Collapsible search bar */}
+        {isSearchOpen && (
+          <div className="mt-3 relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search sessions by title, date, or ID…"
+              autoFocus
+              className="w-full min-h-[36px] pl-8 pr-8 rounded-lg bg-surface-2 border border-border text-xs text-text-main placeholder:text-text-muted outline-none focus:border-primary"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* FILTER CHIPS — uniform pills, matching ClipsScreen */}
+        <div className="mt-3 flex items-center gap-2 overflow-x-auto no-scrollbar">
+          {[
+            { id: 'all' as FilterStatus, label: 'All', count: unifiedSessions.length },
+            { id: 'ready' as FilterStatus, label: 'Ready', count: readyCount },
+            { id: 'processing' as FilterStatus, label: 'Processing', count: processingCount },
+            { id: 'queued' as FilterStatus, label: 'Queued', count: queuedCount },
+          ].map(chip => {
+            const isSelected = filter === chip.id;
+            return (
+              <button
+                key={chip.id}
+                type="button"
+                onClick={() => setFilter(chip.id)}
+                aria-pressed={isSelected}
+                className={`h-8 shrink-0 px-3 rounded-lg text-[13px] font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                  isSelected
+                    ? 'chip-selected'
+                    : 'bg-surface-2 text-text-secondary hover:text-text-main'
+                }`}
+              >
+                <span>{chip.label}</span>
+                <span className="tabular-nums text-xs opacity-70">{chip.count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </header>
+
+      {/* PROMINENT IMPORT YOUTUBE VIDEO BAR (Dedicated high-visibility input dock) */}
+      <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border bg-canvas">
+        <div className="flex items-center gap-2 p-1.5 pl-3 rounded-xl bg-surface-2 border border-border focus-within:border-primary transition-all">
+          <Youtube size={18} className="text-danger shrink-0" />
+          <input
+            type="url"
+            value={importUrl}
+            onChange={e => setImportUrl(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleImportSubmit();
+            }}
+            placeholder="Paste YouTube URL to ingest & extract clips…"
+            className="flex-1 bg-transparent text-xs text-text-main placeholder:text-text-muted outline-none min-w-0"
+          />
+          <button
+            type="button"
+            onClick={() => handleImportSubmit()}
+            disabled={!importUrl.trim() || importState === 'submitting'}
+            className="min-h-[36px] px-3.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold active:scale-[0.98] transition-all shrink-0 flex items-center gap-1.5 shadow-hero-glow disabled:opacity-40"
+          >
+            {importState === 'submitting' ? (
+              <RotateCw size={13} className="animate-spin" />
+            ) : (
+              <Download size={13} />
+            )}
+            <span>Import</span>
+          </button>
+        </div>
+        {importError && (
+          <p className="mt-1.5 text-xs text-danger flex items-center gap-1">
+            <AlertCircle size={12} />
+            <span>{importError}</span>
+          </p>
+        )}
+      </div>
+
+      {/* TOAST NOTIFICATION STRIP */}
+      {toastMessage && (
+        <div className="shrink-0 px-4 py-2 bg-surface-2 border-b border-border flex items-center justify-between gap-3 animate-in fade-in">
+          <span className="text-xs text-text-main truncate flex items-center gap-1.5">
+            <CheckCircle2 size={13} className="text-status-success shrink-0" />
+            <span>{toastMessage}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="text-text-muted hover:text-text-main"
+          >
+            <X size={13} />
+          </button>
         </div>
       )}
 
-      {/* 8. CONFIRM DELETE DIALOG */}
+      {/* SESSIONS LIST — flat rows on canvas, separated by dividers (matching ClipsScreen) */}
+      <main className="flex-1 min-h-0 overflow-y-auto pb-24">
+        {filteredSessions.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
+            <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
+              <Film size={24} />
+            </div>
+            <h2 className="text-base font-semibold tracking-tight text-text-main">
+              {searchQuery ? 'No matching sessions' : 'No sessions recorded yet'}
+            </h2>
+            <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
+              {searchQuery
+                ? 'Try searching with a different date, title, or video ID.'
+                : 'Film a session with your camera or paste a YouTube URL above to extract clips.'}
+            </p>
+            {onNavigateToRecord && !searchQuery && (
+              <button
+                type="button"
+                onClick={onNavigateToRecord}
+                className="mt-5 min-h-[44px] px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
+              >
+                <Camera size={15} />
+                <span>Start Recording</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="px-4">
+            {filteredSessions.map(session => {
+              const ytId = session.youtubeVideoId;
+              const isReady = session.status === 'ready';
+              const isProcessing = session.status === 'processing';
+
+              return (
+                <div
+                  key={session.id}
+                  onClick={() => {
+                    setSelectedSessionId(session.id);
+                    setViewMode('detail');
+                  }}
+                  className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors border-b border-border/50"
+                >
+                  {/* 16:9 Thumbnail Stage */}
+                  <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
+                    <Film size={16} className="text-white/40" />
+                    {ytId ? (
+                      <img
+                        src={`https://img.youtube.com/vi/${ytId}/mqdefault.jpg`}
+                        alt=""
+                        className="absolute inset-0 w-full h-full object-cover"
+                        loading="lazy"
+                        onError={e => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : session.videoUrl ? (
+                      <video
+                        src={session.videoUrl.startsWith('http') ? session.videoUrl : apiUrl(session.videoUrl, pcHost)}
+                        className="absolute inset-0 w-full h-full object-cover"
+                        preload="metadata"
+                      />
+                    ) : null}
+
+                    {/* Origin Badge */}
+                    <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 text-white text-[9px] font-medium flex items-center gap-0.5">
+                      {session.origin === 'phone' ? <Camera size={8} /> : <Youtube size={8} className="text-danger" />}
+                      <span>{session.origin === 'phone' ? 'Camera' : 'YouTube'}</span>
+                    </span>
+
+                    {/* Duration badge */}
+                    <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
+                      {formatDuration(session.totalDuration)}
+                    </span>
+                  </div>
+
+                  {/* Title + Metadata */}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
+                      {session.title}
+                    </h3>
+
+                    <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted tabular-nums truncate">
+                      <span>{session.totalBytes > 0 ? formatBytes(session.totalBytes) : 'YouTube'}</span>
+                      <span>&middot;</span>
+                      {isReady ? (
+                        <span className="text-status-success font-medium">Ready</span>
+                      ) : isProcessing ? (
+                        <span className="text-status-warning font-medium">Processing</span>
+                      ) : session.status === 'failed' ? (
+                        <span className="text-danger font-medium">Failed</span>
+                      ) : (
+                        <span>Queued</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Kebab — circular ghost button */}
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setSelectedSessionId(session.id);
+                      setIsOptionsModalOpen(true);
+                    }}
+                    aria-label="More options"
+                    className="-mr-2 w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+                  >
+                    <MoreVertical size={18} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+
+  return (
+    <div className="w-full h-full">
+      {viewMode === 'library' && renderLibraryView()}
+      {viewMode === 'detail' && renderDetailView()}
+
+      {/* OPTIONS MODAL (For kebab clicks) */}
+      {isOptionsModalOpen && currentSessionDetail && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-surface-1 border border-border p-5 space-y-2.5 shadow-xl animate-in fade-in">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <h3 className="text-sm font-semibold text-text-main line-clamp-1">
+                {currentSessionDetail.title}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsOptionsModalOpen(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-text-muted hover:text-text-main"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const text = currentSessionDetail.youtubeVideoId
+                  ? `https://youtu.be/${currentSessionDetail.youtubeVideoId}`
+                  : currentSessionDetail.id;
+                handleCopy(text, 'Session link');
+                setIsOptionsModalOpen(false);
+              }}
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <Copy size={14} />
+              <span>Copy Link / ID</span>
+            </button>
+
+            {currentSessionDetail.youtubeVideoId && (
+              <a
+                href={`https://youtu.be/${currentSessionDetail.youtubeVideoId}`}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => setIsOptionsModalOpen(false)}
+                className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <ExternalLink size={14} />
+                <span>Open on YouTube</span>
+              </a>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                if (currentSessionDetail.youtubeVideoId) {
+                  handleImportSubmit(`https://youtu.be/${currentSessionDetail.youtubeVideoId}`);
+                } else {
+                  showToast('Re-processing session on PC Studio…');
+                }
+                setIsOptionsModalOpen(false);
+              }}
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <RotateCw size={14} />
+              <span>Re-process on PC Studio</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowConfirmDelete(currentSessionDetail);
+                setIsOptionsModalOpen(false);
+              }}
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary flex items-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <Trash2 size={14} />
+              <span>Dismiss Session</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE DIALOG */}
       {showConfirmDelete && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-surface-100 border border-border p-5 space-y-3 shadow-xl">
+          <div className="w-full max-w-sm rounded-2xl bg-surface-1 border border-border p-5 space-y-3 shadow-xl">
             <div className="flex items-center gap-2 text-danger font-semibold text-sm">
               <AlertCircle size={16} />
               <span>Dismiss Session?</span>
@@ -955,7 +1039,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setShowConfirmDelete(null)}
-                className="min-h-[44px] px-4 rounded-xl bg-surface-200 text-xs font-medium text-text-main"
+                className="min-h-[44px] px-4 rounded-xl bg-surface-2 text-xs font-medium text-text-main active:scale-[0.98]"
               >
                 Cancel
               </button>
@@ -964,9 +1048,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 onClick={() => {
                   showToast('Session dismissed.');
                   setShowConfirmDelete(null);
-                  setActiveSessionDetail(null);
+                  if (selectedSessionId === showConfirmDelete.id) {
+                    setViewMode('library');
+                    setSelectedSessionId(null);
+                  }
                 }}
-                className="min-h-[44px] px-4 rounded-xl bg-danger text-white text-xs font-semibold"
+                className="min-h-[44px] px-4 rounded-xl bg-danger text-white text-xs font-semibold active:scale-[0.98]"
               >
                 Confirm Dismiss
               </button>
