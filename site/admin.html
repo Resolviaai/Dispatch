@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dispatch — Operations Console</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #161616;
+  --surface: #1C1C1C;
+  --well: #232323;
+  --well-deep: #282828;
+  --border: #2E2E2E;
+  --border-strong: #3E3E3E;
+  --primary: #2563EB;
+  --primary-h: #1D4ED8;
+  --primary-soft: rgba(37,99,235,0.14);
+  --text: #F5F5F5;
+  --text-secondary: #D4D4D4;
+  --muted: #A3A3A3;
+  --ok: #22C55E;
+  --ok-soft: rgba(34,197,94,0.12);
+  --warn: #F59E0B;
+  --warn-soft: rgba(245,158,11,0.12);
+  --bad: #EF4444;
+  --bad-soft: rgba(239,68,68,0.14);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
+}
+header.top-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+h1 {
+  font-size: 19px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  letter-spacing: -0.02em;
+}
+.badge-admin {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 6px;
+  padding: 2px 7px;
+  text-transform: uppercase;
+}
+.sub {
+  color: var(--muted);
+  font-size: 13px;
+}
+.linkback {
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: color .15s;
+}
+.linkback:hover { color: var(--text); }
+
+/* 4-Layer Containers */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.well {
+  background: var(--well);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+/* Operational Metrics Grid */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.metric-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.metric-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.metric-val {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.metric-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Forms & Hitboxes (Min 44px) */
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin: 12px 0 6px;
+}
+input {
+  width: 100%;
+  min-height: 44px;
+  background: var(--well);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 14px;
+  color: var(--text);
+  font-size: 14px;
+  transition: border-color .15s;
+}
+input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+input:focus-visible, button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+button {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  user-select: none;
+}
+button:active { transform: scale(0.98); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+}
+.btn-primary:hover:not(:disabled) { background: var(--primary-h); }
+.btn-ghost {
+  background: var(--well);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--well-deep);
+  border-color: var(--border-strong);
+}
+.btn-danger {
+  background: var(--bad-soft);
+  color: var(--bad);
+  border: 1px solid rgba(239,68,68,0.35);
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(239,68,68,0.22);
+}
+.btn-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border: 1px solid rgba(34,197,94,0.35);
+}
+.btn-ok:hover:not(:disabled) {
+  background: rgba(34,197,94,0.22);
+}
+
+/* User Rows & Tables */
+.user-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+@media (min-width: 860px) {
+  .user-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.user-identity {
+  min-width: 260px;
+  flex: 1 1 auto;
+}
+.user-email {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.user-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.controls-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Pills & Badges */
+.pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pill.active {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border: 1px solid rgba(34,197,94,0.3);
+}
+.pill.disabled {
+  background: var(--bad-soft);
+  color: var(--bad);
+  border: 1px solid rgba(239,68,68,0.3);
+}
+
+.badge-prov {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--well);
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* Storage Bar */
+.storage-bar-wrap {
+  width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.storage-bar-track {
+  width: 100%;
+  height: 6px;
+  background: var(--well);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.storage-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width .2s;
+}
+.storage-bar-text {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Feedback messages */
+.feedback-box {
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin-top: 14px;
+}
+.feedback-err {
+  background: var(--bad-soft);
+  border: 1px solid rgba(239,68,68,0.35);
+  color: var(--bad);
+}
+.feedback-ok {
+  background: var(--ok-soft);
+  border: 1px solid rgba(34,197,94,0.35);
+  color: var(--ok);
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.78);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-content {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  max-width: 440px;
+  width: 100%;
+  padding: 22px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+}
+
+.hidden { display: none !important; }
+.spinner { animation: spin 0.8s linear infinite; }
+@keyframes spin { 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top-nav">
+    <div>
+      <h1><span class="badge-admin">OPERATIONS</span> Dispatch DBMS Console</h1>
+      <p class="sub" style="margin-top:2px;">Authoritative operational control plane &middot; R2 storage, user quotas, job queue</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <a class="linkback" href="index.html">← Site</a>
+      <button id="btnSignOut" class="btn-ghost" style="min-height:36px;padding:0 12px;font-size:12px;">Sign out</button>
+    </div>
+  </header>
+
+  <!-- LOGIN PANEL -->
+  <div id="loginSection" class="card" style="max-width:440px;margin:40px auto;">
+    <h2 style="font-size:16px;font-weight:600;margin-bottom:4px;">Admin Authentication</h2>
+    <p class="sub" style="margin-bottom:16px;">Sign in with your admin credentials. Enforced server-side via allowlist.</p>
+    <label for="adminEmail">Email Address</label>
+    <input id="adminEmail" type="email" placeholder="admin@domain.com" autocomplete="username">
+    <label for="adminPassword">Password</label>
+    <input id="adminPassword" type="password" placeholder="••••••••••••" autocomplete="current-password">
+    <button id="btnLogin" class="btn-primary" style="width:100%;margin-top:18px;">Sign In to Console</button>
+    <div id="loginFeedback" class="feedback-box feedback-err hidden"></div>
+  </div>
+
+  <!-- CONSOLE DASHBOARD -->
+  <div id="dashboardSection" class="hidden">
+    <!-- OVERVIEW OPERATIONAL METRICS -->
+    <div class="metrics-grid">
+      <!-- Card 1: Users -->
+      <div class="metric-card">
+        <div>
+          <div class="metric-label">
+            <span>Users</span>
+            <span id="activeBadge" class="pill active" style="font-size:10px;">0 Active</span>
+          </div>
+          <div id="metricTotalUsers" class="metric-val">0</div>
+        </div>
+        <div id="metricUserBreakdown" class="metric-sub">0 Active &middot; 0 Disabled</div>
+      </div>
+
+      <!-- Card 2: Actual R2 Stored Storage -->
+      <div class="metric-card">
+        <div>
+          <div class="metric-label">
+            <span>Actual R2 Stored</span>
+            <span style="font-size:10px;color:var(--ok);">Verified</span>
+          </div>
+          <div id="metricActualR2" class="metric-val">0.00 GB</div>
+        </div>
+        <div id="metricPendingReservations" class="metric-sub">0.00 GB in pending reservations</div>
+      </div>
+
+      <!-- Card 3: Quota Allocation -->
+      <div class="metric-card">
+        <div>
+          <div class="metric-label">
+            <span>Allocated Quota</span>
+            <span style="font-size:10px;color:var(--warn);">Pool</span>
+          </div>
+          <div id="metricAllocatedQuota" class="metric-val">0.00 GB</div>
+        </div>
+        <div id="metricUnallocatedQuota" class="metric-sub">
+          Unallocated Quota Pool: 10.00 GB <br>
+          <span style="color:var(--muted);font-size:10px;">(Not free storage &middot; 10 GB global budget)</span>
+        </div>
+      </div>
+
+      <!-- Card 4: Processing Jobs -->
+      <div class="metric-card">
+        <div>
+          <div class="metric-label">
+            <span>Processing Jobs</span>
+            <span id="queueBadge" class="pill" style="background:var(--primary-soft);color:var(--primary);font-size:10px;">0 Queued</span>
+          </div>
+          <div id="metricTotalJobs" class="metric-val">0</div>
+        </div>
+        <div id="metricJobBreakdown" class="metric-sub">0 Queued &middot; 0 Running &middot; 0 Failed</div>
+      </div>
+    </div>
+
+    <!-- FILTER & SEARCH BAR -->
+    <div class="card" style="padding:14px 18px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+        <div style="display:flex;align-items:center;gap:10px;flex:1 1 280px;">
+          <input id="searchInput" type="text" placeholder="Search by email or user ID…" style="min-height:38px;font-size:13px;">
+          <select id="statusFilter" class="btn-ghost" style="min-height:38px;padding:0 12px;border-radius:10px;font-size:13px;">
+            <option value="all">All Statuses</option>
+            <option value="active">Active Only</option>
+            <option value="disabled">Disabled Only</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button id="btnRefresh" class="btn-ghost" style="min-height:38px;padding:0 14px;font-size:12px;">
+            <svg id="refreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- GLOBAL FEEDBACK BANNER -->
+    <div id="globalFeedback" class="feedback-box hidden" style="margin-bottom:16px;"></div>
+
+    <!-- USERS OPERATIONS LIST -->
+    <div id="usersList">
+      <div class="card" style="text-align:center;padding:32px;">
+        <p class="sub">Loading authoritative operational data…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRMATION MODAL -->
+<div id="confirmModal" class="modal-overlay hidden">
+  <div class="modal-content">
+    <h3 id="modalTitle" style="font-size:16px;font-weight:600;margin-bottom:8px;">Confirm Action</h3>
+    <p id="modalDesc" class="sub" style="font-size:13px;line-height:1.6;margin-bottom:20px;"></p>
+    <div style="display:flex;justify-content:flex-end;gap:10px;">
+      <button id="modalCancel" class="btn-ghost">Cancel</button>
+      <button id="modalConfirm" class="btn-danger">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://aldzlbdxplqkcnyjhzmm.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZHpsYmR4cGxxa2NueWpoem1tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3NDU4MjIsImV4cCI6MjEwODMyMTgyMn0.6wwdz6wIbm8YFVQyKyXpuw3Wub2dMfG5Fq-Z83iD9Mw";
+const WORKER = "https://dispatch-cloud.resolviaai.workers.dev";
+let access_token = sessionStorage.getItem("admin_tok") || "";
+let cachedUsers = [];
+let pendingModalAction = null;
+
+const $ = id => document.getElementById(id);
+
+function showFeedback(msg, isError = false) {
+  const box = $("globalFeedback");
+  box.textContent = msg;
+  box.className = "feedback-box " + (isError ? "feedback-err" : "feedback-ok");
+  box.classList.remove("hidden");
+  setTimeout(() => box.classList.add("hidden"), 6000);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(WORKER + path, {
+    ...opts,
+    headers: {
+      "Authorization": "Bearer " + access_token,
+      "Content-Type": "application/json",
+      ...(opts.headers || {})
+    },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+  return body;
+}
+
+function escapeHtml(str) {
+  return String(str || "").replace(/[&<>"']/g, m => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[m]);
+}
+
+function renderOverview(overview) {
+  if (!overview) return;
+  const uc = overview.user_counts || {};
+  $("metricTotalUsers").textContent = uc.total ?? 0;
+  $("activeBadge").textContent = `${uc.active ?? 0} Active`;
+  $("metricUserBreakdown").textContent = `${uc.active ?? 0} Active · ${uc.disabled ?? 0} Disabled`;
+
+  const st = overview.storage || {};
+  $("metricActualR2").textContent = `${(st.actual_stored_gb ?? 0).toFixed(2)} GB`;
+  $("metricPendingReservations").textContent = `${(st.pending_reserved_gb ?? 0).toFixed(2)} GB in pending reservations`;
+
+  $("metricAllocatedQuota").textContent = `${(st.allocated_quota_gb ?? 0).toFixed(2)} GB`;
+  $("metricUnallocatedQuota").innerHTML = `
+    Unallocated Quota Pool: ${(st.unallocated_quota_gb ?? 0).toFixed(2)} GB<br>
+    <span style="color:var(--muted);font-size:10px;">(Not free storage · 10 GB global budget)</span>
+  `;
+
+  const jb = overview.jobs || {};
+  $("metricTotalJobs").textContent = jb.total ?? 0;
+  $("queueBadge").textContent = `${jb.queued ?? 0} Queued`;
+  $("metricJobBreakdown").textContent = `${jb.queued ?? 0} Queued · ${jb.running ?? 0} Running · ${jb.failed ?? 0} Failed`;
+}
+
+function renderUsers() {
+  const query = $("searchInput").value.trim().toLowerCase();
+  const filter = $("statusFilter").value;
+
+  const filtered = cachedUsers.filter(u => {
+    const matchQuery = !query || (u.email && u.email.toLowerCase().includes(query)) || u.id.toLowerCase().includes(query);
+    const matchStatus = filter === "all" || (filter === "active" && !u.banned) || (filter === "disabled" && u.banned);
+    return matchQuery && matchStatus;
+  });
+
+  if (!filtered.length) {
+    $("usersList").innerHTML = `
+      <div class="card" style="text-align:center;padding:28px;">
+        <p class="sub">No users matched your filter criteria.</p>
+      </div>`;
+    return;
+  }
+
+  $("usersList").innerHTML = filtered.map(u => {
+    const usedGb = u.used_gb || 0;
+    const quotaGb = u.quota_gb || 2.0;
+    const pct = Math.min(100, Math.round((usedGb / Math.max(0.1, quotaGb)) * 100));
+    const prio = u.queue_priority || 100;
+    const provs = Array.isArray(u.connected_providers) ? u.connected_providers : [];
+
+    const provBadges = provs.length > 0
+      ? provs.map(p => `<span class="badge-prov">${escapeHtml(p)}</span>`).join(" ")
+      : '<span style="font-size:11px;color:var(--muted);">No connected accounts</span>';
+
+    return `
+      <div class="user-row" data-uid="${u.id}">
+        <!-- Identity -->
+        <div class="user-identity">
+          <div class="user-email">
+            <span>${escapeHtml(u.email || u.id)}</span>
+            <span class="pill ${u.banned ? 'disabled' : 'active'}">${u.banned ? 'Disabled' : 'Active'}</span>
+          </div>
+          <div class="user-meta">
+            <span class="font-mono text-xs">ID: ${u.id.slice(0, 8)}…</span>
+            <span>Joined: ${String(u.created_at || "").slice(0, 10)}</span>
+            ${u.last_sign_in ? `<span>Last Seen: ${String(u.last_sign_in).slice(0, 10)}</span>` : ''}
+          </div>
+          <div style="margin-top:8px;">
+            ${provBadges}
+          </div>
+        </div>
+
+        <!-- Storage & Quota (Decimal GB) -->
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <div class="storage-bar-wrap">
+            <div class="storage-bar-text">${usedGb.toFixed(2)} / ${quotaGb.toFixed(1)} GB (${pct}%)</div>
+            <div class="storage-bar-track">
+              <div class="storage-bar-fill" style="width:${pct}%;"></div>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:4px;">
+            <button class="btn-ghost" data-quota-preset="1.0" data-uid="${u.id}" style="min-height:36px;padding:0 8px;font-size:11px;">1G</button>
+            <button class="btn-ghost" data-quota-preset="2.0" data-uid="${u.id}" style="min-height:36px;padding:0 8px;font-size:11px;">2G</button>
+            <button class="btn-ghost" data-quota-preset="5.0" data-uid="${u.id}" style="min-height:36px;padding:0 8px;font-size:11px;">5G</button>
+            <input type="number" step="0.1" min="0.1" max="10" value="${quotaGb.toFixed(1)}"
+              data-quota-input="${u.id}"
+              style="width:68px;min-height:36px;padding:0 6px;text-align:right;font-family:monospace;font-size:12px;">
+            <button class="btn-ghost" data-quota-save="${u.id}" style="min-height:36px;padding:0 10px;font-size:11px;">Set</button>
+          </div>
+        </div>
+
+        <!-- Processing Priority (1-1000, lower runs first) -->
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="btn-ghost" data-prio-step="-10" data-uid="${u.id}" title="Higher Priority (Nudge up)" style="min-height:36px;padding:0 8px;font-size:11px;">▲ -10</button>
+          <input type="number" step="1" min="1" max="1000" value="${prio}"
+            data-prio-input="${u.id}"
+            style="width:58px;min-height:36px;padding:0 6px;text-align:right;font-family:monospace;font-size:12px;">
+          <button class="btn-ghost" data-prio-step="10" data-uid="${u.id}" title="Lower Priority (Nudge down)" style="min-height:36px;padding:0 8px;font-size:11px;">▼ +10</button>
+          <button class="btn-ghost" data-prio-save="${u.id}" style="min-height:36px;padding:0 10px;font-size:11px;">Prio</button>
+        </div>
+
+        <!-- Reversible Status Toggle -->
+        <div>
+          ${u.banned
+            ? `<button class="btn-ok" data-action="unban" data-uid="${u.id}" style="min-height:36px;padding:0 12px;font-size:12px;">Enable</button>`
+            : `<button class="btn-danger" data-action="ban" data-uid="${u.id}" data-email="${escapeHtml(u.email)}" style="min-height:36px;padding:0 12px;font-size:12px;">Disable</button>`}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadData() {
+  $("refreshIcon").classList.add("spinner");
+  try {
+    const res = await api("/admin/users");
+    cachedUsers = res.users || [];
+    renderOverview(res.overview);
+    renderUsers();
+  } catch (e) {
+    showFeedback(e.message, true);
+    if (/unauthorized/i.test(e.message)) showLogin();
+  } finally {
+    $("refreshIcon").classList.remove("spinner");
+  }
+}
+
+function showLogin() {
+  $("loginSection").classList.remove("hidden");
+  $("dashboardSection").classList.add("hidden");
+}
+
+function showDashboard() {
+  $("loginSection").classList.add("hidden");
+  $("dashboardSection").classList.remove("hidden");
+  loadData();
+}
+
+// Global Event Listeners
+$("btnRefresh").addEventListener("click", loadData);
+$("searchInput").addEventListener("input", renderUsers);
+$("statusFilter").addEventListener("change", renderUsers);
+
+$("btnLogin").addEventListener("click", async () => {
+  const email = $("adminEmail").value.trim();
+  const password = $("adminPassword").value;
+  const fb = $("loginFeedback");
+  fb.classList.add("hidden");
+
+  if (!email || !password) {
+    fb.textContent = "Please enter email and password.";
+    fb.classList.remove("hidden");
+    return;
+  }
+
+  $("btnLogin").disabled = true;
+  $("btnLogin").textContent = "Authenticating…";
+
+  try {
+    const res = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+      method: "POST",
+      headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.access_token) {
+      throw new Error(data.error_description || data.msg || "Authentication failed");
+    }
+    access_token = data.access_token;
+    sessionStorage.setItem("admin_tok", access_token);
+
+    // Verify admin allowlist
+    await api("/admin/whoami");
+    showDashboard();
+  } catch (e) {
+    fb.textContent = e.message;
+    fb.classList.remove("hidden");
+  } finally {
+    $("btnLogin").disabled = false;
+    $("btnLogin").textContent = "Sign In to Console";
+  }
+});
+
+$("btnSignOut").addEventListener("click", () => {
+  sessionStorage.removeItem("admin_tok");
+  access_token = "";
+  showLogin();
+});
+
+// Operations Delegated Actions (Quota, Priority, Ban/Unban)
+$("usersList").addEventListener("click", async (ev) => {
+  // 1. Quota Presets
+  const preset = ev.target.closest("button[data-quota-preset]");
+  if (preset) {
+    const uid = preset.dataset.uid;
+    const gb = parseFloat(preset.dataset.quotaPreset);
+    const input = document.querySelector(`input[data-quota-input="${uid}"]`);
+    if (input) input.value = gb.toFixed(1);
+    await updateQuota(uid, gb);
+    return;
+  }
+
+  // 2. Quota Custom Save
+  const qSave = ev.target.closest("button[data-quota-save]");
+  if (qSave) {
+    const uid = qSave.dataset.quotaSave;
+    const input = document.querySelector(`input[data-quota-input="${uid}"]`);
+    const gb = parseFloat(input?.value);
+    if (!Number.isFinite(gb) || gb <= 0 || gb > 10) {
+      showFeedback("Quota must be between 0.1 and 10.0 decimal GB.", true);
+      return;
+    }
+    await updateQuota(uid, gb);
+    return;
+  }
+
+  // 3. Priority Step (Nudge ▲ / ▼)
+  const pStep = ev.target.closest("button[data-prio-step]");
+  if (pStep) {
+    const uid = pStep.dataset.uid;
+    const step = parseInt(pStep.dataset.prioStep, 10);
+    const input = document.querySelector(`input[data-prio-input="${uid}"]`);
+    if (input) {
+      const current = parseInt(input.value, 10) || 100;
+      const next = Math.max(1, Math.min(1000, current + step));
+      input.value = next;
+      await updatePriority(uid, next);
+    }
+    return;
+  }
+
+  // 4. Priority Save
+  const pSave = ev.target.closest("button[data-prio-save]");
+  if (pSave) {
+    const uid = pSave.dataset.prioSave;
+    const input = document.querySelector(`input[data-prio-input="${uid}"]`);
+    const prio = parseInt(input?.value, 10);
+    if (!Number.isInteger(prio) || prio < 1 || prio > 1000) {
+      showFeedback("Priority must be an integer between 1 and 1000 (lower number runs first).", true);
+      return;
+    }
+    await updatePriority(uid, prio);
+    return;
+  }
+
+  // 5. Account Ban / Unban
+  const actBtn = ev.target.closest("button[data-action]");
+  if (actBtn) {
+    const { uid, action, email } = actBtn.dataset;
+    if (action === "ban") {
+      openConfirmModal(
+        "Disable User Account?",
+        `Are you sure you want to disable ${email || 'this user'}? Their existing data and R2 storage will remain preserved, but they will be signed out and unable to log in until re-enabled.`,
+        async () => {
+          await toggleAccountStatus(uid, "ban");
+        }
+      );
+    } else if (action === "unban") {
+      await toggleAccountStatus(uid, "unban");
+    }
+  }
+});
+
+async function updateQuota(uid, gb) {
+  try {
+    await api(`/admin/users/${uid}/quota`, {
+      method: "POST",
+      body: JSON.stringify({ quota_gb: gb }),
+    });
+    showFeedback(`Quota successfully updated to ${gb.toFixed(1)} GB.`);
+    loadData();
+  } catch (e) {
+    showFeedback(e.message, true);
+  }
+}
+
+async function updatePriority(uid, priority) {
+  try {
+    await api(`/admin/users/${uid}/priority`, {
+      method: "POST",
+      body: JSON.stringify({ priority }),
+    });
+    showFeedback(`Priority successfully set to ${priority}.`);
+    loadData();
+  } catch (e) {
+    showFeedback(e.message, true);
+  }
+}
+
+async function toggleAccountStatus(uid, action) {
+  try {
+    await api(`/admin/users/${uid}/${action}`, { method: "POST" });
+    showFeedback(`User account successfully ${action === "ban" ? "disabled" : "enabled"}.`);
+    loadData();
+  } catch (e) {
+    showFeedback(e.message, true);
+  }
+}
+
+function openConfirmModal(title, desc, onConfirm) {
+  $("modalTitle").textContent = title;
+  $("modalDesc").textContent = desc;
+  pendingModalAction = onConfirm;
+  $("confirmModal").classList.remove("hidden");
+}
+
+$("modalCancel").addEventListener("click", () => {
+  $("confirmModal").classList.add("hidden");
+  pendingModalAction = null;
+});
+
+$("modalConfirm").addEventListener("click", async () => {
+  $("confirmModal").classList.add("hidden");
+  if (pendingModalAction) {
+    await pendingModalAction();
+    pendingModalAction = null;
+  }
+});
+
+// Initialization
+if (access_token) {
+  showDashboard();
+} else {
+  showLogin();
+}
+</script>
+</body>
+</html>
