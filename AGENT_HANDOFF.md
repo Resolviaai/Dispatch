@@ -253,3 +253,9 @@ Owner dictated the camera contract (Hindi voice note); UI truth = React `fronten
 - Frontend fixes en route: `hover:bg-blue-600`→`primary-hover`, `bg-surface-400` (nonexistent token)→`surface-3`, `#16191E`/`#60A5FA`/sky/emerald drift mapped to tokens/chip utilities across Sessions/Clips/AuthGate/boundary.
 
 
+
+## 45. YouTube OAuth FIXED end-to-end (2026-10-25)
+- Owner created the Web-application OAuth client in GCP (old one was Desktop type — can never carry redirect URIs) and pasted its ID/secret into `.env` as `Client_ID`/`Client_secret` (unread names). Moved programmatically into `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET` (secret never printed), pushed both to the Worker via `wrangler secret put` (instant, no deploy needed).
+- Verified chain: Worker `/oauth/google/start` now serves client `645458441489-3dbv2tv619pkbp05np6v1lnp8ss82put`; Google answers the consent URL with 302 → `/v3/signin/identifier` (real sign-in page) instead of `redirect_uri_mismatch`.
+- PC server restarted with the new env: `DISPATCH_WEB_HOST=0.0.0.0 nohup ./.venv/Scripts/python.exe -m dispatch.main >> storage/dispatch_daemon.log 2>&1 &` (config defaults to 127.0.0.1 — always pass the host for phone access). Local + LAN 192.168.0.200:8000 both 200.
+- Owner next: phone → Settings → Connect YouTube → Google sign-in → approve. Test users already configured on the Audience page.
