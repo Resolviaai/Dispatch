@@ -1,33 +1,47 @@
 /**
- * On-device YouTube OAuth (ADR-001 Decision 4): the phone opens Google consent in a
- * Custom Tab via /oauth/google/start; Google returns the one-time code to
- * /oauth/google/callback; the Worker exchanges it server-side (confidential secret
- * stays here) and stores the refresh token ENCRYPTED (AES-256-GCM, vault key =
- * Worker secret) in Supabase against the initiating user. The PC backend decrypts
- * with the same vault key when processing that user's videos.
+ * Multi-Platform Social OAuth Handlers (YouTube, Instagram, Facebook, LinkedIn, X/Twitter).
+ * Confidential client secrets remain on the Cloudflare Worker.
+ * All tokens are encrypted using AES-256-GCM (vault key = Worker secret TOKEN_VAULT_KEY)
+ * before being stored into Supabase connected_accounts.
  */
 
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
-const SCOPES = [
+const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/youtube",
   "https://www.googleapis.com/auth/youtube.force-ssl",
   "https://www.googleapis.com/auth/userinfo.email",
 ];
 
-export interface OAuthEnv extends Record<string, string> {
+export interface OAuthEnv extends Record<string, unknown> {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   TOKEN_VAULT_KEY: string; // 32-byte base64 AES-256 key
   YOUTUBE_CLIENT_ID: string;
   YOUTUBE_CLIENT_SECRET: string;
   OAUTH_REDIRECT_URI: string; // https://<worker>/oauth/google/callback
+  INSTAGRAM_CLIENT_ID?: string;
+  INSTAGRAM_CLIENT_SECRET?: string;
+  FACEBOOK_CLIENT_ID?: string;
+  FACEBOOK_CLIENT_SECRET?: string;
+  LINKEDIN_CLIENT_ID?: string;
+  LINKEDIN_CLIENT_SECRET?: string;
+  TWITTER_CLIENT_ID?: string;
+  TWITTER_CLIENT_SECRET?: string;
 }
 
 export function b64url(bytes: Uint8Array): string {
   let bin = "";
-  bytes.forEach(b => bin += String.fromCharCode(b));
+  bytes.forEach(b => (bin += String.fromCharCode(b)));
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function fromB64url(b64urlStr: string): Uint8Array {
+  const pad = b64urlStr.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (b64urlStr.length % 4)) % 4);
+  const bin = atob(pad);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
 }
 
 async function aesKey(vaultKeyB64: string): Promise<CryptoKey> {
@@ -39,9 +53,32 @@ async function aesKey(vaultKeyB64: string): Promise<CryptoKey> {
 export async function encryptToken(vaultKeyB64: string, plaintext: string): Promise<string> {
   const key = await aesKey(vaultKeyB64);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv },
-    key, new TextEncoder().encode(plaintext));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(plaintext)
+  );
   return b64url(new Uint8Array([...iv, ...new Uint8Array(ct)]));
+}
+
+/** AES-256-GCM decrypt. */
+export async function decryptToken(vaultKeyB64: string, ciphertextB64url: string): Promise<string> {
+  const key = await aesKey(vaultKeyB64);
+  const data = fromB64url(ciphertextB64url);
+  const iv = data.slice(0, 12);
+  const ct = data.slice(12);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+  return new TextDecoder().decode(pt);
+}
+
+export async function sha256B64Url(str: string): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return b64url(new Uint8Array(hash));
+}
+
+export function generateRandomString(len = 64): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  return b64url(bytes);
 }
 
 /** Deterministic JSON parse helpers with strict validation. */
@@ -58,13 +95,139 @@ export function buildAuthorizeUrl(clientId: string, redirectUri: string, state: 
     redirect_uri: redirectUri,
     response_type: "code",
     access_type: "offline",
-    // select_account: always shows Google's account picker so returning users see
-    // their on-device accounts instead of silently re-authorizing a stale choice.
-    // consent: re-issues the refresh_token on every connect (revocation-safe).
     prompt: "consent select_account",
     include_granted_scopes: "true",
-    scope: SCOPES.join(" "),
+    scope: GOOGLE_SCOPES.join(" "),
     state,
   });
   return `${GOOGLE_AUTH}?${q.toString()}`;
+}
+
+export function buildInstagramAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {
+  const q = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,pages_manage_posts",
+    state,
+  });
+  return `https://www.facebook.com/v21.0/dialog/oauth?${q.toString()}`;
+}
+
+export function buildFacebookAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {
+  const q = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "pages_show_list,pages_read_engagement,pages_manage_posts",
+    state,
+  });
+  return `https://www.facebook.com/v21.0/dialog/oauth?${q.toString()}`;
+}
+
+export function buildLinkedInAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {
+  const q = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state,
+    scope: "openid profile email w_member_social",
+  });
+  return `https://www.linkedin.com/oauth/v2/authorization?${q.toString()}`;
+}
+
+export function buildTwitterAuthorizeUrl(clientId: string, redirectUri: string, state: string, codeChallenge: string): string {
+  const q = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: "tweet.read tweet.write users.read offline.access",
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+  });
+  return `https://twitter.com/i/oauth2/authorize?${q.toString()}`;
+}
+
+export function renderOAuthResultHtml(title: string, message: string, isError = false): Response {
+  const accentColor = isError ? "#EF4444" : "#22C55E";
+  const iconSvg = isError
+    ? `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="${accentColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`
+    : `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="${accentColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title} - Dispatch</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #161616;
+      color: #F5F5F5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #1C1C1C;
+      border: 1px solid #2E2E2E;
+      border-radius: 20px;
+      padding: 32px 24px;
+      max-width: 380px;
+      margin: 20px;
+      text-align: center;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+    }
+    .icon {
+      margin-bottom: 20px;
+      display: inline-flex;
+      padding: 12px;
+      border-radius: 50%;
+      background: #232323;
+    }
+    h2 {
+      margin: 0 0 12px 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+    p {
+      margin: 0 0 24px 0;
+      font-size: 14px;
+      color: #A3A3A3;
+      line-height: 1.5;
+    }
+    .btn {
+      display: inline-block;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px;
+      background: #2563EB;
+      color: #FFFFFF;
+      font-weight: 500;
+      font-size: 14px;
+      border-radius: 12px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">${iconSvg}</div>
+    <h2>${title}</h2>
+    <p>${message}</p>
+    <a href="#" class="btn" onclick="window.close(); return false;">Return to Dispatch</a>
+  </div>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status: isError ? 400 : 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 }

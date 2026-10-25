@@ -99,7 +99,7 @@ class TestPublisher(unittest.TestCase):
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         update_clip_media(clip_id, str(clip_file), None)
 
-        approve_clip(clip_id, custom_mode="public", target_platforms="facebook")
+        approve_clip(clip_id, custom_mode="public", custom_platforms="facebook")
 
         with patch("dispatch.publisher.outbox.upload_facebook_reel", return_value={"status": "published", "remote_id": "mock_fb_123", "remote_url": "https://www.facebook.com/reel/mock_fb_123"}):
             count = process_outbox_queue()

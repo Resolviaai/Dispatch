@@ -8,7 +8,19 @@
  * presigned URLs (aws4fetch SIGV4, service s3 / region auto, explicit expiry).
  */
 import { AwsClient } from "aws4fetch";
-import { encryptToken, buildAuthorizeUrl, validateTokenResponse } from "./oauth.ts";
+import {
+  encryptToken,
+  decryptToken,
+  buildAuthorizeUrl,
+  buildInstagramAuthorizeUrl,
+  buildFacebookAuthorizeUrl,
+  buildLinkedInAuthorizeUrl,
+  buildTwitterAuthorizeUrl,
+  generateRandomString,
+  sha256B64Url,
+  validateTokenResponse,
+  renderOAuthResultHtml,
+} from "./oauth.ts";
 
 export interface Env {
   SUPABASE_URL: string;
@@ -26,6 +38,14 @@ export interface Env {
   OAUTH_REDIRECT_URI: string;
   ADMIN_EMAILS: string; // comma-separated allowlist (server-side only)
   SITE_ORIGIN: string;  // e.g. https://resolviaai.github.io — CORS-pinned admin origin
+  INSTAGRAM_CLIENT_ID?: string;
+  INSTAGRAM_CLIENT_SECRET?: string;
+  FACEBOOK_CLIENT_ID?: string;
+  FACEBOOK_CLIENT_SECRET?: string;
+  LINKEDIN_CLIENT_ID?: string;
+  LINKEDIN_CLIENT_SECRET?: string;
+  TWITTER_CLIENT_ID?: string;
+  TWITTER_CLIENT_SECRET?: string;
 }
 
 const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
@@ -443,28 +463,33 @@ export default {
       return json(200, { deleted: true });
     }
 
-    // ---- On-device YouTube / Provider OAuth (Ticket-based + backward-compatible JWT) ----
+    // ---- Multi-Provider Social OAuth (Ticket-based + backward-compatible JWT) ----
     const oauthInitMatch = url.pathname.match(/^\/oauth\/([a-zA-Z0-9_-]+)\/init$/);
     if (oauthInitMatch && request.method === "POST") {
-      const provider = oauthInitMatch[1].toLowerCase();
+      const rawProvider = oauthInitMatch[1].toLowerCase();
+      const provider = rawProvider === "x" ? "twitter" : rawProvider;
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
-      if (provider === "google" || provider === "youtube") {
-        const ticket = crypto.randomUUID();
-        await rpc(env, "cloud_put_oauth_state", { p_state: "ticket:" + ticket, p_user_id: user.userId });
-        return json(200, {
-          url: `https://dispatch-cloud.resolviaai.workers.dev/oauth/google/start?ticket=${ticket}`
+
+      const supported = ["google", "youtube", "instagram", "facebook", "linkedin", "twitter"];
+      if (!supported.includes(provider)) {
+        return json(400, {
+          error: `OAuth flow for ${provider} is not supported. Use direct account credentials connection instead.`,
+          manual_connect_available: true
         });
       }
-      return json(400, {
-        error: `OAuth flow for ${provider} is not configured on this cluster. Use direct account credentials connection instead.`,
-        manual_connect_available: true
+
+      const ticket = crypto.randomUUID();
+      await rpc(env, "cloud_put_oauth_state", { p_state: "ticket:" + ticket, p_user_id: user.userId });
+      const targetRoute = (provider === "google" || provider === "youtube") ? "google" : provider;
+      return json(200, {
+        url: `https://dispatch-cloud.resolviaai.workers.dev/oauth/${targetRoute}/start?ticket=${ticket}`
       });
     }
 
-    if (url.pathname === "/oauth/google/start" && request.method === "GET") {
+    // Helper: resolve user ID from ticket or JWT query token
+    async function resolveOAuthUser(): Promise<string | null> {
       const ticket = url.searchParams.get("ticket");
-      let uid: string | null = null;
       if (ticket) {
         const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
           method: "POST",
@@ -473,27 +498,29 @@ export default {
         });
         const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
         const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
-        uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
-      } else {
-        const qsToken = url.searchParams.get("token");
-        const reqForAuth = qsToken
-          ? new Request(request.url, { headers: { Authorization: `Bearer ${qsToken}` } })
-          : request;
-        const user = await authenticate(env, reqForAuth);
-        if (user) uid = user.userId;
+        return (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
       }
-      if (!uid) return json(401, { error: "unauthorized" });
+      const qsToken = url.searchParams.get("token");
+      const reqForAuth = qsToken
+        ? new Request(request.url, { headers: { Authorization: `Bearer ${qsToken}` } })
+        : request;
+      const user = await authenticate(env, reqForAuth);
+      return user ? user.userId : null;
+    }
 
+    // 1. Google / YouTube Start & Callback
+    if (url.pathname === "/oauth/google/start" && request.method === "GET") {
+      const uid = await resolveOAuthUser();
+      if (!uid) return json(401, { error: "unauthorized" });
       const state = crypto.randomUUID() + crypto.randomUUID();
       await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
-      return Response.redirect(
-        buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
+      return Response.redirect(buildAuthorizeUrl(env.YOUTUBE_CLIENT_ID, env.OAUTH_REDIRECT_URI, state), 302);
     }
 
     if (url.pathname === "/oauth/google/callback" && request.method === "GET") {
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
-      if (!code || !state) return json(400, { error: "missing code/state" });
+      if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
       const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
@@ -502,7 +529,8 @@ export default {
       const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
       const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
       const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
-      if (!uid) return json(400, { error: "invalid or expired state" });
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired or was already used. Please retry from Dispatch.", true);
+
       const tokRes = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -512,9 +540,10 @@ export default {
         }),
       });
       const tok = (await tokRes.json()) as Record<string, unknown>;
-      if (!tokRes.ok) return json(502, { error: `token exchange failed: ${JSON.stringify(tok).slice(0, 120)}` });
+      if (!tokRes.ok) return renderOAuthResultHtml("Token Exchange Failed", `Google rejected authorization: ${JSON.stringify(tok).slice(0, 100)}`, true);
       const bad = validateTokenResponse(tok);
-      if (bad) return json(502, { error: bad });
+      if (bad) return renderOAuthResultHtml("Invalid Token", bad, true);
+
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, tok.refresh_token as string);
       let email: string | null = null;
       try {
@@ -522,7 +551,6 @@ export default {
         email = typeof payload.email === "string" ? payload.email : null;
       } catch { /* id_token optional */ }
 
-      // Fetch YouTube channel details
       let channelTitle = "YouTube Channel";
       let channelId = uid;
       let avatarUrl: string | null = null;
@@ -540,36 +568,384 @@ export default {
         }
       } catch { /* channel fetch optional */ }
 
-      // Store in connected_accounts
-      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
-          p_user_id: uid,
-          p_provider: "youtube",
-          p_account_id: channelId,
-          p_account_name: channelTitle,
-          p_account_email: email,
-          p_avatar_url: avatarUrl,
-          p_credentials_encrypted: enc,
+          p_user_id: uid, p_provider: "youtube", p_account_id: channelId, p_account_name: channelTitle,
+          p_account_email: email, p_avatar_url: avatarUrl, p_credentials_encrypted: enc,
           p_metadata: { channel_id: channelId, channel_title: channelTitle },
         }),
       });
 
-      if (!storeRes.ok) {
-        return new Response("<html><body style='font-family:sans-serif;background:#161616;color:#F5F5F5;text-align:center;padding-top:20vh'><h2>Connection failed</h2><p>Failed to save connected account token. Please try again.</p></body></html>",
-          { status: 502, headers: { "content-type": "text/html" } });
-      }
-
-      // Backward compatibility with legacy single-row youtube_connections
       await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_refresh_token`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({ p_user_id: uid, p_refresh_token_encrypted: enc, p_google_email: email }),
       });
 
-      return new Response("<html><body style='font-family:sans-serif;background:#161616;color:#F5F5F5;text-align:center;padding-top:20vh'><h2>YouTube connected</h2><p>Account <b>" + channelTitle + "</b> connected. You can close this page and return to Dispatch.</p></body></html>",
-        { headers: { "content-type": "text/html" } });
+      return renderOAuthResultHtml("YouTube Connected", `Channel "${channelTitle}" is connected to Dispatch. You can return to the app.`);
+    }
+
+    // 2. Instagram Start & Callback
+    if (url.pathname === "/oauth/instagram/start" && request.method === "GET") {
+      const uid = await resolveOAuthUser();
+      if (!uid) return json(401, { error: "unauthorized" });
+      const state = crypto.randomUUID() + crypto.randomUUID();
+      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
+      const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
+      return Response.redirect(buildInstagramAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback", state), 302);
+    }
+
+    if (url.pathname === "/oauth/instagram/callback" && request.method === "GET") {
+      const code = url.searchParams.get("code") ?? "";
+      const state = url.searchParams.get("state") ?? "";
+      if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
+      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_state: state }),
+      });
+      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
+      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
+      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
+
+      const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
+      const clientSecret = env.INSTAGRAM_CLIENT_SECRET || env.FACEBOOK_CLIENT_SECRET || "";
+      const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback";
+
+      const tokRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
+        client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, code
+      }));
+      const tok = await tokRes.json() as Record<string, unknown>;
+      if (!tokRes.ok || !tok.access_token) {
+        return renderOAuthResultHtml("Instagram Auth Failed", `Token exchange failed: ${JSON.stringify(tok).slice(0, 100)}`, true);
+      }
+
+      // Exchange short-lived token for 60-day long-lived token
+      let longToken = tok.access_token as string;
+      try {
+        const longRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
+          grant_type: "fb_exchange_token", client_id: clientId, client_secret: clientSecret, fb_exchange_token: longToken
+        }));
+        if (longRes.ok) {
+          const longData = await longRes.json() as Record<string, unknown>;
+          if (longData.access_token) longToken = longData.access_token as string;
+        }
+      } catch { /* fallback to shortToken */ }
+
+      // Fetch Instagram accounts linked to user's Facebook pages
+      let igUserId = "me";
+      let igUsername = "Instagram User";
+      let igAvatar: string | null = null;
+      let pageId: string | null = null;
+      let pageAccessToken: string | null = null;
+
+      try {
+        const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${longToken}`);
+        if (pagesRes.ok) {
+          const pagesData = await pagesRes.json() as { data?: Array<{ id: string; name: string; access_token?: string; instagram_business_account?: { id: string; username: string; profile_picture_url?: string } }> };
+          const found = (pagesData.data || []).find(p => p.instagram_business_account?.id);
+          if (found && found.instagram_business_account) {
+            igUserId = found.instagram_business_account.id;
+            igUsername = "@" + found.instagram_business_account.username;
+            igAvatar = found.instagram_business_account.profile_picture_url || null;
+            pageId = found.id;
+            pageAccessToken = found.access_token || null;
+          } else if (pagesData.data && pagesData.data.length > 0) {
+            const first = pagesData.data[0];
+            pageId = first.id;
+            igUserId = first.id;
+            igUsername = first.name;
+            pageAccessToken = first.access_token || null;
+          }
+        }
+      } catch { /* use defaults */ }
+
+      const credPayload = {
+        access_token: pageAccessToken || longToken,
+        user_access_token: longToken,
+        page_id: pageId,
+        ig_user_id: igUserId,
+        account_id: igUserId
+      };
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          p_user_id: uid, p_provider: "instagram", p_account_id: igUserId, p_account_name: igUsername,
+          p_account_email: null, p_avatar_url: igAvatar, p_credentials_encrypted: enc,
+          p_metadata: { ig_user_id: igUserId, page_id: pageId, username: igUsername },
+        }),
+      });
+
+      return renderOAuthResultHtml("Instagram Connected", `Account "${igUsername}" connected successfully! You can return to Dispatch.`);
+    }
+
+    // 3. Facebook Start & Callback
+    if (url.pathname === "/oauth/facebook/start" && request.method === "GET") {
+      const uid = await resolveOAuthUser();
+      if (!uid) return json(401, { error: "unauthorized" });
+      const state = crypto.randomUUID() + crypto.randomUUID();
+      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
+      const clientId = env.FACEBOOK_CLIENT_ID || env.INSTAGRAM_CLIENT_ID || "";
+      return Response.redirect(buildFacebookAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/facebook/callback", state), 302);
+    }
+
+    if (url.pathname === "/oauth/facebook/callback" && request.method === "GET") {
+      const code = url.searchParams.get("code") ?? "";
+      const state = url.searchParams.get("state") ?? "";
+      if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
+      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_state: state }),
+      });
+      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
+      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
+      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
+
+      const clientId = env.FACEBOOK_CLIENT_ID || env.INSTAGRAM_CLIENT_ID || "";
+      const clientSecret = env.FACEBOOK_CLIENT_SECRET || env.INSTAGRAM_CLIENT_SECRET || "";
+      const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/facebook/callback";
+
+      const tokRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
+        client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, code
+      }));
+      const tok = await tokRes.json() as Record<string, unknown>;
+      if (!tokRes.ok || !tok.access_token) {
+        return renderOAuthResultHtml("Facebook Auth Failed", `Token exchange failed: ${JSON.stringify(tok).slice(0, 100)}`, true);
+      }
+
+      let longToken = tok.access_token as string;
+      try {
+        const longRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
+          grant_type: "fb_exchange_token", client_id: clientId, client_secret: clientSecret, fb_exchange_token: longToken
+        }));
+        if (longRes.ok) {
+          const longData = await longRes.json() as Record<string, unknown>;
+          if (longData.access_token) longToken = longData.access_token as string;
+        }
+      } catch { /* fallback */ }
+
+      let pageId = "me";
+      let pageTitle = "Facebook Page";
+      let pageAccessToken: string | null = null;
+      try {
+        const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token&access_token=${longToken}`);
+        if (pagesRes.ok) {
+          const pagesData = await pagesRes.json() as { data?: Array<{ id: string; name: string; access_token?: string }> };
+          if (pagesData.data && pagesData.data.length > 0) {
+            pageId = pagesData.data[0].id;
+            pageTitle = pagesData.data[0].name;
+            pageAccessToken = pagesData.data[0].access_token || null;
+          }
+        }
+      } catch { /* fallback */ }
+
+      const credPayload = {
+        access_token: pageAccessToken || longToken,
+        user_access_token: longToken,
+        page_id: pageId,
+        account_id: pageId
+      };
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          p_user_id: uid, p_provider: "facebook", p_account_id: pageId, p_account_name: pageTitle,
+          p_account_email: null, p_avatar_url: null, p_credentials_encrypted: enc,
+          p_metadata: { page_id: pageId, title: pageTitle },
+        }),
+      });
+
+      return renderOAuthResultHtml("Facebook Connected", `Page "${pageTitle}" connected successfully! You can return to Dispatch.`);
+    }
+
+    // 4. LinkedIn Start & Callback
+    if (url.pathname === "/oauth/linkedin/start" && request.method === "GET") {
+      const uid = await resolveOAuthUser();
+      if (!uid) return json(401, { error: "unauthorized" });
+      const state = crypto.randomUUID() + crypto.randomUUID();
+      await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
+      return Response.redirect(buildLinkedInAuthorizeUrl(env.LINKEDIN_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback", state), 302);
+    }
+
+    if (url.pathname === "/oauth/linkedin/callback" && request.method === "GET") {
+      const code = url.searchParams.get("code") ?? "";
+      const state = url.searchParams.get("state") ?? "";
+      if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
+      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_state: state }),
+      });
+      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
+      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
+      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
+
+      const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback";
+      const tokRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+          client_id: env.LINKEDIN_CLIENT_ID || "",
+          client_secret: env.LINKEDIN_CLIENT_SECRET || "",
+        }),
+      });
+      const tok = await tokRes.json() as Record<string, unknown>;
+      if (!tokRes.ok || !tok.access_token) {
+        return renderOAuthResultHtml("LinkedIn Auth Failed", `Token exchange failed: ${JSON.stringify(tok).slice(0, 100)}`, true);
+      }
+
+      let authorUrn = "urn:li:person:me";
+      let profileName = "LinkedIn User";
+      let avatarUrl: string | null = null;
+      let email: string | null = null;
+
+      try {
+        const ures = await fetch("https://api.linkedin.com/v2/userinfo", {
+          headers: { Authorization: `Bearer ${tok.access_token}` },
+        });
+        if (ures.ok) {
+          const uinfo = await ures.json() as { sub: string; name?: string; picture?: string; email?: string };
+          authorUrn = `urn:li:person:${uinfo.sub}`;
+          profileName = uinfo.name || profileName;
+          avatarUrl = uinfo.picture || null;
+          email = uinfo.email || null;
+        }
+      } catch { /* use defaults */ }
+
+      const credPayload = {
+        access_token: tok.access_token,
+        refresh_token: tok.refresh_token ?? null,
+        author_urn: authorUrn,
+        account_id: authorUrn
+      };
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          p_user_id: uid, p_provider: "linkedin", p_account_id: authorUrn, p_account_name: profileName,
+          p_account_email: email, p_avatar_url: avatarUrl, p_credentials_encrypted: enc,
+          p_metadata: { author_urn: authorUrn, name: profileName },
+        }),
+      });
+
+      return renderOAuthResultHtml("LinkedIn Connected", `Profile "${profileName}" connected successfully! You can return to Dispatch.`);
+    }
+
+    // 5. X / Twitter (OAuth 2.0 PKCE) Start & Callback
+    if (url.pathname === "/oauth/twitter/start" && request.method === "GET") {
+      const uid = await resolveOAuthUser();
+      if (!uid) return json(401, { error: "unauthorized" });
+      const rawState = crypto.randomUUID() + crypto.randomUUID();
+      const codeVerifier = generateRandomString(48);
+      const codeChallenge = await sha256B64Url(codeVerifier);
+      await rpc(env, "cloud_put_oauth_state", { p_state: rawState, p_user_id: uid });
+      const encryptedState = await encryptToken(env.TOKEN_VAULT_KEY, `${rawState}:::${codeVerifier}`);
+      return Response.redirect(
+        buildTwitterAuthorizeUrl(env.TWITTER_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/twitter/callback", encryptedState, codeChallenge),
+        302
+      );
+    }
+
+    if (url.pathname === "/oauth/twitter/callback" && request.method === "GET") {
+      const code = url.searchParams.get("code") ?? "";
+      const stateParam = url.searchParams.get("state") ?? "";
+      if (!code || !stateParam) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
+
+      let rawState = "";
+      let codeVerifier = "";
+      try {
+        const decrypted = await decryptToken(env.TOKEN_VAULT_KEY, stateParam);
+        const parts = decrypted.split(":::");
+        rawState = parts[0] || "";
+        codeVerifier = parts[1] || "";
+      } catch {
+        return renderOAuthResultHtml("Invalid State", "State validation failed.", true);
+      }
+
+      const consumeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_consume_oauth_state`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ p_state: rawState }),
+      });
+      const consumed = consumeRes.ok ? await consumeRes.json() as unknown : null;
+      const consumedArr = Array.isArray(consumed) ? consumed as Array<Record<string, unknown>> : [];
+      const uid = (consumedArr[0]?.cloud_consume_oauth_state as string | undefined) ?? null;
+      if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired. Please retry from Dispatch.", true);
+
+      const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/twitter/callback";
+      const basicAuth = btoa(`${env.TWITTER_CLIENT_ID || ""}:${env.TWITTER_CLIENT_SECRET || ""}`);
+      const tokRes = await fetch("https://api.twitter.com/2/oauth2/token", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${basicAuth}`,
+        },
+        body: new URLSearchParams({
+          code,
+          grant_type: "authorization_code",
+          redirect_uri: redirectUri,
+          code_verifier: codeVerifier,
+        }),
+      });
+      const tok = await tokRes.json() as Record<string, unknown>;
+      if (!tokRes.ok || !tok.access_token) {
+        return renderOAuthResultHtml("X Auth Failed", `Token exchange failed: ${JSON.stringify(tok).slice(0, 100)}`, true);
+      }
+
+      let twitterHandle = "X User";
+      let twitterId = "me";
+      let avatarUrl: string | null = null;
+
+      try {
+        const ures = await fetch("https://api.twitter.com/2/users/me?user.fields=profile_image_url,username,name", {
+          headers: { Authorization: `Bearer ${tok.access_token}` },
+        });
+        if (ures.ok) {
+          const udata = await ures.json() as { data?: { id: string; name: string; username: string; profile_image_url?: string } };
+          if (udata.data) {
+            twitterId = udata.data.id;
+            twitterHandle = "@" + udata.data.username;
+            avatarUrl = udata.data.profile_image_url || null;
+          }
+        }
+      } catch { /* use defaults */ }
+
+      const credPayload = {
+        access_token: tok.access_token,
+        refresh_token: tok.refresh_token ?? null,
+        bearer_token: tok.access_token,
+        account_id: twitterId,
+        username: twitterHandle
+      };
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+
+      await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+        method: "POST",
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          p_user_id: uid, p_provider: "twitter", p_account_id: twitterId, p_account_name: twitterHandle,
+          p_account_email: null, p_avatar_url: avatarUrl, p_credentials_encrypted: enc,
+          p_metadata: { twitter_id: twitterId, handle: twitterHandle },
+        }),
+      });
+
+      return renderOAuthResultHtml("X (Twitter) Connected", `Account "${twitterHandle}" connected successfully! You can return to Dispatch.`);
     }
 
     // ---- Remote processing jobs (authenticated app clients, any network) ----

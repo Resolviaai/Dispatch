@@ -326,3 +326,16 @@ test("oauth google init creates single-use ticket", async () => {
   const body = await res.json();
   assert.ok(body.url.includes("/oauth/google/start?ticket="));
 });
+
+test("oauth multi-provider init creates tickets for instagram, linkedin, twitter, facebook", async () => {
+  supabase.set("/rpc/cloud_put_oauth_state", { method: "POST", fn: () => ({ body: null }) });
+  for (const prov of ["instagram", "linkedin", "twitter", "facebook"]) {
+    const res = await worker.fetch(new Request(`https://w.test/oauth/${prov}/init`, {
+      method: "POST", headers: pcHeaders()
+    }), env());
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.url.includes(`/oauth/${prov}/start?ticket=`));
+  }
+});
+
