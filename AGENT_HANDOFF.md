@@ -275,3 +275,10 @@ Owner compared Dispatch's Clips page against YouTube Studio side by side and cal
 - **Detail**: 56px header with ghost circular back/kebab, `px-4` grid spacing, transport play 40px circular, Edit/Publish as pill pair (`rounded-full`), framing selector dissolved into flat `border-t` section with uppercase label.
 - Verified live in emulator against 5 real clips (structure confirmed via UIAutomator tree: chips, flat rows, 16:9 thumbs, metadata lines). Shipped v1.1.11-alpha (15), stable URL hash-verified, landing live.
 - Note: the owner's two reference screenshots (Dispatch dark + Studio white) never arrived in the image cache; the rebuild was driven by the written critique + Studio anatomy knowledge. If he re-shares them, diff visually before further polish.
+
+## 48. Clips list divider-free + chip order + row-pill removal (2026-10-25) — v1.1.12-alpha (16)
+Owner sent the two comparison screenshots (Dispatch 1.1.11 build vs YouTube Studio) and a green arrow at the divider between rows: Studio separates rows with whitespace ONLY — no divider lines. Plus: chips must read All → Ready → Uploaded, and per-row Ready/Uploaded pills are clutter (Studio shows no per-row status).
+- Removed both `divide-y divide-border` containers (skeleton + rows); rows now breathe on py-3 whitespace alone.
+- Chip order: All → Ready → Uploaded (default filter stays 'ready').
+- Row status pill block deleted; retention folded into the metadata line (`88% · 9h ago · 5d left` / `· Cloud only`); `isReady` local removed. Status now lives in the filter chips + detail page, exactly like Studio's visibility handling.
+- Verified live in emulator via screenshot (divider-free rows, correct chip order, clean metadata). Shipped v1.1.12-alpha (16), stable URL hash-verified, landing live at 1.1.12.

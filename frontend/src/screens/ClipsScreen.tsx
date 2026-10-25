@@ -2171,9 +2171,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         {/* FILTER CHIPS — uniform pills, YouTube selected-chip inversion */}
         <div className="mt-3 flex items-center gap-2 overflow-x-auto no-scrollbar">
           {[
+            { id: 'all' as FilterStatus, label: 'All', count: allClips.length },
             { id: 'ready' as FilterStatus, label: 'Ready', count: readyClips.length },
             { id: 'approved' as FilterStatus, label: 'Uploaded', count: approvedClips.length },
-            { id: 'all' as FilterStatus, label: 'All', count: allClips.length },
           ].map((chip) => {
             const isSelected = filterStatus === chip.id;
             return (
@@ -2239,7 +2239,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       {/* CLIP LIST — flat rows on canvas, separated by dividers (no cards) */}
       <main className="flex-1 min-h-0 overflow-y-auto pb-24">
         {isLoading && allClips.length === 0 ? (
-          <div className="px-4 divide-y divide-border">
+          <div className="px-4">
             {[1, 2, 3].map((i) => (
               <div key={i} className="py-3 flex gap-3 animate-pulse">
                 <div className="w-[132px] aspect-video rounded-lg bg-surface-2 shrink-0" />
@@ -2302,9 +2302,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 </span>
               </div>
 
-              <div className="px-4 divide-y divide-border">
+              <div className="px-4">
                 {clipsInSession.map((clip) => {
-                  const isReady = clip.status === 'ready_review';
                   const isUploaded = clip.status === 'approved' || clip.status === 'published';
                   const youtubeUrl = clip.remote_url || (clip.remote_id ? 'https://youtu.be/' + clip.remote_id : null);
                   const daysLeft = getRetentionDaysLeft(clip.published_at);
@@ -2358,27 +2357,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                             <>{clip.virality_score}% &middot; </>
                           )}
                           {age || (clip.session_id ? clip.session_id.replace('sess_', '#') : 'Direct')}
+                          {isUploaded && !clip.is_cloud_only && <> &middot; {daysLeft}d left</>}
+                          {isUploaded && clip.is_cloud_only && <> &middot; Cloud only</>}
                         </p>
-                        <div className="flex items-center gap-2 mt-1.5">
-                          <span
-                            className={'text-xs font-medium px-2 py-0.5 rounded-full border ' + (isReady
-                              ? 'bg-primary/15 text-primary border-primary/30'
-                              : 'chip-success border')
-                            }
-                          >
-                            {isReady ? 'Ready' : 'Uploaded'}
-                          </span>
-                          {isUploaded && !clip.is_cloud_only && (
-                            <span className="text-xs text-text-muted tabular-nums" title="Local video auto-deletes 7 days after upload; thumbnail and YouTube link are kept">
-                              {daysLeft}d left
-                            </span>
-                          )}
-                          {isUploaded && clip.is_cloud_only && (
-                            <span className="text-xs text-status-info" title="Local MP4 purged after 7-day retention; thumbnail and YouTube link are kept">
-                              Cloud only
-                            </span>
-                          )}
-                        </div>
                       </div>
 
                       {/* Kebab — circular ghost, aligned to the 16px margin */}
