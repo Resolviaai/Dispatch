@@ -1172,9 +1172,12 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     currentGroup && (!currentGroup.type || currentGroup.type === 'caption' || currentGroup.type === 'text')
   );
   const isCaption = Boolean(currentGroup && (!currentGroup.type || currentGroup.type === 'caption'));
-  const isNormalText = Boolean(currentGroup && currentGroup.type === 'text');
-  const hasTextLayers = Boolean(
-    track?.groups && track.groups.some((g) => !g.type || g.type === 'caption' || g.type === 'text')
+  const isNormalText = Boolean(currentGroup && currentGroup.type === 'text');
+
+  const hasTextLayers = Boolean(
+
+    track?.groups && track.groups.some((g) => !g.type || g.type === 'caption' || g.type === 'text')
+
   );
 
   React.useEffect(() => {
@@ -2431,7 +2434,10 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
               <div className="flex items-center gap-1 shrink-0 ml-2">
                 <button
                   type="button"
-                  onClick={() => setActivePanel('none')}
+                  onClick={() => {
+                    setActivePanel('none');
+                    onSelectGroup?.(null);
+                  }}
                   className="w-7 h-7 rounded-full bg-surface-200 hover:bg-surface-300 text-text-secondary hover:text-white flex items-center justify-center active:scale-95 transition-all"
                   title="Done"
                   aria-label="Done editing"

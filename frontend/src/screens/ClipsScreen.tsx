@@ -598,7 +598,7 @@ function InteractiveCanvasItem({
                   onApplyLayoutToAll(group.id);
                 }}
                 className="h-6 px-2.5 rounded-full bg-[#1C1F24]/95 border border-[#2E3239] hover:border-primary text-text-secondary hover:text-white text-[10px] font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 transition-all whitespace-nowrap"
-                title="Apply this caption's position & size to all spoken captions"
+                title="Apply this caption's style, position & size to all spoken captions"
               >
                 <CheckCheck size={11} className="text-primary" />
                 <span>Apply to All Captions</span>
@@ -2177,12 +2177,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const { nextTrack, affectedCount } = applySectionStylesToTrack(
       visibleCaptionTrack,
       groupId,
-      'layout'
+      'all'
     );
     // Commit as a single atomic history step for undo/redo
     setCaptionTrack(nextTrack, true);
     setSaveStatus('unsaved');
-    setFeedback(`Applied position & size to all captions (${affectedCount})`);
+    setFeedback(`Applied style & layout to all captions (${affectedCount})`);
     setTimeout(() => {
       setFeedback(null);
     }, 2200);

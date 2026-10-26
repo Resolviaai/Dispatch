@@ -17,8 +17,10 @@ class DispatchApplication : Application() {
     }
 
     private fun schedulePeriodicYouTubeUpload() {
+        val pairing = com.resolvia.dispatch.data.PairingManager(this)
+        val networkType = if (pairing.isWifiOnlyEnabled) NetworkType.UNMETERED else NetworkType.CONNECTED
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.UNMETERED)
+            .setRequiredNetworkType(networkType)
             .build()
 
         val periodicUpload = PeriodicWorkRequestBuilder<YouTubeDirectUploadWorker>(15, TimeUnit.MINUTES)

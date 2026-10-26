@@ -511,6 +511,14 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     type: 'move' | 'trim-start' | 'trim-end'
   ) => {
     e.stopPropagation();
+
+    // Tap on unselected block selects it; only dragging an already-selected block or trim handle initiates drag
+    const isAlreadySelected = selectedGroupId === grp.id;
+    if (type === 'move' && !isAlreadySelected) {
+      onSelectGroup(grp.id);
+      return;
+    }
+
     onSelectGroup(grp.id);
 
     // Capture stable anchors for the entire gesture (never move with playhead)
@@ -600,8 +608,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       // Snapping is only active when explicitly enabled via Magnet toggle
       if (isSnapEnabled) {
+        // Snap strictly to stable boundaries (clip start/end, other caption blocks), not playhead jitter
         const candidateAnchors = Array.from(
-          new Set([dragSession.playheadTime, ...dragSession.stableAnchors])
+          new Set(dragSession.stableAnchors)
         );
 
         let bestCandidate: { edge: 'start' | 'end'; anchor: number; diff: number } | null = null;
@@ -1188,55 +1197,60 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                         </div>
                       )}
 
-                      {/* Head Margin Dimmed Overlay (Safety Handle) */}
-                      {trimLeftPx > 0 && (
-                        <div
-                          className="absolute left-0 top-0 bottom-0 bg-black/75 backdrop-blur-[1px] border-r border-dashed border-amber-400/60 pointer-events-none z-10"
-                          style={{ width: `${trimLeftPx}px` }}
-                        />
+                      {/* Safety Handles & Dim Overlays: Rendered ONLY when source trimming is allowed and not hidden */}
+                      {canEditSelection && !hideTrimControls && (
+                        <>
+                          {/* Head Margin Dimmed Overlay (Safety Handle) */}
+                          {trimLeftPx > 0 && (
+                            <div
+                              className="absolute left-0 top-0 bottom-0 bg-black/75 backdrop-blur-[1px] border-r border-dashed border-amber-400/60 pointer-events-none z-10"
+                              style={{ width: `${trimLeftPx}px` }}
+                            />
+                          )}
+
+                          {/* Tail Margin Dimmed Overlay (Safety Handle) */}
+                          {trimRightPx < totalTimelineWidth && (
+                            <div
+                              className="absolute top-0 bottom-0 right-0 bg-black/75 backdrop-blur-[1px] border-l border-dashed border-amber-400/60 pointer-events-none z-10"
+                              style={{ left: `${trimRightPx}px` }}
+                            />
+                          )}
+
+                          {/* Active Video Bounding Box with Dual Drag Handles (CapCut Style) */}
+                          <div
+                            className="absolute top-0 bottom-0 rounded border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.35)] pointer-events-none z-20"
+                            style={{ left: `${trimLeftPx}px`, width: `${trimWidthPx}px` }}
+                          >
+                            {/* Left Trim Handle (Head Padding Expansion) */}
+                            <div
+                              onPointerDown={(e) => handleTrimPointerDown('start', e)}
+                              onPointerMove={handleTrimPointerMove}
+                              onPointerUp={handleTrimPointerUp}
+                              onPointerCancel={handleTrimPointerCancel}
+                              onLostPointerCapture={handleTrimPointerCancel}
+                              className="absolute left-0 top-0 bottom-0 w-3.5 -translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-l cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
+                              title="Drag to trim start (reveals earlier speech in safety handle)"
+                            >
+                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                            </div>
+
+                            {/* Right Trim Handle (Tail Padding Expansion) */}
+                            <div
+                              onPointerDown={(e) => handleTrimPointerDown('end', e)}
+                              onPointerMove={handleTrimPointerMove}
+                              onPointerUp={handleTrimPointerUp}
+                              onPointerCancel={handleTrimPointerCancel}
+                              onLostPointerCapture={handleTrimPointerCancel}
+                              className="absolute right-0 top-0 bottom-0 w-3.5 translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-r cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
+                              title="Drag to trim end (extends ending speech into safety handle)"
+                            >
+                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                            </div>
+                          </div>
+                        </>
                       )}
-
-                      {/* Tail Margin Dimmed Overlay (Safety Handle) */}
-                      {trimRightPx < totalTimelineWidth && (
-                        <div
-                          className="absolute top-0 bottom-0 right-0 bg-black/75 backdrop-blur-[1px] border-l border-dashed border-amber-400/60 pointer-events-none z-10"
-                          style={{ left: `${trimRightPx}px` }}
-                        />
-                      )}
-
-                      {/* Active Video Bounding Box with Dual Drag Handles (CapCut Style) */}
-                      <div
-                        className="absolute top-0 bottom-0 rounded border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.35)] pointer-events-none z-20"
-                        style={{ left: `${trimLeftPx}px`, width: `${trimWidthPx}px` }}
-                      >
-                        {/* Left Trim Handle (Head Padding Expansion) */}
-                        <div
-                          onPointerDown={(e) => handleTrimPointerDown('start', e)}
-                          onPointerMove={handleTrimPointerMove}
-                          onPointerUp={handleTrimPointerUp}
-                          onPointerCancel={handleTrimPointerCancel}
-                          onLostPointerCapture={handleTrimPointerCancel}
-                          className="absolute left-0 top-0 bottom-0 w-3.5 -translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-l cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
-                          title="Drag to trim start (reveals earlier speech in safety handle)"
-                        >
-                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
-                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
-                        </div>
-
-                        {/* Right Trim Handle (Tail Padding Expansion) */}
-                        <div
-                          onPointerDown={(e) => handleTrimPointerDown('end', e)}
-                          onPointerMove={handleTrimPointerMove}
-                          onPointerUp={handleTrimPointerUp}
-                          onPointerCancel={handleTrimPointerCancel}
-                          onLostPointerCapture={handleTrimPointerCancel}
-                          className="absolute right-0 top-0 bottom-0 w-3.5 translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-r cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
-                          title="Drag to trim end (extends ending speech into safety handle)"
-                        >
-                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
-                          <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
-                        </div>
-                      </div>
                     </div>
                   </div>
                 );
@@ -1288,7 +1302,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                               : isGroupHidden
                               ? 'transition-colors duration-150 bg-black/40 border border-white/20 text-white/40 opacity-40 grayscale'
                               : isSpoken
-                              ? `transition-colors duration-150 ${meta.bg} border-2 border-white/80 text-white font-semibold z-10`
+                              ? `transition-colors duration-150 ${meta.bg} border ${meta.border} shadow-[0_0_8px_rgba(255,255,255,0.25)] text-white font-medium z-10`
                               : `transition-colors duration-150 ${meta.bg} border ${meta.border} ${meta.text} hover:opacity-100 opacity-90`
                           }`}
                           style={{ left: `${left}px`, width: `${trueWidth}px` }}

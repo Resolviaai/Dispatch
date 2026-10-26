@@ -202,12 +202,18 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
 
   // --- Load Initial Saved Template (Cache-First + Network Fallback) ---
   useEffect(() => {
+    let localSavedTime = 0;
     if (typeof localStorage !== 'undefined') {
       try {
         const cached = localStorage.getItem('dispatch_default_template');
         if (cached) {
           const parsed = JSON.parse(cached);
-          applyLoadedTemplate(parsed);
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.updated_at) {
+              localSavedTime = new Date(parsed.updated_at).getTime();
+            }
+            applyLoadedTemplate(parsed);
+          }
         }
       } catch {}
     }
@@ -220,7 +226,14 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
         if (res.ok) {
           const data = await res.json();
           if (data && typeof data === 'object') {
-            applyLoadedTemplate(data);
+            const backendTime = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+            // Only overwrite if backend template is explicitly newer than our local saved template
+            if (!localSavedTime || backendTime > localSavedTime) {
+              applyLoadedTemplate(data);
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('dispatch_default_template', JSON.stringify(data));
+              }
+            }
           }
         }
       } catch (err) {
@@ -406,17 +419,28 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
         },
         publish_mode: 'private',
         platform_targets: ['youtube', 'instagram'],
+        updated_at: new Date().toISOString(),
       };
 
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('dispatch_default_template', JSON.stringify(payload));
       }
 
-      await fetch(apiUrl('/api/template/default', pcHost), {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(payload),
-      });
+      try {
+        const res = await fetch(apiUrl('/api/template/default', pcHost), {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData?.template && typeof localStorage !== 'undefined') {
+            localStorage.setItem('dispatch_default_template', JSON.stringify(resData.template));
+          }
+        }
+      } catch (fetchErr) {
+        console.warn('Backend template sync error, preserved in local storage:', fetchErr);
+      }
 
       showToast('Default template saved');
       onSaved?.();
@@ -651,10 +675,10 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
   const handleApplyLayoutToAll = (sourceGroupId: string) => {
     if (!track) return;
     const src = track.groups.find((g) => g.id === sourceGroupId);
-    if (!src || !src.layout) return;
-    const { nextTrack } = applySectionStylesToTrack(track, src.id, 'layout');
+    if (!src) return;
+    const { nextTrack, affectedCount } = applySectionStylesToTrack(track, src.id, 'all');
     setCaptionTrack(nextTrack, true);
-    showToast('Applied position & size to all template phrases');
+    showToast(`Applied style & layout to all captions (${affectedCount})`);
   };
 
   return (
@@ -714,6 +738,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
       <div
         className="h-[50%] min-h-[200px] max-h-[50%] shrink-0 w-full flex items-center justify-center p-1 bg-black relative overflow-hidden"
         onClick={() => {
+          setSelectedGroupId(null);
           setIsVideoSelected(false);
         }}
       >

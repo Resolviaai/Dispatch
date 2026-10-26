@@ -209,7 +209,19 @@ fun SegmentRowItem(
 
             // Real status pill
             when (segment.status) {
-                "UPLOADED_TO_YOUTUBE" -> {
+                "VERIFIED_BY_LAPTOP" -> {
+                    Text(
+                        text = "Synced",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SemanticSuccess,
+                        modifier = Modifier
+                            .background(SemanticSuccessBg, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                "UPLOADED_TO_YOUTUBE", "PROCESSED_ON_YOUTUBE" -> {
                     Text(
                         text = "Uploaded",
                         fontFamily = FontFamily.Monospace,
@@ -218,6 +230,18 @@ fun SegmentRowItem(
                         color = SemanticSuccess,
                         modifier = Modifier
                             .background(SemanticSuccessBg, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                "UPLOADED_AWAITING_PROCESSING" -> {
+                    Text(
+                        text = "Processing...",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PrimarySky,
+                        modifier = Modifier
+                            .background(PrimarySky.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
@@ -249,6 +273,18 @@ fun SegmentRowItem(
                 "QUEUED_FOR_UPLOAD" -> {
                     Text(
                         text = "Queued",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SemanticWarning,
+                        modifier = Modifier
+                            .background(SemanticWarningBg, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                "FAILED_RETRY" -> {
+                    Text(
+                        text = "Retrying...",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,

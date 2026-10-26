@@ -343,7 +343,7 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
                   onApplyLayoutToAll(group.id);
                 }}
                 className="h-6 px-2.5 rounded-full bg-[#1C1F26]/95 border border-[#2E3239] hover:border-primary text-text-secondary hover:text-white text-[10px] font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 transition-all whitespace-nowrap"
-                title="Apply this caption's position & size to all spoken captions"
+                title="Apply this caption's style, position & size to all spoken captions"
               >
                 <CheckCheck size={11} className="text-primary" />
                 <span>Apply to All Captions</span>

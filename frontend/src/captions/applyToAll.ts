@@ -14,7 +14,8 @@ export type StyleSection =
   | 'alignment'
   | 'animation'
   | 'templates'
-  | 'layout';
+  | 'layout'
+  | 'all';
 
 export interface ApplyToAllResult {
   nextTrack: CaptionTrack;
@@ -202,6 +203,30 @@ export function extractSectionProperties(
         animationPatch: { ...targetAnimation },
       };
 
+    case 'all':
+      return {
+        stylePatch: { ...targetStyle },
+        layoutPatch: {
+          position_x: targetLayout.position_x,
+          position_y: targetLayout.position_y,
+          scale: targetLayout.scale,
+          ...(targetLayout.rotation !== undefined ? { rotation: targetLayout.rotation } : {}),
+          ...(targetLayout.alignment !== undefined ? { alignment: targetLayout.alignment } : {}),
+          ...(targetLayout.max_width !== undefined ? { max_width: targetLayout.max_width } : {}),
+          ...(targetLayout.max_lines !== undefined ? { max_lines: targetLayout.max_lines } : {}),
+        },
+        animationPatch: {
+          type: targetAnimation.type,
+          duration_ms: targetAnimation.duration_ms,
+          active_scale: targetAnimation.active_scale,
+          easing: targetAnimation.easing,
+          enter: targetAnimation.enter ? { ...targetAnimation.enter } : undefined,
+          active_word: targetAnimation.active_word ? { ...targetAnimation.active_word } : undefined,
+          exit: targetAnimation.exit ? { ...targetAnimation.exit } : undefined,
+          loop: targetAnimation.loop ? { ...targetAnimation.loop } : undefined,
+        },
+      };
+
     default:
       return {};
   }
@@ -269,6 +294,9 @@ export function applySectionStylesToTrack(
 
   const nextTrack: CaptionTrack = {
     ...track,
+    default_style: stylePatch ? { ...track.default_style, ...stylePatch } : track.default_style,
+    default_layout: layoutPatch ? { ...track.default_layout, ...layoutPatch } : track.default_layout,
+    default_animation: animationPatch ? { ...track.default_animation, ...animationPatch } : track.default_animation,
     groups: updatedGroups,
   };
 

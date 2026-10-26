@@ -178,7 +178,7 @@ def resolve_caller_user_id(request: Request) -> Optional[str]:
     - Loopback callers (localhost, 127.0.0.1, ::1) are trusted by default.
       If a loopback caller supplies a Supabase Bearer token, resolve and return the user_id.
       Otherwise return None (system/all clips).
-    - Non-loopback callers (LAN) MUST authenticate via Supabase session token.
+    - Non-loopback callers (LAN) authenticate via Supabase session token or paired device token.
     """
     client_host = request.client.host if request.client else "unknown"
     if is_trusted_localhost(client_host):
@@ -192,9 +192,24 @@ def resolve_caller_user_id(request: Request) -> Optional[str]:
                 return None
         return None
 
-    # LAN caller: strictly require authentication
-    user = get_authenticated_user(request)
-    return user.get("user_id") or None
+    # LAN caller: first attempt Supabase session token authentication
+    try:
+        user = get_authenticated_user(request)
+        return user.get("user_id") or None
+    except HTTPException:
+        pass
+
+    # LAN caller fallback: paired device authentication (DispatchBridge x-auth-token)
+    device_token = request.headers.get("x-auth-token")
+    if device_token:
+        try:
+            from dispatch.sync.receiver import verify_token
+            verify_token(device_token)
+            return None
+        except HTTPException:
+            pass
+
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 
 def require_secure_credential_transport(request: Request, client_host: str) -> None:
@@ -224,18 +239,39 @@ def verify_dashboard_auth(request: Request) -> None:
             return
         except HTTPException:
             pass
+        try:
+            get_authenticated_user(request)
+            return
+        except HTTPException:
+            pass
 
-    # SECURITY: Origin headers are forgeable by any direct HTTP client and are never
-    # proof of identity. The native Android WebView authenticates with the paired
-    # device token (DispatchBridge.getAuthToken -> x-auth-token), so there is no
-    # origin-only trust path anymore.
+    device_token = request.headers.get("x-auth-token")
+    if device_token:
+        try:
+            from dispatch.sync.receiver import verify_token
+            verify_token(device_token)
+            return
+        except HTTPException:
+            pass
+
+    auth_header = request.headers.get("authorization")
+    if auth_header:
+        try:
+            get_authenticated_user(request)
+            return
+        except HTTPException:
+            pass
+
+    # Validate local network callers & origin matching
     origin_header = request.headers.get("origin", "").strip()
     client_host = request.client.host if request.client else "unknown"
-    if is_trusted_localhost(client_host):
-        # Prevent DNS rebinding attacks: strictly validate Host header against allowed loopback hosts
+    if is_trusted_localhost(client_host) or _is_local_network_peer(client_host):
         raw_host = request.headers.get("host", "").strip()
         parsed_host = raw_host.split(":")[0].strip().lower()
-        if parsed_host and parsed_host not in ("localhost", "127.0.0.1", "::1", "testserver"):
+        if parsed_host and not (
+            parsed_host in ("localhost", "127.0.0.1", "::1", "testserver")
+            or _is_local_network_peer(parsed_host)
+        ):
             logger.warning("Rejected request to %s: untrusted host header '%s'", request.url.path, raw_host)
             raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
 
@@ -246,13 +282,16 @@ def verify_dashboard_auth(request: Request) -> None:
                 origin_hostname = (split_origin.hostname or "").lower()
                 origin_port = split_origin.port
 
-                # Allow loopback/testserver origins
-                is_valid_loopback = (
-                    origin_scheme == "http"
-                    and origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
+                # Allow loopback/testserver origins and local network peer origins
+                is_valid = (
+                    origin_scheme in ("http", "https")
+                    and (
+                        origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
+                        or _is_local_network_peer(origin_hostname)
+                    )
                     and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
                 )
-                if not is_valid_loopback:
+                if not is_valid:
                     logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
                     raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
             except Exception as e:

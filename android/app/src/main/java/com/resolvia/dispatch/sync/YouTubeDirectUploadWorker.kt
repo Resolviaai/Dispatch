@@ -120,6 +120,7 @@ class YouTubeDirectUploadWorker(
                 }
 
                 val dispatchId = "dsp_${seg.finalizedAt ?: System.currentTimeMillis()}_${seg.segmentId.takeLast(6)}"
+                dao.updateSegmentStatus(seg.segmentId, "UPLOADING")
                 val result = uploadToYouTubeDirect(accessToken, file, dispatchId, seg)
 
                 if (result.success && !result.youtubeVideoId.isNullOrBlank()) {
