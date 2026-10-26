@@ -54,6 +54,7 @@ from dispatch.youtube_inbox.catcher import (
 from dispatch.captions import (
     CaptionTrack,
     group_words_into_captions,
+    apply_template_to_track,
     CAPTION_PRESETS,
     export_to_ass,
     export_to_json
@@ -1825,7 +1826,8 @@ async def get_clip_captions(clip_id: str, request: Request):
     # Transliterate Devanagari Hindi text to natural Roman Hinglish with 1:1 token mapping
     clean_segments = transliterate_segments_to_hinglish(segments)
 
-    user_tpl = db.get_default_template(user_id=caller_user_id)
+    effective_user_id = caller_user_id or clip.get("user_id")
+    user_tpl = db.get_default_template(user_id=effective_user_id)
     tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
     preset_candidate = tpl_captions.get("preset_id")
     effective_preset_id = preset_candidate if (preset_candidate and preset_candidate != "custom") else get_default_preset_id()
@@ -1837,24 +1839,7 @@ async def get_clip_captions(clip_id: str, request: Request):
         clip_id=clip_id,
         preset_id=effective_preset_id
     )
-
-    if tpl_captions:
-        if tpl_captions.get("font_family"):
-            track.default_style.font_family = str(tpl_captions["font_family"])
-        if tpl_captions.get("font_size"):
-            track.default_style.font_size = float(tpl_captions["font_size"])
-        if tpl_captions.get("primary_color"):
-            track.default_style.primary_color = str(tpl_captions["primary_color"])
-        if tpl_captions.get("highlight_color"):
-            track.default_style.highlight_color = str(tpl_captions["highlight_color"])
-        if tpl_captions.get("position_y") is not None:
-            track.default_layout.position_y = float(tpl_captions["position_y"])
-        if tpl_captions.get("animation"):
-            track.default_animation.type = str(tpl_captions["animation"])
-        for grp in track.groups:
-            grp.style = track.default_style
-            grp.layout = track.default_layout
-            grp.animation = track.default_animation
+    apply_template_to_track(track, tpl_captions)
 
     track_dict = track.to_dict()
     timing_warning = None
