@@ -171,6 +171,8 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(10.0);
 
+  const [filmstripFrames, setFilmstripFrames] = useState<string[]>([]);
+
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [isVideoSelected, setIsVideoSelected] = useState(false);
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
@@ -290,10 +292,31 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     }
   };
 
-  // --- Available Layout Modes based on Orientation ---
+  // Defined layout modes for portrait vs landscape input
+  const PORTRAIT_MODES: AvailableLayoutMode[] = useMemo(() => [
+    { id: 'native_916', label: 'Native 9:16', target_aspect: '9:16', description: 'Full original vertical video (no bars, no crop)' },
+    { id: 'fit_blur', label: 'Fit + Blur', target_aspect: '16:9', description: '16:9 wide frame with blurred side bars' },
+    { id: 'fit_black', label: 'Fit + Black', target_aspect: '16:9', description: '16:9 wide frame with black side bars' },
+  ], []);
+
+  const LANDSCAPE_MODES: AvailableLayoutMode[] = useMemo(() => [
+    { id: 'crop_916', label: 'Crop 9:16', target_aspect: '9:16', description: 'Full vertical crop to fill 9:16' },
+    { id: 'fit_blur', label: 'Fit + Blur', target_aspect: '9:16', description: 'Vertical 9:16 with blurred top/bottom bars' },
+    { id: 'fit_black', label: 'Fit + Black', target_aspect: '9:16', description: 'Vertical 9:16 with black top/bottom bars' },
+    { id: 'native_169', label: 'Native 16:9', target_aspect: '16:9', description: 'Full original horizontal 16:9 widescreen' },
+  ], []);
+
+  // Available Layout Modes based on Input Orientation
   const availableModes: AvailableLayoutMode[] = useMemo(() => {
-    return orientation === 'portrait' ? DEFAULT_PORTRAIT_MODES : DEFAULT_LANDSCAPE_MODES;
-  }, [orientation]);
+    return orientation === 'portrait' ? PORTRAIT_MODES : LANDSCAPE_MODES;
+  }, [orientation, PORTRAIT_MODES, LANDSCAPE_MODES]);
+
+  // Active target aspect ratio derived dynamically from the active layout mode!
+  const activeModeObj = useMemo(() => {
+    return availableModes.find((m) => m.id === layoutMode) || availableModes[0];
+  }, [availableModes, layoutMode]);
+
+  const targetAspect: '9:16' | '16:9' = (activeModeObj?.target_aspect as '9:16' | '16:9') || (layoutMode === 'native_169' ? '16:9' : '9:16');
 
   // Handle Orientation Switch
   const handleToggleOrientation = (newOrient: 'portrait' | 'landscape') => {
@@ -420,8 +443,10 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     if (videoRef.current) {
       if (nextPlay) {
         videoRef.current.play().catch(() => {});
+        if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
       } else {
         videoRef.current.pause();
+        if (bgVideoRef.current) bgVideoRef.current.pause();
       }
     }
   };
@@ -439,6 +464,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     const maxDur = videoDuration || 10.0;
     if (t >= maxDur) {
       videoRef.current.currentTime = 0;
+      if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
       setCurrentTime(0);
       if (isPlaying) {
         videoRef.current.play().catch(() => {});
@@ -455,7 +481,62 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     if (videoRef.current) {
       videoRef.current.currentTime = clamped;
     }
+    if (bgVideoRef.current) {
+      bgVideoRef.current.currentTime = clamped;
+    }
   };
+
+  // Extract thumbnail snapshots for the timeline Main track
+  useEffect(() => {
+    let isCancelled = false;
+    const generateFilmstrip = async () => {
+      try {
+        const v = document.createElement('video');
+        v.src = sampleVideoUrl;
+        v.crossOrigin = 'anonymous';
+        v.muted = true;
+        v.preload = 'auto';
+
+        await new Promise<void>((resolve, reject) => {
+          v.onloadedmetadata = () => resolve();
+          v.onerror = () => reject();
+          setTimeout(() => reject(), 4000);
+        });
+
+        const dur = v.duration && isFinite(v.duration) ? v.duration : (videoDuration || 10.0);
+        const count = 8;
+        const canvas = document.createElement('canvas');
+        canvas.width = 96;
+        canvas.height = 54;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const frames: string[] = [];
+        for (let i = 0; i < count; i++) {
+          if (isCancelled) return;
+          const seekTime = Math.max(0.05, (i / (count - 1)) * (dur - 0.2));
+          v.currentTime = seekTime;
+          await new Promise<void>((resolve) => {
+            v.onseeked = () => resolve();
+            setTimeout(() => resolve(), 300);
+          });
+          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+          frames.push(canvas.toDataURL('image/jpeg', 0.65));
+        }
+
+        if (!isCancelled && frames.length > 0) {
+          setFilmstripFrames(frames);
+        }
+      } catch {
+        // graceful fallback to placeholder
+      }
+    };
+
+    generateFilmstrip();
+    return () => {
+      isCancelled = true;
+    };
+  }, [sampleVideoUrl, videoDuration]);
 
   // Synchronized playback engine: triggers play and keeps time smoothly running
   useEffect(() => {
@@ -468,7 +549,26 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
         v.pause();
       }
     }
+    const bg = bgVideoRef.current;
+    if (bg) {
+      bg.muted = true;
+      if (isPlaying) {
+        bg.play().catch(() => {});
+      } else {
+        bg.pause();
+      }
+    }
   }, [sampleVideoUrl, isPlaying]);
+
+  // Immediate frame render on URL change (prevents black video on entry)
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = 0.01;
+    }
+    if (bgVideoRef.current) {
+      bgVideoRef.current.currentTime = 0.01;
+    }
+  }, [sampleVideoUrl]);
 
   // Robust animation frame timer fallback: guarantees time progression even if video stalls
   useEffect(() => {
@@ -622,11 +722,12 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           videoUrl={sampleVideoUrl}
           clipStart={0}
           clipEnd={videoDuration}
-          clipDuration={videoDuration}
+          clipDuration={videoDuration}
+
           onLoadedMetadata={handleLoadedMetadata}
           layoutMode={layoutMode}
           sourceOrientation={orientation}
-          targetAspect={orientation === 'portrait' ? '9:16' : '16:9'}
+          targetAspect={targetAspect}
           isPlaying={isPlaying}
           onTogglePlay={handleTogglePlay}
           onTimeUpdate={handleTimeUpdate}
@@ -779,6 +880,8 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
                 isVideoSelected={isVideoSelected}
                 clipStart={0}
                 clipEnd={videoDuration}
+                filmstripFrames={filmstripFrames}
+
                 hideTrimControls={true}
                 onSeek={handleSeek}
                 onSelectGroup={handleSelectGroup}
@@ -924,11 +1027,12 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
               videoUrl={sampleVideoUrl}
               clipStart={0}
               clipEnd={videoDuration}
-              clipDuration={videoDuration}
+              clipDuration={videoDuration}
+
           onLoadedMetadata={handleLoadedMetadata}
               layoutMode={layoutMode}
               sourceOrientation={orientation}
-              targetAspect={orientation === 'portrait' ? '9:16' : '16:9'}
+              targetAspect={targetAspect}
               isPlaying={isPlaying}
               onTogglePlay={handleTogglePlay}
               onTimeUpdate={handleTimeUpdate}
