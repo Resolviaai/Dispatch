@@ -77,6 +77,27 @@ class TestWebDashboard(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertIn("youtube", res.json())
 
+    def test_lan_peer_media_access(self):
+        """Verify that LAN peers can access clip media and thumbnails without Authorization headers."""
+        from fastapi.testclient import TestClient
+        from dispatch.web.app import app, CLIPS_DIR
+
+        test_file = CLIPS_DIR / "test_thumb_auth.jpg"
+        test_file.write_bytes(b"dummy jpeg content")
+        try:
+            # 1. LAN client without auth headers should receive 200 OK (not 401)
+            lan_client = TestClient(app, client=("192.168.0.105", 54321))
+            res = lan_client.get(f"/clips/{test_file.name}")
+            self.assertEqual(res.status_code, 200)
+
+            # 2. External untrusted IP without auth headers should receive 401
+            ext_client = TestClient(app, client=("8.8.8.8", 54321))
+            res = ext_client.get(f"/clips/{test_file.name}")
+            self.assertEqual(res.status_code, 401)
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

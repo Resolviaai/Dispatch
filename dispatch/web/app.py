@@ -173,12 +173,15 @@ def get_authenticated_user(request: Request) -> Dict[str, Any]:
     return {"user_id": user.get("id", ""), "email": user.get("email", "")}
 
 
-def resolve_caller_user_id(request: Request) -> Optional[str]:
+def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Optional[str]:
     """Resolve caller identity:
     - Loopback callers (localhost, 127.0.0.1, ::1) are trusted by default.
       If a loopback caller supplies a Supabase Bearer token, resolve and return the user_id.
       Otherwise return None (system/all clips).
     - Non-loopback callers (LAN) authenticate via Supabase session token or paired device token.
+    - If allow_lan_peer is True and caller is on the local network (or loopback), returns None
+      when unauthenticated instead of raising 401. This allows media streams and thumbnails
+      rendered via standard HTML <img> and <video> tags to load without custom headers.
     """
     client_host = request.client.host if request.client else "unknown"
     if is_trusted_localhost(client_host):
@@ -208,6 +211,9 @@ def resolve_caller_user_id(request: Request) -> Optional[str]:
             return None
         except HTTPException:
             pass
+
+    if allow_lan_peer and _is_local_network_peer(client_host):
+        return None
 
     raise HTTPException(status_code=401, detail="Authentication required")
 
@@ -457,7 +463,7 @@ async def get_clip_file(filename: str, request: Request):
     if not target_path.is_relative_to(CLIPS_DIR.resolve()):
         raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
 
-    caller_user_id = resolve_caller_user_id(request)
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     if caller_user_id:
         stem = Path(filename).stem
         clip_cand_id = stem
@@ -797,7 +803,7 @@ def clip_render_is_stale(clip: Dict[str, Any]) -> bool:
 @app.get("/api/clips")
 async def list_clips(request: Request):
     """List clips grouped by status with source media URLs and stale render flags."""
-    caller_user_id = resolve_caller_user_id(request)
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     ready_clips = db.get_clips_for_review(user_id=caller_user_id)
     for c in ready_clips:
         chunk = db.get_chunk_by_id(c.get("chunk_id")) if c.get("chunk_id") else None
@@ -869,7 +875,7 @@ async def list_clips(request: Request):
 @app.get("/api/clips/{clip_id}")
 async def get_clip_detail(clip_id: str, request: Request):
     """Return single clip metadata with source URL and render status."""
-    caller_user_id = resolve_caller_user_id(request)
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -894,7 +900,7 @@ async def get_clip_source_media(clip_id: str, request: Request):
     Supports HTTP Range requests (206 Partial Content) for smooth HTML5 video scrubbing
     and conditional RFC 9111 revalidation (ETag, 304 Not Modified).
     """
-    caller_user_id = resolve_caller_user_id(request)
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     clip = db.get_clip_by_id(clip_id)
     if clip and caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
         raise HTTPException(status_code=403, detail="Forbidden: Access to another user's source media is denied")
@@ -2083,7 +2089,7 @@ async def get_recordings(request: Request):
     """Return list of recordings/chunks formatted for the Sessions tab.
     Scoped strictly to the authenticated user.
     """
-    caller_user_id = resolve_caller_user_id(request)
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
         if caller_user_id:
@@ -3217,7 +3223,7 @@ async def serve_font(filename: str):
 @app.get("/api/template/default")
 async def get_default_template_endpoint(request: Request):
     """Retrieve the current default editing template for the caller or system."""
-    caller_user_id = resolve_caller_user_id(request)
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     template = db.get_default_template(user_id=caller_user_id)
     return template
 
