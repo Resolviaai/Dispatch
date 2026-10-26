@@ -1,203 +1,175 @@
-# Dispatch: Autonomous Personal Content Engine
+# Dispatch: Capture, Review, and Publish
 
 <p align="center">
   <img src="branding/dist/dispatch-lockup-horizontal-white.svg#gh-dark-mode-only" alt="Dispatch Logo" width="380" />
   <img src="branding/dist/dispatch-lockup-horizontal-black.svg#gh-light-mode-only" alt="Dispatch Logo" width="380" />
 </p>
 
-> **"You create the raw signal. Dispatch carries it the rest of the way."**
+> You create the raw signal. Dispatch carries it through review and publishing.
 
-Dispatch is an autonomous, local-first content pipeline engineered to turn raw, multi-hour natural work and speaking sessions recorded on an Android phone into polished, high-retention vertical short-form videos (YouTube Shorts, Instagram Reels, LinkedIn, X).
+Dispatch turns long speaking or work sessions into short, reviewable videos. It has two input routes: recording in the Android app, or submitting an existing YouTube link. Video processing and rendering are designed to run on the Windows PC; Android records, stores, and uploads Route A segments.
 
-Inspired by the "lead-miner" philosophy, Dispatch requires **zero manual intervention** once configured. There are no manual USB cable transfers, no timeline non-linear editing (NLE) drag-and-drops, and no multi-step render exports. 
+**Current source version:** Android 1.1.23 (version code 27). A version number or successful build is not proof of live-service or physical-phone behavior. Check the current source and verification records before relying on older status claims.
 
----
+## How the workflow works
 
-## 1. System Philosophy: The 5-Step Human Loop
+### Route A — Record on Android
 
-The system is built so the user only touches 5 high-value, tactile actions:
-1. **Open Dispatch**: Open the app on your phone (POCO C65 or browser).
-2. **Record**: Tap record when starting work or a speaking session.
-3. **Stop**: Tap stop when you finish your session.
-4. **Review Clips**: Open the Dispatch local dashboard on your PC at `http://localhost:8000`.
-5. **Approve / Reject**: Tap **Approve** (or **Reject**). 
-   - If set to **Auto-Publish**, the clip is automatically scheduled and posted publicly.
-   - If set to **Private/Draft**, Dispatch uploads the clip as a draft or private post so you have total peace of mind and can inspect it on-platform before making it public.
+1. Dispatch records through CameraX and rolls a long session into segments of about ten minutes.
+2. Room stores session, segment, and upload state on the phone.
+3. WorkManager resumably uploads each segment to the connected YouTube account as **unlisted**, tagged with Dispatch identifiers.
+4. The PC polls YouTube, waits for processing, downloads the segment, and continues the local processing pipeline.
+5. The phone retains its source file until the PC confirms ingestion with matching identifiers and integrity data.
 
-**Everything between Stop and Review happens 100% autonomously in the background.**
+The phone does not transfer recordings to the PC over LAN. A YouTube upload alone is not confirmation that the PC has safely ingested a segment.
 
----
+### Route B — Submit a YouTube link
 
-## 2. Core Architecture: YouTube as Cloud Inbox
+1. Submit a public or unlisted video through the Dispatch Studio.
+2. The PC downloads and probes the source, then persists its processing state.
+3. Dispatch obtains YouTube captions where available and uses the configured transcription fallback when needed.
+4. Gemini proposes highlight ranges. FFmpeg prepares candidate clips and captions.
+5. Review the candidate, adjust its range or captions, then approve or reject it.
+6. Approved output enters the publishing outbox. Local upload completion and YouTube’s later processing status are separate states.
 
-```text
-📱 Phone (You)
-   └── Record video → Stop → Auto-uploads to YouTube as Private
-       (Tagged with durable dispatch_id in description/tags)
-          │
-          ▼
-☁️ YouTube (Cloud Inbox)
-   └── Stores raw video & generates automatic speech captions
-          │
-          ▼
-💻 Laptop (Dispatch Catcher Daemon)
-   └── Starts immediately on boot + polls every 10 min
-       └── Discovers [DISPATCH] uploads matching dispatch_id
-       └── Downloads the original video via yt-dlp
-       └── Retrieves YouTube captions when available (local Whisper fallback)
-       └── Sends the timestamped transcript to Gemini for clip selection
-       └── FFmpeg cuts clips, formats 9:16 vertical video & burns ASS captions
-          │
-          ▼
-🖥️ Review Dashboard (http://localhost:8000)
-   └── Live clip preview → 1-click Approve → Dispatches across platforms
-```
+Private videos are rejected by the manual URL-ingestion visibility gate.
 
-### Current architecture boundary
-- The phone records and uploads directly to YouTube. It does not discover, pair with, or transfer video to the PC.
-- The PC polls the authenticated YouTube account, downloads each Dispatch upload, processes it, and serves the review dashboard locally.
-- If phone credentials are missing, the upload stays queued; there is no PC/LAN fallback.
-- The phone uploads sessions to the owner's own channel as **unlisted**. NOTE (alpha policy): URL/manual ingestion accepts **public and unlisted** videos only; private videos are rejected by an explicit visibility gate before download (see `dispatch/youtube_inbox/catcher.py`). The owner's own poller flow is unaffected because phone sessions upload as unlisted.
+### Review and publishing
 
----
+The React Studio is available at http://localhost:8000/studio/ when the PC daemon is running. The root URL (http://localhost:8000/) is the legacy dashboard. Approval remains an explicit review step; do not assume a clip will be publicly published automatically. Publishing availability depends on the connected account, provider authorization, and selected visibility.
 
-## 3. Hardware & Operating Environment
+## Editing and media limits
 
-- **Host Machine**: Windows 11 (AMD Ryzen / Intel CPU, 16GB+ RAM).
-- **Compute Strategy**: 
-  - Zero reliance on NVIDIA CUDA (optimized for AMD CPU multithreading via `faster-whisper` CPU-int8).
-  - FFmpeg hardware acceleration where available, with fast CPU software fallback.
-  - No heavyweight Docker/WSL2 containers to safeguard SSD space.
-- **Mobile Hardware**: POCO C65 (Android 14+), recording 1080p @ 30 fps.
-- **Budget & Cost**: 100% free local infrastructure; optional pennies spent strictly on Google Gemini Flash API for semantic highlight extraction.
+- The Gemini range is a suggestion, not the boundary of the user's edit.
+- Final selected clips are limited to **5–180 seconds**.
+- Keep source timestamps, temporary edit-window timestamps, and rendered-clip timestamps distinct. AI context padding must not restrict the user's selectable range.
+- Long audio is processed in bounded windows with overlap and timestamp offsets. Stage 2 extraction must remain bounded; failure must not trigger transcription of an entire multi-hour source.
+- The product's storage budget is **10,000,000,000 bytes total** to control cost. This is Dispatch's budget policy, not a claim about the storage provider's technical maximum.
+- The current cloud media contract caps an individual clip/edit-window object at **512 MiB** and a thumbnail at **8 MiB**. A **2,000,000,000-byte** per-user starting quota is configurable by the administrator.
+- Full recording sources belong in the YouTube/PC workflow, not R2. Cloud edit-window staging and phone-side consumption have had separate implementation/deployment gates; verify current migrations and live services before assuming remote editing is fully available.
 
----
+## Accounts, keys, and administration
 
-## 4. Directory Structure
+- Users connect publishing accounts using OAuth in Dispatch. Connecting a YouTube or social account is separate from providing a Gemini API key.
+- Each user can configure their own Gemini key in Settings. User keys are stored through the encrypted key-vault flow; never put keys in source code, screenshots, prompts, logs, or committed files.
+- The web/cloud admin tools include user and job visibility, adjustable storage quotas, processing priorities, and reversible account status controls. Lower priority numbers are processed first.
+- Supabase and Cloudflare components exist in the repository, including account, quota, job, admin, and media-storage paths. Their deployed state and completeness can differ from the local source; verify the relevant live service before changing migrations or claiming an end-to-end cloud feature is live.
 
-```
-Dispatch/
-├── README.md                     # Master project documentation
-├── requirements.txt              # Standard Python dependencies
-├── pyproject.toml                # Modern package configuration
-├── dispatch/
-│   ├── config.py                 # Central configurations & directory paths
-│   ├── db.py                     # SQLite database schema, migrations & CRUD operations
-│   ├── youtube_inbox/            # YouTube Cloud Inbox & Catcher
-│   │   ├── catcher.py            # Catcher core: download -> captions -> clips
-│   │   ├── vtt_parser.py         # WebVTT subtitle parser & word boundary estimator
-│   │   ├── oauth.py              # YouTube Data API OAuth client
-│   │   └── poller.py             # Background daemon polling for new uploads
-│   ├── ingestion/                # File watcher & validator for incoming drops
-│   ├── transcription/            # Speech extraction & Hinglish word alignment (faster-whisper)
-│   ├── ai_clips/                 # Semantic highlight finder & preference learner (Gemini Flash)
-│   ├── video_engine/             # FFmpeg 9:16 reframing, .ass subtitles & rendering
-│   ├── web/                      # FastAPI review dashboard (PC & mobile)
-│   │   ├── app.py
-│   │   └── templates/
-│   ├── publisher/                # Multi-platform publishing (YouTube, Instagram, LinkedIn, X)
-│   ├── governor/                 # Hardware resource governor (CPU priority, battery, disk floor)
-│   ├── orchestrator/             # Checkpointed pipeline runner & crash recovery
-│   └── main.py                   # Master daemon entry point
-├── android/                      # Native Android Studio Project (POCO C65)
-│   ├── app/                      # CameraX recorder, Room DB, YouTubeDirectUploadWorker
-│   ├── gradlew, gradlew.bat      # Self-contained Gradle wrapper scripts
-│   └── build.gradle.kts
-├── storage/
-│   ├── incoming/                 # Raw video chunks
-│   ├── youtube_inbox/            # Downloaded YouTube Inbox media
-│   ├── processing/               # Active workspace during transcription/cutting
-│   ├── clips/                    # Finished candidate clips ready for review
-│   └── database/
-│       └── dispatch.db           # SQLite state, checkpoints, & preference logs
-└── tests/                        # Comprehensive unit, chaos, destructive & inbox tests (29 tests)
-```
+## Requirements
 
----
+- Windows 11 is the primary PC environment.
+- Python **3.10+** and FFmpeg/ffprobe available on PATH.
+- Node.js/npm for building and testing the React frontend.
+- JDK 17 and Android SDK for Android builds.
+- Google/YouTube OAuth configuration for YouTube account access; Gemini API access for AI features.
+- Target phone: POCO C65, with 1080p/30 fps as the recording target. Verify actual encoding settings and output from a real sample.
+- An Android device is required to verify recording, camera, thermal, and OEM lifecycle behavior.
 
-## 5. Quickstart & How to Run
+## Run Dispatch on Windows
 
-### Step 1: Install Dependencies
+From the repository root in PowerShell:
+
 ```powershell
-# Clone repo
-git clone https://github.com/Resolviaai/Dispatch.git
-cd Dispatch
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
 
-# Install Python requirements
-pip install -r requirements.txt
+cd frontend
+npm ci
+npm run build
+cd ..
+
+.\.venv\Scripts\python.exe -m dispatch.main
 ```
 
-### Step 2: Configure Environment (.env)
-Create a `.env` file in the project root:
+Install FFmpeg separately and confirm both ffmpeg and ffprobe work from the same terminal. The frontend build writes the web bundle into android/app/src/main/assets/web; the PC Studio serves that bundle at /studio/.
+
+The PC server binds to 127.0.0.1 by default. Do not expose it to the internet. If LAN access is deliberately configured, protect the host, use the supported authentication flow, and enable TLS for credential transfers (DISPATCH_WEB_TLS=1). Changing the bind address exposes the server to the local network.
+
+### Local environment and YouTube OAuth
+
+Optional local environment values belong in an uncommitted .env file:
+
 ```ini
-GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_API_KEY=your_local_gemini_key
+DISPATCH_WEB_HOST=127.0.0.1
 DISPATCH_WEB_PORT=8000
 DISPATCH_PUBLISH_MODE=private
-DISPATCH_YOUTUBE_POLL_INTERVAL=600
 ```
 
-### Step 3: Start Dispatch Daemon
+For the PC YouTube poller, place the Google OAuth desktop client file at client_secrets.json and run:
+
 ```powershell
-python -m dispatch.main
-```
-You will see:
-```text
-BOOTING DISPATCH: AUTONOMOUS PERSONAL CONTENT ENGINE
-Database initialized
-Autonomous YouTube Cloud Inbox poller active
-Launching Web Dashboard on http://127.0.0.1:8000
+.\.venv\Scripts\python.exe scripts/auth_youtube.py
 ```
 
-### Step 4: Access Dashboard
-Open **http://localhost:8000** in your browser.
+The script saves the authorized token as youtube_token.json. Keep both files private and out of Git. On Android, connect the user's YouTube account through the app's account flow; do not paste refresh tokens or client secrets into the app.
 
----
+### Android debug build
 
-## 6. Phone Recording Setup (POCO C65)
+After building the frontend bundle:
 
-### Option A: Native Android App (Recommended)
-1. Download the signed alpha APK from the public GitHub release: https://github.com/Resolviaai/Dispatch/releases/latest/download/Dispatch.apk (landing page: https://resolviaai.github.io/Dispatch/). The old dashboard route `/download/dispatch.apk` serves the same APK on your local network only and is not the public distribution path.
-2. Install on your phone.
-3. Features:
-   - CameraX FHD 1080p video recording.
-   - Pro Camera controls: Front/Back lens toggle, LED torch, AE/AF locking, tap-to-focus.
-   - Background `RecordingForegroundService` keeps recording even when screen is locked.
-   - `YouTubeDirectUploadWorker` automatically uploads recordings to YouTube as Private upon tapping Stop.
-4. In **Settings**, enter the authorized account's YouTube OAuth refresh token, client ID, and client secret. The app stores them on the phone and uploads directly to YouTube; it does not pair with the PC.
+```powershell
+cd android
+.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
+```
 
-The phone and PC operate independently after YouTube is configured. Review generated clips at `http://localhost:8000` on the PC.
+The debug APK is generated at android/app/build/outputs/apk/debug/app-debug.apk. A source change does not update an already-installed phone app; build and install the APK before checking the change on-device.
 
----
+### Install a published Android release
 
-## 7. Windows Silent Auto-Start on Boot
+Published release assets are listed at https://github.com/Resolviaai/Dispatch/releases. Use an APK attached to a release; a Git tag or a local build does not mean an APK was published or installed.
 
-To run Dispatch silently in the background whenever Windows boots:
+## Tests and verification
+
+Run only the suites relevant to the change, and record exact commands and outcomes:
+
+```powershell
+# Python backend
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+
+# React frontend
+cd frontend
+npm test
+npm run build
+cd ..
+
+# Cloudflare Worker
+npm test --prefix cloud-worker
+
+# Android unit tests and debug APK
+cd android
+.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
+```
+
+Mocks prove only the mocked code paths. They do not prove a live Gemini request, YouTube upload/processing, Cloudflare/Supabase deployment, browser interaction, or POCO camera behavior. Never mark camera recording verified without testing on the actual POCO C65.
+
+Tests must use isolated fixtures and must not overwrite the owner's .env, OAuth files, databases, or media. Verify test paths before running security or destructive tests.
+
+## Windows startup helper
+
+To register the optional hidden background startup task:
+
 ```cmd
 scripts\install_windows_startup.bat
 ```
-Registers Dispatch in Windows Task Scheduler to run hidden with below-normal CPU priority.
-To uninstall at any time, run:
+
+To remove it:
+
 ```cmd
 scripts\uninstall_windows_startup.bat
 ```
 
----
+## Important project documents
 
-## 8. Verification & Test Suite
+- AGENTS.md — current repository UI and mobile engineering invariants.
+- design.md — current design-system specification.
+- PROGRESS.md and AGENT_HANDOFF.md — checkpoint and handoff notes; check their recorded commit before trusting their claims.
+- docs/ROUTE_B_IMPLEMENTATION_HANDOFF.md — Route B workflow and earlier automated verification.
+- docs/CANONICAL_ARCHITECTURE.md — pipeline and data boundaries.
+- docs/BOUNDED_EDITING_20261025.md — bounded edit-window design and implementation gates.
+- docs/ADMIN_OPERATIONS_DASHBOARD.md — admin, account, quota, priority, and cloud-control-plane notes.
 
-Run the full automated test suite covering all 29 unit, integration, chaos, destructive, and YouTube inbox scenarios:
+The current code is authoritative when it disagrees with an older handoff. At the time this README was refreshed, main was clean at c508988 (v1.1.23-alpha); several handoff documents still described older revisions and verification runs.
 
-```powershell
-# Run all 29 tests
-python -m unittest discover tests
-
-# Run YouTube Inbox tests
-python -m unittest tests/test_youtube_inbox.py
-
-# Run crash recovery & destructive tests
-python -m unittest tests/test_destructive.py
-
-# Run chaos engineering tests
-python -m unittest tests/test_chaos.py
-```
-All 29 tests pass with 100% green exit code.
+At this checkpoint, the source contains Route A transcript stitching and media handling for highlights across recording segments. The focused tests cover transcript offsets and source selection, but they do not prove a full real-media clip spanning a segment boundary. Camera and recording behavior also remain unverified on the POCO C65 unless a device run is recorded against this revision.
