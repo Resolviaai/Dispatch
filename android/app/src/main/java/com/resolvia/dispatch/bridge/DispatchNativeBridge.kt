@@ -641,6 +641,7 @@ class DispatchNativeBridge(
                         addProperty("durationSeconds", s.durationSeconds)
                         addProperty("youtubeVideoId", s.youtubeVideoId)
                         addProperty("userId", s.userId)
+                        addProperty("videoUrl", "http://appassets.androidplatform.net/recordings/${s.filename}")
                     }
                     jsonArr.add(obj)
                 }

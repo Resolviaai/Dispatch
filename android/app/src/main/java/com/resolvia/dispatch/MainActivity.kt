@@ -1,6 +1,7 @@
 package com.resolvia.dispatch
 
 import android.Manifest
+import java.io.File
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -218,10 +219,12 @@ class MainActivity : ComponentActivity() {
 
         // Set up WebViewAssetLoader to safely serve assets over http://appassets.androidplatform.net
         // Using HTTP scheme eliminates Chromium mixed-content auto-upgrade so local LAN HTTP video streaming works seamlessly.
+        val recordingsDir = File(filesDir, "recordings").apply { if (!exists()) mkdirs() }
         val assetLoader = WebViewAssetLoader.Builder()
             .setDomain("appassets.androidplatform.net")
             .setHttpAllowed(true)
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/recordings/", WebViewAssetLoader.InternalStoragePathHandler(this, recordingsDir))
             .build()
 
         // Configure full-bleed WebView with transparent background
@@ -329,6 +332,13 @@ class MainActivity : ComponentActivity() {
             updateRecordingScreenDimming(true)
         }
         scheduleRecordingScreenDim()
+
+        // Re-confirm camera preview lifecycle when app returns from background (e.g. WhatsApp share)
+        if (::cameraCaptureManager.isInitialized && ::previewView.isInitialized) {
+            if (!cameraCaptureManager.isRecording && !segmenterEngine.isSessionActive) {
+                initCameraLifecycle()
+            }
+        }
     }
 
     override fun onPause() {

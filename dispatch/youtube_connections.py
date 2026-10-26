@@ -51,8 +51,10 @@ def _supabase_rpc(action: str, params: Dict[str, Any]) -> Any:
     resp = httpx.post(f"{url}/rest/v1/rpc/{action}", json=params,
                       headers={"apikey": key, "Authorization": f"Bearer {key}",
                                "Content-Type": "application/json"}, timeout=20.0)
-    if resp.status_code != 200:
+    if resp.status_code not in (200, 204):
         raise VaultUnavailable(f"Supabase RPC {action} failed: {resp.status_code}")
+    if resp.status_code == 204 or not resp.content:
+        return None
     return resp.json()
 
 

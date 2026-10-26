@@ -50,7 +50,7 @@ interface RecordingDao {
     @Query("SELECT * FROM segments ORDER BY createdAt DESC LIMIT 500")
     suspend fun getAllSegmentsList(): List<SegmentEntity>
 
-    @Query("SELECT * FROM segments WHERE userId = :userId ORDER BY createdAt DESC LIMIT 500")
+    @Query("SELECT * FROM segments WHERE (userId = :userId OR userId IS NULL OR userId = '') ORDER BY createdAt DESC LIMIT 500")
     suspend fun getSegmentsForUser(userId: String): List<SegmentEntity>
 
     @Query("DELETE FROM segments WHERE userId IS NULL OR userId = ''")
