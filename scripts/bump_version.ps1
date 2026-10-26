@@ -143,9 +143,12 @@ if (Test-Path $pkgPath) {
 $siteHtmlPath = Join-Path $root "site\index.html"
 if (Test-Path $siteHtmlPath) {
     $htmlContent = Get-Content $siteHtmlPath -Raw
-    $newHtml = [regex]::Replace($htmlContent, 'Alpha\s+1\.\d+\.\d+', "Alpha $nextVersion")
+    # Update version text
+    $newHtml = [regex]::Replace($htmlContent, 'Alpha\s+\d+\.\d+\.\d+', "Alpha $nextVersion")
+    # Update release download URLs
+    $newHtml = [regex]::Replace($newHtml, 'https://github\.com/Resolviaai/Dispatch/releases/download/v[\w.-]+/Dispatch\.apk', "https://github.com/Resolviaai/Dispatch/releases/download/v$nextVersion-alpha/Dispatch.apk")
     Set-Content -Path $siteHtmlPath -Value $newHtml -NoNewline
-    Write-Host "[x] Updated $siteHtmlPath"
+    Write-Host "[x] Updated $siteHtmlPath (links and version pills)"
 }
 
 $siteUpdatePath = Join-Path $root "site\update.json"

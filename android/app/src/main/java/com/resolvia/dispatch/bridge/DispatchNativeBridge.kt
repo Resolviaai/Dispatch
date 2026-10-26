@@ -1,6 +1,8 @@
 package com.resolvia.dispatch.bridge
 
 import android.content.Intent
+import android.net.Uri
+import android.content.pm.PackageManager
 import androidx.core.content.FileProvider
 import android.widget.Toast
 import android.os.Build
@@ -60,6 +62,56 @@ class DispatchNativeBridge(
 
     @JavascriptInterface
     fun getDeviceModel(): String = "${Build.MANUFACTURER} ${Build.MODEL}"
+
+    @JavascriptInterface
+    fun getAppVersionInfo(): String {
+        return try {
+            val pm = activity.packageManager
+            val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(activity.packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(activity.packageName, 0)
+            }
+            val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pInfo.longVersionCode.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                pInfo.versionCode
+            }
+            val obj = JsonObject().apply {
+                addProperty("packageName", activity.packageName)
+                addProperty("versionName", pInfo.versionName ?: "unknown")
+                addProperty("versionCode", vCode)
+            }
+            obj.toString()
+        } catch (e: Exception) {
+            JsonObject().apply {
+                addProperty("packageName", activity.packageName)
+                addProperty("versionName", "1.2.14")
+                addProperty("versionCode", 42)
+            }.toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun openDownloadUrl(url: String): Boolean {
+        val cleanUrl = url.trim()
+        if (!cleanUrl.startsWith("https://github.com/Resolviaai/Dispatch/releases/") &&
+            !cleanUrl.startsWith("https://resolviaai.github.io/Dispatch/")) {
+            return false
+        }
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(cleanUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            activity.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("DispatchBridge", "openDownloadUrl failed: ${e.message}")
+            false
+        }
+    }
 
     @JavascriptInterface
     fun setCurrentUserId(userId: String?): Boolean {

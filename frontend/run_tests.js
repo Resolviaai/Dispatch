@@ -17,6 +17,7 @@ async function run() {
     await server.ssrLoadModule('/frontend/test_camera_interactions.js');
     await server.ssrLoadModule('/frontend/test_studio_render_path.js');
     await server.ssrLoadModule('/frontend/test_clip_timeline_interactions.js');
+    await server.ssrLoadModule('/frontend/test_update_service.js');
   } catch (err) {
     console.error('Test execution failed:', err);
     process.exit(1);

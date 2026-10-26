@@ -25,6 +25,12 @@ export interface YouTubeStatus {
   account?: string;
 }
 
+export interface AppVersionInfo {
+  packageName: string;
+  versionName: string;
+  versionCode: number;
+}
+
 export interface StorageInfo {
   available: boolean;
   freeGb?: number;
@@ -127,6 +133,8 @@ declare global {
       setCurrentUserId?: (userId: string | null) => boolean;
       getCurrentUserId?: () => string | null;
       clearLegacyRecordings?: () => boolean;
+      getAppVersionInfo?: () => string;
+      openDownloadUrl?: (url: string) => boolean;
     };
   }
 }
@@ -586,6 +594,45 @@ export const Bridge = {
       } catch (e) {
         console.warn('Failed to call clearLegacyRecordings', e);
       }
+    }
+    return false;
+  },
+
+  getAppVersionInfo(): AppVersionInfo {
+    if (typeof window !== 'undefined' && window.DispatchBridge?.getAppVersionInfo) {
+      try {
+        const raw = window.DispatchBridge.getAppVersionInfo();
+        if (raw) return JSON.parse(raw);
+      } catch (e) {
+        console.warn('Failed to parse app version info from bridge', e);
+      }
+    }
+    return {
+      packageName: 'com.resolvia.dispatch',
+      versionName: '1.2.14',
+      versionCode: 42,
+    };
+  },
+
+  openDownloadUrl(url: string): boolean {
+    if (typeof window !== 'undefined' && window.DispatchBridge?.openDownloadUrl) {
+      try {
+        const handled = window.DispatchBridge.openDownloadUrl(url);
+        if (handled) return true;
+      } catch (e) {
+        console.warn('Failed to open download URL via bridge', e);
+      }
+    }
+    if (typeof window !== 'undefined') {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Dispatch.apk';
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return true;
     }
     return false;
   }

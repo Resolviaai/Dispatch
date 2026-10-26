@@ -21,9 +21,14 @@ import {
   Smartphone,
   Cloud,
   X as CloseIcon,
+  Download,
+  ExternalLink,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
 import { TemplateStudio } from '../captions/TemplateStudio';
-import { Bridge, StorageInfo, apiUrl } from '../bridge';
+import { checkAppUpdate, ReleaseManifest } from '../update/updateService';
+import { Bridge, StorageInfo, apiUrl, getAuthHeaders } from '../bridge';
 import { getThemePreference, setThemePreference, ThemePreference } from '../theme';
 import {
   ConnectedAccount,
@@ -128,6 +133,53 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     onEditorOpenChange?.(isTemplateEditorOpen);
     return () => onEditorOpenChange?.(false);
   }, [isTemplateEditorOpen, onEditorOpenChange]);
+  // App update state
+  const [appVersion, setAppVersion] = useState(() => Bridge.getAppVersionInfo());
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'up_to_date' | 'available' | 'error'>('idle');
+  const [availableUpdate, setAvailableUpdate] = useState<ReleaseManifest | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [lastCheckedTime, setLastCheckedTime] = useState<string | null>(() => {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_last_update_check') : null;
+  });
+
+  const handleCheckUpdates = async () => {
+    setIsCheckingUpdate(true);
+    setUpdateError(null);
+    try {
+      const res = await checkAppUpdate();
+      setAppVersion(res.currentVersion);
+      const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      setLastCheckedTime(nowStr);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('dispatch_last_update_check', nowStr);
+      }
+
+      if (res.error) {
+        setUpdateCheckStatus('error');
+        setUpdateError(res.error);
+      } else if (res.hasUpdate && res.latestManifest) {
+        setAvailableUpdate(res.latestManifest);
+        setUpdateCheckStatus('available');
+      } else {
+        setAvailableUpdate(null);
+        setUpdateCheckStatus('up_to_date');
+      }
+    } catch (e: any) {
+      setUpdateCheckStatus('error');
+      setUpdateError(e?.message || 'Check failed');
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleDownloadUpdate = () => {
+    if (availableUpdate) {
+      const url = `https://github.com/Resolviaai/Dispatch/releases/download/${availableUpdate.releaseTag}/Dispatch.apk`;
+      Bridge.openDownloadUrl(url);
+    }
+  };
+
   const [cloudStorage, setCloudStorage] = useState<CloudStorageInfo | null>(null);
   const [isLoadingCloudStorage, setIsLoadingCloudStorage] = useState(false);
 
@@ -956,6 +1008,117 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </p>
             )}
           </div>
+        </section>
+
+        {/* 8. APP UPDATES & ABOUT */}
+        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-3.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold tracking-tight text-text-main">App Updates</h2>
+              <span className="text-[11px] font-mono tabular-nums text-text-muted px-2 py-0.5 rounded-full bg-surface-2 border border-border">
+                v{appVersion.versionName} ({appVersion.versionCode})
+              </span>
+            </div>
+            {lastCheckedTime && (
+              <span className="text-[11px] text-text-muted">
+                Checked {lastCheckedTime}
+              </span>
+            )}
+          </div>
+
+          {/* Status & Actions */}
+          {updateCheckStatus === 'available' && availableUpdate ? (
+            <div className="rounded-xl bg-primary/10 border border-primary/30 p-3.5 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-primary-hover">Update Available</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary text-white">
+                      v{availableUpdate.versionName}
+                    </span>
+                  </div>
+                  <p className="text-xs text-text-muted leading-relaxed">
+                    {availableUpdate.releaseNotes || 'New improvements and bug fixes available.'}
+                  </p>
+                </div>
+                <span className="text-[11px] font-mono tabular-nums text-text-muted shrink-0 pt-0.5">
+                  {(availableUpdate.apkSizeBytes / (1024 * 1024)).toFixed(1)}&nbsp;MB
+                </span>
+              </div>
+
+              <div className="pt-1 flex flex-col gap-2">
+                <button
+                  onClick={handleDownloadUpdate}
+                  className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
+                >
+                  <Download size={16} />
+                  <span>Download &amp; Install Update</span>
+                </button>
+
+                <div className="flex items-center justify-between text-[11px] px-1">
+                  <a
+                    href={`https://github.com/Resolviaai/Dispatch/releases/tag/${availableUpdate.releaseTag}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-text-muted hover:text-primary transition-colors flex items-center gap-1"
+                  >
+                    <span>Release notes</span>
+                    <ExternalLink size={11} />
+                  </a>
+                  <button
+                    onClick={() => Bridge.openDownloadUrl('https://resolviaai.github.io/Dispatch/Dispatch.apk')}
+                    className="text-primary hover:underline"
+                  >
+                    Direct mirror link
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : updateCheckStatus === 'up_to_date' ? (
+            <div className="rounded-xl bg-surface-2 border border-border p-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-full bg-success/15 text-success flex items-center justify-center shrink-0">
+                  <CheckCircle2 size={15} />
+                </div>
+                <div>
+                  <span className="text-xs font-medium text-text-main block">You're on the latest version</span>
+                  <span className="text-[11px] text-text-muted font-mono tabular-nums block">
+                    Dispatch v{appVersion.versionName} (build {appVersion.versionCode})
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={handleCheckUpdates}
+                disabled={isCheckingUpdate}
+                className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-3/80 border border-border text-xs text-text-main flex items-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={isCheckingUpdate ? 'animate-spin' : ''} />
+                <span>Check Again</span>
+              </button>
+            </div>
+          ) : updateCheckStatus === 'error' ? (
+            <div className="rounded-xl bg-danger/10 border border-danger/30 p-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle size={15} className="text-danger shrink-0" />
+                <span className="text-xs text-danger">{updateError || 'Check failed. Verify network.'}</span>
+              </div>
+              <button
+                onClick={handleCheckUpdates}
+                className="min-h-[36px] px-3 rounded-lg bg-surface-2 border border-border text-xs text-text-main active:scale-[0.98] transition-all"
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleCheckUpdates}
+              disabled={isCheckingUpdate}
+              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
+            >
+              <RefreshCw size={15} className={isCheckingUpdate ? 'animate-spin' : ''} />
+              <span>{isCheckingUpdate ? 'Checking for updates…' : 'Check for Updates'}</span>
+            </button>
+          )}
         </section>
 
       </div>
