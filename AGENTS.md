@@ -50,3 +50,11 @@ Never pick arbitrary hex colors or AI neon palettes. Every surface belongs to on
 * Every clickable button and interactive card must provide immediate tactile feedback on touch/click:
   `active:scale-[0.98] transition-all duration-150`.
 * All states must be fully specified: default, hover, active (pressed), disabled, and loading.
+
+---
+
+## 9. App Versioning & Release Governance Invariants
+* **SemVer Alignment (`MAJOR.MINOR.PATCH`):** Every release follows SemVer 2.0. Major feature suites (e.g. Template Studio, new hardware engines) trigger a **MINOR** bump ($1.1.x \rightarrow 1.2.0$); bug fixes trigger a **PATCH** bump ($1.2.0 \rightarrow 1.2.1$). Breaking architecture changes trigger **MAJOR** ($2.0.0$).
+* **Strict Android `versionCode` Monotonicity:** In Android, integer `versionCode` is the **sole update authority**. Every release **MUST** increment `versionCode` by at least $+1$ ($27 \rightarrow 28$). Android will reject any install or update if the APK's `versionCode` is $\le$ the installed version. Never reuse a `versionCode`.
+* **Multi-File Synchronization:** When updating versions, always run `scripts/bump_version.ps1` to atomically synchronize `android/app/build.gradle.kts`, `frontend/package.json`, `site/update.json`, `site/index.html`, and `README.md`.
+* **Release Verification Standard:** Every APK release must be verified with `scripts/prepare_release.ps1` (checking package ID `com.resolvia.dispatch` and trusted certificate SHA-256 `94f778...3804`), attached to GitHub Releases, and mirrored to the `gh-pages` branch. Detailed guidelines: `docs/VERSIONING_GUIDE.md`.
