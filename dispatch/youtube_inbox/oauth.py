@@ -310,10 +310,21 @@ def get_youtube_processing_status(video_ids: List[str]) -> Dict[str, Dict[str, A
     for i in range(0, len(video_ids), batch_size):
         chunk = video_ids[i:i + batch_size]
         try:
-            resp = service.videos().list(
-                part="snippet,status,processingDetails,contentDetails",
-                id=",".join(chunk)
-            ).execute()
+            try:
+                resp = service.videos().list(
+                    part="snippet,status,processingDetails,contentDetails",
+                    id=",".join(chunk)
+                ).execute()
+            except Exception as owner_err:
+                err_str = str(owner_err).lower()
+                if "403" in err_str or "processingdetails" in err_str or "forbidden" in err_str:
+                    logger.debug("Non-owner video or restricted processingDetails; falling back to public parts: %s", owner_err)
+                    resp = service.videos().list(
+                        part="snippet,status,contentDetails",
+                        id=",".join(chunk)
+                    ).execute()
+                else:
+                    raise
 
             for item in resp.get("items", []):
                 vid = item.get("id")
@@ -327,7 +338,7 @@ def get_youtube_processing_status(video_ids: List[str]) -> Dict[str, Dict[str, A
                 results[vid] = {
                     "video_id": vid,
                     "upload_status": st.get("uploadStatus"),
-                    "processing_status": pr.get("processingStatus"),
+                    "processing_status": pr.get("processingStatus") if pr else "succeeded",
                     "failure_reason": pr.get("processingFailureReason") or st.get("rejectionReason"),
                     "duration": cd.get("duration"),
                     "title": snip.get("title", ""),

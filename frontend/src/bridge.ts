@@ -122,6 +122,7 @@ declare global {
       getAuthToken?: () => string;
       openCustomTab?: (url: string) => boolean;
       deleteSession?: (sessionId: string) => boolean;
+      openNativePreview?: (idOrSessionId: string) => boolean;
       performHaptic?: (type: string) => boolean;
       setCurrentUserId?: (userId: string | null) => boolean;
       getCurrentUserId?: () => string | null;
@@ -453,6 +454,18 @@ export const Bridge = {
         return window.DispatchBridge.deleteSession(sessionId);
       } catch (e) {
         console.error('Failed to delete session via bridge:', e);
+        return false;
+      }
+    }
+    return false;
+  },
+
+  openNativePreview(idOrSessionId: string): boolean {
+    if (window.DispatchBridge?.openNativePreview) {
+      try {
+        return window.DispatchBridge.openNativePreview(idOrSessionId);
+      } catch (e) {
+        console.error('Failed to open native preview via bridge:', e);
         return false;
       }
     }

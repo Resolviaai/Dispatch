@@ -2,6 +2,7 @@ package com.resolvia.dispatch
 
 import android.Manifest
 import java.io.File
+import java.io.FileInputStream
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -219,12 +220,37 @@ class MainActivity : ComponentActivity() {
 
         // Set up WebViewAssetLoader to safely serve assets over http://appassets.androidplatform.net
         // Using HTTP scheme eliminates Chromium mixed-content auto-upgrade so local LAN HTTP video streaming works seamlessly.
-        val recordingsDir = File(filesDir, "recordings").apply { if (!exists()) mkdirs() }
+        val extRecDir = File(getExternalFilesDir(null) ?: filesDir, "recordings").apply { if (!exists()) mkdirs() }
+        val intRecDir = File(filesDir, "recordings").apply { if (!exists()) mkdirs() }
         val assetLoader = WebViewAssetLoader.Builder()
             .setDomain("appassets.androidplatform.net")
             .setHttpAllowed(true)
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
-            .addPathHandler("/recordings/", WebViewAssetLoader.InternalStoragePathHandler(this, recordingsDir))
+            .addPathHandler("/recordings/", object : WebViewAssetLoader.PathHandler {
+                override fun handle(path: String): WebResourceResponse? {
+                    return try {
+                        val targetFile = listOf(extRecDir, intRecDir)
+                            .map { File(it, path).canonicalFile }
+                            .firstOrNull { it.exists() && it.canRead() && !it.isDirectory } ?: return null
+
+                        val mime = when {
+                            targetFile.name.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
+                            targetFile.name.endsWith(".jpg", ignoreCase = true) || targetFile.name.endsWith(".jpeg", ignoreCase = true) -> "image/jpeg"
+                            targetFile.name.endsWith(".png", ignoreCase = true) -> "image/png"
+                            else -> "application/octet-stream"
+                        }
+                        val headers = mapOf(
+                            "Access-Control-Allow-Origin" to "*",
+                            "Accept-Ranges" to "bytes",
+                            "Content-Type" to mime
+                        )
+                        WebResourceResponse(mime, null, 200, "OK", headers, FileInputStream(targetFile))
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Error serving recording $path: ${e.message}")
+                        null
+                    }
+                }
+            })
             .build()
 
         // Configure full-bleed WebView with transparent background

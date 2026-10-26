@@ -62,7 +62,7 @@ export interface UnifiedSession {
 }
 
 type ViewMode = 'library' | 'detail';
-type FilterStatus = 'all' | 'ready' | 'processing' | 'queued';
+type FilterStatus = 'all' | 'ready' | 'processing' | 'queued' | 'failed';
 
 interface RecordingsScreenProps {
   recordings: RecordingItem[];
@@ -395,7 +395,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return unifiedSessions.filter(s => {
       if (filter === 'ready') return s.status === 'ready';
       if (filter === 'processing') return s.status === 'processing';
-      if (filter === 'queued') return s.status === 'queued' || s.status === 'failed';
+      if (filter === 'queued') return s.status === 'queued' || s.status === 'uploading';
+      if (filter === 'failed') return s.status === 'failed';
       return true;
     });
   }, [unifiedSessions, filter]);
@@ -403,7 +404,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   // Counts for tabs
   const readyCount = unifiedSessions.filter(s => s.status === 'ready').length;
   const processingCount = unifiedSessions.filter(s => s.status === 'processing').length;
-  const queuedCount = unifiedSessions.filter(s => s.status === 'queued' || s.status === 'failed').length;
+  const queuedCount = unifiedSessions.filter(s => s.status === 'queued' || s.status === 'uploading').length;
+  const failedCount = unifiedSessions.filter(s => s.status === 'failed').length;
 
   // YouTube Link Extraction & Submission
   const extractVideoId = (raw: string): string | null => {
@@ -522,6 +524,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <video
                 src={s.videoUrl.startsWith('http') ? s.videoUrl : apiUrl(s.videoUrl, pcHost)}
                 controls
+                playsInline
                 className="w-full h-full object-contain"
                 preload="metadata"
               />
@@ -560,7 +563,46 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 </p>
               </div>
             )}
+            {s.origin === 'phone' && (
+              <button
+                type="button"
+                onClick={() => Bridge.openNativePreview(s.id)}
+                className="absolute top-2 right-2 px-2.5 py-1 rounded-lg bg-black/80 hover:bg-black text-white text-[11px] font-medium flex items-center gap-1.5 border border-white/15 active:scale-95 transition-all shadow-md z-10"
+                title="Play in Phone Player"
+              >
+                <Play size={10} className="fill-white" />
+                <span>Native Player</span>
+              </button>
+            )}
           </div>
+
+          {/* FAILED STATUS BANNER WITH DIRECT RETRY */}
+          {s.status === 'failed' && (
+            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs space-y-2">
+              <div className="flex items-center gap-2 font-semibold text-danger">
+                <AlertCircle size={15} />
+                <span>Processing Issue</span>
+              </div>
+              <p className="text-[11px] text-text-secondary leading-relaxed">
+                {s.errorMessage || 'This video could not be processed. Tap below to retry.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (s.origin === 'phone') {
+                    onRetryUpload(s.id);
+                    showToast('Retrying upload to YouTube…');
+                  } else if (s.youtubeVideoId) {
+                    handleImportSubmit(`https://youtu.be/${s.youtubeVideoId}`);
+                  }
+                }}
+                className="min-h-[38px] px-3.5 rounded-lg bg-danger/20 hover:bg-danger/30 text-danger text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all"
+              >
+                <RotateCw size={13} />
+                <span>Retry Video</span>
+              </button>
+            </div>
+          )}
 
           {/* COMPACT METRICS ROW */}
           <div className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border text-xs">
@@ -814,6 +856,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             { id: 'ready' as FilterStatus, label: 'Ready', count: readyCount },
             { id: 'processing' as FilterStatus, label: 'Processing', count: processingCount },
             { id: 'queued' as FilterStatus, label: 'Queued', count: queuedCount },
+            ...(failedCount > 0 ? [{ id: 'failed' as FilterStatus, label: 'Failed', count: failedCount }] : []),
           ].map(chip => {
             const isSelected = filter === chip.id;
             return (
@@ -996,6 +1039,20 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 <X size={14} />
               </button>
             </div>
+
+            {currentSessionDetail.origin === 'phone' && (
+              <button
+                type="button"
+                onClick={() => {
+                  Bridge.openNativePreview(currentSessionDetail.id);
+                  setIsOptionsModalOpen(false);
+                }}
+                className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <Play size={14} className="text-primary fill-primary" />
+                <span>Play in Native Video Player</span>
+              </button>
+            )}
 
             <button
               type="button"

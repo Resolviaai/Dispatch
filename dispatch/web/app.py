@@ -2346,12 +2346,19 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
             "message": f"YouTube video {video_id} is already being ingested. Track its progress in the inbox."
         }
 
+    user_id = None
+    try:
+        user_info = get_authenticated_user(request)
+        user_id = user_info.get("id")
+    except Exception:
+        pass
+
     # Start background processing thread so API returns immediately to client
     catcher = YouTubeInboxCatcher()
 
     def _run_bg_catcher():
         try:
-            catcher.ingest_video(payload.url)
+            catcher.ingest_video(payload.url, user_id=user_id)
         except Exception as e:
             logger.error("Error in background YouTube ingestion for %s: %s", video_id, e)
 

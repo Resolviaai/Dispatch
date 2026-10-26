@@ -1,5 +1,8 @@
 package com.resolvia.dispatch.bridge
 
+import android.content.Intent
+import androidx.core.content.FileProvider
+import android.widget.Toast
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
@@ -707,6 +710,63 @@ class DispatchNativeBridge(
             }
         } catch (e: Exception) {
             android.util.Log.e("DispatchBridge", "deleteSession failed: ${e.message}")
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun openNativePreview(idOrSessionId: String): Boolean {
+        return try {
+            val file = runBlocking(Dispatchers.IO) {
+                // 1. Try finding segment by segmentId
+                var seg = database.recordingDao().getSegmentById(idOrSessionId)
+                if (seg == null) {
+                    // 2. Try finding first segment by sessionId
+                    val segs = database.recordingDao().getSegmentsBySessionId(idOrSessionId)
+                    seg = segs.firstOrNull()
+                }
+                if (seg != null) {
+                    val f = java.io.File(seg.filepath)
+                    if (f.exists() && f.length() > 0L) return@runBlocking f
+                }
+                // 3. Fallback: check external and internal recordings directories directly
+                val extRec = java.io.File(activity.getExternalFilesDir(null) ?: activity.filesDir, "recordings")
+                val intRec = java.io.File(activity.filesDir, "recordings")
+                val candidates = listOf(
+                    java.io.File(extRec, "$idOrSessionId.mp4"),
+                    java.io.File(extRec, idOrSessionId),
+                    java.io.File(intRec, "$idOrSessionId.mp4"),
+                    java.io.File(intRec, idOrSessionId)
+                )
+                candidates.firstOrNull { it.exists() && it.length() > 0L }
+            } ?: run {
+                activity.runOnUiThread {
+                    Toast.makeText(activity, "Video file not found on device storage", Toast.LENGTH_SHORT).show()
+                }
+                return false
+            }
+
+            activity.runOnUiThread {
+                try {
+                    val uri = FileProvider.getUriForFile(
+                        activity,
+                        "${activity.packageName}.fileprovider",
+                        file
+                    )
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "video/mp4")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activity.startActivity(intent)
+                } catch (e: Exception) {
+                    android.util.Log.e("DispatchBridge", "Could not start native preview intent: ${e.message}")
+                    Toast.makeText(activity, "Could not open video player: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("DispatchBridge", "openNativePreview failed: ${e.message}")
             false
         }
     }
