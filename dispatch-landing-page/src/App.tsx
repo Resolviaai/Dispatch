@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 
 const releaseUrl = 'https://github.com/Resolviaai/Dispatch/releases/latest';
 const featureCards = [
@@ -9,13 +9,25 @@ const featureCards = [
   { title: 'Review', image: '/assets/feature-cards/review.png' },
   { title: 'Export', image: '/assets/feature-cards/export.png' },
 ];
-const sideDialMetrics = [
-  { id: 'views', target: 12800 },
-  { id: 'followers', target: 320 },
-] as const;
+const dialMilestones = [
+  ...Array.from({ length: 11 }, (_, index) => index),
+  ...Array.from({ length: 9 }, (_, index) => (index + 2) * 10),
+  ...Array.from({ length: 9 }, (_, index) => (index + 2) * 100),
+  ...Array.from({ length: 9 }, (_, index) => (index + 2) * 1000),
+  ...Array.from({ length: 9 }, (_, index) => (index + 2) * 10000),
+  ...Array.from({ length: 9 }, (_, index) => (index + 2) * 100000),
+];
+const sideDialMetrics = ['views', 'followers'] as const;
 
 function formatCount(value: number) {
   return Math.round(value).toLocaleString('en-US');
+}
+
+function interpolateTrackValue(stops: number[], distance: number) {
+  const position = Math.min(stops.length - 1, Math.max(0, distance));
+  const lower = Math.floor(position);
+  const upper = Math.min(stops.length - 1, lower + 1);
+  return stops[lower] + (stops[upper] - stops[lower]) * (position - lower);
 }
 
 function ArrowIcon() {
@@ -76,6 +88,7 @@ function PhoneMockup() {
 
 function PageSideOrnaments() {
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [isMobileDial, setIsMobileDial] = useState(() => window.innerWidth <= 680);
 
   useEffect(() => {
     let frame = 0;
@@ -85,6 +98,7 @@ function PageSideOrnaments() {
         const scrollableHeight = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
         const progress = scrollableHeight === 0 ? 0 : Math.min(1, Math.max(0, window.scrollY / scrollableHeight));
         setScrollProgress(progress);
+        setIsMobileDial(window.innerWidth <= 680);
         frame = 0;
       });
     };
@@ -99,10 +113,17 @@ function PageSideOrnaments() {
     };
   }, []);
 
+  const trackPosition = scrollProgress * (dialMilestones.length - 1);
+  const milestoneIndex = Math.min(dialMilestones.length - 1, Math.floor(trackPosition));
+  const scrollPhase = milestoneIndex === dialMilestones.length - 1 ? 0 : trackPosition - milestoneIndex;
+  const track = isMobileDial
+    ? { step: 2.8, x: [0, .55, 1.25, 1.7, 2.1] }
+    : { step: 4, x: [0, .7, 1.7, 2.2, 2.7] };
+
   return (
     <div className="page-side-ornaments">
       {sideDialMetrics.map((metric) => {
-        const value = Math.round(scrollProgress * metric.target);
+        const value = dialMilestones[milestoneIndex];
         const neighbors = [
           { slot: 'far-above', offset: 3 },
           { slot: 'above', offset: 2 },
@@ -112,20 +133,30 @@ function PageSideOrnaments() {
           { slot: 'far-below', offset: -3 },
         ];
         return (
-          <div className={`page-side-dial page-side-dial--${metric.id}`} key={metric.id}>
+          <div className={`page-side-dial page-side-dial--${metric}`} key={metric}>
             <div className="page-side-ring" aria-hidden="true" />
             <div className="page-side-neighbors" aria-hidden="true">
               {neighbors.map(({ slot, offset }) => {
-                const neighborValue = value + offset;
+                const neighborIndex = milestoneIndex + offset;
+                const trackPosition = offset - scrollPhase;
+                const distance = Math.abs(trackPosition);
+                const arcX = interpolateTrackValue(track.x, distance) * (metric === 'views' ? -1 : 1);
+                const arcY = -trackPosition * track.step;
+                const tilt = Math.sign(-trackPosition) * interpolateTrackValue([0, 12, 24, 34, 42], distance) * (metric === 'views' ? 1 : -1);
+                const opacity = interpolateTrackValue([0, .86, .68, .45, .22], distance) * Math.min(1, distance / .55);
                 return (
-                  <span className={`page-side-neighbor page-side-neighbor--${slot}`} key={slot}>
-                    {neighborValue < 0 || neighborValue > metric.target ? '' : formatCount(neighborValue)}
+                  <span
+                    className={`page-side-neighbor page-side-neighbor--${slot}`}
+                    key={slot}
+                    style={{ '--arc-x': `${arcX}rem`, '--arc-y': `${arcY}rem`, '--arc-tilt': `${tilt}deg`, opacity } as CSSProperties}
+                  >
+                    {neighborIndex < 0 || neighborIndex >= dialMilestones.length ? '' : formatCount(dialMilestones[neighborIndex])}
                   </span>
                 );
               })}
             </div>
-            <div className="page-side-current" role="img" aria-label={`${formatCount(value)} ${metric.id}`}>
-              <strong aria-hidden="true">{formatCount(value)}</strong><small aria-hidden="true">{metric.id}</small>
+            <div className="page-side-current" role="img" aria-label={`${formatCount(value)} ${metric}`}>
+              <strong aria-hidden="true">{formatCount(value)}</strong><small aria-hidden="true">{metric}</small>
             </div>
           </div>
         );
@@ -171,7 +202,7 @@ function Hero() {
         <div className="hero-copy">
           <p className="eyebrow"><span className="eyebrow-dot" /> A CALMER WAY TO FIND THE GOOD PARTS</p>
           <div className="hero-title-stage">
-            <h1 id="hero-title">Make the long take.<br /><em>Keep the good parts.</em></h1>
+            <h1 id="hero-title">Meet Dispatch</h1>
             <PhoneMockup />
           </div>
           <p className="hero-lede">Dispatch helps you find short clips in longer talking sessions, so you can spend less time scrubbing and more time creating.</p>
