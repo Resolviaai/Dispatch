@@ -101,47 +101,47 @@ function createSampleTemplateTrack(
       {
         id: 'grp_tpl_1',
         start: 0.0,
-        end: 2.6,
+        end: 3.2,
         type: 'caption',
         style: { ...style },
         layout: { ...layout },
         animation: { ...anim },
         words: [
-          { id: 'w1_1', text: 'This', start: 0.0, end: 0.6 },
-          { id: 'w1_2', text: 'is', start: 0.6, end: 1.0 },
-          { id: 'w1_3', text: 'how', start: 1.0, end: 1.5 },
-          { id: 'w1_4', text: 'Dispatch', start: 1.5, end: 2.5 },
+          { id: 'w1_1', text: 'This', start: 0.0, end: 0.7 },
+          { id: 'w1_2', text: 'is', start: 0.7, end: 1.2 },
+          { id: 'w1_3', text: 'how', start: 1.2, end: 1.8 },
+          { id: 'w1_4', text: 'Dispatch', start: 1.8, end: 3.0 },
         ],
       },
       {
         id: 'grp_tpl_2',
-        start: 2.6,
-        end: 5.2,
+        start: 3.2,
+        end: 6.5,
         type: 'caption',
         style: { ...style },
         layout: { ...layout },
         animation: { ...anim },
         words: [
-          { id: 'w2_1', text: 'automatically', start: 2.6, end: 3.4 },
-          { id: 'w2_2', text: 'styles', start: 3.4, end: 4.0 },
-          { id: 'w2_3', text: 'your', start: 4.0, end: 4.5 },
-          { id: 'w2_4', text: 'clips', start: 4.5, end: 5.1 },
+          { id: 'w2_1', text: 'automatically', start: 3.2, end: 4.2 },
+          { id: 'w2_2', text: 'styles', start: 4.2, end: 4.9 },
+          { id: 'w2_3', text: 'your', start: 4.9, end: 5.5 },
+          { id: 'w2_4', text: 'clips', start: 5.5, end: 6.3 },
         ],
       },
       {
         id: 'grp_tpl_3',
-        start: 5.2,
-        end: 8.0,
+        start: 6.5,
+        end: 9.8,
         type: 'caption',
         style: { ...style },
         layout: { ...layout },
         animation: { ...anim },
         words: [
-          { id: 'w3_1', text: 'ready', start: 5.2, end: 5.7 },
-          { id: 'w3_2', text: 'for', start: 5.7, end: 6.2 },
-          { id: 'w3_3', text: 'Shorts', start: 6.2, end: 6.8 },
-          { id: 'w3_4', text: '&', start: 6.8, end: 7.2 },
-          { id: 'w3_5', text: 'Reels', start: 7.2, end: 7.9 },
+          { id: 'w3_1', text: 'ready', start: 6.5, end: 7.1 },
+          { id: 'w3_2', text: 'for', start: 7.1, end: 7.7 },
+          { id: 'w3_3', text: 'Shorts', start: 7.7, end: 8.5 },
+          { id: 'w3_4', text: '&', start: 8.5, end: 9.0 },
+          { id: 'w3_5', text: 'Reels', start: 9.0, end: 9.8 },
         ],
       },
     ],
@@ -169,6 +169,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
 
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [videoDuration, setVideoDuration] = useState(10.0);
 
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [isVideoSelected, setIsVideoSelected] = useState(false);
@@ -425,11 +426,18 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     }
   };
 
+  const handleLoadedMetadata = () => {
+    if (videoRef.current && videoRef.current.duration > 0 && isFinite(videoRef.current.duration)) {
+      setVideoDuration(videoRef.current.duration);
+    }
+  };
+
   // Video timeupdate handler
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
     const t = videoRef.current.currentTime;
-    if (t >= 8.0) {
+    const maxDur = videoDuration || 10.0;
+    if (t >= maxDur) {
       videoRef.current.currentTime = 0;
       setCurrentTime(0);
       if (isPlaying) {
@@ -441,7 +449,8 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
   };
 
   const handleSeek = (seconds: number) => {
-    const clamped = Math.max(0, Math.min(8.0, seconds));
+    const maxDur = videoDuration || 10.0;
+    const clamped = Math.max(0, Math.min(maxDur, seconds));
     setCurrentTime(clamped);
     if (videoRef.current) {
       videoRef.current.currentTime = clamped;
@@ -471,9 +480,10 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
       const dt = (now - lastTime) / 1000;
       lastTime = now;
 
+      const maxDur = videoDuration || 10.0;
       if (videoRef.current && !videoRef.current.paused && videoRef.current.readyState >= 2) {
         const vt = videoRef.current.currentTime;
-        if (vt >= 8.0) {
+        if (vt >= maxDur) {
           videoRef.current.currentTime = 0;
           setCurrentTime(0);
         } else {
@@ -483,7 +493,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
         // Fallback software timer
         setCurrentTime((prev) => {
           const next = prev + dt;
-          if (next >= 8.0) {
+          if (next >= maxDur) {
             if (videoRef.current) videoRef.current.currentTime = 0;
             return 0;
           }
@@ -612,7 +622,8 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           videoUrl={sampleVideoUrl}
           clipStart={0}
           clipEnd={videoDuration}
-          clipDuration={8.0}
+          clipDuration={videoDuration}
+          onLoadedMetadata={handleLoadedMetadata}
           layoutMode={layoutMode}
           sourceOrientation={orientation}
           targetAspect={orientation === 'portrait' ? '9:16' : '16:9'}
@@ -913,7 +924,8 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
               videoUrl={sampleVideoUrl}
               clipStart={0}
               clipEnd={videoDuration}
-              clipDuration={8.0}
+              clipDuration={videoDuration}
+          onLoadedMetadata={handleLoadedMetadata}
               layoutMode={layoutMode}
               sourceOrientation={orientation}
               targetAspect={orientation === 'portrait' ? '9:16' : '16:9'}
