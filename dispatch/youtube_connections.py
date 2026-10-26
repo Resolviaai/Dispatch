@@ -21,16 +21,15 @@ class VaultUnavailable(Exception):
     """Cloud/Supabase unreachable or misconfigured; caller must fail closed."""
 
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+
 def _env(name: str) -> str:
-    val = os.getenv(name, "").strip()
-    if not val:
-        try:
-            from dotenv import load_dotenv
-            load_dotenv()
-            val = os.getenv(name, "").strip()
-        except Exception:
-            pass
-    return val
+    return os.getenv(name, "").strip()
 
 
 def get_candidate_vault_keys() -> List[bytes]:
@@ -66,6 +65,9 @@ def get_candidate_vault_keys() -> List[bytes]:
 
 
 def vault_key() -> bytes:
+    raw_key = _env("DISPATCH_TOKEN_VAULT_KEY")
+    if not raw_key:
+        raise VaultUnavailable("DISPATCH_TOKEN_VAULT_KEY not configured")
     candidates = get_candidate_vault_keys()
     if candidates:
         return candidates[0]

@@ -1483,10 +1483,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   useEffect(() => {
     fetchClips();
-    if (viewMode !== 'library') return;
+    if (viewMode !== 'library' && viewMode !== 'detail') return;
     const interval = setInterval(() => {
       fetchClips();
-    }, 6000);
+    }, 4000);
     return () => clearInterval(interval);
   }, [pcHost, viewMode]);
 
@@ -2201,69 +2201,84 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }, 2200);
   };
 
-  // 5. Approve & Publish Handler
-  const handleApprove = async () => {
+  // 5. Approve & Publish Handler (Optimistic UI)
+  const handleApprove = () => {
     if (!currentClip) return;
     if (!titleDraft.trim()) {
       setFeedback('Clip title cannot be empty.');
       return;
     }
-    setIsSubmitting(true);
-    setFeedback(null);
 
-    try {
-      if (captionTrack) {
-        if (captionTrack.clip_id && captionTrack.clip_id !== currentClip.id) {
-          throw new Error(`Refusing to approve: caption track (${captionTrack.clip_id}) belongs to another clip (${currentClip.id})`);
+    const clipToApprove = currentClip;
+    const optimisticTitle = titleDraft.trim();
+    const optimisticDescription = captionDraft.trim();
+    const optimisticLayout = layoutMode;
+    const optimisticMode = publishMode;
+    const trackSnapshot = captionTrack;
+    const platformsToPublish = selectedPlatforms.map((p) => p === 'youtube_shorts' ? 'youtube' : p).join(',');
+    const accountsMap = { ...selectedAccountMap };
+    const rev = clipToApprove.range_revision || 0;
+
+    // Instant Optimistic State Update:
+    const approvedItem: ClipItem = {
+      ...clipToApprove,
+      title: optimisticTitle,
+      description: optimisticDescription,
+      layout_mode: optimisticLayout,
+      publish_mode: optimisticMode,
+      status: 'approved',
+      approved_at: new Date().toISOString(),
+    };
+
+    setReadyClips((prev) => prev.filter((c) => c.id !== clipToApprove.id));
+    setApprovedClips((prev) => [approvedItem, ...prev.filter((c) => c.id !== clipToApprove.id)]);
+    setFeedback('Queued for rendering & publishing to YouTube…');
+    setViewMode('library');
+    setSelectedClipId(null);
+    setIsSubmitting(false);
+
+    // Asynchronous background call without blocking UI:
+    (async () => {
+      try {
+        if (trackSnapshot) {
+          if (trackSnapshot.clip_id && trackSnapshot.clip_id !== clipToApprove.id) {
+            console.error('Refusing to approve: caption track belongs to another clip');
+            return;
+          }
+          await fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(trackSnapshot),
+          });
         }
-        const capRes = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
+
+        const res = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/approve`, pcHost), {
           method: 'POST',
           headers: getAuthHeaders(),
-          body: JSON.stringify(captionTrack),
+          body: JSON.stringify({
+            title: optimisticTitle,
+            hashtags: optimisticDescription,
+            publish_mode: optimisticMode,
+            platforms: platformsToPublish,
+            account_ids: accountsMap,
+            layout_mode: optimisticLayout,
+            range_revision: rev,
+          }),
         });
-        if (!capRes.ok) {
-          throw new Error('Failed to save caption track before approval');
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          console.error('Approval failed:', err);
+          setFeedback(err?.detail || 'Approval request failed in background');
+        } else {
+          // Poll server for published status & remote_id
+          setTimeout(() => { fetchClips(); }, 2000);
+          setTimeout(() => { fetchClips(); }, 5000);
         }
+      } catch (err) {
+        console.error('Background publish error:', err);
       }
-
-      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/approve`, pcHost), {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          title: titleDraft.trim(),
-          hashtags: captionDraft.trim(),
-          publish_mode: publishMode,
-          platforms: selectedPlatforms.map((p) => p === 'youtube_shorts' ? 'youtube' : p).join(','),
-          account_ids: selectedAccountMap,
-          layout_mode: layoutMode,
-          range_revision: currentClip.range_revision || 0,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.detail || 'Approval request failed');
-      }
-
-      const approvedItem: ClipItem = {
-        ...currentClip,
-        title: titleDraft.trim(),
-        description: captionDraft.trim(),
-        layout_mode: layoutMode,
-        publish_mode: publishMode,
-        status: 'approved',
-      };
-
-      setReadyClips((prev) => prev.filter((c) => c.id !== currentClip.id));
-      setApprovedClips((prev) => [approvedItem, ...prev]);
-      setFeedback('Clip approved and queued to publishing outbox.');
-      setViewMode('library');
-      setSelectedClipId(null);
-    } catch (e) {
-      setFeedback(e instanceof Error ? e.message : 'Could not approve clip.');
-    } finally {
-      setIsSubmitting(false);
-    }
+    })();
   };
 
   // 6. Double Confirmation Reject Handlers
@@ -2835,81 +2850,165 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               </div>
             </section>
 
-            {/* Primary actions — pill pair, one hero (publish) */}
-            <section className="w-full grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setViewMode('studio')}
-                className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
-              >
-                <Scissors size={15} className="text-primary" />
-                <span>Edit</span>
-              </button>
-
-              {/* Publish or Watch Live on YouTube */}
-              {(currentClip.status === 'approved' || currentClip.status === 'published') && (currentClip.remote_url || currentClip.remote_id) ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const url = currentClip.remote_url || `https://youtu.be/${currentClip.remote_id}`;
-                    window.open(url, '_blank', 'noopener,noreferrer');
-                  }}
-                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
-                >
-                  <ExternalLink size={14} />
-                  <span>Watch on YouTube</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setViewMode('publish')}
-                  className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
-                >
-                  <Send size={14} />
-                  <span>Publish</span>
-                                  </button>
-              )}
-            </section>
-
-            {/* Layout framing — flat section, single divider (no card) */}
+            {/* 3. DYNAMIC ACTIONS & TELEMETRY: Changes depending on clip lifecycle */}
             {(() => {
+              const isClipPublished = Boolean(
+                currentClip.status === 'published' ||
+                currentClip.remote_id ||
+                currentClip.remote_url
+              );
+              const isClipPublishing = Boolean(
+                currentClip.status === 'approved' && !isClipPublished
+              );
+              const liveUrl = currentClip.remote_url || (currentClip.remote_id ? `https://youtube.com/shorts/${currentClip.remote_id}` : '');
+
+              if (isClipPublished) {
+                return (
+                  <section className="w-full space-y-3 pt-1">
+                    {/* Live Published Card */}
+                    <div className="w-full p-3.5 rounded-2xl bg-surface-100 border border-border flex flex-col gap-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-status-success">
+                          <span className="w-2 h-2 rounded-full bg-status-success shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+                          <span>Live on YouTube Shorts</span>
+                        </div>
+                        <span className="text-[11px] text-text-muted font-mono">
+                          {formatAge(currentClip.published_at || currentClip.approved_at)}
+                        </span>
+                      </div>
+
+                      {/* Direct URL Bar with Copy */}
+                      {liveUrl && (
+                        <div className="flex items-center gap-2 p-1.5 pl-3 rounded-xl bg-surface-200 border border-border">
+                          <span className="flex-1 min-w-0 font-mono text-xs text-text-secondary truncate select-all">
+                            {liveUrl}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(liveUrl, 'YouTube link')}
+                            className="shrink-0 px-2.5 py-1 rounded-lg bg-surface-3 hover:bg-surface-200 text-xs font-medium text-text-main flex items-center gap-1 active:scale-95 transition-all"
+                            title="Copy link"
+                          >
+                            <Copy size={12} />
+                            <span>Copy</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Publishing Details */}
+                      <div className="flex items-center justify-between text-[11px] text-text-muted pt-1 border-t border-border/40">
+                        <span>Visibility: <strong className="text-text-secondary font-medium capitalize">{currentClip.publish_mode || 'unlisted'}</strong></span>
+                        <span className="font-mono text-text-secondary">Framing: {currentClip.layout_mode || '9:16'}</span>
+                      </div>
+                    </div>
+
+                    {/* Dual Action Buttons: Watch Live (Hero) + Edit a Copy */}
+                    <div className="w-full grid grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (liveUrl) window.open(liveUrl, '_blank', 'noopener,noreferrer');
+                        }}
+                        className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
+                      >
+                        <ExternalLink size={15} />
+                        <span>Watch Live</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setViewMode('studio')}
+                        className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-semibold text-text-secondary hover:text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
+                      >
+                        <Scissors size={14} className="text-primary" />
+                        <span>Edit a Copy</span>
+                      </button>
+                    </div>
+                  </section>
+                );
+              }
+
+              if (isClipPublishing) {
+                return (
+                  <section className="w-full space-y-3 pt-1">
+                    <div className="w-full p-4 rounded-2xl bg-surface-100 border border-primary/40 flex flex-col gap-2">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                        <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
+                        <span>Publishing to YouTube Shorts…</span>
+                      </div>
+                      <p className="text-xs text-text-muted leading-relaxed">
+                        Dispatch is rendering your clip with burned-in captions and uploading it to your channel. You can preview the video above while upload completes.
+                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <div className="flex-1 h-1.5 rounded-full bg-surface-200 overflow-hidden">
+                          <div className="h-full bg-primary rounded-full animate-pulse w-3/4" />
+                        </div>
+                        <span className="text-[10px] font-mono text-text-muted">In Progress</span>
+                      </div>
+                    </div>
+                  </section>
+                );
+              }
+
+              // Normal Ready-to-Review Mode:
               const availableModes = (currentClip.available_layout_modes && currentClip.available_layout_modes.length > 0)
                 ? currentClip.available_layout_modes
                 : (currentClip.source_orientation === 'landscape' ? DEFAULT_LANDSCAPE_MODES : DEFAULT_PORTRAIT_MODES);
-
               const activeModeObj = availableModes.find((m) => m.id === layoutMode) || availableModes[0];
 
               return (
-                <section className="w-full pt-3 mt-1 border-t border-border">
-                  <div className="flex items-center justify-between text-xs leading-tight mb-2">
-                    <span className="font-medium uppercase tracking-wider text-text-muted">Layout framing</span>
-                    <span className="font-mono text-xs text-primary font-semibold tabular-nums">
-                      {activeModeObj ? `${activeModeObj.target_aspect} ${activeModeObj.label}` : layoutMode}
-                    </span>
-                  </div>
-                  <div
-                    className="grid gap-1.5 w-full"
-                    style={{ gridTemplateColumns: `repeat(${availableModes.length}, minmax(0, 1fr))` }}
-                  >
-                    {availableModes.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => handleLayoutChange(opt.id)}
-                        className={`h-8 px-1 rounded-lg text-[11px] sm:text-xs font-medium text-center flex items-center justify-center truncate active:scale-[0.98] transition-all ${layoutMode === opt.id
-                          ? 'chip-selected font-semibold shadow-sm'
-                          : 'bg-surface-2 text-text-secondary hover:text-text-main'
-                          }`}
-                        title={opt.description}
-                      >
-                        <span className="truncate">{opt.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
+                <>
+                  {/* Primary actions: Edit + Publish */}
+                  <section className="w-full grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('studio')}
+                      className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                    >
+                      <Scissors size={15} className="text-primary" />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('publish')}
+                      className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                    >
+                      <Send size={14} />
+                      <span>Publish</span>
+                    </button>
+                  </section>
+
+                  {/* Layout framing */}
+                  <section className="w-full pt-3 mt-1 border-t border-border">
+                    <div className="flex items-center justify-between text-xs leading-tight mb-2">
+                      <span className="font-medium uppercase tracking-wider text-text-muted">Layout framing</span>
+                      <span className="font-mono text-xs text-primary font-semibold tabular-nums">
+                        {activeModeObj ? `${activeModeObj.target_aspect} ${activeModeObj.label}` : layoutMode}
+                      </span>
+                    </div>
+                    <div
+                      className="grid gap-1.5 w-full"
+                      style={{ gridTemplateColumns: `repeat(${availableModes.length}, minmax(0, 1fr))` }}
+                    >
+                      {availableModes.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handleLayoutChange(opt.id)}
+                          className={`h-8 px-1 rounded-lg text-[11px] sm:text-xs font-medium text-center flex items-center justify-center truncate active:scale-[0.98] transition-all ${layoutMode === opt.id
+                            ? 'chip-selected font-semibold shadow-sm'
+                            : 'bg-surface-2 text-text-secondary hover:text-text-main'
+                            }`}
+                          title={opt.description}
+                        >
+                          <span className="truncate">{opt.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                </>
               );
-            })()}
-          </div>
+            })()}          </div>
         </main>
       </div>
     );
