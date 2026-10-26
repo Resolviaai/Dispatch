@@ -466,8 +466,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               Customize
             </button>
           </div>
-          <p className="text-xs text-text-secondary leading-relaxed">
-            Customize the default framing, caption typography, active word highlight, and hook style applied to newly generated clips.
+          <p className="text-[11px] text-text-muted">
+            Framing & caption presets for new clips
           </p>
         </section>
 

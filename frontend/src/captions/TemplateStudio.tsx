@@ -611,7 +611,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           sourceVideoUrl={sampleVideoUrl}
           videoUrl={sampleVideoUrl}
           clipStart={0}
-          clipEnd={8.0}
+          clipEnd={videoDuration}
           clipDuration={8.0}
           layoutMode={layoutMode}
           sourceOrientation={orientation}
@@ -700,7 +700,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           <div className="font-mono tabular-nums text-[10px] sm:text-[11px] font-semibold text-text-main flex items-center gap-1 pl-0.5">
             <span>{formatTime(currentTime)}</span>
             <span className="text-text-muted">/</span>
-            <span className="text-text-secondary">0:08.0</span>
+            <span className="text-text-secondary">{formatTime(videoDuration)}</span>
           </div>
 
           {/* Center: Play / Pause */}
@@ -762,12 +762,12 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
               <CaptionTimeline
                 track={track}
                 currentTime={currentTime}
-                duration={8.0}
+                duration={videoDuration}
                 isPlaying={isPlaying}
                 selectedGroupId={selectedGroupId}
                 isVideoSelected={isVideoSelected}
                 clipStart={0}
-                clipEnd={8.0}
+                clipEnd={videoDuration}
                 hideTrimControls={true}
                 onSeek={handleSeek}
                 onSelectGroup={handleSelectGroup}
@@ -783,7 +783,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
               <CaptionStudio
                 track={track}
                 currentTime={currentTime}
-                duration={8.0}
+                duration={videoDuration}
                 selectedGroupId={selectedGroupId}
                 isVideoSelected={isVideoSelected}
                 layoutMode={layoutMode}
@@ -818,7 +818,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
             <CaptionStudio
               track={track}
               currentTime={currentTime}
-              duration={8.0}
+              duration={videoDuration}
               selectedGroupId={selectedGroupId || activeGroupId}
               isVideoSelected={isVideoSelected}
               layoutMode={layoutMode}
@@ -912,7 +912,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
               sourceVideoUrl={sampleVideoUrl}
               videoUrl={sampleVideoUrl}
               clipStart={0}
-              clipEnd={8.0}
+              clipEnd={videoDuration}
               clipDuration={8.0}
               layoutMode={layoutMode}
               sourceOrientation={orientation}
