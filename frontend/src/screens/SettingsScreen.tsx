@@ -17,8 +17,12 @@ import {
   Plus,
   RefreshCw,
   Share2,
+  Sliders,
+  Smartphone,
+  Cloud,
   X as CloseIcon,
 } from 'lucide-react';
+import { TemplateStudio } from '../captions/TemplateStudio';
 import { Bridge, StorageInfo, apiUrl } from '../bridge';
 import { getThemePreference, setThemePreference, ThemePreference } from '../theme';
 import {
@@ -32,10 +36,13 @@ import {
   deleteGeminiKey,
   initGoogleOAuth,
   updateAccountRoles,
+  CloudStorageInfo,
+  getCloudStorageInfo,
 } from '../accounts/accountsService';
 
 interface SettingsScreenProps {
   pcHost?: string;
+  onEditorOpenChange?: (open: boolean) => void;
 }
 
 const DEFAULT_LENS_KEY = 'dispatch_default_lens';
@@ -98,7 +105,7 @@ const FacebookIcon = () => (
   </svg>
 );
 
-export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000' }) => {
+export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000', onEditorOpenChange }) => {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
   const [geminiStatus, setGeminiStatus] = useState<GeminiKeyStatus>({ configured: false, key_prefix: null });
@@ -114,6 +121,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [defaultLens, setDefaultLens] = useState<'back' | 'front'>(() => getDefaultLensPref());
   const [accountEmail, setAccountEmail] = useState('');
   const [jwtToken, setJwtToken] = useState<string | null>(null);
+  const [isTemplateEditorOpen, setIsTemplateEditorOpen] = useState(false);
+
+  useEffect(() => {
+    onEditorOpenChange?.(isTemplateEditorOpen);
+    return () => onEditorOpenChange?.(false);
+  }, [isTemplateEditorOpen, onEditorOpenChange]);
+  const [cloudStorage, setCloudStorage] = useState<CloudStorageInfo | null>(null);
+  const [isLoadingCloudStorage, setIsLoadingCloudStorage] = useState(false);
+
+  const refreshCloudStorage = async () => {
+    setIsLoadingCloudStorage(true);
+    try {
+      const info = await getCloudStorageInfo();
+      setCloudStorage(info);
+    } catch {
+      // offline or unauthenticated
+    } finally {
+      setIsLoadingCloudStorage(false);
+    }
+  };
 
   useEffect(() => {
     import('../auth/supabase').then(({ currentSession }) =>
@@ -148,15 +175,18 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     }
     setWifiOnly(Bridge.getWifiOnly());
     setStorageInfo(Bridge.getStorageInfo());
+    refreshCloudStorage();
 
     const handleVisibility = () => {
       if (document.visibilityState === 'visible' && jwtToken) {
         refreshAccounts();
+        refreshCloudStorage();
       }
     };
     const handleFocus = () => {
       if (jwtToken) {
         refreshAccounts();
+        refreshCloudStorage();
       }
     };
 
@@ -300,6 +330,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const linkedinAccount = accounts.find(a => a.provider === 'linkedin');
   const twitterAccount = accounts.find(a => a.provider === 'twitter');
 
+  if (isTemplateEditorOpen) {
+    return (
+      <TemplateStudio
+        onClose={() => setIsTemplateEditorOpen(false)}
+        pcHost={pcHost}
+      />
+    );
+  }
+
   return (
     <div className="w-full h-full flex flex-col bg-canvas text-text-main overflow-hidden select-none">
 
@@ -408,6 +447,27 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
           <p className="text-[11px] text-text-muted tabular-nums">
             1080p · 30&nbsp;FPS · 10m segments
+          </p>
+        </section>
+
+        {/* 3. DEFAULT EDITING STYLE */}
+        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sliders size={15} className="text-primary" />
+              <h2 className="text-sm font-semibold tracking-tight text-text-main">Default Editing Style</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsTemplateEditorOpen(true)}
+              className="px-3 min-h-[36px] rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-hero-glow active:scale-[0.98] transition-all flex items-center gap-1.5"
+            >
+              <Sliders size={13} />
+              Customize
+            </button>
+          </div>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Customize the default framing, caption typography, active word highlight, and hook style applied to newly generated clips.
           </p>
         </section>
 
@@ -751,36 +811,93 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </section>
 
         {/* 7. STORAGE */}
-        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2">
+        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-3.5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold tracking-tight text-text-main">Storage</h2>
-            <span className="text-[11px] font-mono tabular-nums text-text-muted">
-              {storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb)
-                ? <>{storageInfo.freeGb!.toFixed(1)}&nbsp;GB free / {storageInfo.totalGb!.toFixed(1)}&nbsp;GB</>
-                : 'Unavailable'}
-            </span>
           </div>
 
-          {storageUsedPct !== null ? (
-            <>
-              <div className="w-full h-2 rounded-full bg-surface-3 overflow-hidden mt-1">
-                <div
-                  className="h-full bg-primary rounded-full transition-all duration-300"
-                  style={{ width: `${storageUsedPct}%` }}
-                />
-              </div>
-              <span className="text-[11px] text-text-muted block">
-                {storageUsedPct}% used · Recordings
+          {/* Device Local Storage */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-xs text-text-secondary">
+                <Smartphone size={13} className="text-text-muted" />
+                Device buffer
               </span>
-            </>
-          ) : (
-            <p className="text-xs text-text-muted" role="status">
-              {storageInfo?.error || 'Storage information is loading.'}
-            </p>
-          )}
+              <span className="text-[11px] font-mono tabular-nums text-text-muted">
+                {storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb)
+                  ? <>{storageInfo.freeGb!.toFixed(1)}&nbsp;GB free / {storageInfo.totalGb!.toFixed(1)}&nbsp;GB</>
+                  : 'Unavailable'}
+              </span>
+            </div>
+
+            {storageUsedPct !== null ? (
+              <>
+                <div className="w-full h-2 rounded-full bg-surface-3 overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-300"
+                    style={{ width: `${storageUsedPct}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-text-muted">
+                  <span>{storageUsedPct}% used · Local recordings</span>
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-text-muted" role="status">
+                {storageInfo?.error || 'Local storage information is loading.'}
+              </p>
+            )}
+          </div>
+
+          {/* Recessed Subtle Divider */}
+          <div className="h-px bg-border/60" />
+
+          {/* Cloud Storage (Per-Account Quota) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-xs text-text-secondary">
+                <Cloud size={13} className="text-text-muted" />
+                Cloud space (Account)
+              </span>
+              <span className="text-[11px] font-mono tabular-nums text-text-muted">
+                {cloudStorage
+                  ? <>{cloudStorage.freeGb.toFixed(1)}&nbsp;GB free / {cloudStorage.quotaGb.toFixed(1)}&nbsp;GB</>
+                  : isLoadingCloudStorage ? 'Loading…' : accountEmail ? '2.0&nbsp;GB quota' : 'Sign in required'}
+              </span>
+            </div>
+
+            {cloudStorage ? (
+              <>
+                <div className="w-full h-2 rounded-full bg-surface-3 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      cloudStorage.percentUsed >= 90
+                        ? 'bg-danger'
+                        : cloudStorage.percentUsed >= 75
+                        ? 'bg-warning'
+                        : 'bg-primary'
+                    }`}
+                    style={{ width: `${cloudStorage.percentUsed}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-text-muted">
+                  <span>{cloudStorage.percentUsed}% used · R2 & Cloud highlights</span>
+                  {cloudStorage.percentUsed >= 90 && (
+                    <span className="text-danger font-medium">Near limit</span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-text-muted">
+                {accountEmail ? 'Fetching cloud quota…' : 'Connect your account to track cloud storage.'}
+              </p>
+            )}
+          </div>
         </section>
 
       </div>
+
+
     </div>
   );
 };

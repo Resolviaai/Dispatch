@@ -83,6 +83,8 @@ class CameraCaptureManager(private val context: Context) {
     @Volatile var isRecordingPaused: Boolean = false
         private set
 
+    var onRecordingPauseStateChanged: ((Boolean) -> Unit)? = null
+
     var currentLensFacing: Int = CameraSelector.LENS_FACING_BACK
         private set
 
@@ -892,14 +894,19 @@ class CameraCaptureManager(private val context: Context) {
      * Sets zoom ratio clamped to camera capabilities (e.g. 1.0f, 2.0f, 3.0f).
      */
     fun setZoom(ratio: Float): Float {
-        currentZoomRatio = ratio
-        val cam = camera ?: return ratio
+        val cam = camera ?: run {
+            currentZoomRatio = ratio
+            return ratio
+        }
         val zoomState = cam.cameraInfo.zoomState.value
         val minZ = zoomState?.minZoomRatio ?: 1.0f
         val maxZ = zoomState?.maxZoomRatio ?: 5.0f
-        if (minZ < maxZ) {
-            val clamped = ratio.coerceIn(minZ, maxZ)
+        val clamped = if (minZ < maxZ) ratio.coerceIn(minZ, maxZ) else ratio
+        currentZoomRatio = clamped
+        try {
             cam.cameraControl.setZoomRatio(clamped)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to apply zoom ratio $clamped: ${e.message}")
         }
         return currentZoomRatio
     }
@@ -1154,15 +1161,34 @@ class CameraCaptureManager(private val context: Context) {
             when (recordEvent) {
                 is VideoRecordEvent.Start -> {
                     isRecording = true
+                    isRecordingPaused = false
                     mainHandler.post {
+                        onRecordingPauseStateChanged?.invoke(false)
                         RecordingForegroundService.instance?.updateNotification()
                     }
                     Log.i(TAG, "Started recording 1080p FHD video segment: ${targetTmpFile.name} ($currentOrientationMode)")
+                }
+                is VideoRecordEvent.Pause -> {
+                    isRecordingPaused = true
+                    mainHandler.post {
+                        onRecordingPauseStateChanged?.invoke(true)
+                        RecordingForegroundService.instance?.updateNotification()
+                    }
+                    Log.i(TAG, "CameraX VideoRecordEvent.Pause received")
+                }
+                is VideoRecordEvent.Resume -> {
+                    isRecordingPaused = false
+                    mainHandler.post {
+                        onRecordingPauseStateChanged?.invoke(false)
+                        RecordingForegroundService.instance?.updateNotification()
+                    }
+                    Log.i(TAG, "CameraX VideoRecordEvent.Resume received")
                 }
                 is VideoRecordEvent.Finalize -> {
                     isRecording = false
                     isRecordingPaused = false
                     mainHandler.post {
+                        onRecordingPauseStateChanged?.invoke(false)
                         RecordingForegroundService.instance?.updateNotification()
                     }
                     val durationMs = recordEvent.recordingStats.recordedDurationNanos / 1_000_000
@@ -1201,7 +1227,10 @@ class CameraCaptureManager(private val context: Context) {
             activeRecording = null
             isRecording = false
             isRecordingPaused = false
-            RecordingForegroundService.instance?.updateNotification()
+            mainHandler.post {
+                onRecordingPauseStateChanged?.invoke(false)
+                RecordingForegroundService.instance?.updateNotification()
+            }
         }
     }
 
@@ -1215,7 +1244,10 @@ class CameraCaptureManager(private val context: Context) {
         return try {
             rec.pause()
             isRecordingPaused = true
-            RecordingForegroundService.instance?.updateNotification()
+            mainHandler.post {
+                onRecordingPauseStateChanged?.invoke(true)
+                RecordingForegroundService.instance?.updateNotification()
+            }
             Log.i(TAG, "Recording paused")
             true
         } catch (e: Exception) {
@@ -1233,7 +1265,10 @@ class CameraCaptureManager(private val context: Context) {
         return try {
             rec.resume()
             isRecordingPaused = false
-            RecordingForegroundService.instance?.updateNotification()
+            mainHandler.post {
+                onRecordingPauseStateChanged?.invoke(false)
+                RecordingForegroundService.instance?.updateNotification()
+            }
             Log.i(TAG, "Recording resumed")
             true
         } catch (e: Exception) {

@@ -1,3 +1,5 @@
+import { supabase } from '../auth/supabase';
+
 /**
  * Unified accounts and credentials service for Dispatch.
  * Connects to the Dispatch Worker control plane.
@@ -191,5 +193,62 @@ export async function updateAccountRoles(
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+export interface CloudStorageInfo {
+  quotaBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+  quotaGb: number;
+  usedGb: number;
+  freeGb: number;
+  percentUsed: number;
+}
+
+export async function getCloudStorageInfo(): Promise<CloudStorageInfo | null> {
+  try {
+    const { data: profile, error: profError } = await supabase
+      .from('profiles')
+      .select('storage_quota_bytes')
+      .maybeSingle();
+
+    if (profError) {
+      console.warn('Could not read user profile storage quota:', profError);
+    }
+
+    const { data: media, error: mediaError } = await supabase
+      .from('media_objects')
+      .select('byte_count')
+      .eq('status', 'active');
+
+    if (mediaError) {
+      console.warn('Could not read user media objects:', mediaError);
+    }
+
+    const quotaBytes = Number(profile?.storage_quota_bytes || 2_000_000_000);
+    const usedBytes = Array.isArray(media)
+      ? media.reduce((sum, item) => sum + Number(item.byte_count || 0), 0)
+      : 0;
+    const freeBytes = Math.max(0, quotaBytes - usedBytes);
+
+    const bytesPerGb = 1_000_000_000;
+    const quotaGb = Math.round((quotaBytes / bytesPerGb) * 10) / 10;
+    const usedGb = Math.round((usedBytes / bytesPerGb) * 100) / 100;
+    const freeGb = Math.max(0, Math.round((freeBytes / bytesPerGb) * 10) / 10);
+    const percentUsed = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : 0;
+
+    return {
+      quotaBytes,
+      usedBytes,
+      freeBytes,
+      quotaGb,
+      usedGb,
+      freeGb,
+      percentUsed,
+    };
+  } catch (err) {
+    console.warn('Failed to fetch cloud storage info:', err);
+    return null;
   }
 }

@@ -27,4 +27,9 @@ export async function signUp(email: string, password: string) {
 
 export async function signOut() {
   await supabase.auth.signOut()
+  try {
+    if (typeof window !== 'undefined' && (window as any).DispatchBridge?.setCurrentUserId) {
+      (window as any).DispatchBridge.setCurrentUserId(null)
+    }
+  } catch {}
 }

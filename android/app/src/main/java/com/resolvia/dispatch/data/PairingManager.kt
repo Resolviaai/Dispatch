@@ -117,6 +117,17 @@ class PairingManager(context: Context) {
         prefs.edit().remove("session_url_$segmentId").apply()
     }
 
+    var currentUserId: String?
+        get() = prefs.getString("current_user_id", null)?.takeIf { it.isNotBlank() }
+        set(value) {
+            val clean = value?.trim()?.takeIf { it.isNotBlank() }
+            if (clean != null) {
+                prefs.edit().putString("current_user_id", clean).apply()
+            } else {
+                prefs.edit().remove("current_user_id").apply()
+            }
+        }
+
     fun clearCredentials() {
         prefs.edit().clear().apply()
     }

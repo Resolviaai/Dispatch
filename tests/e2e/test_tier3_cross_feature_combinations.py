@@ -38,9 +38,7 @@ from dispatch_mobile.db import get_mobile_db
 from dispatch.ai_clips.preference_learner import get_negative_feedback_prompt
 from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
 
-# Privacy-gate fixture: ingestion requires an allowed visibility verdict.
-patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
-      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
 
 
 class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):

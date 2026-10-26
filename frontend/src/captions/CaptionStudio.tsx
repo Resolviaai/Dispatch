@@ -153,61 +153,6 @@ interface CaptionTemplate {
 
 const CAPTION_TEMPLATES: CaptionTemplate[] = [
   {
-    id: 'viral_yellow',
-    name: 'Viral Bold',
-    category: 'High Retention',
-    style: {
-      font_family: 'Impact',
-      font_size: 48,
-      font_weight: '900',
-      text_transform: 'uppercase',
-      primary_color: '#FFE600',
-      highlight_color: '#FFFFFF',
-      outline_enabled: true,
-      outline_color: '#000000',
-      outline_width: 3,
-      shadow_enabled: true,
-      shadow_color: '#000000',
-      shadow_offset_y: 3,
-      shadow_blur: 6,
-      background_enabled: false,
-    },
-    animation: {
-      type: 'pop',
-      duration_ms: 120,
-      active_scale: 1.18,
-      easing: 'bounce',
-      active_word: { type: 'pop', active_scale: 1.2, duration_ms: 120 },
-    },
-  },
-  {
-    id: 'clean_minimal',
-    name: 'Clean Pill',
-    category: 'Minimalist',
-    style: {
-      font_family: 'Montserrat',
-      font_size: 38,
-      font_weight: '700',
-      text_transform: 'none',
-      primary_color: '#FFFFFF',
-      highlight_color: '#60A5FA',
-      outline_enabled: false,
-      shadow_enabled: false,
-      background_enabled: true,
-      background_color: 'rgba(0, 0, 0, 0.7)',
-      background_padding_x: 14,
-      background_padding_y: 8,
-      background_corner_radius: 12,
-    },
-    animation: {
-      type: 'fade',
-      duration_ms: 140,
-      active_scale: 1.05,
-      easing: 'ease_out',
-      active_word: { type: 'highlight', active_scale: 1.08, duration_ms: 140 },
-    },
-  },
-  {
     id: 'hormozi_punch',
     name: 'Hormozi Green',
     category: 'Creator High-Energy',
@@ -263,7 +208,175 @@ const CAPTION_TEMPLATES: CaptionTemplate[] = [
       duration_ms: 110,
       active_scale: 1.15,
       easing: 'ease_out',
-      active_word: { type: 'karaoke', active_scale: 1.18, duration_ms: 110 },
+      active_word: { type: 'pop', active_scale: 1.18, duration_ms: 110 },
+    },
+  },
+  {
+    id: 'minimal_clean',
+    name: 'Minimal Clean',
+    category: 'Minimalist',
+    style: {
+      font_family: 'Montserrat',
+      font_size: 38,
+      font_weight: '700',
+      text_transform: 'none',
+      primary_color: '#FFFFFF',
+      highlight_color: '#60A5FA',
+      outline_enabled: false,
+      shadow_enabled: false,
+      background_enabled: true,
+      background_mode: 'line',
+      background_color: 'rgba(0, 0, 0, 0.7)',
+      background_padding_x: 14,
+      background_padding_y: 8,
+      background_corner_radius: 12,
+    },
+    animation: {
+      type: 'fade',
+      duration_ms: 140,
+      active_scale: 1.05,
+      easing: 'ease_out',
+      active_word: { type: 'highlight', active_scale: 1.08, duration_ms: 140 },
+    },
+  },
+  {
+    id: 'viral_yellow',
+    name: 'Viral Bold',
+    category: 'High Retention',
+    style: {
+      font_family: 'Impact',
+      font_size: 48,
+      font_weight: '900',
+      text_transform: 'uppercase',
+      primary_color: '#FFE600',
+      highlight_color: '#FFFFFF',
+      outline_enabled: true,
+      outline_color: '#000000',
+      outline_width: 3.5,
+      shadow_enabled: true,
+      shadow_color: '#000000',
+      shadow_offset_y: 3,
+      shadow_blur: 6,
+      background_enabled: false,
+    },
+    animation: {
+      type: 'pop',
+      duration_ms: 120,
+      active_scale: 1.18,
+      easing: 'bounce',
+      active_word: { type: 'pop', active_scale: 1.2, duration_ms: 120 },
+    },
+  },
+  {
+    id: 'bebas_fire',
+    name: 'Fire Punch',
+    category: 'Creator High-Energy',
+    style: {
+      font_family: 'Bebas Neue',
+      font_size: 50,
+      font_weight: '400',
+      text_transform: 'uppercase',
+      primary_color: '#F97316',
+      highlight_color: '#FFE600',
+      outline_enabled: true,
+      outline_color: '#000000',
+      outline_width: 3,
+      shadow_enabled: true,
+      shadow_color: '#000000',
+      shadow_offset_y: 3,
+      shadow_blur: 6,
+      background_enabled: false,
+    },
+    animation: {
+      type: 'bounce',
+      duration_ms: 120,
+      active_scale: 1.2,
+      easing: 'bounce',
+      active_word: { type: 'bounce', active_scale: 1.22, duration_ms: 120 },
+    },
+  },
+  {
+    id: 'classic_subtitle',
+    name: 'Classic Subtitle',
+    category: 'Clean Subtitle',
+    style: {
+      font_family: 'Montserrat',
+      font_size: 40,
+      font_weight: '700',
+      text_transform: 'none',
+      primary_color: '#FFFFFF',
+      highlight_color: '#FFE600',
+      outline_enabled: true,
+      outline_color: '#000000',
+      outline_width: 2.5,
+      shadow_enabled: true,
+      shadow_color: 'rgba(0,0,0,0.85)',
+      shadow_offset_y: 2,
+      shadow_blur: 4,
+      background_enabled: false,
+    },
+    animation: {
+      type: 'pop',
+      duration_ms: 130,
+      active_scale: 1.12,
+      easing: 'ease_out',
+      active_word: { type: 'pop', active_scale: 1.14, duration_ms: 130 },
+    },
+  },
+  {
+    id: 'danger_red',
+    name: 'Danger Red',
+    category: 'Attention Grabber',
+    style: {
+      font_family: 'Impact',
+      font_size: 48,
+      font_weight: '900',
+      text_transform: 'uppercase',
+      primary_color: '#EF4444',
+      highlight_color: '#FFFFFF',
+      outline_enabled: true,
+      outline_color: '#000000',
+      outline_width: 3.5,
+      shadow_enabled: true,
+      shadow_color: 'rgba(0,0,0,0.9)',
+      shadow_offset_y: 3,
+      shadow_blur: 6,
+      background_enabled: false,
+    },
+    animation: {
+      type: 'bounce',
+      duration_ms: 120,
+      active_scale: 1.2,
+      easing: 'bounce',
+      active_word: { type: 'bounce', active_scale: 1.24, duration_ms: 120 },
+    },
+  },
+  {
+    id: 'neon_pink',
+    name: 'Neon Pink',
+    category: 'Stylized',
+    style: {
+      font_family: 'Montserrat',
+      font_size: 44,
+      font_weight: '800',
+      text_transform: 'none',
+      primary_color: '#EC4899',
+      highlight_color: '#FFE600',
+      outline_enabled: true,
+      outline_color: '#000000',
+      outline_width: 2,
+      glow_enabled: true,
+      glow_color: '#EC4899',
+      glow_blur: 14,
+      shadow_enabled: false,
+      background_enabled: false,
+    },
+    animation: {
+      type: 'pop',
+      duration_ms: 120,
+      active_scale: 1.15,
+      easing: 'ease_out',
+      active_word: { type: 'pop', active_scale: 1.18, duration_ms: 120 },
     },
   },
 ];
@@ -984,6 +1097,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   };
   const [styleTab, setStyleTab] = useState<StyleTab>('text');
   const [textMainTab, setTextMainTab] = useState<TextMainTab>('styles');
+  const [effectsTab, setEffectsTab] = useState<'presets' | 'stroke' | 'glow' | 'shadow' | 'background'>('presets');
   const [loadingFontFamily, setLoadingFontFamily] = useState<string | null>(null);
   const [animCategory, setAnimCategory] = useState<'in' | 'out' | 'loop' | 'word'>('in');
   const [activeColorPicker, setActiveColorPicker] = useState<{
@@ -1058,7 +1172,10 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     currentGroup && (!currentGroup.type || currentGroup.type === 'caption' || currentGroup.type === 'text')
   );
   const isCaption = Boolean(currentGroup && (!currentGroup.type || currentGroup.type === 'caption'));
-  const isNormalText = Boolean(currentGroup && currentGroup.type === 'text');
+  const isNormalText = Boolean(currentGroup && currentGroup.type === 'text');
+  const hasTextLayers = Boolean(
+    track?.groups && track.groups.some((g) => !g.type || g.type === 'caption' || g.type === 'text')
+  );
 
   React.useEffect(() => {
     if (isNormalText && animCategory === 'word') {
@@ -1073,7 +1190,6 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
       'fonts',
       'effects',
       'animation',
-      'templates',
       'overlay_transform',
       'overlay_animation',
       'layer_opacity',
@@ -1176,6 +1292,52 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
 
   // Patch function for captions/text: edits affect ONLY the selected group
   // Never fall back to track.groups[0] and never silently mutate default_style
+  const triggerPlayPreview = React.useCallback((customStart?: number, customEnd?: number) => {
+    const s = customStart !== undefined ? customStart : (currentGroup ? currentGroup.start : currentTimeRef.current);
+    const e = customEnd !== undefined ? customEnd : (currentGroup ? currentGroup.end : s + 2.5);
+    setTimeout(() => {
+      if (onPreviewAnimation) {
+        onPreviewAnimation(s, e);
+      } else {
+        onSeek(s);
+      }
+    }, 30);
+  }, [currentGroup, onPreviewAnimation, onSeek]);
+
+  // Select template and apply style + animation immediately to active track/group with dirty state
+  const handleSelectTemplate = (tmpl: CaptionTemplate) => {
+    if (!track) return;
+    let targetGrp = currentGroup;
+    if (!targetGrp && track.groups && track.groups.length > 0) {
+      targetGrp = track.groups.find((g) => !g.type || g.type === 'caption') || track.groups[0];
+      if (targetGrp && onSelectGroup) {
+        onSelectGroup(targetGrp.id);
+      }
+    }
+
+    const nextTrack: CaptionTrack = {
+      ...track,
+      default_style: { ...(track.default_style || {}), ...tmpl.style },
+      default_animation: { ...(track.default_animation || {}), ...tmpl.animation },
+      groups: track.groups.map((grp) => {
+        if (grp.type === 'audio' || grp.type === 'voiceover') return grp;
+        return {
+          ...grp,
+          style: { ...(grp.style || track.default_style || {}), ...tmpl.style },
+          animation: tmpl.animation
+            ? { ...(grp.animation || track.default_animation || {}), ...tmpl.animation }
+            : grp.animation,
+        };
+      }),
+    };
+
+    onUpdateTrack(nextTrack, true);
+
+    if (targetGrp) {
+      triggerPlayPreview(targetGrp.start, targetGrp.end);
+    }
+  };
+
   const patch = (
     stylePatch?: Partial<StyleConfig>,
     layoutPatch?: Partial<LayoutConfig>,
@@ -1227,20 +1389,23 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   };
 
   const handleSelectFont = async (f: FontEntry) => {
+    const isMontBlack = f.family.toLowerCase() === 'montserrat black';
+    const effectiveFamily = isMontBlack ? 'Montserrat' : f.family;
+    const initialWeight = isMontBlack ? '900' : getClosestSupportedWeight(effectiveFamily, currentStyle?.font_weight, fontCatalog);
+
     addRecentFont(f.family);
     setRecentFonts(getRecentFonts());
-    if (f.url) {
-      setLoadingFontFamily(f.family);
-      try {
-        await loadFontFace(f.family, f.url);
-      } catch {
-        // ignore
-      } finally {
-        setLoadingFontFamily(null);
-      }
+
+    setLoadingFontFamily(f.family);
+    try {
+      await loadFontFace(effectiveFamily, f.url);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingFontFamily(null);
     }
-    const nextWeight = getClosestSupportedWeight(f.family, currentStyle?.font_weight, fontCatalog);
-    patch({ font_family: f.family, font_weight: nextWeight }, undefined, undefined, true);
+
+    patch({ font_family: effectiveFamily, font_weight: initialWeight }, undefined, undefined, true);
   };
 
   const handleToggleFavorite = (e: React.MouseEvent, family: string) => {
@@ -2165,10 +2330,12 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     ];
 
     const wordEffects = [
-      { id: 'none', label: 'None', desc: 'No word pop' },
-      { id: 'pop', label: 'Pop Scale', desc: 'Active word punch' },
-      { id: 'bounce', label: 'Punch Jump', desc: 'Active word bounce' },
-      { id: 'highlight', label: 'Highlight', desc: 'Color only' },
+      { id: 'bounce', label: 'Punch Jump', desc: 'Active word bounce & jump' },
+      { id: 'pop', label: 'Pop Scale', desc: 'Active word spring punch' },
+      { id: 'fade', label: 'Fade', desc: 'Smooth word opacity ramp' },
+      { id: 'slide', label: 'Slide Up', desc: 'Upward word rise' },
+      { id: 'highlight', label: 'Highlight', desc: 'Active color glow only' },
+      { id: 'none', label: 'None', desc: 'Static captions' },
     ];
 
     const curEnter = currentAnimation?.enter?.type || (currentAnimation as any)?.enter_type || 'none';
@@ -2287,9 +2454,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                       <button
                         key={tmpl.id}
                         type="button"
-                        onClick={() => {
-                          patch(tmpl.style, undefined, tmpl.animation, true);
-                        }}
+                        onClick={() => handleSelectTemplate(tmpl)}
                         className="p-2 rounded-lg border border-[#262B35] bg-[#1C1F26] hover:bg-[#232832] hover:border-text-muted flex flex-col items-center justify-center gap-1 transition-all active:scale-95 min-h-[52px]"
                       >
                         <span
@@ -2385,6 +2550,41 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     </button>
                   ))}
                 </div>
+
+                {/* Quick Weight Selection for Currently Active Font */}
+                {selectedFontEntry && supportedWeights.length > 1 && (
+                  <div className="flex items-center justify-between gap-1.5 px-2 py-1 bg-[#161920] border border-[#232832] rounded-lg shrink-0">
+                    <span className="text-[11px] font-semibold text-text-secondary truncate max-w-[90px]">
+                      {currentStyle?.font_family || 'Montserrat'}
+                    </span>
+                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+                      {supportedWeights.map((wt) => {
+                        const currentWeight = String(currentStyle?.font_weight || '700').toLowerCase();
+                        const isSelected = currentWeight === wt || (wt === '700' && currentWeight === 'bold') || (wt === '400' && currentWeight === 'normal');
+                        const label =
+                          wt === '400' ? 'Regular' :
+                          wt === '500' ? 'Medium' :
+                          wt === '600' ? 'SemiBold' :
+                          wt === '700' ? 'Bold' :
+                          wt === '800' ? 'ExtraBold' : 'Black (900)';
+                        return (
+                          <button
+                            key={wt}
+                            type="button"
+                            onClick={() => patch({ font_weight: wt }, undefined, undefined, true)}
+                            className={`h-6 px-2 rounded text-[10px] font-medium transition-all shrink-0 ${
+                              isSelected
+                                ? 'bg-primary text-white font-bold shadow-sm'
+                                : 'bg-[#1C1F26] text-text-muted hover:text-white'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Font Grid: Clean 3 columns on desktop, 2-3 columns on mobile, unified tiles */}
                 <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar pt-1 pb-4">
@@ -2541,6 +2741,35 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 unit="px"
                 onChange={(val) => patch({ font_size: val })}
               />
+
+              {/* Text Alignment */}
+              <div className="space-y-1 pt-1 border-t border-[#232832]">
+                <span className="text-[11px] font-medium text-text-secondary">Text Alignment</span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { align: 'left', icon: <AlignLeft size={14} />, label: 'Left' },
+                    { align: 'center', icon: <AlignCenter size={14} />, label: 'Center' },
+                    { align: 'right', icon: <AlignRight size={14} />, label: 'Right' },
+                  ].map(({ align, icon, label }) => {
+                    const isSelected = (currentLayout?.alignment || 'center') === align;
+                    return (
+                      <button
+                        key={align}
+                        type="button"
+                        onClick={() => patch(undefined, { alignment: align as any })}
+                        className={`h-8 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-95 ${
+                          isSelected
+                            ? 'bg-primary border-primary text-white shadow-hero-sm font-bold'
+                            : 'bg-[#1C1F26] border-[#262B35] text-text-secondary hover:text-white'
+                        }`}
+                      >
+                        {icon}
+                        <span>{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               {/* Text Style: Bold, Italic, Underline Quick Action Bar */}
               <div className="space-y-1 pt-1 border-t border-[#232832]">
@@ -3115,199 +3344,510 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
       </div>
     )}
 
-    {/* TAB 4: EFFECTS */}
+    {/* TAB 4: EFFECTS (Stroke, Glow, Shadow, Background Box & Effect Presets) */}
     {textMainTab === 'effects' && (
-      <div className="flex-1 min-h-0 flex flex-col space-y-2 py-0.5">
-        <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-3 pb-8 pt-0.5">
-          {/* 1. Style Effects Presets */}
-          <div className="space-y-1.5">
-            <span className="text-[11px] font-medium text-text-secondary">Style Effects</span>
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
-              {/* None / Reset Style Effects */}
-              {(() => {
-                const isNone = !currentStyle?.outline_enabled &&
-                  !currentStyle?.glow_enabled &&
-                  !currentStyle?.shadow_enabled &&
-                  (!currentStyle?.background_enabled || currentStyle?.background_mode === 'none');
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      patch({
-                        primary_color: '#FFFFFF',
-                        text_opacity: 1.0,
-                        outline_enabled: false,
-                        outline_width: 0,
-                        glow_enabled: false,
-                        shadow_enabled: false,
-                        background_enabled: false,
-                        background_mode: 'none',
-                      });
-                    }}
-                    className={`flex flex-col items-center justify-between p-2 rounded-lg border min-h-[64px] transition-all active:scale-95 ${
-                      isNone
-                        ? 'border-2 border-primary bg-primary/15 ring-1 ring-primary/60 text-white shadow-sm'
-                        : 'border-[#262B35] bg-[#1C1F26] hover:bg-[#232832] hover:border-text-muted/60 text-text-muted hover:text-white'
-                    }`}
-                    title="None / Reset Effects"
-                    aria-label="None / Reset Effects"
-                  >
-                    <div className="w-full h-8 flex items-center justify-center">
-                      <Ban size={20} className={isNone ? 'text-primary' : 'text-text-muted'} />
-                    </div>
-                    <span className="text-[10px] text-text-muted truncate max-w-full text-center">
-                      None
-                    </span>
-                  </button>
-                );
-              })()}
-              {INLINE_STYLE_PREVIEWS.map((prev) => {
-                const isSelected = (() => {
-                  if (!currentStyle) return false;
-                  const c1 = (currentStyle.primary_color || '').toUpperCase();
-                  const c2 = (prev.style.primary_color || '').toUpperCase();
-                  if (c1 !== c2) return false;
-
-                  const curOutline = Boolean(currentStyle.outline_enabled);
-                  const prevOutline = Boolean(prev.style.outline_enabled);
-                  if (curOutline !== prevOutline) return false;
-                  if (curOutline && (currentStyle.outline_color || '').toUpperCase() !== (prev.style.outline_color || '').toUpperCase()) {
-                    return false;
-                  }
-
-                  const curGlow = Boolean(currentStyle.glow_enabled);
-                  const prevGlow = Boolean(prev.style.glow_enabled);
-                  if (curGlow !== prevGlow) return false;
-
-                  const curShadow = Boolean(currentStyle.shadow_enabled);
-                  const prevShadow = Boolean(prev.style.shadow_enabled);
-                  if (curShadow !== prevShadow) return false;
-
-                  const curBg = Boolean(currentStyle.background_enabled && currentStyle.background_mode !== 'none');
-                  const prevBg = Boolean(prev.style.background_enabled && prev.style.background_mode !== 'none');
-                  if (curBg !== prevBg) return false;
-                  if (curBg && (currentStyle.background_color || '').toUpperCase() !== (prev.style.background_color || '').toUpperCase()) {
-                    return false;
-                  }
-
-                  return true;
-                })();
-
-                return (
-                  <button
-                    key={prev.id}
-                    type="button"
-                    onClick={() => patch(prev.style, undefined, undefined, true)}
-                    className={`flex flex-col items-center justify-between p-2 rounded-lg border min-h-[64px] transition-all active:scale-95 ${
-                      isSelected
-                        ? 'border-2 border-primary bg-primary/15 ring-1 ring-primary/60 text-white shadow-sm'
-                        : 'border-[#262B35] bg-[#1C1F26] hover:bg-[#232832] hover:border-text-muted/60'
-                    }`}
-                    title={prev.name}
-                    aria-label={prev.name}
-                  >
-                    <div className="w-full h-8 flex items-center justify-center overflow-visible relative">
-                      {prev.style.background_enabled && prev.style.background_mode !== 'none' ? (
-                        <span
-                          className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-[4px]"
-                          style={{
-                            backgroundColor: prev.style.background_color || '#000000',
-                            opacity: prev.style.background_opacity ?? 0.9,
-                          }}
-                        >
-                          <span
-                            className="text-[17px] font-black leading-none tracking-tight select-none"
-                            style={getAaPreviewStyle(prev.style)}
-                          >
-                            Aa
-                          </span>
-                        </span>
-                      ) : (
-                        <span
-                          className="text-[17px] font-black leading-none tracking-tight select-none"
-                          style={getAaPreviewStyle(prev.style)}
-                        >
-                          Aa
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-[10px] font-medium text-text-muted truncate w-full text-center mt-1">
-                      {prev.name}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 2. Glow & Neon Effects */}
-          <div className="space-y-1.5 pt-2 border-t border-[#20242D]">
-            <span className="text-[11px] font-medium text-text-secondary">Neon & Glow Effects</span>
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
-            {EFFECT_PRESETS.map((eff) => {
-              const isSelected = (() => {
-                if (!currentStyle) return false;
-                const c1 = (currentStyle.primary_color || '').toUpperCase();
-                const c2 = (eff.style.primary_color || '').toUpperCase();
-                if (c1 !== c2) return false;
-                const curOutline = Boolean(currentStyle.outline_enabled);
-                const effOutline = Boolean(eff.style.outline_enabled);
-                if (curOutline !== effOutline) return false;
-                const curGlow = Boolean(currentStyle.glow_enabled);
-                const effGlow = Boolean(eff.style.glow_enabled);
-                if (curGlow !== effGlow) return false;
-                return true;
-              })();
-
-              return (
-                <button
-                  key={eff.id}
-                  type="button"
-                  onClick={() => patch(eff.style, undefined, undefined, true)}
-                  className={`p-2 rounded-lg border flex flex-col items-center justify-between min-h-[64px] transition-all active:scale-95 group ${
-                    isSelected
-                      ? 'border-2 border-primary bg-primary/15 ring-1 ring-primary/60 text-white shadow-sm'
-                      : 'border-[#262B35] bg-[#1C1F26] hover:bg-[#232832] hover:border-text-muted/60'
-                  }`}
-                  title={eff.name}
-                >
-                  <div className="h-8 w-full flex items-center justify-center overflow-visible relative">
-                    {eff.style.background_enabled && eff.style.background_mode !== 'none' ? (
-                      <span
-                        className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-[4px]"
-                        style={{
-                          backgroundColor: eff.style.background_color || '#000000',
-                          opacity: eff.style.background_opacity ?? 0.9,
-                        }}
-                      >
-                        <span
-                          className="text-[18px] font-black leading-none tracking-tight select-none"
-                          style={getAaPreviewStyle({ ...eff.style, font_family: eff.style.font_family || 'Impact' })}
-                        >
-                          Aa
-                        </span>
-                      </span>
-                    ) : (
-                      <span
-                        className="text-[18px] font-black leading-none tracking-tight select-none"
-                        style={getAaPreviewStyle({ ...eff.style, font_family: eff.style.font_family || 'Impact' })}
-                      >
-                        Aa
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] font-medium text-text-muted group-hover:text-primary transition-colors truncate w-full text-center mt-1">
-                    {eff.name}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+      <div className="flex-1 min-h-0 flex flex-col space-y-1.5 py-0.5">
+        {/* Effects Sub-Navigation: Presets | Stroke | Glow | Shadow | Background */}
+        <div
+          className="flex items-center gap-1 sm:gap-2 overflow-x-auto no-scrollbar py-1 shrink-0 border-b border-[#20242D]"
+          style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+        >
+          {([
+            { id: 'presets', label: 'Presets' },
+            { id: 'stroke', label: 'Stroke' },
+            { id: 'glow', label: 'Glow' },
+            { id: 'shadow', label: 'Shadow' },
+            { id: 'background', label: 'Background Box' },
+          ] as { id: 'presets' | 'stroke' | 'glow' | 'shadow' | 'background'; label: string }[]).map((tab) => {
+            const isTabActive = effectsTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setEffectsTab(tab.id)}
+                className={`px-3 py-1 rounded-md text-[12px] font-medium whitespace-nowrap transition-all shrink-0 active:scale-95 ${
+                  isTabActive
+                    ? 'bg-white/10 text-white font-semibold'
+                    : 'text-[#8E95A2] hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
-        <ApplyToAllButton section="glow" sectionLabel="Effect" onApply={handleApplySectionToAll} />
+
+        <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-6 pt-0.5">
+          {/* 1. STROKE / OUTLINE */}
+          {effectsTab === 'stroke' && (
+            <div className="space-y-2 py-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-text-secondary font-medium">Enable Text Outline</span>
+                <input
+                  type="checkbox"
+                  checked={currentStyle?.outline_enabled ?? true}
+                  onChange={(e) => patch({ outline_enabled: e.target.checked })}
+                  className="w-4 h-4 accent-primary cursor-pointer"
+                />
+              </div>
+              {currentStyle?.outline_enabled && (
+                <>
+                  <ValueSlider
+                    label="Stroke Width"
+                    value={currentStyle?.outline_width || 3}
+                    min={0.5}
+                    max={12}
+                    step={0.5}
+                    unit="px"
+                    onChange={(val) => patch({ outline_width: val })}
+                  />
+                  <ValueSlider
+                    label="Stroke Opacity"
+                    value={Math.round((currentStyle?.outline_opacity ?? 1.0) * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit="%"
+                    onChange={(val) => patch({ outline_opacity: Number((val / 100).toFixed(2)) })}
+                  />
+                  <CapCutColorRow
+                    label="Stroke Color"
+                    value={currentStyle?.outline_color}
+                    defaultValue="#000000"
+                    onChange={(c) => patch({ outline_color: c })}
+                    onOpenCustom={() => setActiveColorPicker({
+                      isOpen: true,
+                      title: 'Custom Outline Stroke Color',
+                      property: 'outline_color',
+                      color: currentStyle?.outline_color || '#000000',
+                    })}
+                  />
+                </>
+              )}
+              <ApplyToAllButton section="stroke" sectionLabel="Stroke" onApply={handleApplySectionToAll} />
+            </div>
+          )}
+
+          {/* 2. GLOW / NEON */}
+          {effectsTab === 'glow' && (
+            <div className="space-y-2 py-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-text-secondary font-medium">Enable Neon Glow</span>
+                <input
+                  type="checkbox"
+                  checked={currentStyle?.glow_enabled ?? false}
+                  onChange={(e) => patch({ glow_enabled: e.target.checked })}
+                  className="w-4 h-4 accent-primary cursor-pointer"
+                />
+              </div>
+              {currentStyle?.glow_enabled && (
+                <>
+                  <ValueSlider
+                    label="Glow Radius"
+                    value={currentStyle?.glow_blur || 12}
+                    min={2}
+                    max={40}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ glow_blur: val })}
+                  />
+                  <ValueSlider
+                    label="Glow Opacity"
+                    value={Math.round((currentStyle?.glow_opacity ?? 1.0) * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit="%"
+                    onChange={(val) => patch({ glow_opacity: Number((val / 100).toFixed(2)) })}
+                  />
+                  <CapCutColorRow
+                    label="Glow Color"
+                    value={currentStyle?.glow_color}
+                    defaultValue="#00F0FF"
+                    onChange={(c) => patch({ glow_color: c })}
+                    onOpenCustom={() => setActiveColorPicker({
+                      isOpen: true,
+                      title: 'Custom Neon Glow Color',
+                      property: 'glow_color',
+                      color: currentStyle?.glow_color || '#00F0FF',
+                    })}
+                  />
+                </>
+              )}
+              <ApplyToAllButton section="glow" sectionLabel="Glow" onApply={handleApplySectionToAll} />
+            </div>
+          )}
+
+          {/* 3. DROP SHADOW */}
+          {effectsTab === 'shadow' && (
+            <div className="space-y-2 py-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-text-secondary font-medium">Enable Drop Shadow</span>
+                <input
+                  type="checkbox"
+                  checked={currentStyle?.shadow_enabled ?? false}
+                  onChange={(e) => patch({ shadow_enabled: e.target.checked })}
+                  className="w-4 h-4 accent-primary cursor-pointer"
+                />
+              </div>
+              {currentStyle?.shadow_enabled && (
+                <>
+                  <CapCutColorRow
+                    label="Shadow Color"
+                    value={currentStyle?.shadow_color}
+                    defaultValue="#000000"
+                    onChange={(c) => patch({ shadow_color: c })}
+                    onOpenCustom={() => setActiveColorPicker({
+                      isOpen: true,
+                      title: 'Custom Shadow Color',
+                      property: 'shadow_color',
+                      color: currentStyle?.shadow_color || '#000000',
+                    })}
+                  />
+                  <ValueSlider
+                    label="Shadow Opacity"
+                    value={Math.round((currentStyle?.shadow_opacity ?? 1.0) * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit="%"
+                    onChange={(val) => patch({ shadow_opacity: Number((val / 100).toFixed(2)) })}
+                  />
+                  <ValueSlider
+                    label="Blur"
+                    value={currentStyle?.shadow_blur ?? 6}
+                    min={0}
+                    max={25}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ shadow_blur: val })}
+                  />
+                  <ValueSlider
+                    label="Offset X"
+                    value={currentStyle?.shadow_offset_x ?? 2}
+                    min={-30}
+                    max={30}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ shadow_offset_x: val })}
+                  />
+                  <ValueSlider
+                    label="Offset Y"
+                    value={currentStyle?.shadow_offset_y ?? 2}
+                    min={-30}
+                    max={30}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ shadow_offset_y: val })}
+                  />
+                </>
+              )}
+              <ApplyToAllButton section="shadow" sectionLabel="Shadow" onApply={handleApplySectionToAll} />
+            </div>
+          )}
+
+          {/* 4. BACKGROUND BOX */}
+          {effectsTab === 'background' && (
+            <div className="space-y-3 py-1">
+              <div className="space-y-1">
+                <span className="text-[11px] font-medium text-text-secondary">Background Mode</span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(['none', 'line', 'block'] as const).map((mode) => {
+                    const currentMode = (!currentStyle?.background_enabled || currentStyle?.background_mode === 'none')
+                      ? 'none'
+                      : (currentStyle?.background_mode || 'line');
+                    const isSelected = currentMode === mode;
+                    const label = mode === 'none' ? 'None' : mode === 'line' ? 'Per-Line' : 'Full Box';
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => patch({
+                          background_mode: mode,
+                          background_enabled: mode !== 'none',
+                        })}
+                        className={`h-8 rounded-lg text-[11px] font-semibold transition-all active:scale-95 ${
+                          isSelected
+                            ? 'bg-primary text-white shadow-hero-sm font-bold'
+                            : 'bg-[#1C1F26] border border-[#262B35] text-text-secondary hover:text-white'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {Boolean(currentStyle?.background_enabled && currentStyle?.background_mode !== 'none') && (
+                <>
+                  <CapCutColorRow
+                    label="Background Color"
+                    value={currentStyle?.background_color}
+                    defaultValue="#000000"
+                    onChange={(c) => patch({ background_color: c })}
+                    onOpenCustom={() => setActiveColorPicker({
+                      isOpen: true,
+                      title: 'Custom Background Color',
+                      property: 'background_color',
+                      color: currentStyle?.background_color || '#000000',
+                      enableAlpha: true,
+                    })}
+                  />
+                  <ValueSlider
+                    label="Background Opacity"
+                    value={Math.round((currentStyle?.background_opacity ?? 1.0) * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit="%"
+                    onChange={(val) => patch({ background_opacity: Number((val / 100).toFixed(2)) })}
+                  />
+                  <ValueSlider
+                    label="Corner Radius"
+                    value={currentStyle?.background_corner_radius ?? 8}
+                    min={0}
+                    max={30}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ background_corner_radius: val })}
+                  />
+                  <ValueSlider
+                    label="Width Padding (X)"
+                    value={currentStyle?.background_padding_x ?? 14}
+                    min={0}
+                    max={40}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ background_padding_x: val })}
+                  />
+                  <ValueSlider
+                    label="Height Padding (Y)"
+                    value={currentStyle?.background_padding_y ?? 8}
+                    min={0}
+                    max={30}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ background_padding_y: val })}
+                  />
+                  <ValueSlider
+                    label="Offset X"
+                    value={currentStyle?.background_offset_x || 0}
+                    min={-50}
+                    max={50}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ background_offset_x: val })}
+                  />
+                  <ValueSlider
+                    label="Offset Y"
+                    value={currentStyle?.background_offset_y || 0}
+                    min={-50}
+                    max={50}
+                    step={1}
+                    unit="px"
+                    onChange={(val) => patch({ background_offset_y: val })}
+                  />
+                </>
+              )}
+              <ApplyToAllButton section="background" sectionLabel="Background" onApply={handleApplySectionToAll} />
+            </div>
+          )}
+
+          {/* 5. PRESETS (Style Effects & Neon Glow) */}
+          {effectsTab === 'presets' && (
+            <div className="space-y-3 py-1">
+              {/* Style Effects Presets */}
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-medium text-text-secondary">Style Effects</span>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                  {/* None / Reset Style Effects */}
+                  {(() => {
+                    const isNone = !currentStyle?.outline_enabled &&
+                      !currentStyle?.glow_enabled &&
+                      !currentStyle?.shadow_enabled &&
+                      (!currentStyle?.background_enabled || currentStyle?.background_mode === 'none');
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          patch({
+                            primary_color: '#FFFFFF',
+                            text_opacity: 1.0,
+                            outline_enabled: false,
+                            outline_width: 0,
+                            glow_enabled: false,
+                            shadow_enabled: false,
+                            background_enabled: false,
+                            background_mode: 'none',
+                          });
+                        }}
+                        className={`flex flex-col items-center justify-between p-2 rounded-lg border min-h-[64px] transition-all active:scale-95 ${
+                          isNone
+                            ? 'border-2 border-primary bg-primary/15 ring-1 ring-primary/60 text-white shadow-sm'
+                            : 'border-[#262B35] bg-[#1C1F26] hover:bg-[#232832] hover:border-text-muted/60 text-text-muted hover:text-white'
+                        }`}
+                        title="None / Reset Effects"
+                        aria-label="None / Reset Effects"
+                      >
+                        <div className="w-full h-8 flex items-center justify-center">
+                          <Ban size={20} className={isNone ? 'text-primary' : 'text-text-muted'} />
+                        </div>
+                        <span className="text-[10px] text-text-muted truncate max-w-full text-center">
+                          None
+                        </span>
+                      </button>
+                    );
+                  })()}
+                  {INLINE_STYLE_PREVIEWS.map((prev) => {
+                    const isSelected = (() => {
+                      if (!currentStyle) return false;
+                      const c1 = (currentStyle.primary_color || '').toUpperCase();
+                      const c2 = (prev.style.primary_color || '').toUpperCase();
+                      if (c1 !== c2) return false;
+
+                      const curOutline = Boolean(currentStyle.outline_enabled);
+                      const prevOutline = Boolean(prev.style.outline_enabled);
+                      if (curOutline !== prevOutline) return false;
+                      if (curOutline && (currentStyle.outline_color || '').toUpperCase() !== (prev.style.outline_color || '').toUpperCase()) {
+                        return false;
+                      }
+
+                      const curGlow = Boolean(currentStyle.glow_enabled);
+                      const prevGlow = Boolean(prev.style.glow_enabled);
+                      if (curGlow !== prevGlow) return false;
+
+                      const curShadow = Boolean(currentStyle.shadow_enabled);
+                      const prevShadow = Boolean(prev.style.shadow_enabled);
+                      if (curShadow !== prevShadow) return false;
+
+                      const curBg = Boolean(currentStyle.background_enabled && currentStyle.background_mode !== 'none');
+                      const prevBg = Boolean(prev.style.background_enabled && prev.style.background_mode !== 'none');
+                      if (curBg !== prevBg) return false;
+                      if (curBg && (currentStyle.background_color || '').toUpperCase() !== (prev.style.background_color || '').toUpperCase()) {
+                        return false;
+                      }
+
+                      return true;
+                    })();
+
+                    return (
+                      <button
+                        key={prev.id}
+                        type="button"
+                        onClick={() => patch(prev.style, undefined, undefined, true)}
+                        className={`flex flex-col items-center justify-between p-2 rounded-lg border min-h-[64px] transition-all active:scale-95 ${
+                          isSelected
+                            ? 'border-2 border-primary bg-primary/15 ring-1 ring-primary/60 text-white shadow-sm'
+                            : 'border-[#262B35] bg-[#1C1F26] hover:bg-[#232832] hover:border-text-muted/60'
+                        }`}
+                        title={prev.name}
+                        aria-label={prev.name}
+                      >
+                        <div className="w-full h-8 flex items-center justify-center overflow-visible relative">
+                          {prev.style.background_enabled && prev.style.background_mode !== 'none' ? (
+                            <span
+                              className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-[4px]"
+                              style={{
+                                backgroundColor: prev.style.background_color || '#000000',
+                                opacity: prev.style.background_opacity ?? 0.9,
+                              }}
+                            >
+                              <span
+                                className="text-[17px] font-black leading-none tracking-tight select-none"
+                                style={getAaPreviewStyle(prev.style)}
+                              >
+                                Aa
+                              </span>
+                            </span>
+                          ) : (
+                            <span
+                              className="text-[17px] font-black leading-none tracking-tight select-none"
+                              style={getAaPreviewStyle(prev.style)}
+                            >
+                              Aa
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-medium text-text-muted truncate w-full text-center mt-1">
+                          {prev.name}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Neon & Glow Effects */}
+              <div className="space-y-1.5 pt-2 border-t border-[#20242D]">
+                <span className="text-[11px] font-medium text-text-secondary">Neon & Glow Effects</span>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                  {EFFECT_PRESETS.map((eff) => {
+                    const isSelected = (() => {
+                      if (!currentStyle) return false;
+                      const c1 = (currentStyle.primary_color || '').toUpperCase();
+                      const c2 = (eff.style.primary_color || '').toUpperCase();
+                      if (c1 !== c2) return false;
+                      const curOutline = Boolean(currentStyle.outline_enabled);
+                      const effOutline = Boolean(eff.style.outline_enabled);
+                      if (curOutline !== effOutline) return false;
+                      const curGlow = Boolean(currentStyle.glow_enabled);
+                      const effGlow = Boolean(eff.style.glow_enabled);
+                      if (curGlow !== effGlow) return false;
+                      return true;
+                    })();
+
+                    return (
+                      <button
+                        key={eff.id}
+                        type="button"
+                        onClick={() => patch(eff.style, undefined, undefined, true)}
+                        className={`p-2 rounded-lg border flex flex-col items-center justify-between min-h-[64px] transition-all active:scale-95 group ${
+                          isSelected
+                            ? 'border-2 border-primary bg-primary/15 ring-1 ring-primary/60 text-white shadow-sm'
+                            : 'border-[#262B35] bg-[#1C1F26] hover:bg-[#232832] hover:border-text-muted/60'
+                        }`}
+                        title={eff.name}
+                      >
+                        <div className="h-8 w-full flex items-center justify-center overflow-visible relative">
+                          {eff.style.background_enabled && eff.style.background_mode !== 'none' ? (
+                            <span
+                              className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-[4px]"
+                              style={{
+                                backgroundColor: eff.style.background_color || '#000000',
+                                opacity: eff.style.background_opacity ?? 0.9,
+                              }}
+                            >
+                              <span
+                                className="text-[18px] font-black leading-none tracking-tight select-none"
+                                style={getAaPreviewStyle({ ...eff.style, font_family: eff.style.font_family || 'Impact' })}
+                              >
+                                Aa
+                              </span>
+                            </span>
+                          ) : (
+                            <span
+                              className="text-[18px] font-black leading-none tracking-tight select-none"
+                              style={getAaPreviewStyle({ ...eff.style, font_family: eff.style.font_family || 'Impact' })}
+                            >
+                              Aa
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-medium text-text-muted group-hover:text-primary transition-colors truncate w-full text-center mt-1">
+                          {eff.name}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <ApplyToAllButton section="glow" sectionLabel="Effect" onApply={handleApplySectionToAll} />
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  )}
+    )}
 
     {/* TAB 5: ANIMATIONS */}
     {textMainTab === 'animations' && (
@@ -3434,6 +3974,24 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     <span className="text-[11px] font-bold flex items-center gap-1 select-none">
                       <span className="text-text-muted">Aa</span>
                       <span className="inline-block" style={{ animation: 'cs-word-bounce 1.8s infinite ease-in-out' }}>Bb</span>
+                      <span className="text-text-muted">Cc</span>
+                    </span>
+                  );
+                }
+                if (id === 'fade') {
+                  return (
+                    <span className="text-[11px] font-bold flex items-center gap-1 select-none">
+                      <span className="text-text-muted">Aa</span>
+                      <span className="inline-block text-primary" style={{ animation: 'cs-in-fade 1.8s infinite ease-in-out' }}>Bb</span>
+                      <span className="text-text-muted">Cc</span>
+                    </span>
+                  );
+                }
+                if (id === 'slide') {
+                  return (
+                    <span className="text-[11px] font-bold flex items-center gap-1 select-none">
+                      <span className="text-text-muted">Aa</span>
+                      <span className="inline-block text-primary" style={{ animation: 'cs-in-slide-up 1.8s infinite ease-in-out' }}>Bb</span>
                       <span className="text-text-muted">Cc</span>
                     </span>
                   );
@@ -3663,44 +4221,46 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                       })}
                     </div>
                     {(curWord === 'pop' || curWord === 'bounce') && (
-                      <>
-                        <ValueSlider
-                          label="Scale Impact"
-                          value={currentAnimation?.active_word?.active_scale || currentAnimation?.active_scale || 1.16}
-                          min={1.05}
-                          max={1.40}
-                          step={0.02}
-                          unit="x"
-                          onChange={(val) => {
-                            patch(undefined, undefined, {
+                      <ValueSlider
+                        label="Scale Impact"
+                        value={currentAnimation?.active_word?.active_scale || currentAnimation?.active_scale || 1.16}
+                        min={1.05}
+                        max={1.40}
+                        step={0.02}
+                        unit="x"
+                        onChange={(val) => {
+                          patch(undefined, undefined, {
+                            active_scale: val,
+                            active_word: {
+                              type: curWord as any,
                               active_scale: val,
-                              active_word: {
-                                type: curWord as any,
-                                active_scale: val,
-                                duration_ms: currentAnimation?.active_word?.duration_ms || currentAnimation?.duration_ms || 100,
-                              },
-                            }, false);
-                          }}
-                        />
-                        <ValueSlider
-                          label="Pop Duration"
-                          value={currentAnimation?.active_word?.duration_ms || currentAnimation?.duration_ms || 100}
-                          min={50}
-                          max={300}
-                          step={10}
-                          unit="ms"
-                          onChange={(val) => {
-                            patch(undefined, undefined, {
+                              duration_ms: currentAnimation?.active_word?.duration_ms || currentAnimation?.duration_ms || 120,
+                            },
+                          }, false);
+                          triggerPlayPreview();
+                        }}
+                      />
+                    )}
+                    {(curWord === 'pop' || curWord === 'bounce' || curWord === 'slide' || curWord === 'fade') && (
+                      <ValueSlider
+                        label="Word Duration"
+                        value={currentAnimation?.active_word?.duration_ms || currentAnimation?.duration_ms || 120}
+                        min={50}
+                        max={400}
+                        step={10}
+                        unit="ms"
+                        onChange={(val) => {
+                          patch(undefined, undefined, {
+                            duration_ms: val,
+                            active_word: {
+                              type: curWord as any,
+                              active_scale: currentAnimation?.active_word?.active_scale || currentAnimation?.active_scale || 1.16,
                               duration_ms: val,
-                              active_word: {
-                                type: curWord as any,
-                                active_scale: currentAnimation?.active_word?.active_scale || currentAnimation?.active_scale || 1.16,
-                                duration_ms: val,
-                              },
-                            }, false);
-                          }}
-                        />
-                      </>
+                            },
+                          }, false);
+                          triggerPlayPreview();
+                        }}
+                      />
                     )}
                   </div>
                 )}
@@ -4002,18 +4562,27 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
           <ToolButton
             icon={<Wand2 size={18} />}
             label="Presets"
-            disabled={!isTextLayerSelected}
             onClick={() => {
-              if (!isTextLayerSelected) return;
+              if (!isTextLayerSelected && track && track.groups && track.groups.length > 0) {
+                const firstTextGrp = track.groups.find((g) => !g.type || g.type === 'caption' || g.type === 'text');
+                if (firstTextGrp && onSelectGroup) {
+                  onSelectGroup(firstTextGrp.id);
+                }
+              }
               setActivePanel('templates');
             }}
           />
           <ToolButton
             icon={<Palette size={18} />}
             label="Style"
-            disabled={!isTextLayerSelected}
+            disabled={!hasTextLayers}
             onClick={() => {
-              if (!isTextLayerSelected) return;
+              if (!isTextLayerSelected && track && track.groups && track.groups.length > 0) {
+                const firstTextGrp = track.groups.find((g) => !g.type || g.type === 'caption' || g.type === 'text');
+                if (firstTextGrp && onSelectGroup) {
+                  onSelectGroup(firstTextGrp.id);
+                }
+              }
               setTextMainTab('styles');
               setActivePanel('style');
             }}
@@ -4021,9 +4590,14 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
           <ToolButton
             icon={<Move size={18} />}
             label="Position"
-            disabled={!isTextLayerSelected}
+            disabled={!hasTextLayers}
             onClick={() => {
-              if (!isTextLayerSelected) return;
+              if (!isTextLayerSelected && track && track.groups && track.groups.length > 0) {
+                const firstTextGrp = track.groups.find((g) => !g.type || g.type === 'caption' || g.type === 'text');
+                if (firstTextGrp && onSelectGroup) {
+                  onSelectGroup(firstTextGrp.id);
+                }
+              }
               setStyleTab('spacing');
               setActivePanel('style');
             }}

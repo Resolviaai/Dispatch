@@ -16,7 +16,7 @@ import {
   MoreVertical,
   Check
 } from 'lucide-react';
-import { Bridge, RecordingItem, apiUrl } from '../bridge';
+import { Bridge, RecordingItem, apiUrl, getAuthHeaders } from '../bridge';
 import { WORKER_BASE } from '../accounts/accountsService';
 import { currentSession } from '../auth/supabase';
 
@@ -148,7 +148,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const fetchClips = async () => {
     try {
       if (pcHost && pcStatus.online) {
-        const res = await fetch(apiUrl('/api/clips', pcHost));
+        const res = await fetch(apiUrl('/api/clips', pcHost), { headers: getAuthHeaders() });
         if (res.ok) {
           const data = await res.json();
           const ready = Array.isArray(data.ready) ? data.ready : [];
@@ -185,7 +185,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const fetchInbox = async () => {
     try {
       if (pcHost && pcStatus.online) {
-        const res = await fetch(apiUrl('/api/youtube/inbox', pcHost));
+        const res = await fetch(apiUrl('/api/youtube/inbox', pcHost), { headers: getAuthHeaders() });
         if (res.ok) {
           const data = await res.json();
           setInboxItems(Array.isArray(data.items) ? data.items : []);

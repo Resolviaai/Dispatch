@@ -21,8 +21,7 @@ from dispatch.youtube_inbox.catcher import (
 from dispatch import db
 
 # Privacy-gate fixture: ingestion requires an allowed visibility verdict.
-patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
-      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
 
 
 class TestVTTParser(unittest.TestCase):
@@ -118,6 +117,19 @@ class TestYouTubeCatcher(unittest.TestCase):
 
     def setUp(self):
         db.init_db()
+        p = patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                  side_effect=lambda ids: {i: {
+                      "video_id": i,
+                      "upload_status": "processed",
+                      "processing_status": "succeeded",
+                      "failure_reason": None,
+                      "duration": "PT30S",
+                      "title": "Test Video",
+                      "published_at": "2026-10-06T00:00:00Z",
+                      "privacy_status": "unlisted"
+                  } for i in ids})
+        p.start()
+        self.addCleanup(p.stop)
         with db.get_db_connection() as conn:
             conn.execute("DELETE FROM youtube_inbox WHERE video_id LIKE 'mock_vid_%'")
             conn.commit()

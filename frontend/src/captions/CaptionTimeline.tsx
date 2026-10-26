@@ -49,6 +49,7 @@ interface CaptionTimelineProps {
   onSelectVideo?: () => void;
   onUpdateGroup?: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
   onSplitGroup?: (groupId: string, splitTime: number) => void;
+  hideTrimControls?: boolean;
 }
 
 const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
@@ -96,6 +97,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   onSelectGroup,
   onSelectVideo,
   onUpdateGroup,
+  hideTrimControls = false,
 }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -970,43 +972,50 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         </div>
       </div>
 
-      <div
-        aria-label="Selected source range controls"
-        className="h-11 min-h-11 px-2 bg-[#16191E] border-b border-[#232832] flex items-center gap-2 overflow-x-auto whitespace-nowrap text-[10px]"
-      >
-        <span className="text-text-secondary font-mono tabular-nums" aria-live="polite">
-          Start {formatTimeRuler(activeTrim.start)} · End {formatTimeRuler(activeTrim.end)} · {selectionDuration.toFixed(1)} s
-        </span>
-        <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
-          onClick={() => applyRangeExtension('start', -RANGE_CONTROL_STEP_SECONDS)}
-          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
-          aria-label={`Extend selection start earlier by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
-          Start −0.5 s
-        </button>
-        <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
-          onClick={() => applyRangeExtension('end', RANGE_CONTROL_STEP_SECONDS)}
-          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
-          aria-label={`Extend selection end later by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
-          End +0.5 s
-        </button>
-        <button type="button" disabled={!beforeContext || !onPreviewContext || !sourceTimebase}
-          onClick={() => beforeContext && onPreviewContext?.(beforeContext)}
-          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
-          aria-label="Preview four seconds before the selected range">
-          Preview before
-        </button>
-        <button type="button" disabled={!afterContext || !onPreviewContext || !sourceTimebase}
-          onClick={() => afterContext && onPreviewContext?.(afterContext)}
-          className="h-11 min-w-[44px] px-2 rounded-md border border-border bg-surface-200 text-text-main disabled:opacity-40 active:scale-95"
-          aria-label="Preview four seconds after the selected range">
-          Preview after
-        </button>
-        <span role="status" className={trimSaveState === 'error' ? 'text-red-400' : 'text-text-muted'}>
-          {trimSaveState === 'saving' ? 'Saving range…' : trimSaveState === 'saved' ? 'Range saved' : trimSaveState === 'error' ? 'Range save failed' : ''}
-        </span>
-        {track?.timing_warning && <span role="alert" className="text-amber-400">{track.timing_warning}</span>}
-        {!sourceDuration && <span className="text-text-muted">Source duration unavailable; range editing is disabled.</span>}
-      </div>
+      {canEditSelection && !hideTrimControls && (
+        <div
+          aria-label="Selected source range controls"
+          className="h-9 px-3 bg-[#16191E] border-b border-[#232832] flex items-center gap-2 overflow-x-auto no-scrollbar whitespace-nowrap text-[11px]"
+        >
+          <span className="text-text-secondary font-mono tabular-nums text-[10px] shrink-0" aria-live="polite">
+            Start {formatTimeRuler(activeTrim.start)} · End {formatTimeRuler(activeTrim.end)} · {selectionDuration.toFixed(1)} s
+          </span>
+          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
+            onClick={() => applyRangeExtension('start', -RANGE_CONTROL_STEP_SECONDS)}
+            className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium disabled:opacity-40 active:scale-95 transition-all shrink-0"
+            aria-label={`Extend selection start earlier by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
+            −0.5s Start
+          </button>
+          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
+            onClick={() => applyRangeExtension('end', RANGE_CONTROL_STEP_SECONDS)}
+            className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium disabled:opacity-40 active:scale-95 transition-all shrink-0"
+            aria-label={`Extend selection end later by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
+            +0.5s End
+          </button>
+          {beforeContext && onPreviewContext && sourceTimebase && (
+            <button type="button" disabled={trimSaveState === 'saving'}
+              onClick={() => beforeContext && onPreviewContext?.(beforeContext)}
+              className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium active:scale-95 transition-all shrink-0"
+              aria-label="Preview context before range">
+              ◀ Context
+            </button>
+          )}
+          {afterContext && onPreviewContext && sourceTimebase && (
+            <button type="button" disabled={trimSaveState === 'saving'}
+              onClick={() => afterContext && onPreviewContext?.(afterContext)}
+              className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium active:scale-95 transition-all shrink-0"
+              aria-label="Preview context after range">
+              Context ▶
+            </button>
+          )}
+          {trimSaveState && (
+            <span role="status" className={`text-[10px] shrink-0 ${trimSaveState === 'error' ? 'text-red-400' : 'text-text-muted'}`}>
+              {trimSaveState === 'saving' ? 'Saving…' : trimSaveState === 'saved' ? 'Saved' : 'Error'}
+            </span>
+          )}
+          {track?.timing_warning && <span role="alert" className="text-amber-400 text-[10px] shrink-0">{track.timing_warning}</span>}
+        </div>
+      )}
 
       {/* TIMELINE MAIN BODY: Sticky Left Rail + Canvas Viewport with Fixed Center Playhead */}
       <div className="flex-1 min-h-0 flex relative overflow-hidden">

@@ -1,3 +1,4 @@
+from dispatch.governor import ResourceGovernor
 """End-to-End integration test for Dispatch with synthesized human speech.
 Simulates:
 1. Phone recording dropping into storage/incoming/ with real synthesized speech
@@ -105,7 +106,19 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(staged_info["filepath"].exists(), "Staged file missing in processing")
 
         # 4. Run end-to-end processing pipeline on the staged chunk
-        process_single_chunk(staged_info)
+        mock_candidates = [{
+            "start_time": 0.5,
+            "end_time": 8.5,
+            "title": "Dispatch Highlight",
+            "hook": "Check this out",
+            "description": "Automated clip",
+            "hashtags": "#Shorts #Reels",
+            "virality_score": 85,
+            "layout_recommendation": "crop_916"
+        }]
+        with patch("dispatch.ai_clips.highlight_finder.call_gemini_generate_content", return_value=(mock_candidates, "mock_gemini")), \
+             patch.object(ResourceGovernor, "can_process_heavy_task", return_value=(True, "OK")):
+            process_single_chunk(staged_info)
 
         # 5. Verify raw chunk file is preserved on disk to prevent creator data loss
         self.assertTrue(staged_info["filepath"].exists(), "Raw source video chunk should be preserved to prevent creator data loss")

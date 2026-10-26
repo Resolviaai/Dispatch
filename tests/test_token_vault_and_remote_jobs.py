@@ -78,7 +78,7 @@ class TestRemoteJobs(unittest.TestCase):
         processed = []
         with patch.object(yc, "_supabase_rpc", return_value=[]), \
              patch.object(yc, "claim_remote_job", return_value=yc.RemoteJob("j9", "u9", "https://youtu.be/ok")):
-            poller = yc.RemoteJobPoller(ingest_video=lambda url: processed.append(url) or {"status": "DOWNLOADED", "video_id": "v9"})
+            poller = yc.RemoteJobPoller(ingest_video=lambda url, **kwargs: processed.append(url) or {"status": "DOWNLOADED", "video_id": "v9"})
             poller._process(poller and yc.claim_remote_job("w"))
         self.assertEqual(processed, ["https://youtu.be/ok"])
 

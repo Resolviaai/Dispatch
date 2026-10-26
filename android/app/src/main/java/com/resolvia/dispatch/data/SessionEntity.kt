@@ -10,5 +10,6 @@ data class SessionEntity(
     val startedAt: Long = System.currentTimeMillis(),
     val totalSegments: Int = 0,
     val status: String = "RECORDING", // RECORDING, FINALIZED, CRASH_RECOVERED
-    val notes: String = ""
+    val notes: String = "",
+    val userId: String? = null
 )

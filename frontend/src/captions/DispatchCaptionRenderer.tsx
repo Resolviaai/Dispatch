@@ -141,8 +141,8 @@ const CaptionGroupItem: React.FC<CaptionGroupItemProps> = React.memo(({
   const effectiveOpacity = (style.opacity ?? 1) * Math.min(enterOpacity, exitOpacity);
 
   // Shadow angle and distance calculations
-  let shadowX = style.shadow_offset_x || 0;
-  let shadowY = style.shadow_offset_y || 2;
+  let shadowX = style.shadow_offset_x ?? 0;
+  let shadowY = style.shadow_offset_y ?? 2;
   if (style.shadow_distance !== undefined && style.shadow_angle !== undefined) {
     const rad = (style.shadow_angle * Math.PI) / 180;
     shadowX = Math.round(style.shadow_distance * Math.cos(rad) * 10) / 10;
@@ -154,10 +154,10 @@ const CaptionGroupItem: React.FC<CaptionGroupItemProps> = React.memo(({
   // Filters for glow and shadow
   const filters: string[] = [];
   if (style.shadow_enabled) {
-    filters.push(`drop-shadow(${shadowX}px ${shadowY}px ${style.shadow_blur || 6}px ${shadowColor})`);
+    filters.push(`drop-shadow(${shadowX}px ${shadowY}px ${style.shadow_blur ?? 6}px ${shadowColor})`);
   }
   if (style.glow_enabled) {
-    filters.push(`drop-shadow(0px 0px ${style.glow_blur || 12}px ${glowColor})`);
+    filters.push(`drop-shadow(0px 0px ${style.glow_blur ?? 12}px ${glowColor})`);
   }
   const filterStr = filters.length > 0 ? filters.join(' ') : undefined;
 
@@ -220,16 +220,33 @@ const CaptionGroupItem: React.FC<CaptionGroupItemProps> = React.memo(({
           const wordText = applyCaseTransform(w.text || (w as any).word || '', style.text_transform);
           const wordOverride = w.style_override;
 
-          // Tactile scale pop calculation (Spring Punch) ONLY when layer is caption
+          // Tactile scale, bounce jump, and motion calculation ONLY when layer is caption
           let scale = 1.0;
+          let translateY = 0;
+          let wordActiveOpacity = 1.0;
+
           const animType = anim?.active_word?.type || anim?.type || (anim as any)?.active_word_effect;
-          if (isCaption && isSpoken && highlightEnabled && animType && animType !== 'none' && (animType === 'pop' || animType === 'bounce')) {
-            const durationSec = (anim?.duration_ms || 100) / 1000;
+          const wordDurationMs = anim?.active_word?.duration_ms ?? anim?.duration_ms ?? 120;
+          const wordScaleMax = anim?.active_word?.active_scale ?? anim?.active_scale ?? 1.16;
+          const wordDurationSec = wordDurationMs / 1000;
+
+          if (isCaption && isSpoken && highlightEnabled && animType && animType !== 'none') {
             const elapsed = Math.max(0, currentTime - w.start);
-            if (elapsed < durationSec) {
-              const progress = elapsed / durationSec;
-              const punch = (anim?.active_scale || 1.16) - 1.0;
-              scale = 1.0 + punch * Math.cos(progress * (Math.PI / 2));
+            if (elapsed < wordDurationSec) {
+              const progress = elapsed / wordDurationSec;
+              if (animType === 'pop') {
+                const punch = wordScaleMax - 1.0;
+                scale = 1.0 + punch * Math.cos(progress * (Math.PI / 2));
+              } else if (animType === 'bounce') {
+                // Punch Jump: scale punch + upward vertical spring arc
+                const punch = wordScaleMax - 1.0;
+                scale = 1.0 + punch * Math.cos(progress * (Math.PI / 2));
+                translateY = -8 * Math.sin(progress * Math.PI);
+              } else if (animType === 'slide') {
+                translateY = -6 * (1 - progress);
+              } else if (animType === 'fade') {
+                wordActiveOpacity = 0.35 + 0.65 * progress;
+              }
             }
           }
 
@@ -241,9 +258,17 @@ const CaptionGroupItem: React.FC<CaptionGroupItemProps> = React.memo(({
             textColor = wordOverride.color;
           }
 
-          const strokeWidth = style.outline_enabled ? `${Math.max(1.5, (style.outline_width || 2) * 0.6)}px` : '0px';
+          const strokeWidth = style.outline_enabled
+            ? `${Math.max(0.5, (style.outline_width ?? 2) * 0.44).toFixed(1)}px`
+            : '0px';
           const strokeColorWithOpacity = style.outline_enabled
             ? applyColorOpacity(style.outline_color || '#000000', style.outline_opacity ?? 1.0)
+            : undefined;
+
+          const spanTransform = translateY !== 0
+            ? `translateY(${translateY.toFixed(1)}px) scale(${scale.toFixed(3)})`
+            : scale !== 1.0
+            ? `scale(${scale.toFixed(3)})`
             : undefined;
 
           return (
@@ -258,10 +283,11 @@ const CaptionGroupItem: React.FC<CaptionGroupItemProps> = React.memo(({
                   letterSpacing: `${style.letter_spacing || 0}px`,
                   lineHeight: style.line_height || 1.25,
                   color: applyColorOpacity(textColor, style.text_opacity ?? 1.0),
+                  opacity: wordActiveOpacity < 1.0 ? wordActiveOpacity : undefined,
                   WebkitTextStroke: style.outline_enabled ? `${strokeWidth} ${strokeColorWithOpacity}` : undefined,
                   paintOrder: 'stroke fill',
                   filter: filterStr,
-                  transform: `scale(${scale})`,
+                  transform: spanTransform,
                   display: 'inline-block',
                   transformOrigin: 'center bottom',
                   transition: 'transform 0.04s cubic-bezier(0.16, 1, 0.3, 1), color 0.05s ease',

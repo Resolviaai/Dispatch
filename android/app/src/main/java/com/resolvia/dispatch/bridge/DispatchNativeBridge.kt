@@ -43,6 +43,9 @@ class DispatchNativeBridge(
     private val database: AppDatabase,
     private val pairingManager: PairingManager
 ) {
+    init {
+        segmenterEngine.currentUserId = pairingManager.currentUserId
+    }
     private val gson = Gson()
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -54,6 +57,32 @@ class DispatchNativeBridge(
 
     @JavascriptInterface
     fun getDeviceModel(): String = "${Build.MANUFACTURER} ${Build.MODEL}"
+
+    @JavascriptInterface
+    fun setCurrentUserId(userId: String?): Boolean {
+        val clean = userId?.trim()?.takeIf { it.isNotBlank() }
+        pairingManager.currentUserId = clean
+        segmenterEngine.currentUserId = clean
+        android.util.Log.i("DispatchBridge", "Active native user_id set to: $clean")
+        return true
+    }
+
+    @JavascriptInterface
+    fun getCurrentUserId(): String? = pairingManager.currentUserId
+
+    @JavascriptInterface
+    fun clearLegacyRecordings(): Boolean {
+        return try {
+            runBlocking(Dispatchers.IO) {
+                database.recordingDao().deleteLegacyUnownedSegments()
+                database.recordingDao().deleteLegacyUnownedSessions()
+                true
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DispatchBridge", "Failed to clear legacy recordings: ${e.message}")
+            false
+        }
+    }
 
     @JavascriptInterface
     fun getPcHost(): String {
@@ -590,7 +619,12 @@ class DispatchNativeBridge(
     fun getRecordings(): String {
         return try {
             runBlocking(Dispatchers.IO) {
-                val segments = database.recordingDao().getAllSegmentsList()
+                val currentUid = pairingManager.currentUserId
+                val segments = if (!currentUid.isNullOrBlank()) {
+                    database.recordingDao().getSegmentsForUser(currentUid)
+                } else {
+                    database.recordingDao().getAllSegmentsList()
+                }
                 val jsonArr = JsonArray()
                 for (s in segments) {
                     val obj = JsonObject().apply {
@@ -606,6 +640,7 @@ class DispatchNativeBridge(
                         addProperty("finalizedAt", s.finalizedAt)
                         addProperty("durationSeconds", s.durationSeconds)
                         addProperty("youtubeVideoId", s.youtubeVideoId)
+                        addProperty("userId", s.userId)
                     }
                     jsonArr.add(obj)
                 }

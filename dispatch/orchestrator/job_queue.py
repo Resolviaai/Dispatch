@@ -45,7 +45,7 @@ def init_job_queue_schema():
         """)
 
 
-def enqueue_job(chunk_id: str, session_id: Optional[str] = None) -> str:
+def enqueue_job(chunk_id: str, session_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
     """Enqueue a new chunk processing job starting at VERIFY stage.
     Deduplicates active jobs: if an active job already exists for chunk_id, returns it.
     """
@@ -54,6 +54,16 @@ def enqueue_job(chunk_id: str, session_id: Optional[str] = None) -> str:
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        eff_user_id = user_id
+        if not eff_user_id:
+            r = cursor.execute("SELECT user_id FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            if r and r["user_id"]:
+                eff_user_id = r["user_id"]
+        if not eff_user_id and session_id:
+            r = cursor.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if r and r["user_id"]:
+                eff_user_id = r["user_id"]
+
         cursor.execute("""
             SELECT job_id FROM pipeline_jobs
             WHERE chunk_id = ? AND status NOT IN ('COMPLETED', 'FAILED_PERMANENT')
@@ -67,9 +77,9 @@ def enqueue_job(chunk_id: str, session_id: Optional[str] = None) -> str:
         job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         conn.execute("""
             INSERT OR IGNORE INTO pipeline_jobs (
-                job_id, chunk_id, session_id, current_stage, status, next_retry_at, created_at, updated_at
-            ) VALUES (?, ?, ?, 'VERIFY', 'QUEUED', ?, ?, ?)
-        """, (job_id, chunk_id, session_id, now_str, now_str, now_str))
+                job_id, chunk_id, session_id, current_stage, status, next_retry_at, created_at, updated_at, user_id
+            ) VALUES (?, ?, ?, 'VERIFY', 'QUEUED', ?, ?, ?, ?)
+        """, (job_id, chunk_id, session_id, now_str, now_str, now_str, eff_user_id))
 
     logger.info("Enqueued pipeline job %s for chunk %s", job_id, chunk_id)
     return job_id

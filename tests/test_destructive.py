@@ -296,22 +296,28 @@ if claimed:
         dummy_video = self.temp_dir / "rendered.mp4"
         dummy_video.write_bytes(b"TEST_VIDEO_BYTES_SIMULATED")
 
-        # 1. Test LinkedIn raises PermissionError when credentials missing
-        with self.assertRaises(PermissionError):
-            upload_linkedin_video(
-                video_path=dummy_video,
-                title="Dispatch LinkedIn Test",
-                commentary="#buildinpublic #ai",
-                access_token=None
-            )
+        # 1 & 2. Test credentials missing in isolated env
+        with patch.dict(os.environ, {
+            "X_BEARER_TOKEN": "",
+            "TWITTER_BEARER_TOKEN": "",
+            "X_API_KEY": "",
+            "LINKEDIN_ACCESS_TOKEN": "",
+            "LINKEDIN_AUTHOR_URN": "",
+        }):
+            with self.assertRaises(PermissionError):
+                upload_linkedin_video(
+                    video_path=dummy_video,
+                    title="Dispatch LinkedIn Test",
+                    commentary="#buildinpublic #ai",
+                    access_token=None
+                )
 
-        # 2. Test Twitter / X raises PermissionError when credentials missing
-        with self.assertRaises(PermissionError):
-            upload_x_video(
-                video_path=dummy_video,
-                text="Autonomous video engine #python",
-                bearer_token=None
-            )
+            with self.assertRaises(PermissionError):
+                upload_x_video(
+                    video_path=dummy_video,
+                    text="Autonomous video engine #python",
+                    bearer_token=None
+                )
 
         # 3. Test queue and dispatch all 4 platforms
         with get_db_connection() as conn:

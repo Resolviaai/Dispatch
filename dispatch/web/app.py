@@ -968,9 +968,12 @@ def is_matching_layout(a: Optional[str], b: Optional[str]) -> bool:
 async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, request: Request):
     """Persist chosen layout framing mode for a clip immediately."""
     verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can change layout")
 
@@ -1012,9 +1015,12 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
 async def handle_render_clip(clip_id: str, request: Request, payload: Optional[LayoutModeRequest] = None):
     """Explicitly re-render a clip from source media using the current or specified layout_mode."""
     verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can be rendered")
 
@@ -1106,9 +1112,12 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
 async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Request):
     """Update clip active trim boundaries (CapCut-style trimming with safety handles)."""
     verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can be trimmed")
 
@@ -1157,14 +1166,17 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
 @_serialize_clip_mutation
 async def handle_approve_clip(clip_id: str, payload: ApproveRequest, request: Request):
     verify_dashboard_auth(request)
-    return await _approve_clip_with_render(clip_id, payload)
+    caller_user_id = resolve_caller_user_id(request)
+    return await _approve_clip_with_render(clip_id, payload, caller_user_id=caller_user_id)
 
 
-async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest):
+async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, caller_user_id: Optional[str] = None):
     """Render the submitted caption snapshot and chosen layout before enqueueing publishing."""
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") in ("approved", "published"):
         return {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}
     if clip.get("status") != "ready_review":
@@ -1312,9 +1324,12 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest):
 async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Request):
     """Reject a clip and record negative preference learning data."""
     verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected")
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
 
@@ -1489,14 +1504,17 @@ async def get_filmstrip_lock(clip_id: str) -> asyncio.Lock:
 
 
 @app.get("/api/clips/{clip_id}/filmstrip")
-async def get_clip_filmstrip(clip_id: str):
+async def get_clip_filmstrip(clip_id: str, request: Request):
     """Return an array of thumbnail frames spanning the video duration for the timeline filmstrip.
     Guarantees freshness: automatically detects when underlying video has changed and regenerates frames.
     Serializes concurrent extraction per clip_id and uses atomic temporary files.
     """
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
     active_video = resolve_active_clip_video(clip)
     if not active_video or not active_video.exists():
@@ -1614,11 +1632,14 @@ async def get_caption_presets():
 
 
 @app.get("/api/clips/{clip_id}/captions")
-async def get_clip_captions(clip_id: str):
+async def get_clip_captions(clip_id: str, request: Request):
     """Return saved captions or derive a lightweight preview from the stored transcript."""
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
     cached_json = db.get_clip_caption_data(clip_id)
     current_revision = int(clip.get("range_revision") or 0)
@@ -1735,13 +1756,36 @@ async def get_clip_captions(clip_id: str):
     # Transliterate Devanagari Hindi text to natural Roman Hinglish with 1:1 token mapping
     clean_segments = transliterate_segments_to_hinglish(segments)
 
+    user_tpl = db.get_default_template(user_id=caller_user_id)
+    tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+    preset_candidate = tpl_captions.get("preset_id")
+    effective_preset_id = preset_candidate if (preset_candidate and preset_candidate != "custom") else get_default_preset_id()
+
     track = group_words_into_captions(
         raw_segments=clean_segments,
         clip_start=clip_start,
         clip_end=clip_end,
         clip_id=clip_id,
-        preset_id=get_default_preset_id()
+        preset_id=effective_preset_id
     )
+
+    if tpl_captions:
+        if tpl_captions.get("font_family"):
+            track.default_style.font_family = str(tpl_captions["font_family"])
+        if tpl_captions.get("font_size"):
+            track.default_style.font_size = float(tpl_captions["font_size"])
+        if tpl_captions.get("primary_color"):
+            track.default_style.primary_color = str(tpl_captions["primary_color"])
+        if tpl_captions.get("highlight_color"):
+            track.default_style.highlight_color = str(tpl_captions["highlight_color"])
+        if tpl_captions.get("position_y") is not None:
+            track.default_layout.position_y = float(tpl_captions["position_y"])
+        if tpl_captions.get("animation"):
+            track.default_animation.type = str(tpl_captions["animation"])
+        for grp in track.groups:
+            grp.style = track.default_style
+            grp.layout = track.default_layout
+            grp.animation = track.default_animation
 
     track_dict = track.to_dict()
     timing_warning = None
@@ -1782,9 +1826,12 @@ async def get_clip_captions(clip_id: str):
 async def save_clip_captions(clip_id: str, request: Request):
     """Save customized CaptionTrack JSON and export updated ASS file for FFmpeg render parity."""
     verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can change captions")
 
@@ -1993,61 +2040,104 @@ async def upload_web_recording(request: Request, file: UploadFile = File(...)):
 
 
 @app.get("/api/recordings")
-async def get_recordings():
+async def get_recordings(request: Request):
     """Return list of recordings/chunks formatted for the Sessions tab.
-    
-    Guarantees:
-    1. Zero duplication: Chunks are grouped by c.id so one chunk never produces multiple recording rows.
-    2. True Source Video: videoUrl ALWAYS resolves to original raw footage (/api/recordings/{chunk_id}/source).
-       Generated/captioned clips (video_path) are strictly excluded from recording previews.
-    3. Lightweight Clip Counts: Provides exact clip_count and approved_clip_count for UI badges.
+    Scoped strictly to the authenticated user.
     """
+    caller_user_id = resolve_caller_user_id(request)
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
-                c.id as chunk_id,
-                c.session_id,
-                c.filename,
-                c.filepath,
-                c.duration,
-                c.status as chunk_status,
-                c.created_at,
-                s.status as session_status,
-                s.created_at as session_created_at,
-                COUNT(cl.id) as clip_count,
-                COUNT(CASE WHEN cl.status = 'approved' OR cl.status = 'published' THEN 1 END) as approved_clip_count,
-                ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(c.session_id, c.id) 
-                    ORDER BY c.created_at ASC
-                ) as seq_num,
-                y.video_id as youtube_video_id
-            FROM chunks c
-            LEFT JOIN sessions s ON c.session_id = s.id
-            LEFT JOIN clips cl ON cl.chunk_id = c.id
-            LEFT JOIN youtube_inbox y ON (c.file_hash = 'yt_' || y.video_id OR y.local_video_path = c.filepath OR c.filename LIKE '%' || y.video_id || '%')
-            GROUP BY c.id
-            ORDER BY c.created_at DESC
-        """)
-        rows = cursor.fetchall()
+        if caller_user_id:
+            cursor.execute("""
+                SELECT 
+                    c.id as chunk_id,
+                    c.session_id,
+                    c.filename,
+                    c.filepath,
+                    c.duration,
+                    c.status as chunk_status,
+                    c.created_at,
+                    s.status as session_status,
+                    s.created_at as session_created_at,
+                    COUNT(cl.id) as clip_count,
+                    COUNT(CASE WHEN cl.status = 'approved' OR cl.status = 'published' THEN 1 END) as approved_clip_count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(c.session_id, c.id) 
+                        ORDER BY c.created_at ASC
+                    ) as seq_num,
+                    y.video_id as youtube_video_id
+                FROM chunks c
+                LEFT JOIN sessions s ON c.session_id = s.id
+                LEFT JOIN clips cl ON cl.chunk_id = c.id
+                LEFT JOIN youtube_inbox y ON (c.file_hash = 'yt_' || y.video_id OR y.local_video_path = c.filepath OR c.filename LIKE '%' || y.video_id || '%')
+                WHERE c.user_id = ?
+                GROUP BY c.id
+                ORDER BY c.created_at DESC
+            """, (caller_user_id,))
+            rows = cursor.fetchall()
 
-        cursor.execute("""
-            SELECT 
-                y.video_id,
-                y.session_id,
-                y.title,
-                y.local_video_path,
-                y.duration,
-                y.status as inbox_status,
-                y.discovered_at,
-                y.sequence_number
-            FROM youtube_inbox y
-            WHERE y.video_id NOT IN (
-                SELECT REPLACE(c.file_hash, 'yt_', '') FROM chunks c WHERE c.file_hash LIKE 'yt_%'
-            )
-            ORDER BY y.discovered_at DESC
-        """)
-        inbox_rows = cursor.fetchall()
+            cursor.execute("""
+                SELECT 
+                    y.video_id,
+                    y.session_id,
+                    y.title,
+                    y.local_video_path,
+                    y.duration,
+                    y.status as inbox_status,
+                    y.discovered_at,
+                    y.sequence_number
+                FROM youtube_inbox y
+                WHERE y.user_id = ? AND y.video_id NOT IN (
+                    SELECT REPLACE(c.file_hash, 'yt_', '') FROM chunks c WHERE c.file_hash LIKE 'yt_%'
+                )
+                ORDER BY y.discovered_at DESC
+            """, (caller_user_id,))
+            inbox_rows = cursor.fetchall()
+        else:
+            cursor.execute("""
+                SELECT 
+                    c.id as chunk_id,
+                    c.session_id,
+                    c.filename,
+                    c.filepath,
+                    c.duration,
+                    c.status as chunk_status,
+                    c.created_at,
+                    s.status as session_status,
+                    s.created_at as session_created_at,
+                    COUNT(cl.id) as clip_count,
+                    COUNT(CASE WHEN cl.status = 'approved' OR cl.status = 'published' THEN 1 END) as approved_clip_count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(c.session_id, c.id) 
+                        ORDER BY c.created_at ASC
+                    ) as seq_num,
+                    y.video_id as youtube_video_id
+                FROM chunks c
+                LEFT JOIN sessions s ON c.session_id = s.id
+                LEFT JOIN clips cl ON cl.chunk_id = c.id
+                LEFT JOIN youtube_inbox y ON (c.file_hash = 'yt_' || y.video_id OR y.local_video_path = c.filepath OR c.filename LIKE '%' || y.video_id || '%')
+                GROUP BY c.id
+                ORDER BY c.created_at DESC
+            """)
+            rows = cursor.fetchall()
+
+            cursor.execute("""
+                SELECT 
+                    y.video_id,
+                    y.session_id,
+                    y.title,
+                    y.local_video_path,
+                    y.duration,
+                    y.status as inbox_status,
+                    y.discovered_at,
+                    y.sequence_number
+                FROM youtube_inbox y
+                WHERE y.video_id NOT IN (
+                    SELECT REPLACE(c.file_hash, 'yt_', '') FROM chunks c WHERE c.file_hash LIKE 'yt_%'
+                )
+                ORDER BY y.discovered_at DESC
+            """)
+            inbox_rows = cursor.fetchall()
 
     recordings = []
     for r in rows:
@@ -2182,9 +2272,10 @@ async def update_settings(payload: SettingsRequest, request: Request):
 
 
 @app.get("/api/youtube/inbox")
-async def get_youtube_inbox_items():
+async def get_youtube_inbox_items(request: Request):
     """List YouTube Inbox items and their current processing status."""
-    return {"items": db.list_youtube_inbox(limit=30)}
+    caller_user_id = resolve_caller_user_id(request)
+    return {"items": db.list_youtube_inbox(limit=30, user_id=caller_user_id)}
 
 @app.delete("/api/youtube/inbox/{video_id}")
 async def delete_youtube_inbox_entry(video_id: str, request: Request):
@@ -3073,3 +3164,38 @@ async def serve_font(filename: str):
 
 
 
+
+
+# --- Default Editing Template Endpoints ---
+
+@app.get("/api/template/default")
+async def get_default_template_endpoint(request: Request):
+    """Retrieve the current default editing template for the caller or system."""
+    caller_user_id = resolve_caller_user_id(request)
+    template = db.get_default_template(user_id=caller_user_id)
+    return template
+
+
+@app.post("/api/template/default")
+async def save_default_template_endpoint(payload: Dict[str, Any], request: Request):
+    """Save or update the caller's default editing template."""
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
+    saved = db.save_default_template(payload, user_id=caller_user_id)
+    return {"status": "success", "template": saved}
+
+
+@app.get("/api/template/sample-video")
+async def get_sample_template_video(orientation: str = "portrait"):
+    """Serve reference sample video for template editor preview."""
+    root_dir = Path(__file__).resolve().parent.parent.parent
+    if orientation == "landscape":
+        sample_path = root_dir / "frontend" / "public" / "sample_landscape.mp4"
+    else:
+        sample_path = root_dir / "frontend" / "public" / "sample_portrait.mp4"
+    
+    if not sample_path.exists():
+        sample_path = root_dir / "tests" / "fixtures" / "tiny_valid.mp4"
+    if sample_path.exists():
+        return FileResponse(str(sample_path), media_type="video/mp4")
+    raise HTTPException(status_code=404, detail="Sample preview video not found")

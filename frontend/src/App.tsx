@@ -150,7 +150,7 @@ export const App: React.FC = () => {
     } else {
       const loadBackendRecordings = async () => {
         try {
-          const res = await fetch(apiUrl('/api/recordings', pcHost));
+          const res = await fetch(apiUrl('/api/recordings', pcHost), { headers: getAuthHeaders() });
           if (res.ok) {
             const data = await res.json();
             if (Array.isArray(data)) {
@@ -204,8 +204,11 @@ export const App: React.FC = () => {
           const blob = await resp.blob();
           const formData = new FormData();
           formData.append('file', blob, 'web_recording.webm');
+          const authHeaders = getAuthHeaders();
+          const { 'Content-Type': _, ...headersWithoutContentType } = authHeaders;
           const res = await fetch(apiUrl('/api/recordings/upload', pcHost), {
             method: 'POST',
+            headers: headersWithoutContentType,
             body: formData,
           });
           if (res.ok) {
@@ -352,7 +355,7 @@ export const App: React.FC = () => {
           )}
 
           {currentTab === 'settings' && (
-            <SettingsScreen pcHost={pcHost} />
+            <SettingsScreen pcHost={pcHost} onEditorOpenChange={setIsEditorOpen} />
           )}
         </div>
 

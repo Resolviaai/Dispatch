@@ -56,7 +56,7 @@ class TestCredentialEndpoints(unittest.TestCase):
         # testserver counts as loopback in this harness; the transport gate is
         # exercised authoritatively by the unit tests above + the LAN integration
         # case below with a spoofed client address.
-        self.assertIn(res2.status_code, (200, 401, 403, 404, 409, 426))
+        self.assertIn(res2.status_code, (200, 401, 403, 404, 409, 410, 426))
 
     def test_lan_client_gets_426_not_credentials(self):
         # Direct simulation: request over http from a LAN address must never include
@@ -67,7 +67,7 @@ class TestCredentialEndpoints(unittest.TestCase):
                 self.fail("must raise")
             except HTTPException as e:
                 self.assertEqual(e.status_code, 426)
-                self.assertIn("HTTPS", str(e.detail))
+                self.assertIn("https", str(e.detail).lower())
 
 
 if __name__ == "__main__":

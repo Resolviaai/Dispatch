@@ -357,8 +357,11 @@ class HighlightWorker:
                 else:
                     if temp_stitched_path.exists():
                         temp_stitched_path.unlink()
+                    logger.error("FFmpeg boundary stitch failed for multi-segment clip %s (code %s); aborting invalid single-segment fallback", clip.get("id"), res.returncode)
+                    return None, 0.0, 0.0, 0.0, 0.0, None
             except Exception as stitch_err:
-                logger.warning("Failed to stitch boundary segments for clip %s: %s", clip["id"], stitch_err)
+                logger.error("Failed to stitch boundary segments for clip %s: %s; aborting invalid single-segment fallback", clip.get("id"), stitch_err)
+                return None, 0.0, 0.0, 0.0, 0.0, None
 
         return default_src_path, c_start, c_end, p_start, p_end, None
 
@@ -413,7 +416,9 @@ class HighlightWorker:
                 self._resolve_clip_media_source(clip, source_video_path, session_items)
             )
             range_revision = int(clip.get("range_revision") or 0)
-            c_layout = clip.get("layout_mode", "fit_blur")
+            tpl = db.get_default_template(user_id=clip.get("user_id"))
+            tpl_layout = tpl.get("framing", {}).get("horizontal_mode") or "crop_916"
+            c_layout = clip.get("layout_mode") or tpl_layout
 
             active_segs: List[Dict[str, Any]] = []
 
@@ -473,7 +478,7 @@ class HighlightWorker:
                         clip_start=eff_c_start,
                         clip_end=eff_c_end,
                         clip_id=clip_id,
-                        preset_id=get_default_preset_id()
+                        preset_id=(db.get_default_template(user_id=clip.get("user_id")).get("captions", {}).get("preset_id") or get_default_preset_id())
                     )
                     track_dict = track.to_dict()
                     track_dict["words"] = clean_words
@@ -507,7 +512,7 @@ class HighlightWorker:
                         clip_start=eff_c_start,
                         clip_end=eff_c_end,
                         clip_id=clip_id,
-                        preset_id=get_default_preset_id()
+                        preset_id=(db.get_default_template(user_id=clip.get("user_id")).get("captions", {}).get("preset_id") or get_default_preset_id())
                     )
                     if not db.save_clip_caption_data(
                         clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
@@ -552,7 +557,7 @@ class HighlightWorker:
                         clip_start=eff_c_start,
                         clip_end=eff_c_end,
                         clip_id=clip_id,
-                        preset_id=get_default_preset_id()
+                        preset_id=(db.get_default_template(user_id=clip.get("user_id")).get("captions", {}).get("preset_id") or get_default_preset_id())
                     )
                     if not db.save_clip_caption_data(
                         clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,

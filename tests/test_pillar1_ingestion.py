@@ -20,8 +20,7 @@ from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
 from dispatch.youtube_inbox.oauth import list_authenticated_user_uploads
 
 # Privacy-gate fixture: ingestion requires an allowed visibility verdict.
-patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
-      side_effect=lambda ids: {i: {"privacy_status": "unlisted"} for i in ids}).start()
+
 
 
 class TestPillar1Ingestion(unittest.TestCase):
@@ -32,6 +31,19 @@ class TestPillar1Ingestion(unittest.TestCase):
         self.catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
         self.test_video_id = "p1_test0001"
         self.test_dispatch_id = "dsp_test_p1_001"
+        p = patch("dispatch.youtube_inbox.oauth.get_youtube_processing_status",
+                  side_effect=lambda ids: {i: {
+                      "video_id": i,
+                      "upload_status": "processed",
+                      "processing_status": "succeeded",
+                      "failure_reason": None,
+                      "duration": "PT30S",
+                      "title": "Test Video",
+                      "published_at": "2026-10-06T00:00:00Z",
+                      "privacy_status": "unlisted"
+                  } for i in ids})
+        p.start()
+        self.addCleanup(p.stop)
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)

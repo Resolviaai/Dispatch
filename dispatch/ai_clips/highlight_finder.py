@@ -818,7 +818,8 @@ def identify_and_save_highlights(
     segments: List[Dict[str, Any]],
     total_duration: float,
     publish_mode: str = "private",
-    video_id: Optional[str] = None
+    video_id: Optional[str] = None,
+    user_id: Optional[str] = None
 ) -> List[str]:
     """Identify highlights via Gemini and save candidate definitions.
     
@@ -857,17 +858,39 @@ def identify_and_save_highlights(
         max_clips=MAX_HIGHLIGHTS_PER_CHUNK
     )
 
+    eff_user_id = user_id
+    if not eff_user_id and video_id:
+        v = db.get_youtube_video(video_id)
+        if v and v.get("user_id"):
+            eff_user_id = v["user_id"]
+    if not eff_user_id and chunk_id:
+        chk = db.get_chunk_by_id(chunk_id)
+        if chk and chk.get("user_id"):
+            eff_user_id = chk["user_id"]
+    if not eff_user_id and session_id:
+        with db.get_db_connection() as conn:
+            r = conn.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if r and r["user_id"]:
+                eff_user_id = r["user_id"]
+
+    tpl = db.get_default_template(user_id=eff_user_id)
+    tpl_framing = tpl.get("framing", {})
+
     if video_id:
         saved_ids = db.save_clip_definitions(
             chunk_id=chunk_id,
             session_id=session_id,
             video_id=video_id,
             clip_defs=validated_clips,
-            publish_mode=publish_mode
+            publish_mode=publish_mode,
+            user_id=eff_user_id
         )
     else:
         saved_ids = []
         for c in validated_clips:
+            c_layout = c.get("layout_recommendation")
+            if not c_layout:
+                c_layout = tpl_framing.get("horizontal_mode") or "crop_916"
             cid = db.save_clip(
                 session_id=session_id,
                 chunk_id=chunk_id,
@@ -879,11 +902,12 @@ def identify_and_save_highlights(
                 description=c["description"],
                 hashtags=c["hashtags"],
                 virality_score=c["virality_score"],
-                layout_mode=c["layout_recommendation"],
+                layout_mode=c_layout,
                 platform_targets="youtube",
                 publish_mode=publish_mode,
                 padded_start=c.get("padded_start"),
-                padded_end=c.get("padded_end")
+                padded_end=c.get("padded_end"),
+                user_id=eff_user_id
             )
             saved_ids.append(cid)
 

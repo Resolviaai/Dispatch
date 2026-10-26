@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   RefreshCw,
   Sparkles,
+  Bookmark,
   Undo2,
   Redo2,
   X,
@@ -61,13 +62,13 @@ export interface AvailableLayoutMode {
   description?: string;
 }
 
-const DEFAULT_PORTRAIT_MODES: AvailableLayoutMode[] = [
+export const DEFAULT_PORTRAIT_MODES: AvailableLayoutMode[] = [
   { id: 'fit_black', label: 'Fit + Black', target_aspect: '16:9', description: '16:9 wide frame with black side bars' },
   { id: 'fit_blur', label: 'Fit + Blur', target_aspect: '16:9', description: '16:9 wide frame with blurred background' },
   { id: 'native_916', label: 'Native 9:16', target_aspect: '9:16', description: '100% full original vertical video (no bars, no crop)' },
 ];
 
-const DEFAULT_LANDSCAPE_MODES: AvailableLayoutMode[] = [
+export const DEFAULT_LANDSCAPE_MODES: AvailableLayoutMode[] = [
   { id: 'crop_916', label: 'Crop 9:16', target_aspect: '9:16', description: 'Full vertical crop to fill 9:16' },
   { id: 'fit_blur', label: 'Fit + Blur', target_aspect: '9:16', description: 'Vertical 9:16 with blurred top/bottom bars' },
   { id: 'fit_black', label: 'Fit + Black', target_aspect: '9:16', description: 'Vertical 9:16 with black top/bottom bars' },
@@ -817,7 +818,7 @@ function InteractiveCanvasItem({
   );
 }
 
-function InteractiveCaptionCanvas({
+export function InteractiveCaptionCanvas({
   track,
   currentTime,
   isPlaying = false,
@@ -909,6 +910,7 @@ interface FramedVideoStageProps {
   isDetail?: boolean;
   preferRendered?: boolean;
   onVideoClick?: () => void;
+  muted?: boolean;
 }
 
 export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
@@ -932,6 +934,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   isDetail = false,
   preferRendered = false,
   onVideoClick,
+  muted = false,
 }) => {
   const [sourceFailed, setSourceFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
@@ -1110,6 +1113,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               ref={videoRef}
               src={activeVideoUrl}
               poster={poster}
+              muted={muted}
               preload="auto"
               playsInline
               onLoadedMetadata={(e) => {
@@ -1203,6 +1207,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isVideoSelected, setIsVideoSelected] = useState<boolean>(false);
   const [isFullscreenPreview, setIsFullscreenPreview] = useState<boolean>(false);
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
+  const [showStudioExitConfirm, setShowStudioExitConfirm] = useState<boolean>(false);
   const lastTimeUpdateRef = useRef<number>(0);
 
   useEffect(() => {
@@ -1362,7 +1367,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000);
-        const res = await fetch(apiUrl('/api/clips', pcHost), { signal: controller.signal });
+        const res = await fetch(apiUrl('/api/clips', pcHost), { headers: getAuthHeaders(), signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
@@ -1523,7 +1528,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setCaptionClipId(null); // Clear previous track association immediately
 
     const controller = new AbortController();
-    fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { signal: controller.signal })
+    fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { headers: getAuthHeaders(), signal: controller.signal })
       .then(async (res) => {
         if (res.ok) {
           const rawData = await res.json().catch(() => null);
@@ -1573,7 +1578,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
 
     const timer = setTimeout(() => {
-      fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { signal: controller.signal })
+      fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { headers: getAuthHeaders(), signal: controller.signal })
         .then((res) => (res.ok ? res.json() : null))
         .then((fsData) => {
           if (reqId === filmstripReqIdRef.current && fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
@@ -1872,6 +1877,83 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
     setCurrentTime(0);
     setDuration(clipDuration);
+  };
+
+  const [templateSaveFeedback, setTemplateSaveFeedback] = useState<string | null>(null);
+
+  const handleSaveAsDefaultTemplate = async () => {
+    const repGroup = (captionTrack?.groups && captionTrack.groups.length > 0)
+      ? (selectedGroupId ? captionTrack.groups.find(g => g.id === selectedGroupId) || captionTrack.groups[0] : captionTrack.groups[0])
+      : null;
+
+    const templateData = {
+      name: 'Creator Standard',
+      framing: {
+        vertical_mode: currentClip?.source_orientation === 'portrait' ? layoutMode : 'native_916',
+        horizontal_mode: currentClip?.source_orientation === 'landscape' ? layoutMode : 'crop_916',
+      },
+      captions: {
+        preset_id: 'custom',
+        font_family: repGroup?.style?.font_family || 'Impact',
+        font_size: repGroup?.style?.font_size || 48,
+        font_weight: repGroup?.style?.font_weight || '900',
+        letter_spacing: repGroup?.style?.letter_spacing ?? 0,
+        line_height: repGroup?.style?.line_height ?? 1.25,
+        primary_color: repGroup?.style?.primary_color || '#FFFFFF',
+        highlight_color: repGroup?.style?.highlight_color || '#FFD700',
+        outline_enabled: repGroup?.style?.outline_enabled ?? true,
+        outline_color: repGroup?.style?.outline_color || '#000000',
+        outline_width: repGroup?.style?.outline_width ?? 4.5,
+        shadow_enabled: repGroup?.style?.shadow_enabled ?? true,
+        shadow_color: repGroup?.style?.shadow_color || '#000000',
+        shadow_blur: repGroup?.style?.shadow_blur ?? 4,
+        shadow_offset_x: repGroup?.style?.shadow_offset_x ?? 2,
+        shadow_offset_y: repGroup?.style?.shadow_offset_y ?? 3,
+        shadow_distance: repGroup?.style?.shadow_distance,
+        shadow_angle: repGroup?.style?.shadow_angle,
+        shadow_opacity: repGroup?.style?.shadow_opacity ?? 1.0,
+        glow_enabled: repGroup?.style?.glow_enabled ?? false,
+        glow_color: repGroup?.style?.glow_color || '#00F0FF',
+        glow_blur: repGroup?.style?.glow_blur ?? 12,
+        glow_opacity: repGroup?.style?.glow_opacity ?? 1.0,
+        background_enabled: repGroup?.style?.background_enabled ?? false,
+        background_mode: repGroup?.style?.background_mode || 'none',
+        background_color: repGroup?.style?.background_color || '#000000',
+        background_opacity: repGroup?.style?.background_opacity ?? 1.0,
+        background_padding_x: repGroup?.style?.background_padding_x ?? 12,
+        background_padding_y: repGroup?.style?.background_padding_y ?? 6,
+        background_corner_radius: repGroup?.style?.background_corner_radius ?? 8,
+        background_offset_x: repGroup?.style?.background_offset_x,
+        background_offset_y: repGroup?.style?.background_offset_y,
+        animation: repGroup?.animation?.type || 'pop',
+        animation_config: repGroup?.animation,
+        position_y: repGroup?.layout?.position_y ?? 0.78,
+        max_words_per_line: 3,
+        all_caps: repGroup?.style?.text_transform === 'uppercase',
+      },
+      hook: {
+        enabled: true,
+        style: 'pill',
+      },
+      publish_mode: publishMode || 'private',
+      platform_targets: ['youtube', 'instagram'],
+    };
+
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('dispatch_default_template', JSON.stringify(templateData));
+      }
+      await fetch(apiUrl('/api/template/default', pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(templateData),
+      });
+      setTemplateSaveFeedback('Saved as default template!');
+      setTimeout(() => setTemplateSaveFeedback(null), 2500);
+    } catch {
+      setTemplateSaveFeedback('Saved default locally');
+      setTimeout(() => setTemplateSaveFeedback(null), 2500);
+    }
   };
 
   const handleLayoutChange = async (newMode: LayoutMode) => {
@@ -2784,9 +2866,20 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <section className="w-full pt-3 mt-1 border-t border-border">
                   <div className="flex items-center justify-between text-xs leading-tight mb-2">
                     <span className="font-medium uppercase tracking-wider text-text-muted">Layout framing</span>
-                    <span className="font-mono text-xs text-primary font-semibold tabular-nums">
-                      {activeModeObj ? `${activeModeObj.target_aspect} ${activeModeObj.label}` : layoutMode}
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleSaveAsDefaultTemplate}
+                        className="text-[11px] text-text-muted hover:text-primary transition-colors flex items-center gap-1 active:scale-[0.98]"
+                        title="Save this framing mode as default for new clips"
+                      >
+                        <Sliders size={11} />
+                        Save as default
+                      </button>
+                      <span className="font-mono text-xs text-primary font-semibold tabular-nums">
+                        {activeModeObj ? `${activeModeObj.target_aspect} ${activeModeObj.label}` : layoutMode}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex gap-2 overflow-x-auto no-scrollbar">
                     {availableModes.map((opt) => (
@@ -2852,11 +2945,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               type="button"
               onClick={async () => {
                 if (saveStatus === 'unsaved') {
-                  const saveFirst = window.confirm('You have unsaved changes. Save before exiting?');
-                  if (saveFirst) {
-                    const saved = await handleSaveCaptions();
-                    if (!saved) return;
-                  }
+                  setShowStudioExitConfirm(true);
+                  return;
                 }
                 setViewMode('detail');
                 setSelectedGroupId(null);
@@ -2983,6 +3073,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <span>{playbackFeedback}</span>
             </div>
           )}
+          {templateSaveFeedback && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 px-3 py-1 bg-primary text-white text-[11px] font-medium rounded-full shadow-lg backdrop-blur-sm animate-in fade-in flex items-center gap-1.5 pointer-events-none">
+              <Bookmark size={12} />
+              <span>{templateSaveFeedback}</span>
+            </div>
+          )}
 
           {/* 3. CAPCUT TRANSPORT-CONTROL ROW (Fullscreen · Play/Pause · Undo/Redo) */}
           <div className="shrink-0 h-9 px-3 bg-[#13161B] border-y border-[#232832] flex items-center justify-between text-[11px] z-20">
@@ -3014,8 +3110,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               {isPlaying ? <Pause size={12} /> : <Play size={12} fill="currentColor" className="ml-0.5" />}
             </button>
 
-            {/* Right: Undo & Redo genuine action icon buttons */}
+            {/* Right: Undo & Redo + Set Default Template action buttons */}
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleSaveAsDefaultTemplate}
+                className="h-7 px-2 rounded-lg bg-surface-200 hover:bg-surface-300 border border-border flex items-center gap-1 text-[10px] font-medium text-text-secondary hover:text-text-main active:scale-95 transition-all"
+                title="Save current caption style & framing as global default"
+                aria-label="Set Default Template"
+              >
+                <Bookmark size={11} className="text-primary" />
+                <span className="hidden sm:inline">Set Default</span>
+              </button>
               <button
                 type="button"
                 disabled={!canUndo}
@@ -3060,7 +3166,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         type="button"
                         onClick={() => {
                           setCaptionLoadingState('loading');
-                          fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost))
+                          fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { headers: getAuthHeaders() })
                             .then(async (res) => {
                               if (res.ok) {
                                 const raw = await res.json().catch(() => null);
@@ -3265,6 +3371,56 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <span className="font-mono text-[11px] text-white tabular-nums">
                 {formatTimeCode(currentTime)}
               </span>
+            </div>
+          </div>
+        )}
+        {/* Exit Confirmation Modal */}
+        {showStudioExitConfirm && (
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+            <div className="w-full max-w-xs bg-surface-100 border border-border rounded-2xl p-5 shadow-2xl flex flex-col gap-4">
+              <div className="flex flex-col gap-1 text-center">
+                <h3 className="text-base font-semibold text-text-main">Save Clip Changes?</h3>
+                <p className="text-xs text-text-muted">You have unsaved changes. Save before exiting to Clip Details?</p>
+              </div>
+
+              <div className="flex flex-col gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const saved = await handleSaveCaptions();
+                    if (saved) {
+                      setShowStudioExitConfirm(false);
+                      setViewMode('detail');
+                      setSelectedGroupId(null);
+                      setIsVideoSelected(false);
+                      setActivePanel('none');
+                    }
+                  }}
+                  className="w-full h-10 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center active:scale-98 transition-all shadow-hero-glow"
+                >
+                  Save & Exit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStudioExitConfirm(false);
+                    setViewMode('detail');
+                    setSelectedGroupId(null);
+                    setIsVideoSelected(false);
+                    setActivePanel('none');
+                  }}
+                  className="w-full h-10 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-xs font-medium flex items-center justify-center active:scale-98 transition-all"
+                >
+                  Discard Changes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowStudioExitConfirm(false)}
+                  className="w-full h-8 text-text-muted hover:text-text-main text-xs font-normal flex items-center justify-center transition-colors"
+                >
+                  Keep Editing
+                </button>
+              </div>
             </div>
           </div>
         )}

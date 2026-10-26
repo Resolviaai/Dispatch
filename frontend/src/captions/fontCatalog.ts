@@ -82,6 +82,15 @@ export const CURATED_FONTS: FontEntry[] = [
     license: 'OFL 1.1',
   },
   {
+    family: 'Montserrat Black',
+    category: 'Bold / Captions',
+    categoryKey: 'bold',
+    weights: ['900'],
+    filename: 'Montserrat-Variable.ttf',
+    url: '/api/fonts/Montserrat-Variable.ttf',
+    license: 'OFL 1.1',
+  },
+  {
     family: 'Oswald',
     category: 'Bold / Captions',
     categoryKey: 'bold',
@@ -250,18 +259,37 @@ const loadedFontFaceFamilies = new Set<string>();
 /**
  * Ensure a font asset is registered in document.fonts via the Web FontFace API.
  */
-export async function loadFontFace(family: string, fontUrl: string): Promise<boolean> {
+export async function loadFontFace(family: string, fontUrl?: string): Promise<boolean> {
   if (loadedFontFaceFamilies.has(family)) return true;
   if (typeof window === 'undefined' || !('FontFace' in window)) return false;
 
+  if (fontUrl) {
+    try {
+      const font = new FontFace(family, `url(${fontUrl})`);
+      const loaded = await font.load();
+      document.fonts.add(loaded);
+      loadedFontFaceFamilies.add(family);
+      return true;
+    } catch (err) {
+      console.warn(`[FontLoader] Could not load @font-face for ${family}, falling back to Google Fonts:`, err);
+    }
+  }
+
+  // Google Font fallback loading
   try {
-    const font = new FontFace(family, `url(${fontUrl})`);
-    const loaded = await font.load();
-    document.fonts.add(loaded);
+    const googleFamily = family.replace(/ /g, '+');
+    const linkId = `gfont-${family.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+    if (!document.getElementById(linkId)) {
+      const link = document.createElement('link');
+      link.id = linkId;
+      link.rel = 'stylesheet';
+      link.href = `https://fonts.googleapis.com/css2?family=${googleFamily}:wght@400;600;700;800;900&display=swap`;
+      document.head.appendChild(link);
+    }
     loadedFontFaceFamilies.add(family);
     return true;
   } catch (err) {
-    console.warn(`[FontLoader] Could not load @font-face for ${family}:`, err);
+    console.warn(`[FontLoader] Google Font fallback failed for ${family}:`, err);
     return false;
   }
 }

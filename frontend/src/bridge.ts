@@ -123,6 +123,9 @@ declare global {
       openCustomTab?: (url: string) => boolean;
       deleteSession?: (sessionId: string) => boolean;
       performHaptic?: (type: string) => boolean;
+      setCurrentUserId?: (userId: string | null) => boolean;
+      getCurrentUserId?: () => string | null;
+      clearLegacyRecordings?: () => boolean;
     };
   }
 }
@@ -537,6 +540,39 @@ export const Bridge = {
     if (typeof window !== 'undefined') {
       window.open(url, '_blank');
       return true;
+    }
+    return false;
+  },
+
+  setCurrentUserId(userId: string | null): boolean {
+    if (window.DispatchBridge?.setCurrentUserId) {
+      try {
+        return window.DispatchBridge.setCurrentUserId(userId);
+      } catch (e) {
+        console.warn('Failed to call setCurrentUserId', e);
+      }
+    }
+    return false;
+  },
+
+  getCurrentUserId(): string | null {
+    if (window.DispatchBridge?.getCurrentUserId) {
+      try {
+        return window.DispatchBridge.getCurrentUserId();
+      } catch (e) {
+        console.warn('Failed to call getCurrentUserId', e);
+      }
+    }
+    return null;
+  },
+
+  clearLegacyRecordings(): boolean {
+    if (window.DispatchBridge?.clearLegacyRecordings) {
+      try {
+        return window.DispatchBridge.clearLegacyRecordings();
+      } catch (e) {
+        console.warn('Failed to call clearLegacyRecordings', e);
+      }
     }
     return false;
   }

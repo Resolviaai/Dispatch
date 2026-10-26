@@ -19,7 +19,7 @@ from dispatch.config import (
 
 logger = logging.getLogger("dispatch.db")
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def verify_db_integrity() -> bool:
@@ -411,6 +411,52 @@ def init_db():
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN user_id TEXT;");
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_user_id ON publishing_outbox (user_id);")
 
+        # Migration: Ensure user_id column exists on sessions
+        cursor.execute("PRAGMA table_info(sessions);")
+        sess_cols = [col[1] for col in cursor.fetchall()]
+        if "user_id" not in sess_cols:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);")
+
+        # Migration: Ensure user_id column exists on chunks
+        cursor.execute("PRAGMA table_info(chunks);")
+        chunk_cols = [col[1] for col in cursor.fetchall()]
+        if "user_id" not in chunk_cols:
+            cursor.execute("ALTER TABLE chunks ADD COLUMN user_id TEXT;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_user_id ON chunks (user_id);")
+
+        # Migration: Ensure user_id column exists on transcripts
+        cursor.execute("PRAGMA table_info(transcripts);")
+        tx_cols = [col[1] for col in cursor.fetchall()]
+        if "user_id" not in tx_cols:
+            cursor.execute("ALTER TABLE transcripts ADD COLUMN user_id TEXT;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts (user_id);")
+
+        # Migration: Ensure user_id column exists on pipeline_jobs
+        cursor.execute("PRAGMA table_info(pipeline_jobs);")
+        pj_cols = [col[1] for col in cursor.fetchall()]
+        if "user_id" not in pj_cols:
+            cursor.execute("ALTER TABLE pipeline_jobs ADD COLUMN user_id TEXT;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_user_id ON pipeline_jobs (user_id);")
+
+        # Table: editing_templates
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS editing_templates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                revision INTEGER NOT NULL DEFAULT 1,
+                name TEXT NOT NULL,
+                template_json TEXT NOT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_user ON editing_templates (user_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_default ON editing_templates (user_id, is_default);")
+        cursor.execute("PRAGMA user_version = 3;")
+
         # Default settings if not already present
         cursor.execute("""
             INSERT OR IGNORE INTO settings (key, value) VALUES
@@ -442,29 +488,36 @@ def set_setting(key: str, value: str):
         conn.commit()
 
 
-def create_session(notes: str = "", session_id: Optional[str] = None) -> str:
+def create_session(notes: str = "", session_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
     if not session_id:
         session_id = f"sess_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT OR IGNORE INTO sessions (id, status, notes) VALUES (?, 'recording', ?)",
-            (session_id, notes)
+            "INSERT OR IGNORE INTO sessions (id, status, notes, user_id) VALUES (?, 'recording', ?, ?)",
+            (session_id, notes, user_id)
         )
+        if user_id:
+            cursor.execute("UPDATE sessions SET user_id = ? WHERE id = ? AND user_id IS NULL", (user_id, session_id))
         conn.commit()
     return session_id
 
 
-def register_chunk(session_id: Optional[str], filename: str, filepath: str, file_hash: str) -> str:
+def register_chunk(session_id: Optional[str], filename: str, filepath: str, file_hash: str, user_id: Optional[str] = None) -> str:
     chunk_id = f"chk_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        eff_user_id = user_id
         if session_id:
-            cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
+            cursor.execute("INSERT OR IGNORE INTO sessions (id, status, user_id) VALUES (?, 'recording', ?)", (session_id, user_id))
+            if not eff_user_id:
+                row = cursor.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                if row and row["user_id"]:
+                    eff_user_id = row["user_id"]
         cursor.execute("""
-            INSERT INTO chunks (id, session_id, filename, filepath, file_hash, status)
-            VALUES (?, ?, ?, ?, ?, 'incoming')
-        """, (chunk_id, session_id, filename, filepath, file_hash))
+            INSERT INTO chunks (id, session_id, filename, filepath, file_hash, status, user_id)
+            VALUES (?, ?, ?, ?, ?, 'incoming', ?)
+        """, (chunk_id, session_id, filename, filepath, file_hash, eff_user_id))
         conn.commit()
     return chunk_id
 
@@ -497,16 +550,21 @@ def update_chunk_metadata(chunk_id: str, duration: float, width: int, height: in
         conn.commit()
 
 
-def save_transcript(chunk_id: str, session_id: Optional[str], full_text: str, segments: List[Dict[str, Any]]) -> str:
+def save_transcript(chunk_id: str, session_id: Optional[str], full_text: str, segments: List[Dict[str, Any]], user_id: Optional[str] = None) -> str:
     transcript_id = f"tx_{uuid.uuid4().hex[:8]}"
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        eff_user_id = user_id
+        if not eff_user_id and chunk_id:
+            row = cursor.execute("SELECT user_id FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            if row and row["user_id"]:
+                eff_user_id = row["user_id"]
         # Enforce idempotency: one authoritative transcript per chunk_id
         cursor.execute("DELETE FROM transcripts WHERE chunk_id = ?", (chunk_id,))
         cursor.execute("""
-            INSERT INTO transcripts (id, chunk_id, session_id, full_text, segments_json)
-            VALUES (?, ?, ?, ?, ?)
-        """, (transcript_id, chunk_id, session_id, full_text, json.dumps(segments, ensure_ascii=False)))
+            INSERT INTO transcripts (id, chunk_id, session_id, full_text, segments_json, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (transcript_id, chunk_id, session_id, full_text, json.dumps(segments, ensure_ascii=False), eff_user_id))
         cursor.execute("UPDATE chunks SET status = 'transcribed' WHERE id = ?", (chunk_id,))
         conn.commit()
     return transcript_id
@@ -528,7 +586,8 @@ def save_clip(
     rendered_layout_mode: Optional[str] = None,
     duration: Optional[float] = None,
     padded_start: Optional[float] = None,
-    padded_end: Optional[float] = None
+    padded_end: Optional[float] = None,
+    user_id: Optional[str] = None
 ) -> str:
     clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     final_duration = round(float(duration), 2) if duration is not None else round(end_time - start_time, 2)
@@ -537,20 +596,30 @@ def save_clip(
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        eff_user_id = user_id
+        if not eff_user_id and chunk_id:
+            r = cursor.execute("SELECT user_id FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            if r and r["user_id"]:
+                eff_user_id = r["user_id"]
+        if not eff_user_id and session_id:
+            r = cursor.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if r and r["user_id"]:
+                eff_user_id = r["user_id"]
+
         cursor.execute("""
             INSERT INTO clips (
                 id, session_id, chunk_id, start_time, end_time,
                 ai_suggested_start_time, ai_suggested_end_time, range_revision, duration,
                 title, hook, description, hashtags, virality_score,
                 layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
-                padded_start, padded_end
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?)
+                padded_start, padded_end, user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?, ?)
         """, (
             clip_id, session_id, chunk_id, start_time, end_time,
             start_time, end_time, final_duration,
             title, hook, description, hashtags, virality_score,
             layout_mode, rendered_layout_mode, publish_mode, platform_targets,
-            p_start, p_end
+            p_start, p_end, eff_user_id
         ))
         conn.commit()
     return clip_id
@@ -1016,20 +1085,24 @@ def update_youtube_video(
         conn.commit()
 
 
-def list_youtube_inbox(status: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-    """List YouTube inbox items with optional status filtering."""
+def list_youtube_inbox(status: Optional[str] = None, limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List YouTube inbox items with optional status and user filtering."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        clauses = []
+        params = []
         if status:
-            cursor.execute(
-                "SELECT * FROM youtube_inbox WHERE status = ? ORDER BY discovered_at DESC LIMIT ?",
-                (status, limit)
-            )
-        else:
-            cursor.execute(
-                "SELECT * FROM youtube_inbox ORDER BY discovered_at DESC LIMIT ?",
-                (limit,)
-            )
+            clauses.append("status = ?")
+            params.append(status)
+        if user_id:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cursor.execute(
+            f"SELECT * FROM youtube_inbox {where_sql} ORDER BY discovered_at DESC LIMIT ?",
+            tuple(params)
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -1127,7 +1200,9 @@ def save_clip_definitions(
             description = c.get("description", "")
             hashtags = c.get("hashtags", "#Shorts #Reels")
             virality_score = int(c.get("virality_score", 70))
-            layout_mode = c.get("layout_recommendation", "fit_blur")
+            tpl = get_default_template(user_id=effective_user_id)
+            tpl_layout = tpl.get("framing", {}).get("horizontal_mode") or "crop_916"
+            layout_mode = c.get("layout_recommendation") or tpl_layout
 
             p_start = float(c.get("padded_start", max(0.0, start_t - 4.0)))
             p_end = float(c.get("padded_end", end_t + 4.0))
@@ -1205,3 +1280,117 @@ def get_transcription_queue_stats() -> Dict[str, Any]:
     }
 
 
+
+
+# --- Default Editing Template Management ---
+
+DEFAULT_EDITING_TEMPLATE: Dict[str, Any] = {
+    "schema_version": 1,
+    "revision": 1,
+    "name": "Creator Standard",
+    "framing": {
+        "vertical_mode": "native_916",
+        "horizontal_mode": "crop_916",
+    },
+    "captions": {
+        "preset_id": "yellow_pop",
+        "font_family": "Impact",
+        "font_size": 54,
+        "primary_color": "#FFFFFF",
+        "highlight_color": "#FFD700",
+        "outline_color": "#000000",
+        "outline_width": 4.5,
+        "shadow_enabled": True,
+        "animation": "pop",
+        "position_y": 0.78,
+        "max_words_per_line": 3,
+        "all_caps": True
+    },
+    "hook": {
+        "enabled": True,
+        "style": "pill"
+    },
+    "publish_mode": "private",
+    "platform_targets": ["youtube", "instagram"]
+}
+
+
+def get_default_template(user_id: Optional[str] = None) -> Dict[str, Any]:
+    """Retrieve the authoritative default editing template for a user, or the global default."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        row = None
+        if user_id:
+            cursor.execute("""
+                SELECT * FROM editing_templates
+                WHERE user_id = ? AND is_default = 1
+                ORDER BY updated_at DESC LIMIT 1
+            """, (user_id,))
+            row = cursor.fetchone()
+        if not row:
+            cursor.execute("""
+                SELECT * FROM editing_templates
+                WHERE (user_id IS NULL OR user_id = '') AND is_default = 1
+                ORDER BY updated_at DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+
+        if row:
+            try:
+                tpl = json.loads(row["template_json"])
+                tpl["id"] = row["id"]
+                tpl["revision"] = row["revision"]
+                tpl["name"] = row["name"]
+                return tpl
+            except Exception as e:
+                logger.warning("Failed to parse template JSON for template %s: %s", row["id"], e)
+
+    tpl = json.loads(json.dumps(DEFAULT_EDITING_TEMPLATE))
+    tpl["id"] = "tpl_default"
+    return tpl
+
+
+def save_default_template(template_data: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
+    """Atomically save or update the user's default editing template."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if user_id:
+            cursor.execute("""
+                SELECT * FROM editing_templates
+                WHERE user_id = ? AND is_default = 1
+                LIMIT 1
+            """, (user_id,))
+        else:
+            cursor.execute("""
+                SELECT * FROM editing_templates
+                WHERE (user_id IS NULL OR user_id = '') AND is_default = 1
+                LIMIT 1
+            """)
+        existing = cursor.fetchone()
+
+        template_id = existing["id"] if existing else f"tpl_{uuid.uuid4().hex[:8]}"
+        revision = (int(existing["revision"]) + 1) if existing else 1
+        name = template_data.get("name") or "Creator Standard"
+
+        tpl_clean = dict(template_data)
+        tpl_clean["id"] = template_id
+        tpl_clean["revision"] = revision
+        tpl_clean["name"] = name
+        tpl_clean["user_id"] = user_id
+        tpl_clean["schema_version"] = 1
+        tpl_json = json.dumps(tpl_clean, ensure_ascii=False)
+
+        now = datetime.now().isoformat()
+        if existing:
+            cursor.execute("""
+                UPDATE editing_templates
+                SET name = ?, template_json = ?, revision = ?, updated_at = ?
+                WHERE id = ?
+            """, (name, tpl_json, revision, now, template_id))
+        else:
+            cursor.execute("""
+                INSERT INTO editing_templates (id, user_id, schema_version, revision, name, template_json, is_default, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?, ?, 1, ?, ?)
+            """, (template_id, user_id, revision, name, tpl_json, now, now))
+        conn.commit()
+        return tpl_clean

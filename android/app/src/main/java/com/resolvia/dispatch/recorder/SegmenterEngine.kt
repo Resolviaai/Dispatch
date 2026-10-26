@@ -43,6 +43,7 @@ class SegmenterEngine(
 
     // Default 10-minute rolling segments (600,000 ms)
     var segmentDurationMs: Long = 10 * 60 * 1000L
+    var currentUserId: String? = null
 
     private var segmentRollJob: Job? = null
     private var storageMonitorJob: Job? = null
@@ -56,7 +57,7 @@ class SegmenterEngine(
     ): String = withContext(Dispatchers.IO) {
         requireRecordingStorage()
         val sessionId = "sess_${System.currentTimeMillis()}"
-        val session = SessionEntity(sessionId = sessionId, notes = notes)
+        val session = SessionEntity(sessionId = sessionId, notes = notes, userId = currentUserId)
         RecordingForegroundService.markSessionActive(sessionId)
         try {
             dao.insertSession(session)
@@ -119,7 +120,8 @@ class SegmenterEngine(
             sequenceNumber = sequenceNumber,
             filename = "$segId.mp4",
             filepath = File(recordingsDir, "$segId.mp4").absolutePath,
-            status = "RECORDING"
+            status = "RECORDING",
+            userId = currentUserId
         )
         // Persist the row before CameraX can begin writing; recovery must always see ownership.
         withContext(Dispatchers.IO) { dao.insertSegment(segment) }

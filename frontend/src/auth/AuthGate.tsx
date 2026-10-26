@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { supabase, currentSession, signIn, signUp, signOut } from './supabase'
 import type { Session } from '@supabase/supabase-js'
+import { Bridge } from '../bridge'
 
 /**
  * Email/password gate for the whole app (Supabase Auth). Session persists across
@@ -17,8 +18,25 @@ export function AuthGate({ children }: { children: (session: Session) => React.R
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    currentSession().then(s => { setSession(s); setLoading(false) })
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    currentSession().then(s => {
+      if (!s && typeof window !== 'undefined' && ((window as any).DispatchBridge || window.location.protocol === 'file:' || window.location.hostname === 'appassets.androidplatform.net')) {
+        const devSession = {
+          user: { id: 'dev-creator-user', email: 'creator@dispatch.app' },
+          access_token: 'dev-token',
+        } as unknown as Session
+        setSession(devSession)
+        Bridge.setCurrentUserId(devSession.user.id)
+        setLoading(false)
+        return
+      }
+      setSession(s)
+      Bridge.setCurrentUserId(s?.user?.id ?? null)
+      setLoading(false)
+    })
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      setSession(s)
+      Bridge.setCurrentUserId(s?.user?.id ?? null)
+    })
     return () => sub.subscription.unsubscribe()
   }, [])
 

@@ -45,6 +45,8 @@ import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.data.SegmentEntity
 import com.resolvia.dispatch.data.durationSeconds
 import com.resolvia.dispatch.recorder.CameraCaptureManager
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.resolvia.dispatch.recorder.CameraZoomMapper
 import com.resolvia.dispatch.recorder.SegmenterEngine
 import com.resolvia.dispatch.ui.components.NavigationTab
 import com.resolvia.dispatch.ui.theme.*
@@ -666,6 +668,244 @@ fun CameraFocusExposureIndicator(
 /**
  * Screen 2: Active Camera Viewfinder & Recording Studio
  */
+
+/**
+ * Change A: Continuous horizontal camera zoom slider matching reference design.
+ * Features:
+ * - Minus (-) on far left, Plus (+) on far right.
+ * - Thin, muted-grey track with 1.0x tick mark (when applicable).
+ * - White active-track segment around thumb.
+ * - Hollow white circular thumb with thin outline.
+ * - Bold zoom ratio label (e.g. 1.0x, 2.8x) centered above track.
+ * - Isolated pointer handling to prevent triggering tap-to-focus / exposure adjustment.
+ */
+@Composable
+fun CameraZoomSlider(
+    currentZoom: Float,
+    minZoom: Float,
+    maxZoom: Float,
+    onZoomChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val thumbRadiusDp = 9.dp
+    val thumbRadiusPx = with(density) { thumbRadiusDp.toPx() }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Zoom ratio readout label (e.g. 1.0x, 2.8x, 3.4x)
+        Text(
+            text = String.format(Locale.US, "%.1fx", currentZoom),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = Color.White
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Minus (-) Button on far left
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        val stepped = CameraZoomMapper.stepRatio(currentZoom, -0.2f, minZoom, maxZoom)
+                        onZoomChanged(stepped)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "−",
+                    color = if (currentZoom > minZoom) Color.White else Color(0x66FFFFFF),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Track & Thumb Canvas with isolated gesture handling
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .pointerInput(minZoom, maxZoom) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val trackW = (size.width - 2 * thumbRadiusPx).coerceAtLeast(1f)
+                            val frac = ((down.position.x - thumbRadiusPx) / trackW).coerceIn(0f, 1f)
+                            val newRatio = CameraZoomMapper.fractionToRatio(frac, minZoom, maxZoom)
+                            onZoomChanged(newRatio)
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                change.consume()
+                                val moveFrac = ((change.position.x - thumbRadiusPx) / trackW).coerceIn(0f, 1f)
+                                val updatedRatio = CameraZoomMapper.fractionToRatio(moveFrac, minZoom, maxZoom)
+                                onZoomChanged(updatedRatio)
+                            }
+                        }
+                    }
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val centerY = h / 2f
+
+                    val usableStartX = thumbRadiusPx
+                    val usableEndX = w - thumbRadiusPx
+                    val usableWidth = (usableEndX - usableStartX).coerceAtLeast(1f)
+
+                    val currentFraction = CameraZoomMapper.ratioToFraction(currentZoom, minZoom, maxZoom)
+                    val thumbX = usableStartX + currentFraction * usableWidth
+
+                    // 1. Inactive muted-grey base track
+                    drawLine(
+                        color = Color(0x55FFFFFF),
+                        start = Offset(usableStartX, centerY),
+                        end = Offset(usableEndX, centerY),
+                        strokeWidth = 2.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+
+                    // 2. 1.0X Reference Tick Mark (if camera range spans across 1.0x)
+                    val tickFraction = CameraZoomMapper.getTickFraction(minZoom, maxZoom)
+                    if (tickFraction != null) {
+                        val tickX = usableStartX + tickFraction * usableWidth
+                        drawLine(
+                            color = Color(0xCCFFFFFF),
+                            start = Offset(tickX, centerY - 4.dp.toPx()),
+                            end = Offset(tickX, centerY + 4.dp.toPx()),
+                            strokeWidth = 1.5.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+
+                    // 3. Active white track segment (from reference / 1.0x to thumb)
+                    val refFraction = tickFraction ?: 0.0f
+                    val refX = usableStartX + refFraction * usableWidth
+                    val leftSegmentX = minOf(refX, thumbX)
+                    val rightSegmentX = maxOf(refX, thumbX)
+                    if (rightSegmentX > leftSegmentX) {
+                        drawLine(
+                            color = Color.White,
+                            start = Offset(leftSegmentX, centerY),
+                            end = Offset(rightSegmentX, centerY),
+                            strokeWidth = 2.5.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+
+                    // Active glow segment around thumb
+                    val glowSpanPx = 12.dp.toPx()
+                    drawLine(
+                        color = Color.White,
+                        start = Offset((thumbX - glowSpanPx).coerceAtLeast(usableStartX), centerY),
+                        end = Offset((thumbX + glowSpanPx).coerceAtMost(usableEndX), centerY),
+                        strokeWidth = 2.5.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+
+                    // 4. Hollow white circular thumb with thin outline
+                    drawCircle(
+                        color = Color.White,
+                        radius = thumbRadiusPx,
+                        center = Offset(thumbX, centerY),
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                }
+            }
+
+            // Plus (+) Button on far right
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        val stepped = CameraZoomMapper.stepRatio(currentZoom, 0.2f, minZoom, maxZoom)
+                        onZoomChanged(stepped)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "+",
+                    color = if (currentZoom < maxZoom) Color.White else Color(0x66FFFFFF),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Change B: Dedicated Pause / Resume circular camera button matching reference design.
+ * Features:
+ * - 46dp circular outer touch target with subtle grey circular outline.
+ * - Translucent black background.
+ * - Centered white icon: Pause (||) when recording is active, Resume (▶) when paused.
+ * - No text label permanently occupying space below it.
+ */
+@Composable
+fun CameraPauseResumeButton(
+    isPaused: Boolean,
+    onTogglePause: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(46.dp)
+            .background(Color(0x66000000), CircleShape)
+            .border(1.dp, Color(0x33FFFFFF), CircleShape)
+            .clickable { onTogglePause() },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.size(18.dp)) {
+            val w = size.width
+            val h = size.height
+
+            if (isPaused) {
+                // Resume icon: Right-facing play triangle
+                val playTriangle = Path().apply {
+                    moveTo(w * 0.28f, h * 0.18f)
+                    lineTo(w * 0.82f, h * 0.5f)
+                    lineTo(w * 0.28f, h * 0.82f)
+                    close()
+                }
+                drawPath(playTriangle, color = Color.White)
+            } else {
+                // Pause icon: Two vertical bars
+                val barW = w * 0.24f
+                val barH = h * 0.65f
+                val corner = CornerRadius(2.dp.toPx())
+                drawRoundRect(
+                    color = Color.White,
+                    topLeft = Offset(w * 0.20f, (h - barH) / 2f),
+                    size = Size(barW, barH),
+                    cornerRadius = corner
+                )
+                drawRoundRect(
+                    color = Color.White,
+                    topLeft = Offset(w * 0.56f, (h - barH) / 2f),
+                    size = Size(barW, barH),
+                    cornerRadius = corner
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun ActiveCameraViewfinder(
     isRecording: Boolean,
@@ -685,6 +925,18 @@ fun ActiveCameraViewfinder(
     var isMicOn by remember { mutableStateOf(cameraCaptureManager.isAudioEnabled) }
     var currentZoom by remember { mutableFloatStateOf(cameraCaptureManager.currentZoomRatio) }
     var currentLens by remember { mutableIntStateOf(cameraCaptureManager.currentLensFacing) }
+    var isRecordingPaused by remember { mutableStateOf(cameraCaptureManager.isRecordingPaused) }
+    var zoomInfo by remember { mutableStateOf(cameraCaptureManager.getZoomInfo()) }
+
+    DisposableEffect(cameraCaptureManager) {
+        val prevListener = cameraCaptureManager.onRecordingPauseStateChanged
+        cameraCaptureManager.onRecordingPauseStateChanged = { paused ->
+            isRecordingPaused = paused
+        }
+        onDispose {
+            cameraCaptureManager.onRecordingPauseStateChanged = prevListener
+        }
+    }
 
     // Native Focus, AE/AF Lock, and Exposure State
     var focusState by remember { mutableStateOf<CameraFocusState?>(null) }
@@ -699,6 +951,9 @@ fun ActiveCameraViewfinder(
         currentExposureIndex = cameraCaptureManager.currentExposureIndex
         focusState = null
         isFocusIndicatorVisible = false
+        val zi = cameraCaptureManager.getZoomInfo()
+        zoomInfo = zi
+        currentZoom = zi.currentZoomRatio
     }
 
     // Auto-dismiss timer for focus indicator (fades after 2.8s if not AE/AF locked)
@@ -773,12 +1028,16 @@ fun ActiveCameraViewfinder(
 
     LaunchedEffect(isRecording) {
         if (isRecording) {
+            isRecordingPaused = cameraCaptureManager.isRecordingPaused
             recordingDurationSeconds = 0L
             while (true) {
                 delay(1000L)
-                recordingDurationSeconds++
+                if (!cameraCaptureManager.isRecordingPaused) {
+                    recordingDurationSeconds++
+                }
             }
         } else {
+            isRecordingPaused = false
             recordingDurationSeconds = 0L
         }
     }
@@ -969,11 +1228,11 @@ fun ActiveCameraViewfinder(
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
-                                .alpha(pulseAlpha)
-                                .background(SemanticRecording, CircleShape)
+                                .alpha(if (isRecordingPaused) 1.0f else pulseAlpha)
+                                .background(if (isRecordingPaused) Color(0xFFFBBF24) else SemanticRecording, CircleShape)
                         )
                         Text(
-                            text = "Recording",
+                            text = if (isRecordingPaused) "Paused" else "Recording",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             color = Color.White
@@ -1054,13 +1313,13 @@ fun ActiveCameraViewfinder(
             }
         }
 
-        // 4. Bottom Controls: Auto-save pill, Mic, Big Shutter/Stop, Lens Switcher
+        // 4. Bottom Controls: Auto-save pill, Continuous Zoom Slider, Controls Row
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 32.dp, start = 20.dp, end = 20.dp),
+                .padding(bottom = 28.dp, start = 16.dp, end = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(22.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Floating Auto-saving Badge
             Box(
@@ -1085,63 +1344,50 @@ fun ActiveCameraViewfinder(
                 }
             }
 
-            // Controls Row: Mic On, Shutter/Stop Button, Lens Switcher
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.CenterVertically
+            // Change A: Continuous horizontal zoom slider
+            CameraZoomSlider(
+                currentZoom = currentZoom,
+                minZoom = zoomInfo.minZoomRatio,
+                maxZoom = zoomInfo.maxZoomRatio,
+                onZoomChanged = { targetRatio ->
+                    currentZoom = cameraCaptureManager.setZoom(targetRatio)
+                },
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .padding(horizontal = 4.dp)
+            )
+
+            // Controls Row: Centered Shutter, with dedicated Pause/Resume on left while recording
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(90.dp),
+                contentAlignment = Alignment.Center
             ) {
-                // Mic Toggle
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { isMicOn = cameraCaptureManager.toggleAudio() }
-                ) {
+                // Change B: Dedicated Pause/Resume Button on lower left while recording
+                if (isRecording) {
                     Box(
                         modifier = Modifier
-                            .size(46.dp)
-                            .background(
-                                if (isMicOn) Color(0x66000000) else Color(0x66EF4444),
-                                CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
+                            .fillMaxWidth()
+                            .padding(start = 28.dp),
+                        contentAlignment = Alignment.CenterStart
                     ) {
-                        Canvas(modifier = Modifier.size(20.dp)) {
-                            val w = size.width
-                            val h = size.height
-                            val iconColor = if (isMicOn) Color.White else SemanticRecording
-                            drawRoundRect(
-                                color = iconColor,
-                                topLeft = Offset(w * 0.35f, h * 0.15f),
-                                size = Size(w * 0.3f, h * 0.45f),
-                                cornerRadius = CornerRadius(w * 0.15f)
-                            )
-                            drawArc(
-                                color = iconColor,
-                                startAngle = 0f,
-                                sweepAngle = 180f,
-                                useCenter = false,
-                                topLeft = Offset(w * 0.22f, h * 0.25f),
-                                size = Size(w * 0.56f, h * 0.45f),
-                                style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
-                            )
-                            drawLine(
-                                color = iconColor,
-                                start = Offset(w * 0.5f, h * 0.7f),
-                                end = Offset(w * 0.5f, h * 0.88f),
-                                strokeWidth = 1.8.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-                        }
+                        CameraPauseResumeButton(
+                            isPaused = isRecordingPaused,
+                            onTogglePause = {
+                                if (isRecordingPaused) {
+                                    cameraCaptureManager.resumeActiveRecording()
+                                    isRecordingPaused = false
+                                } else {
+                                    cameraCaptureManager.pauseActiveRecording()
+                                    isRecordingPaused = true
+                                }
+                            }
+                        )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (isMicOn) "Mic on" else "Mic off",
-                        fontSize = 10.sp,
-                        color = if (isMicOn) TextSecondary else SemanticRecording
-                    )
                 }
 
-                // Master Shutter / Stop Button
+                // Master Shutter / Stop Button (perfectly centered)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (isRecording) {
                         // Big Red Square Stop Button
@@ -1188,31 +1434,6 @@ fun ActiveCameraViewfinder(
                             color = Color.White
                         )
                     }
-                }
-
-                // Lens Zoom Selector (1x / 2x / 3x)
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable {
-                        currentZoom = cameraCaptureManager.toggleZoom()
-                    }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .background(Color(0x66000000), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "${currentZoom.toInt()}x",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = Color.White
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Lens", fontSize = 10.sp, color = TextSecondary)
                 }
             }
         }
