@@ -112,6 +112,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [isSavingGemini, setIsSavingGemini] = useState(false);
   const [showGeminiInput, setShowGeminiInput] = useState(false);
+  const [geminiError, setGeminiError] = useState<string | null>(null);
 
   // State for connected accounts and keys
   const [wifiOnly, setWifiOnly] = useState(true);
@@ -272,19 +273,75 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   };
 
   const handleSaveGeminiKey = async () => {
-    if (!jwtToken || !geminiKeyInput.trim()) return;
+    const cleanKey = geminiKeyInput.trim();
+    if (!cleanKey) return;
+
+    setGeminiError(null);
+    if (!cleanKey.startsWith('AIza')) {
+      setGeminiError('Invalid format: Gemini API key must start with AIza...');
+      return;
+    }
+    if (cleanKey.length < 30) {
+      setGeminiError('API key is too short. Please paste the full Gemini key.');
+      return;
+    }
+
     setIsSavingGemini(true);
     setFeedback(null);
     try {
-      const res = await saveGeminiKey(jwtToken, geminiKeyInput.trim());
-      if (res.saved) {
-        setGeminiStatus({ configured: true, key_prefix: res.key_prefix || null });
+      const { currentSession, supabase } = await import('../auth/supabase');
+      let sess = await currentSession().catch(() => null);
+      if (!sess?.access_token) {
+        const refresh = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+        sess = refresh.data.session;
+      }
+      const token = sess?.access_token || jwtToken;
+
+      let cloudSuccess = false;
+      let cloudErrorMsg: string | null = null;
+      let displayPrefix = `${cleanKey.slice(0, 8)}...${cleanKey.slice(-4)}`;
+
+      if (token) {
+        const res = await saveGeminiKey(token, cleanKey);
+        if (res.saved) {
+          cloudSuccess = true;
+          displayPrefix = res.key_prefix || displayPrefix;
+        } else {
+          cloudErrorMsg = res.error || null;
+        }
+      }
+
+      // Also sync directly to connected PC workstation
+      let pcSuccess = false;
+      try {
+        const pcRes = await fetch(apiUrl('/api/integrations/gemini', pcHost), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({ api_key: cleanKey })
+        });
+        if (pcRes.ok) {
+          pcSuccess = true;
+        }
+      } catch {
+        // PC offline
+      }
+
+      if (cloudSuccess || pcSuccess) {
+        setGeminiStatus({ configured: true, key_prefix: displayPrefix });
         setGeminiKeyInput('');
         setShowGeminiInput(false);
-        setFeedback('Personal Gemini API key saved securely in your vault.');
+        setGeminiError(null);
+        const msg = cloudSuccess && pcSuccess
+          ? 'Personal Gemini API key saved to your cloud vault and PC workstation.'
+          : cloudSuccess
+          ? 'Personal Gemini API key saved to your cloud vault.'
+          : 'Gemini API key saved to your PC workstation.';
+        setFeedback(msg);
       } else {
-        setFeedback(res.error || 'Failed to save Gemini API key.');
+        setGeminiError(cloudErrorMsg || 'Could not save Gemini key. Please sign in or check your connection.');
       }
+    } catch (e: any) {
+      setGeminiError(e.message || 'An error occurred while saving.');
     } finally {
       setIsSavingGemini(false);
     }
@@ -748,6 +805,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 placeholder="AIzaSy..."
                 className="w-full min-h-[44px] rounded-xl bg-surface-2 border border-border px-3 text-sm font-mono text-text-main outline-none focus:border-primary"
               />
+              {geminiError && (
+                <p className="text-xs text-danger flex items-center gap-1.5 pt-0.5">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span>{geminiError}</span>
+                </p>
+              )}
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleSaveGeminiKey}
@@ -757,7 +820,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                   {isSavingGemini ? 'Saving...' : 'Save Gemini Key'}
                 </button>
                 <button
-                  onClick={() => { setShowGeminiInput(false); setGeminiKeyInput(''); }}
+                  onClick={() => { setShowGeminiInput(false); setGeminiKeyInput(''); setGeminiError(null); }}
                   className="min-h-[40px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm text-text-secondary active:scale-[0.98]"
                 >
                   Cancel
