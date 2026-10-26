@@ -10,7 +10,7 @@ from dispatch.captions.model import (
     AnimationConfig,
     WordStyleOverride
 )
-from dispatch.captions.grouper import group_words_into_captions
+from dispatch.captions.grouper import group_words_into_captions, apply_template_to_track
 from dispatch.captions.presets import CAPTION_PRESETS, get_preset
 from dispatch.captions.exporter import (
     export_to_ass,
@@ -28,6 +28,7 @@ __all__ = [
     "AnimationConfig",
     "WordStyleOverride",
     "group_words_into_captions",
+    "apply_template_to_track",
     "CAPTION_PRESETS",
     "get_preset",
     "export_to_ass",

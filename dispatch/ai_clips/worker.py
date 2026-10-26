@@ -18,7 +18,7 @@ from dispatch import db
 import dispatch.config
 from dispatch.config import DEFAULT_PUBLISH_MODE, PROCESSING_DIR, GEMINI_API_KEY
 from dispatch.video_engine.renderer import render_clip
-from dispatch.captions import group_words_into_captions, export_to_ass
+from dispatch.captions import group_words_into_captions, export_to_ass, apply_template_to_track
 from dispatch.captions.presets import get_default_preset_id
 from dispatch.ai_clips.highlight_finder import (
     call_gemini_generate_content,
@@ -473,13 +473,24 @@ class HighlightWorker:
                                 "end": w_e
                             })
 
+                    raw_stage2_segments = [{"id": 0, "start": eff_c_start, "end": eff_c_end, "words": clean_words}]
+                    clean_stage2_segments = transliterate_segments_to_hinglish(raw_stage2_segments)
+                    if clean_stage2_segments and clean_stage2_segments[0].get("words"):
+                        clean_words = clean_stage2_segments[0]["words"]
+
+                    user_tpl = db.get_default_template(user_id=clip.get("user_id"))
+                    tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+                    preset_cand = tpl_captions.get("preset_id")
+                    effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
+
                     track = group_words_into_captions(
                         raw_segments=[{"id": 0, "start": eff_c_start, "end": eff_c_end, "words": clean_words}],
                         clip_start=eff_c_start,
                         clip_end=eff_c_end,
                         clip_id=clip_id,
-                        preset_id=(db.get_default_template(user_id=clip.get("user_id")).get("captions", {}).get("preset_id") or get_default_preset_id())
+                        preset_id=effective_preset_id
                     )
+                    apply_template_to_track(track, tpl_captions)
                     track_dict = track.to_dict()
                     track_dict["words"] = clean_words
                     if not db.save_clip_caption_data(
@@ -507,13 +518,18 @@ class HighlightWorker:
                         clip_segs = shifted_segs
 
                     clean_segs = transliterate_segments_to_hinglish(clip_segs)
+                    user_tpl = db.get_default_template(user_id=clip.get("user_id"))
+                    tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+                    preset_cand = tpl_captions.get("preset_id")
+                    effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
                     track = group_words_into_captions(
                         raw_segments=clean_segs,
                         clip_start=eff_c_start,
                         clip_end=eff_c_end,
                         clip_id=clip_id,
-                        preset_id=(db.get_default_template(user_id=clip.get("user_id")).get("captions", {}).get("preset_id") or get_default_preset_id())
+                        preset_id=effective_preset_id
                     )
+                    apply_template_to_track(track, tpl_captions)
                     if not db.save_clip_caption_data(
                         clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
                         source_range_start=eff_c_start, source_range_end=eff_c_end,

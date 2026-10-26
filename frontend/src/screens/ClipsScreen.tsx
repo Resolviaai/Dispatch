@@ -2849,8 +2849,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 >
                   <Send size={14} />
                   <span>Publish</span>
-                  <span className="text-xs opacity-80 font-mono capitalize">({publishMode})</span>
-                </button>
+                                  </button>
               )}
             </section>
 
@@ -2866,34 +2865,26 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <section className="w-full pt-3 mt-1 border-t border-border">
                   <div className="flex items-center justify-between text-xs leading-tight mb-2">
                     <span className="font-medium uppercase tracking-wider text-text-muted">Layout framing</span>
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={handleSaveAsDefaultTemplate}
-                        className="text-[11px] text-text-muted hover:text-primary transition-colors flex items-center gap-1 active:scale-[0.98]"
-                        title="Save this framing mode as default for new clips"
-                      >
-                        <Sliders size={11} />
-                        Save as default
-                      </button>
-                      <span className="font-mono text-xs text-primary font-semibold tabular-nums">
-                        {activeModeObj ? `${activeModeObj.target_aspect} ${activeModeObj.label}` : layoutMode}
-                      </span>
-                    </div>
+                    <span className="font-mono text-xs text-primary font-semibold tabular-nums">
+                      {activeModeObj ? `${activeModeObj.target_aspect} ${activeModeObj.label}` : layoutMode}
+                    </span>
                   </div>
-                  <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                  <div
+                    className="grid gap-1.5 w-full"
+                    style={{ gridTemplateColumns: `repeat(${availableModes.length}, minmax(0, 1fr))` }}
+                  >
                     {availableModes.map((opt) => (
                       <button
                         key={opt.id}
                         type="button"
                         onClick={() => handleLayoutChange(opt.id)}
-                        className={`h-8 px-3 rounded-lg text-[13px] font-medium whitespace-nowrap active:scale-[0.98] transition-all flex-1 min-w-[64px] ${layoutMode === opt.id
-                          ? 'chip-selected font-semibold'
+                        className={`h-8 px-1 rounded-lg text-[11px] sm:text-xs font-medium text-center flex items-center justify-center truncate active:scale-[0.98] transition-all ${layoutMode === opt.id
+                          ? 'chip-selected font-semibold shadow-sm'
                           : 'bg-surface-2 text-text-secondary hover:text-text-main'
                           }`}
                         title={opt.description}
                       >
-                        {opt.label}
+                        <span className="truncate">{opt.label}</span>
                       </button>
                     ))}
                   </div>

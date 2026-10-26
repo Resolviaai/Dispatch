@@ -280,6 +280,16 @@ class MainActivity : ComponentActivity() {
                     view: WebView,
                     request: WebResourceRequest
                 ): WebResourceResponse? {
+                    val url = request.url
+                    if (url.host == "appassets.androidplatform.net" && url.path?.startsWith("/recordings/") == true) {
+                        val path = url.path!!.removePrefix("/recordings/")
+                        val targetFile = listOf(extRecDir, intRecDir)
+                            .map { File(it, path).canonicalFile }
+                            .firstOrNull { it.exists() && it.canRead() && !it.isDirectory }
+                        if (targetFile != null) {
+                            return handleMediaFileWithRange(targetFile, request.requestHeaders)
+                        }
+                    }
                     return assetLoader.shouldInterceptRequest(request.url)
                 }
 
@@ -400,5 +410,71 @@ class MainActivity : ComponentActivity() {
         if (::webView.isInitialized) {
             webView.destroy()
         }
+    }
+
+    private fun handleMediaFileWithRange(file: File, requestHeaders: Map<String, String>?): WebResourceResponse {
+        val fileLength = file.length()
+        val mime = when {
+            file.name.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
+            file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".jpeg", ignoreCase = true) -> "image/jpeg"
+            file.name.endsWith(".png", ignoreCase = true) -> "image/png"
+            else -> "application/octet-stream"
+        }
+
+        val rangeHeader = requestHeaders?.entries?.firstOrNull { it.key.equals("range", ignoreCase = true) }?.value
+
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+            try {
+                val range = rangeHeader.removePrefix("bytes=").trim()
+                val parts = range.split("-", limit = 2)
+                var start = parts[0].toLongOrNull() ?: 0L
+                var end = if (parts.size > 1 && parts[1].isNotBlank()) parts[1].toLongOrNull() ?: (fileLength - 1) else (fileLength - 1)
+                if (end >= fileLength) end = fileLength - 1
+                if (start > end) start = 0L
+
+                val contentLength = end - start + 1
+                val fis = FileInputStream(file)
+                fis.channel.position(start)
+
+                val boundedStream = object : java.io.InputStream() {
+                    private var bytesRemaining = contentLength
+                    override fun read(): Int {
+                        if (bytesRemaining <= 0) return -1
+                        val b = fis.read()
+                        if (b != -1) bytesRemaining--
+                        return b
+                    }
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        if (bytesRemaining <= 0) return -1
+                        val toRead = Math.min(len.toLong(), bytesRemaining).toInt()
+                        val count = fis.read(b, off, toRead)
+                        if (count != -1) bytesRemaining -= count
+                        return count
+                    }
+                    override fun close() {
+                        fis.close()
+                    }
+                }
+
+                val responseHeaders = mapOf(
+                    "Access-Control-Allow-Origin" to "*",
+                    "Accept-Ranges" to "bytes",
+                    "Content-Range" to "bytes $start-$end/$fileLength",
+                    "Content-Length" to contentLength.toString(),
+                    "Content-Type" to mime
+                )
+                return WebResourceResponse(mime, null, 206, "Partial Content", responseHeaders, boundedStream)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Range request failed: ${e.message}")
+            }
+        }
+
+        val defaultHeaders = mapOf(
+            "Access-Control-Allow-Origin" to "*",
+            "Accept-Ranges" to "bytes",
+            "Content-Length" to fileLength.toString(),
+            "Content-Type" to mime
+        )
+        return WebResourceResponse(mime, null, 200, "OK", defaultHeaders, FileInputStream(file))
     }
 }

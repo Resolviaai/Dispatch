@@ -1696,6 +1696,30 @@ async def get_clip_captions(clip_id: str, request: Request):
                 and isinstance(cached_track.get("groups"), list)
                 and int(clip.get("caption_range_revision") if clip.get("caption_range_revision") is not None else current_revision) == current_revision
             ):
+                # Ensure Roman Hinglish transliteration on cached tracks
+                groups = cached_track.get("groups", [])
+                tokens = []
+                positions = []
+                for g_idx, grp in enumerate(groups):
+                    for w_idx, w in enumerate(grp.get("words", [])):
+                        tok = w.get("word") or w.get("text") or ""
+                        tokens.append(tok)
+                        positions.append((g_idx, w_idx))
+                from dispatch.ai_clips.highlight_finder import has_devanagari, transliterate_tokens_to_hinglish
+                if any(has_devanagari(t) for t in tokens):
+                    transliterated = transliterate_tokens_to_hinglish(tokens)
+                    for (g_idx, w_idx), new_word in zip(positions, transliterated):
+                        w = groups[g_idx]["words"][w_idx]
+                        if "word" in w:
+                            w["word"] = new_word
+                        if "text" in w:
+                            w["text"] = new_word
+                    for grp in groups:
+                        words = grp.get("words", [])
+                        if words:
+                            grp["text"] = " ".join((w.get("word") or w.get("text") or "") for w in words)
+                    db.save_clip_caption_data(clip_id, json.dumps(cached_track), expected_range_revision=current_revision)
+
                 cached_track["range_revision"] = current_revision
                 cached_track["timing_warning"] = clip.get("caption_timing_warning")
                 if not cached_track["timing_warning"] and any(

@@ -179,3 +179,68 @@ def group_words_into_captions(
         default_layout=default_layout,
         default_animation=default_anim
     )
+
+
+def apply_template_to_track(track: CaptionTrack, tpl_captions: Optional[Dict[str, Any]]) -> CaptionTrack:
+    """Apply user editing template caption properties over an existing CaptionTrack."""
+    if not tpl_captions or not isinstance(tpl_captions, dict):
+        return track
+
+    if tpl_captions.get("font_family"):
+        track.default_style.font_family = str(tpl_captions["font_family"])
+    if tpl_captions.get("font_size"):
+        try:
+            track.default_style.font_size = int(float(tpl_captions["font_size"]))
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("font_weight"):
+        track.default_style.font_weight = str(tpl_captions["font_weight"])
+    if tpl_captions.get("primary_color"):
+        track.default_style.primary_color = str(tpl_captions["primary_color"])
+    if tpl_captions.get("highlight_color"):
+        track.default_style.highlight_color = str(tpl_captions["highlight_color"])
+    if tpl_captions.get("highlight_enabled") is not None:
+        track.default_style.highlight_enabled = bool(tpl_captions["highlight_enabled"])
+    if tpl_captions.get("outline_enabled") is not None:
+        track.default_style.outline_enabled = bool(tpl_captions["outline_enabled"])
+    if tpl_captions.get("outline_color"):
+        track.default_style.outline_color = str(tpl_captions["outline_color"])
+    if tpl_captions.get("outline_width") is not None:
+        try:
+            track.default_style.outline_width = float(tpl_captions["outline_width"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("shadow_enabled") is not None:
+        track.default_style.shadow_enabled = bool(tpl_captions["shadow_enabled"])
+    if tpl_captions.get("shadow_color"):
+        track.default_style.shadow_color = str(tpl_captions["shadow_color"])
+    if tpl_captions.get("background_enabled") is not None:
+        track.default_style.background_enabled = bool(tpl_captions["background_enabled"])
+    if tpl_captions.get("background_color"):
+        track.default_style.background_color = str(tpl_captions["background_color"])
+    if tpl_captions.get("letter_spacing") is not None:
+        try:
+            track.default_style.letter_spacing = float(tpl_captions["letter_spacing"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("line_height") is not None:
+        try:
+            track.default_style.line_height = float(tpl_captions["line_height"])
+        except (ValueError, TypeError):
+            pass
+
+    if tpl_captions.get("position_y") is not None:
+        try:
+            track.default_layout.position_y = float(tpl_captions["position_y"])
+        except (ValueError, TypeError):
+            pass
+
+    if tpl_captions.get("animation"):
+        track.default_animation.type = str(tpl_captions["animation"])
+
+    for grp in track.groups:
+        grp.style = track.default_style
+        grp.layout = track.default_layout
+        grp.animation = track.default_animation
+
+    return track
