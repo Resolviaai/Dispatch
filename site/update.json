@@ -4,9 +4,9 @@
     "versionCode":  27,
     "versionName":  "1.1.23",
     "releaseTag":  "v1.1.23-alpha",
-    "generatedAt":  "2026-10-26T13:21:50Z",
+    "generatedAt":  "2026-10-26T15:04:13Z",
     "releaseNotes":  "Dispatch 1.1.23 alpha build.",
     "apkAsset":  "Dispatch.apk",
-    "apkSizeBytes":  11610893,
-    "apkSha256":  "19e42b31d3c4b71d1993da675dec38e27ba4e1c883be4e9d124f0b3c49d3ad06"
+    "apkSizeBytes":  11610890,
+    "apkSha256":  "f8e84fd06e73c0fcff642d1f94d504d1c4ee95cab1cc150972a1e19e2313d91f"
 }
