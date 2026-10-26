@@ -1,9 +1,13 @@
 package com.resolvia.dispatch.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "segments")
+@Entity(
+    tableName = "segments",
+    indices = [Index(value = ["userId"])]
+)
 data class SegmentEntity(
     @PrimaryKey
     val segmentId: String,

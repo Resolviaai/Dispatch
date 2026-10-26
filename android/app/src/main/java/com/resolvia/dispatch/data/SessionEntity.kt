@@ -1,9 +1,13 @@
 package com.resolvia.dispatch.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "sessions")
+@Entity(
+    tableName = "sessions",
+    indices = [Index(value = ["userId"])]
+)
 data class SessionEntity(
     @PrimaryKey
     val sessionId: String,
