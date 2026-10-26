@@ -193,12 +193,25 @@ function formatTimeCode(sec: number): string {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
-function formatAge(createdAt?: string): string {
-  if (!createdAt) return '';
-  const t = new Date(createdAt).getTime();
+function parseUtcTimestamp(raw?: string): number {
+  if (!raw) return NaN;
+  const s = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}/.test(s)) {
+    return new Date(s.replace(' ', 'T') + 'Z').getTime();
+  }
+  if (s.includes('T') && !s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
+    return new Date(s + 'Z').getTime();
+  }
+  return new Date(s).getTime();
+}
+
+function formatAge(dateStr?: string): string {
+  if (!dateStr) return '';
+  const t = parseUtcTimestamp(dateStr);
   if (Number.isNaN(t)) return '';
-  const mins = Math.floor((Date.now() - t) / 60000);
-  if (mins < 1) return 'just now';
+  const diffMs = Date.now() - t;
+  if (diffMs < 60000) return 'just now';
+  const mins = Math.floor(diffMs / 60000);
   if (mins < 60) return mins + 'm ago';
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return hrs + 'h ago';
@@ -207,7 +220,7 @@ function formatAge(createdAt?: string): string {
 
 function getRetentionDaysLeft(publishedAt?: string): number {
   if (!publishedAt) return 7;
-  const pubDate = new Date(publishedAt).getTime();
+  const pubDate = parseUtcTimestamp(publishedAt);
   if (isNaN(pubDate)) return 7;
   const diffDays = 7 - (Date.now() - pubDate) / (1000 * 60 * 60 * 24);
   return Math.max(0, Math.ceil(diffDays));
@@ -1211,7 +1224,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const lastTimeUpdateRef = useRef<number>(0);
 
   useEffect(() => {
-    onEditorOpenChange?.(viewMode === 'studio');
+    onEditorOpenChange?.(viewMode === 'studio' || viewMode === 'publish');
   }, [viewMode, onEditorOpenChange]);
 
   // Clips State
@@ -2399,7 +2412,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           {[
             { id: 'all' as FilterStatus, label: 'All', count: allClips.length },
             { id: 'ready' as FilterStatus, label: 'Ready', count: readyClips.length },
-            { id: 'approved' as FilterStatus, label: 'Uploaded', count: approvedClips.length },
+            { id: 'approved' as FilterStatus, label: 'Published', count: approvedClips.length },
           ].map((chip) => {
             const isSelected = filterStatus === chip.id;
             return (
@@ -2536,9 +2549,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <div className="px-4">
                 {clipsInSession.map((clip) => {
                   const isUploaded = clip.status === 'approved' || clip.status === 'published';
+                  const isPublished = clip.status === 'published' || Boolean(clip.remote_id || clip.remote_url);
                   const youtubeUrl = clip.remote_url || (clip.remote_id ? 'https://youtu.be/' + clip.remote_id : null);
                   const daysLeft = getRetentionDaysLeft(clip.published_at);
-                  const age = formatAge(clip.created_at);
+                  const age = formatAge(isUploaded ? (clip.published_at || clip.approved_at || clip.created_at) : clip.created_at);
 
                   return (
                     <div
@@ -2588,8 +2602,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                             <>{clip.virality_score}% &middot; </>
                           )}
                           {age || (clip.session_id ? clip.session_id.replace('sess_', '#') : 'Direct')}
-                          {isUploaded && !clip.is_cloud_only && <> &middot; {daysLeft}d left</>}
-                          {isUploaded && clip.is_cloud_only && <> &middot; Cloud only</>}
+                          {isPublished ? (
+                            !clip.is_cloud_only && <> &middot; {daysLeft}d left</>
+                          ) : isUploaded ? (
+                            <> &middot; <span className="text-primary font-medium">Publishing…</span></>
+                          ) : null}
+                          {clip.is_cloud_only && <> &middot; Cloud only</>}
                         </p>
                       </div>
 
@@ -3428,12 +3446,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     return (
       <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
         {/* PUBLISH TOP BAR */}
-        <header className="shrink-0 px-3 pt-2.5 pb-2 border-b border-border bg-canvas z-20 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+        <header className="shrink-0 px-4 pt-3 pb-2.5 border-b border-border bg-canvas z-20 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"
               onClick={() => setViewMode('detail')}
-              className="min-h-[44px] min-w-[44px] rounded-xl bg-surface-200 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95]"
+              className="min-h-[44px] min-w-[44px] rounded-xl bg-surface-100 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95] transition-all"
               title="Back to Clip Detail"
             >
               <ChevronLeft size={18} />
@@ -3442,7 +3460,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <h2 className="text-base font-semibold tracking-tight text-text-main truncate leading-tight">
                 Publish Clip
               </h2>
-              <div className="text-xs text-text-muted truncate">
+              <div className="text-xs text-text-muted truncate mt-0.5">
                 {currentClip.title}
               </div>
             </div>
@@ -3450,20 +3468,20 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         </header>
 
         {/* PUBLISH SCROLL MAIN */}
-        <main className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-5 pb-28">
-          {/* Platform Selector — destination rows with pill toggles (v3 publish sheet) */}
-          <section className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs font-semibold text-text-secondary uppercase tracking-wider">
-              <span>Destinations &amp; Accounts</span>
-              <span className="font-mono text-text-muted">{selectedPlatforms.length} selected</span>
+        <main className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-5 pb-6">
+          {/* Platform Selector — clean iOS-style grouped card with inset dividers */}
+          <section className="space-y-2">
+            <div className="flex items-center justify-between text-xs font-medium text-text-muted">
+              <span>Destinations</span>
+              <span className="font-mono text-xs">{selectedPlatforms.length} selected</span>
             </div>
-            <div className="rounded-2xl bg-surface-100 border border-border divide-y divide-border/60">
+            <div className="rounded-2xl bg-surface-100 border border-border overflow-hidden">
               {[
                 { id: 'youtube_shorts', label: 'YouTube Shorts', provider: 'youtube', icon: <YouTubeShortsIcon /> },
                 { id: 'instagram', label: 'Instagram Reels', provider: 'instagram', icon: <InstagramIcon /> },
                 { id: 'linkedin', label: 'LinkedIn Video', provider: 'linkedin', icon: <LinkedInIcon /> },
                 { id: 'x', label: 'X / Twitter', provider: 'twitter', icon: <XIcon /> },
-              ].map((p) => {
+              ].map((p, pIdx) => {
                 const isSelected = selectedPlatforms.includes(p.id);
                 const platformAccounts = connectedAccounts.filter(a => a.provider === p.provider);
                 const hasAccount = platformAccounts.length > 0;
@@ -3471,82 +3489,105 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 const chosenAccount = platformAccounts.find(a => a.account_id === chosenAccountId) || platformAccounts[0];
 
                 return (
-                  <div key={p.id} className="p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <button
-                        type="button"
-                        onClick={() => togglePlatform(p.id)}
-                        aria-pressed={isSelected}
-                        className={`flex items-center gap-3 min-w-0 text-left text-sm transition-all active:scale-[0.99] flex-1 ${isSelected ? 'text-text-main' : 'text-text-secondary hover:text-text-main'}`}
-                      >
-                        {p.icon}
-                        <div className="min-w-0">
-                          <span className="font-medium block truncate">{p.label}</span>
-                          {hasAccount ? (
-                            <span className="text-xs text-text-muted font-mono block truncate">
-                              {chosenAccount?.account_name || 'Connected'}
+                  <div key={p.id} className="relative">
+                    {pIdx > 0 && <div className="ml-14 border-t border-border/40" />}
+                    <div className="p-3.5 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (hasAccount) {
+                              togglePlatform(p.id);
+                            } else {
+                              setFeedback(`Connect ${p.label} in Settings`);
+                            }
+                          }}
+                          aria-pressed={isSelected}
+                          className="flex items-center gap-3 min-w-0 text-left text-sm transition-all active:scale-[0.99] flex-1"
+                        >
+                          <div className={hasAccount ? 'shrink-0' : 'shrink-0 opacity-50'}>
+                            {p.icon}
+                          </div>
+                          <div className="min-w-0">
+                            <span className={`font-medium block truncate ${hasAccount ? 'text-text-main' : 'text-text-secondary'}`}>
+                              {p.label}
                             </span>
-                          ) : (
-                            <span className="text-xs text-status-warning block">
-                              Not connected in Settings
-                            </span>
-                          )}
-                        </div>
-                      </button>
+                            {hasAccount ? (
+                              <span className="text-xs text-text-muted font-mono block truncate">
+                                {chosenAccount?.account_name || 'Connected'}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-text-muted block">
+                                Not connected
+                              </span>
+                            )}
+                          </div>
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => togglePlatform(p.id)}
-                        aria-pressed={isSelected}
-                        className="shrink-0 p-1"
-                      >
-                        <span className={`w-11 h-6 rounded-full p-0.5 flex items-center transition-colors duration-150 ${isSelected ? 'bg-primary justify-end' : 'bg-surface-3 border border-border justify-start'}`}>
-                          <span className="w-5 h-5 rounded-full bg-white shadow-sm" />
-                        </span>
-                      </button>
-                    </div>
-
-                    {/* Account picker if multiple accounts connected for this provider */}
-                    {isSelected && platformAccounts.length > 1 && (
-                      <div className="pt-1.5 pl-7 flex items-center gap-1.5 flex-wrap">
-                        <span className="text-xs text-text-muted">Account:</span>
-                        {platformAccounts.map((acc) => (
+                        {hasAccount ? (
                           <button
-                            key={acc.id}
                             type="button"
-                            onClick={() => setSelectedAccountMap(prev => ({ ...prev, [p.id]: acc.account_id }))}
-                            className={`px-2 py-0.5 rounded-lg text-xs font-medium border transition-all ${
-                              chosenAccountId === acc.account_id
-                                ? 'bg-primary text-white border-primary font-semibold'
-                                : 'bg-surface-2 border-border text-text-secondary hover:text-text-main'
-                            }`}
+                            onClick={() => togglePlatform(p.id)}
+                            aria-pressed={isSelected}
+                            className="shrink-0 p-1 min-h-[44px] min-w-[44px] flex items-center justify-center active:scale-[0.95] transition-all"
                           >
-                            {acc.account_name}
+                            <span className={`w-11 h-6 rounded-full p-0.5 flex items-center transition-colors duration-150 ${isSelected ? 'bg-primary justify-end' : 'bg-surface-3 border border-border justify-start'}`}>
+                              <span className="w-5 h-5 rounded-full bg-white shadow-sm" />
+                            </span>
                           </button>
-                        ))}
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setFeedback(`To connect ${p.label}, open Settings -> Connected Accounts`)}
+                            className="shrink-0 px-2.5 py-1 rounded-lg bg-surface-2 border border-border/50 text-[11px] font-medium text-text-muted hover:text-text-main transition-colors"
+                          >
+                            Connect
+                          </button>
+                        )}
                       </div>
-                    )}
+
+                      {/* Account picker if multiple accounts connected for this provider */}
+                      {isSelected && platformAccounts.length > 1 && (
+                        <div className="pt-1 pl-11 flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs text-text-muted">Account:</span>
+                          {platformAccounts.map((acc) => (
+                            <button
+                              key={acc.id}
+                              type="button"
+                              onClick={() => setSelectedAccountMap(prev => ({ ...prev, [p.id]: acc.account_id }))}
+                              className={`px-2 py-0.5 rounded-lg text-xs font-medium border transition-all ${
+                                chosenAccountId === acc.account_id
+                                  ? 'bg-primary text-white border-primary font-semibold'
+                                  : 'bg-surface-2 border-border text-text-secondary hover:text-text-main'
+                              }`}
+                            >
+                              {acc.account_name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
           </section>
 
-          {/* Visibility / Privacy Selector — segmented, selected inverts via accent */}
-          <section className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs font-semibold text-text-secondary uppercase tracking-wider">
+          {/* Visibility / Privacy Selector — sleek segmented control */}
+          <section className="space-y-2">
+            <div className="flex items-center justify-between text-xs font-medium text-text-muted">
               <span>Visibility</span>
-              <span className="font-mono text-primary normal-case tracking-normal font-medium">
+              <span className="text-[11px] text-text-muted font-normal">
                 {publishMode === 'private' && 'Only you can view'}
                 {publishMode === 'unlisted' && 'Anyone with link can view'}
                 {publishMode === 'public' && 'Publicly visible to everyone'}
               </span>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="h-10 p-1 rounded-xl bg-surface-100 border border-border grid grid-cols-3 gap-1">
               {[
-                { id: 'private', label: 'Private', icon: <Lock size={13} />, desc: 'Review safe' },
-                { id: 'unlisted', label: 'Unlisted', icon: <LinkIcon size={13} />, desc: 'Share link' },
-                { id: 'public', label: 'Public', icon: <Globe size={13} />, desc: 'Live on feed' },
+                { id: 'private', label: 'Private', icon: <Lock size={13} /> },
+                { id: 'unlisted', label: 'Unlisted', icon: <LinkIcon size={13} /> },
+                { id: 'public', label: 'Public', icon: <Globe size={13} /> },
               ].map((m) => {
                 const isSelected = publishMode === m.id;
                 return (
@@ -3555,16 +3596,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     type="button"
                     onClick={() => setPublishMode(m.id as 'private' | 'unlisted' | 'public')}
                     aria-pressed={isSelected}
-                    className={`min-h-[52px] p-2 rounded-xl border flex flex-col items-center justify-center gap-1 active:scale-[0.98] transition-all ${isSelected
-                      ? 'bg-primary border-primary text-white font-semibold'
-                      : 'bg-surface-100 border-border text-text-secondary hover:text-text-main'
+                    className={`h-full rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] ${
+                      isSelected
+                        ? 'bg-primary text-white font-semibold shadow-sm'
+                        : 'text-text-secondary hover:text-text-main'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-sm">
-                      {m.icon}
-                      <span>{m.label}</span>
-                    </div>
-                    <span className={`text-xs ${isSelected ? 'text-white/80' : 'text-text-muted'}`}>{m.desc}</span>
+                    {m.icon}
+                    <span>{m.label}</span>
                   </button>
                 );
               })}
@@ -3572,37 +3611,37 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           </section>
 
           {/* Content Fields */}
-          <section className="space-y-2.5">
+          <section className="space-y-3">
             <div>
-              <label className="text-xs font-semibold text-text-secondary block mb-1">
+              <label className="text-xs font-medium text-text-muted block mb-1.5">
                 Publishing Title
               </label>
               <input
                 type="text"
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
-                className="w-full min-h-[44px] rounded-xl bg-surface-100 border border-border px-3 text-sm text-text-main outline-none focus:border-border-strong"
+                className="w-full min-h-[44px] rounded-xl bg-surface-100 border border-border px-3.5 text-sm text-text-main outline-none focus:border-border-strong transition-colors"
                 placeholder="Title for publishing"
               />
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-text-secondary block mb-1">
+              <label className="text-xs font-medium text-text-muted block mb-1.5">
                 Description &amp; #hashtags
               </label>
               <textarea
                 value={captionDraft}
                 onChange={(e) => setCaptionDraft(e.target.value)}
-                rows={4}
-                className="w-full rounded-xl bg-surface-100 border border-border p-3 text-sm text-text-main outline-none focus:border-border-strong resize-none"
+                rows={3}
+                className="w-full rounded-xl bg-surface-100 border border-border p-3.5 text-sm text-text-main outline-none focus:border-border-strong resize-none"
                 placeholder="Description, credits and hashtags"
               />
             </div>
           </section>
         </main>
 
-        {/* STICKY PUBLISH ACTION FOOTER — hero CTA with destination count inside (v3) */}
-        <footer className="shrink-0 border-t border-border bg-canvas px-4 py-2.5 z-30 space-y-2">
+        {/* STICKY PUBLISH ACTION FOOTER — clean hero CTA */}
+        <footer className="shrink-0 border-t border-border bg-canvas px-4 pt-3 pb-8 z-30 space-y-2">
           {(() => {
             const missing = selectedPlatforms.filter(p => {
               const prov = p === 'youtube_shorts' ? 'youtube' : (p === 'x' ? 'twitter' : p);
@@ -3614,25 +3653,25 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             const ctaText = isSubmitting
               ? 'Publishing…'
               : missing.length > 0
-                ? `Connect ${missing[0] === 'youtube_shorts' ? 'YouTube' : missing[0]} in Settings to publish`
+                ? `Connect ${missing[0] === 'youtube_shorts' ? 'YouTube' : missing[0]} in Settings`
                 : selectedPlatforms.length === 0
                   ? 'Select at least one destination'
                   : hasNonYt
-                    ? `Publish to ${selectedPlatforms.length} destinations (YouTube: ${publishMode} · Socials: Public)`
+                    ? `Publish to ${selectedPlatforms.length} destinations`
                     : `Publish to YouTube · ${publishMode}`;
 
             return (
               <>
                 {missing.length > 0 && (
-                  <div className="p-2 rounded-lg chip-warning border text-xs text-center font-medium">
-                    {missing.map(m => m === 'youtube_shorts' ? 'YouTube' : m).join(', ')} account not connected. Please connect in Settings.
+                  <div className="p-2 rounded-lg bg-surface-2 border border-border text-xs text-text-muted text-center font-medium">
+                    {missing.map(m => m === 'youtube_shorts' ? 'YouTube' : m).join(', ')} account not connected.
                   </div>
                 )}
                 <button
                   type="button"
                   onClick={handleApprove}
                   disabled={isDisabled}
-                  className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
+                  className="w-full h-12 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
                 >
                   <Send size={15} />
                   <span>{ctaText}</span>
@@ -3645,8 +3684,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     );
   };
 
-  // =========================================================================
-  // VIEW 5: MORE ACTIONS MODAL / OVERFLOW
+    // VIEW 5: MORE ACTIONS MODAL / OVERFLOW
   // =========================================================================
   const renderMoreModal = () => {
     if (!isMoreModalOpen || !currentClip) return null;

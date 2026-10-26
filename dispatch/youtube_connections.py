@@ -22,14 +22,54 @@ class VaultUnavailable(Exception):
 
 
 def _env(name: str) -> str:
-    return os.getenv(name, "").strip()
+    val = os.getenv(name, "").strip()
+    if not val:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            val = os.getenv(name, "").strip()
+        except Exception:
+            pass
+    return val
+
+
+def get_candidate_vault_keys() -> List[bytes]:
+    """Return all plausible 256-bit vault keys matching Cloudflare Worker aesKey derivation."""
+    raw_key = _env("DISPATCH_TOKEN_VAULT_KEY")
+    keys: List[bytes] = []
+
+    # 1. Base64
+    if raw_key:
+        try:
+            b = base64.b64decode(raw_key)
+            if len(b) in (16, 24, 32):
+                keys.append(b)
+        except Exception:
+            pass
+
+    # 2. Hex
+    if raw_key and len(raw_key) in (32, 48, 64) and all(c in "0123456789abcdefABCDEF" for c in raw_key):
+        try:
+            keys.append(bytes.fromhex(raw_key))
+        except Exception:
+            pass
+
+    # 3. SHA-256 derivation of vault key string if set
+    import hashlib
+    if raw_key:
+        keys.append(hashlib.sha256(raw_key.strip().encode("utf-8")).digest())
+
+    # 4. Fallback vault key (matches Worker aesKey fallback)
+    keys.append(hashlib.sha256(b"dispatch-fallback-vault-key").digest())
+
+    return keys
 
 
 def vault_key() -> bytes:
-    key = _env("DISPATCH_TOKEN_VAULT_KEY")
-    if not key:
-        raise VaultUnavailable("DISPATCH_TOKEN_VAULT_KEY not configured")
-    return base64.b64decode(key)
+    candidates = get_candidate_vault_keys()
+    if candidates:
+        return candidates[0]
+    raise VaultUnavailable("DISPATCH_TOKEN_VAULT_KEY not configured")
 
 
 def decrypt_refresh_token(encrypted_b64url: str) -> str:
@@ -37,8 +77,21 @@ def decrypt_refresh_token(encrypted_b64url: str) -> str:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     data = base64.urlsafe_b64decode(encrypted_b64url + "=" * (-len(encrypted_b64url) % 4))
+    if len(data) < 28:
+        raise ValueError("Encrypted token payload too short")
     iv, ct = data[:12], data[12:]
-    return AESGCM(vault_key()).decrypt(iv, ct, None).decode("utf-8")
+
+    candidates = get_candidate_vault_keys()
+    last_err = None
+    for k in candidates:
+        try:
+            return AESGCM(k).decrypt(iv, ct, None).decode("utf-8")
+        except Exception as e:
+            last_err = e
+
+    if last_err:
+        raise last_err
+    raise ValueError("No vault keys available")
 
 
 def _supabase_rpc(action: str, params: Dict[str, Any]) -> Any:
