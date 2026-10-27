@@ -51,6 +51,51 @@ import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
 import { ConnectedAccount, listConnectedAccounts, WORKER_BASE } from '../accounts/accountsService';
 import { currentSession } from '../auth/supabase';
 
+const CAPTION_LOAD_TIMEOUT_MS = 10_000;
+
+async function loadClipCaptionTrack(
+  clipId: string,
+  duration: number,
+  pcHost: string,
+  parentSignal: AbortSignal,
+): Promise<CaptionTrack> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromParent = () => controller.abort();
+  if (parentSignal.aborted) controller.abort();
+  else parentSignal.addEventListener('abort', abortFromParent, { once: true });
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, CAPTION_LOAD_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(apiUrl(`/api/clips/${clipId}/captions`, pcHost), {
+      headers: getAuthHeaders(),
+      signal: controller.signal,
+    });
+    if (res.status === 404) {
+      return normalizeCaptionTrack({ clip_id: clipId, groups: [] }, clipId, duration);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load captions`);
+
+    const rawData = await res.json().catch((error) => {
+      if (controller.signal.aborted) throw error;
+      return null;
+    });
+    if (rawData && Array.isArray(rawData.groups)) {
+      return normalizeCaptionTrack(rawData, clipId, duration);
+    }
+    return normalizeCaptionTrack({ clip_id: clipId, groups: [] }, clipId, duration);
+  } catch (error) {
+    if (timedOut) throw new Error('Caption loading timed out. Check the PC connection and retry.');
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+    parentSignal.removeEventListener('abort', abortFromParent);
+  }
+}
+
 export type LayoutMode = 'fit_black' | 'fit_blur' | 'native_916' | 'crop_916' | 'crop_follow' | 'native_169' | 'landscape';
 export type ViewMode = 'library' | 'detail' | 'studio' | 'publish';
 export type FilterStatus = 'all' | 'ready' | 'approved';
@@ -1216,6 +1261,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [isMoreModalOpen, setIsMoreModalOpen] = useState<boolean>(false);
   const [clipToReject, setClipToReject] = useState<ClipItem | null>(null);
+  const optimisticRejectIdsRef = useRef<Set<string>>(new Set());
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
   const [isVideoSelected, setIsVideoSelected] = useState<boolean>(false);
   const [isFullscreenPreview, setIsFullscreenPreview] = useState<boolean>(false);
@@ -1315,6 +1361,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [captionClipId, setCaptionClipId] = useState<string | null>(null);
   const [captionLoadingState, setCaptionLoadingState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle');
   const [captionErrorMessage, setCaptionErrorMessage] = useState<string | null>(null);
+  const captionRequestControllerRef = useRef<AbortController | null>(null);
   const {
     track: captionTrack,
     setTrack: setCaptionTrack,
@@ -1372,8 +1419,6 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
-    setIsLoading(true);
-    setFeedback(null);
     let loadedFromPc = false;
 
     if (pcHost && pcHost.trim()) {
@@ -1386,8 +1431,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           const data = await res.json();
           const rList = Array.isArray(data.ready) ? data.ready : [];
           const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
-          setReadyClips(rList);
-          setApprovedClips(aList);
+          const hiddenIds = optimisticRejectIdsRef.current;
+          setReadyClips(rList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+          setApprovedClips(aList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
           if (data.queue_stats) {
             setQueueStats(data.queue_stats);
           }
@@ -1423,8 +1469,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             const data = await clipsRes.json();
             const rList = Array.isArray(data.ready) ? data.ready : [];
             const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
-            setReadyClips(rList);
-            setApprovedClips(aList);
+            const hiddenIds = optimisticRejectIdsRef.current;
+            setReadyClips(rList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+            setApprovedClips(aList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
             if (data.queue_stats) {
               setQueueStats(data.queue_stats);
             }
@@ -1535,51 +1582,32 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       setLayoutMode(defaultMode as LayoutMode);
     }
 
-    // Fetch canonical caption track for current clip
-    setCaptionLoadingState('loading');
-    setCaptionErrorMessage(null);
+    // Load captions independently; the timeline remains mounted while this request runs.
+    setCaptionLoadingState(isCloudMode ? 'error' : 'loading');
+    setCaptionErrorMessage(isCloudMode ? 'Connect to your PC to load captions.' : null);
     setCaptionClipId(null); // Clear previous track association immediately
 
+    captionRequestControllerRef.current?.abort();
     const controller = new AbortController();
-    fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { headers: getAuthHeaders(), signal: controller.signal })
-      .then(async (res) => {
-        if (res.ok) {
-          const rawData = await res.json().catch(() => null);
-          if (rawData && Array.isArray(rawData.groups)) {
-            const norm = normalizeCaptionTrack(rawData, currentClip.id, currentClip.duration || 40);
-            resetHistory(norm);
-            setCaptionClipId(currentClip.id);
-            setCaptionLoadingState(norm.groups.length > 0 ? 'success' : 'empty');
-            setSaveStatus('saved');
-            if (norm.groups && norm.groups.length > 0) {
-              setSelectedGroupId(norm.groups[0].id);
-            }
-          } else {
-            const emptyTrack = normalizeCaptionTrack({ clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
-            resetHistory(emptyTrack);
-            setCaptionClipId(currentClip.id);
-            setCaptionLoadingState('empty');
-            setSaveStatus('saved');
-          }
-        } else if (res.status === 404) {
-          // Genuinely empty initial track for fresh clip
-          const emptyTrack = normalizeCaptionTrack({ clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
-          resetHistory(emptyTrack);
+    captionRequestControllerRef.current = controller;
+    let isCurrentClip = true;
+    if (!isCloudMode) {
+      loadClipCaptionTrack(currentClip.id, currentClip.duration || 40, pcHost, controller.signal)
+        .then((track) => {
+          if (!isCurrentClip) return;
+          resetHistory(track);
           setCaptionClipId(currentClip.id);
-          setCaptionLoadingState('empty');
+          setCaptionLoadingState(track.groups.length > 0 ? 'success' : 'empty');
           setSaveStatus('saved');
-        } else {
-          setCaptionLoadingState('error');
-          setCaptionErrorMessage(`HTTP ${res.status}: Failed to load captions`);
-        }
-      })
-      .catch((err) => {
-        if ((err as DOMException)?.name !== 'AbortError') {
+          if (track.groups.length > 0) setSelectedGroupId(track.groups[0].id);
+        })
+        .catch((err) => {
+          if (!isCurrentClip) return;
           console.warn('Captions unavailable for clip:', err);
           setCaptionLoadingState('error');
-          setCaptionErrorMessage(err.message || 'Network communication failure');
-        }
-      });
+          setCaptionErrorMessage(err instanceof Error ? err.message : 'Caption request failed. Retry.');
+        });
+    }
 
     // Defer heavy filmstrip frame extraction so active video stream and captions have top network priority
     const reqId = ++filmstripReqIdRef.current;
@@ -1602,10 +1630,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }, 700);
 
     return () => {
+      isCurrentClip = false;
       clearTimeout(timer);
+      captionRequestControllerRef.current?.abort();
+      captionRequestControllerRef.current = null;
       controller.abort();
     };
-  }, [currentClip?.id, currentClip?.range_revision, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost]);
+  }, [currentClip?.id, currentClip?.range_revision, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost, isCloudMode]);
 
   // Source bounds for mapping local clip time (0 -> duration) to source video time
   const clipStart = currentClip ? (currentClip.start_time || 0) : 0;
@@ -2284,19 +2315,42 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // 6. Double Confirmation Reject Handlers
   const handlePromptReject = (clip: ClipItem) => {
     setIsMoreModalOpen(false);
+    if (isCloudMode) {
+      setFeedback('Connect to your PC to delete this clip.');
+      return;
+    }
     setClipToReject(clip);
   };
 
   const handleConfirmReject = async () => {
-    if (!clipToReject) return;
-    setIsSubmitting(true);
-    setFeedback(null);
+    if (!clipToReject || isSubmitting) return;
+    const clip = clipToReject;
+    if (isCloudMode) {
+      setClipToReject(null);
+      setFeedback('Connect to your PC to delete this clip.');
+      return;
+    }
 
+    setIsSubmitting(true);
+    setFeedback('Removing clip…');
+    optimisticRejectIdsRef.current.add(clip.id);
+    setReadyClips((prev) => prev.filter((item) => item.id !== clip.id));
+    setApprovedClips((prev) => prev.filter((item) => item.id !== clip.id));
+    setClipToReject(null);
+    setIsMoreModalOpen(false);
+    if (selectedClipId === clip.id) {
+      setViewMode('library');
+      setSelectedClipId(null);
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
     try {
-      const res = await fetch(apiUrl(`/api/clips/${clipToReject.id}/reject`, pcHost), {
+      const res = await fetch(apiUrl(`/api/clips/${clip.id}/reject`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ reason: 'Rejected from review studio' }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -2304,17 +2358,21 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         throw new Error(err?.detail || 'Reject request failed');
       }
 
-      setReadyClips((prev) => prev.filter((c) => c.id !== clipToReject.id));
-      setApprovedClips((prev) => prev.filter((c) => c.id !== clipToReject.id));
-      if (selectedClipId === clipToReject.id) {
-        setViewMode('library');
-        setSelectedClipId(null);
-      }
-      setClipToReject(null);
-      setFeedback('Clip permanently rejected and media deleted.');
+      setReadyClips((prev) => prev.filter((item) => item.id !== clip.id));
+      setApprovedClips((prev) => prev.filter((item) => item.id !== clip.id));
+      setFeedback('Clip deleted.');
     } catch (e) {
-      setFeedback(e instanceof Error ? e.message : 'Could not reject clip.');
+      optimisticRejectIdsRef.current.delete(clip.id);
+      await fetchClips();
+      const message = e instanceof DOMException && e.name === 'AbortError'
+        ? 'Couldn’t confirm deletion. The list was refreshed.'
+        : e instanceof Error
+          ? e.message
+          : 'Could not delete clip.';
+      setFeedback(message);
     } finally {
+      window.clearTimeout(timeoutId);
+      optimisticRejectIdsRef.current.delete(clip.id);
       setIsSubmitting(false);
     }
   };
@@ -3257,62 +3315,67 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <>
               {/* 4. MULTI-TRACK TIMELINE (Seamless edge-to-edge surface filling available workspace) */}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-[#13161B]">
-                {captionLoadingState === 'loading' && !visibleCaptionTrack ? (
-                  <div className="flex-1 min-h-[200px] flex flex-col items-center justify-center text-text-muted gap-2">
-                    <RotateCw size={22} className="animate-spin text-primary" />
+                {captionLoadingState === 'loading' && !visibleCaptionTrack && (
+                  <div role="status" className="h-8 shrink-0 px-3 flex items-center gap-2 border-b border-border bg-surface text-text-muted">
+                    <RotateCw size={13} className="animate-spin text-primary" />
                     <span className="text-xs">Loading captions…</span>
                   </div>
-                ) : captionLoadingState === 'error' && !visibleCaptionTrack ? (
-                  <div className="flex-1 min-h-[200px] flex flex-col items-center justify-center p-4 text-center">
-                    <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center mb-2">
-                      <AlertCircle size={20} />
-                    </div>
-                    <p className="text-xs font-semibold text-text-main mb-1">Failed to load captions</p>
-                    <p className="text-[11px] text-text-muted mb-3 max-w-xs">{captionErrorMessage || 'HTTP communication failure'}</p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCaptionLoadingState('loading');
-                          fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), { headers: getAuthHeaders() })
-                            .then(async (res) => {
-                              if (res.ok) {
-                                const raw = await res.json().catch(() => null);
-                                const norm = normalizeCaptionTrack(raw || { clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
-                                resetHistory(norm);
-                                setCaptionClipId(currentClip.id);
-                                setCaptionLoadingState(norm.groups.length > 0 ? 'success' : 'empty');
-                              } else {
+                )}
+                {captionLoadingState === 'error' && !visibleCaptionTrack && (
+                  <div role="alert" className="min-h-11 shrink-0 px-3 py-1.5 flex items-center justify-between gap-2 border-b border-border bg-surface">
+                    <span className="text-xs text-text-secondary min-w-0">{captionErrorMessage || 'Could not load captions.'}</span>
+                    {!isCloudMode && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const clipId = currentClip.id;
+                            const clipDuration = currentClip.duration || 40;
+                            captionRequestControllerRef.current?.abort();
+                            const controller = new AbortController();
+                            captionRequestControllerRef.current = controller;
+                            setCaptionLoadingState('loading');
+                            setCaptionErrorMessage(null);
+                            loadClipCaptionTrack(clipId, clipDuration, pcHost, controller.signal)
+                              .then((track) => {
+                                if (controller.signal.aborted || captionRequestControllerRef.current !== controller) return;
+                                resetHistory(track);
+                                setCaptionClipId(clipId);
+                                setCaptionLoadingState(track.groups.length > 0 ? 'success' : 'empty');
+                                setSaveStatus('saved');
+                                if (track.groups.length > 0) setSelectedGroupId(track.groups[0].id);
+                              })
+                              .catch((err) => {
+                                if (controller.signal.aborted || captionRequestControllerRef.current !== controller) return;
                                 setCaptionLoadingState('error');
-                                setCaptionErrorMessage(`HTTP ${res.status}`);
-                              }
-                            })
-                            .catch((err) => {
-                              setCaptionLoadingState('error');
-                              setCaptionErrorMessage(err.message || 'Network error');
-                            });
-                        }}
-                        className="h-7 px-3 rounded-md bg-surface-200 hover:bg-surface-300 border border-border text-xs font-medium text-text-main flex items-center gap-1 active:scale-95"
-                      >
-                        <RotateCw size={12} />
-                        <span>Retry</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const emptyTrack = normalizeCaptionTrack({ clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
-                          resetHistory(emptyTrack);
-                          setCaptionClipId(currentClip.id);
-                          setCaptionLoadingState('empty');
-                        }}
-                        className="h-7 px-3 rounded-md bg-primary hover:bg-primary-hover text-xs font-medium text-white flex items-center gap-1 active:scale-95"
-                      >
-                        <span>Start Fresh</span>
-                      </button>
-                    </div>
+                                setCaptionErrorMessage(err instanceof Error ? err.message : 'Caption request failed. Retry.');
+                              })
+                              .finally(() => {
+                                if (captionRequestControllerRef.current === controller) captionRequestControllerRef.current = null;
+                              });
+                          }}
+                          className="min-h-[44px] px-3 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center gap-1 active:scale-[0.98] transition-all"
+                        >
+                          <RotateCw size={12} />
+                          <span>Retry</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const emptyTrack = normalizeCaptionTrack({ clip_id: currentClip.id, groups: [] }, currentClip.id, currentClip.duration || 40);
+                            resetHistory(emptyTrack);
+                            setCaptionClipId(currentClip.id);
+                            setCaptionLoadingState('empty');
+                          }}
+                          className="min-h-[44px] px-3 rounded-lg bg-primary hover:bg-primary-hover text-xs font-medium text-white active:scale-[0.98] transition-all"
+                        >
+                          Start fresh
+                        </button>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <CaptionTimeline
+                )}
+                <CaptionTimeline
                     track={visibleCaptionTrack}
                     currentTime={currentTime}
                     duration={duration || currentClip.duration || 40}
@@ -3337,7 +3400,6 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     }}
                     onUpdateGroup={handleUpdateGroup}
                   />
-                )}
               </div>
 
               {/* 5. CONTEXTUAL BOTTOM WORKSPACE / EXPANDED TOOL PANEL (Docked flush edge-to-edge) */}
@@ -3914,14 +3976,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             </div>
             <div className="min-w-0 flex-1">
               <h3 className="text-base font-semibold tracking-tight text-text-main leading-tight">
-                Reject &amp; Delete Clip?
+                Reject clip?
               </h3>
-              <p className="text-sm text-text-secondary mt-1 leading-relaxed">
-                Are you sure you want to reject <span className="text-text-main font-semibold">&ldquo;{clipToReject.title || clipToReject.hook || 'this clip'}&rdquo;</span>?
+              <p className="text-sm text-text-secondary mt-1 leading-snug line-clamp-2">
+                {clipToReject.title || clipToReject.hook || 'Selected clip'}
               </p>
-              <p className="text-xs text-status-danger mt-1.5 leading-snug">
-                This will immediately delete the rendered MP4 and thumbnail files from your storage. This action cannot be undone.
-              </p>
+              <p className="text-xs text-status-danger mt-1.5 leading-snug">Permanently deletes its video and thumbnail.</p>
             </div>
           </div>
 
@@ -3945,7 +4005,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               ) : (
                 <Trash2 size={14} />
               )}
-              <span>{isSubmitting ? 'Deleting…' : 'Yes, Delete'}</span>
+              <span>{isSubmitting ? 'Deleting…' : 'Reject'}</span>
             </button>
           </div>
         </div>

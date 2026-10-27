@@ -120,3 +120,5 @@ frontend/.env*
 
 new_folder_1/
 new_folder_2/
+
+dispatch.db

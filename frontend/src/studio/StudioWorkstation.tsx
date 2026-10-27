@@ -199,6 +199,12 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
     const clipId = currentClip.id;
     const controller = new AbortController();
+    let timedOut = false;
+    let isCurrentClip = true;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 10_000);
     setTrack(null);
     setCaptionClipId(null);
     setCaptionLoadState('loading');
@@ -212,7 +218,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
         return res.json();
       })
       .then((raw) => {
-        if (controller.signal.aborted) return;
+        if (!isCurrentClip || controller.signal.aborted) return;
         const normalized = normalizeCaptionTrack(raw, clipId, currentClip.duration || 40);
         setTrack(normalized);
         setCaptionClipId(clipId);
@@ -220,17 +226,24 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
         setSelectedGroupId(normalized.groups[0]?.id || null);
       })
       .catch((err: unknown) => {
-        if ((err as DOMException)?.name === 'AbortError') return;
-        const message = err instanceof Error ? err.message : 'Network communication failure';
+        if (!isCurrentClip || ((err as DOMException)?.name === 'AbortError' && !timedOut)) return;
+        const message = timedOut
+          ? 'Caption loading timed out. Check the connection and retry.'
+          : err instanceof Error ? err.message : 'Network communication failure';
         console.warn('Captions unavailable for clip:', err);
         setCaptionLoadError(message);
         setCaptionLoadState('error');
-      });
+      })
+      .finally(() => window.clearTimeout(timeoutId));
 
     setCurrentTime(0);
     setIsPlaying(false);
 
-    return () => controller.abort();
+    return () => {
+      isCurrentClip = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [currentClip?.id, currentClip?.duration, currentClip?.range_revision, pcHost, captionRetryCount]);
 
   const handleRetryCaptionLoad = () => {
@@ -369,23 +382,30 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   // 2. Reject Selected Clip
   const handleRejectCurrentClip = async (reason = 'User rejected') => {
     if (!currentClip || isRejecting) return;
+    const clip = currentClip;
     setIsRejecting(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
     try {
-      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/reject`, pcHost), {
+      const res = await fetch(apiUrl(`/api/clips/${clip.id}/reject`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ reason }),
+        signal: controller.signal,
       });
       if (res.ok) {
-        delete metadataDraftsRef.current[currentClip.id];
+        delete metadataDraftsRef.current[clip.id];
         showToast('Clip marked as Rejected');
-        setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, status: 'rejected' } : c));
+        setClips(prev => prev.map(c => c.id === clip.id ? { ...c, status: 'rejected' } : c));
       } else {
         showToast(`Rejection failed (HTTP ${res.status})`);
       }
     } catch (err: any) {
-      showToast(`Error rejecting clip: ${err?.message || 'Network error'}`);
+      showToast(err?.name === 'AbortError'
+        ? 'Rejection timed out. Refresh to confirm.'
+        : `Error rejecting clip: ${err?.message || 'Network error'}`);
     } finally {
+      window.clearTimeout(timeoutId);
       setIsRejecting(false);
     }
   };
@@ -577,11 +597,19 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
           });
           if (res.ok) successCount++;
         } else {
-          const res = await fetch(apiUrl(`/api/clips/${clipItem.id}/reject`, pcHost), {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ reason: 'Batch rejection' }),
-          });
+          const controller = new AbortController();
+          const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
+          let res: Response;
+          try {
+            res = await fetch(apiUrl(`/api/clips/${clipItem.id}/reject`, pcHost), {
+              method: 'POST',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ reason: 'Batch rejection' }),
+              signal: controller.signal,
+            });
+          } finally {
+            window.clearTimeout(timeoutId);
+          }
           if (res.ok) successCount++;
         }
       } catch {

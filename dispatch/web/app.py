@@ -1376,7 +1376,8 @@ async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Requ
         raise HTTPException(status_code=404, detail="Clip not found")
     if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
-    db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected")
+    if not db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected"):
+        raise HTTPException(status_code=404, detail="Clip not found")
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
 
 

@@ -825,6 +825,11 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
         clip = cursor.fetchone()
         if not clip:
             return False
+        # Repeated requests can happen when a client times out after the server
+        # has already committed the rejection. Treat them as successful without
+        # inserting duplicate preference-learning records.
+        if clip["status"] == "rejected":
+            return True
 
         # 1. Immediately delete physical rendered media files (MP4 & thumbnail) from disk
         for file_key in ("video_path", "thumbnail_path"):
