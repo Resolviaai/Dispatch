@@ -133,14 +133,16 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
 
     def test_02_layout_change_persists_and_marks_stale(self):
         """POST /api/clips/{id}/layout updates layout_mode and flags is_render_stale."""
-        # 1. Initial render with fit_blur
+        # 1. Initial render with fit_blur (framing-only render: captions are
+        # disabled exactly like the production /render endpoint does).
         render_clip(
             source_video=self.source_video,
             clip_id=self.clip_id,
             start_time=0.5,
             end_time=5.5,
             aspect_ratio="16:9",
-            layout_mode="fit_blur"
+            layout_mode="fit_blur",
+            subtitle_options={"enabled": False, "preserve_timing": True}
         )
         clip = db.get_clip_by_id(self.clip_id)
         self.assertEqual(clip["rendered_layout_mode"], "fit_blur")
@@ -168,18 +170,42 @@ class TestLayoutFramingArchitecture(unittest.TestCase):
 
     def test_03_approve_detects_stale_and_rerenders_from_source(self):
         """Approve automatically re-renders from source when rendered_layout_mode != layout_mode."""
-        # Initial render as fit_blur
+        # Initial render as fit_blur (framing-only, like the /render endpoint).
         render_clip(
             source_video=self.source_video,
             clip_id=self.clip_id,
             start_time=0.5,
             end_time=5.5,
             aspect_ratio="16:9",
-            layout_mode="fit_blur"
+            layout_mode="fit_blur",
+            subtitle_options={"enabled": False, "preserve_timing": True}
         )
-        
+
+        # Seed a valid, word-timed caption track: v1.5 makes approving a
+        # caption-less clip a hard error, so approvals under test must carry
+        # one exactly like a real creator flow does.
+        import json as _json
+        track = {
+            "clip_id": self.clip_id,
+            "groups": [{
+                "id": "g1", "start": 0.0, "end": 1.0, "text": "Hook text",
+                "type": "caption",
+                "words": [{"id": "w1", "word": "Hook", "start": 0.0, "end": 1.0}],
+                "has_word_timing": True,
+                "timing_mode": "word",
+            }],
+        }
+        saved = db.save_clip_caption_data(
+            self.clip_id, _json.dumps(track),
+            expected_range_revision=0,
+            source_range_start=0.5,
+            source_range_end=5.5,
+        )
+        self.assertTrue(saved, "caption fixture must save against the current range")
+
         # User changes framing to fit_black
         self.client.post(f"/api/clips/{self.clip_id}/layout", json={"layout_mode": "fit_black"})
+
         
         # User approves clip
         res = self.client.post(f"/api/clips/{self.clip_id}/approve", json={

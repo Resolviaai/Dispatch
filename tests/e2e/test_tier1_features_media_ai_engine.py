@@ -325,7 +325,8 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
             end_time=5.0,
             aspect_ratio="16:9",
             layout_mode="fit_blur",
-            segments=None
+            segments=None,
+            subtitle_options={"enabled": False, "preserve_timing": True},
         )
         self.assertTrue(Path(res["video_path"]).exists())
         self.assertTrue(Path(res["thumbnail_path"]).exists())
@@ -340,7 +341,10 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
             mock_run.return_value = MagicMock(returncode=0)
             with patch("dispatch.db.get_db_connection"):
                 try:
-                    render_clip(source_video, clip_id, 0.0, 1.0)
+                    # Framing-pipeline inspection: captions disabled so the FFmpeg
+                    # command itself is exercised (not blocked by caption policy).
+                    render_clip(source_video, clip_id, 0.0, 1.0,
+                                subtitle_options={"enabled": False, "preserve_timing": True})
                 except Exception:
                     pass
                 if mock_run.call_args:

@@ -75,8 +75,16 @@ def render_clip(
     temp_video_path = CLIPS_DIR / f"{clip_id}.tmp.mp4"
     temp_thumb_path = CLIPS_DIR / f"{clip_id}.tmp.jpg"
 
-    # 2. Subtitle generation with synchronized timeline
-    if sub_opts.get("enabled", True):
+    # 2. Subtitle generation with synchronized timeline.
+    # Rendering contract (v1.5 remediation):
+    #   - Captions intentionally disabled -> rendering without subtitles is valid.
+    #   - Captions required (enabled) -> generation/export/serveability failures
+    #     MUST fail the render with an actionable error. A caption-less output
+    #     may never be published or approved as if subtitles were included.
+    subtitles_enabled = bool(sub_opts.get("enabled", True))
+    if not subtitles_enabled:
+        ass_path = None
+    else:
         captured_track = sub_opts.get("caption_track")
         existing_cap_json = db.get_clip_caption_data(clip_id) if captured_track is None else None
         if captured_track is not None and not has_silence_cuts:
@@ -132,9 +140,22 @@ def render_clip(
                 # renders, never as unexplained caption-less exports.
                 raise RuntimeError(f"Caption generation failed: {e}") from e
         else:
+            # Captions required but unavailable: no captured track, no saved
+            # track, no transcript segments. Fail the render instead of
+            # producing a silently caption-less output.
             ass_path = None
-    else:
-        ass_path = None
+            raise RuntimeError(
+                "Captions are required but no caption track or transcript is available for this clip. "
+                "Transcribe the source, load captions in the editor, or disable subtitles for this render."
+            )
+
+        # Serveability rule: when subtitles are required, the exported ASS file
+        # must actually exist. Its absence downstream (deleted, unwritten,
+        # locked) is a hard failure, not an optional omission.
+        if not (ass_path and ass_path.exists()):
+            raise RuntimeError(
+                "Required caption file is missing after export; the render was aborted before subtitles could be burned in."
+            )
 
     # 3. Construct FFmpeg command
     keep_intervals = build_silence_keep_intervals(start_time, end_time, cuts) if has_silence_cuts else []
@@ -158,7 +179,7 @@ def render_clip(
         framing_filter, final_v_label = build_filter_complex(
             aspect_ratio=aspect_ratio,
             layout_mode=layout_mode,
-            ass_subtitle_path=ass_path if (ass_path and ass_path.exists()) else None,
+            ass_subtitle_path=ass_path,
             input_v_label="[concat_v]"
         )
 
@@ -191,7 +212,7 @@ def render_clip(
         filter_complex_str, final_v_label = build_filter_complex(
             aspect_ratio=aspect_ratio,
             layout_mode=layout_mode,
-            ass_subtitle_path=ass_path if (ass_path and ass_path.exists()) else None,
+            ass_subtitle_path=ass_path,
             input_v_label="[0:v]"
         )
 
