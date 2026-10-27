@@ -142,12 +142,48 @@ Every change to the mobile web frontend (`frontend/src/...`) and Android views m
 - **CaptionDock / StudioWorkstation / ClipsScreen**: timeline stays mounted while captions load (10&nbsp;s timeout, retry path, cloud-mode explainer) instead of a stuck full-panel spinner.
 
 ### E. Direct Phone-to-YouTube Cloud Upload Sessions
-- **cloud-worker** new endpoints: `POST /youtube/upload-sessions` (resumable upload init via raw-vault refresh token), `POST /youtube/uploads/lookup`, `POST /youtube/videos/status` (processing tracker). Worker `tsc` OK, 38/38 tests pass.
+- **cloud-worker** new endpoints: `POST /youtube/upload-sessions` (resumable upload init via raw-vault refresh token), `POST /youtube/uploads/lookup`, `POST /youtube/videos/status` (processing tracker). Worker `tsc` OK, 45/45 tests pass as of 2026-10-27.
 - **PairingManager**: encrypted `dispatch_cloud_secure` prefs for short-lived cloud JWT; `rawVaultAccountId` + cloud-session marker APIs.
 - **DispatchNativeBridge / CameraScreen / App**: native emits `recording_stopped` / `recording_stop_failed`; stop button shows finalizing state (disabled) and navigates to Sessions on completion.
 
 ### F. Open Item (needs user input)
 - A video that finished YouTube processing still shows **Failed** locally. Waiting on the exact "Processing Issue" text from the failed session's detail view; two unexplained red YouTube entries likely = same video via two URL formats or a private/unlisted visibility gate.
+
+---
+
+## 5c. Session Forensic History: Root-Cause Remediation (2026-10-27)
+
+Eight reported failures root-caused and fixed in five commits (`93ccba5` … `14c95bc`). **No deployment** was performed — migrations 0014/0015 and the rebuilt worker still need a user-approved deploy.
+
+### G. Direct YouTube Upload Without PC (Route A credential boundary)
+- **Root cause**: Android worker required `accessToken` (PC-synced OAuth token) before any upload; cloud worker `/youtube/upload-sessions` existed but nothing wired the phone's Supabase JWT to it.
+- **Fix**:
+  - `DispatchNativeBridge.pushCloudSession(payload)`: validates + stores `{access_token, account_id}` into PairingManager (`cloudAccessToken`/`rawVaultAccountId`), requeues `WAITING_FOR_YOUTUBE` segments, triggers `triggerYouTubeUpload()`.
+  - `frontend/src/auth/cloudSessionBootstrap.ts`: pushes the Supabase session on `SIGNED_IN`/`TOKEN_REFRESHED` (+ throttled visibility re-push), clears on `SIGNED_OUT`.
+  - `YouTubeDirectUploadWorker`: `initiateCloudResumableSession()` calls worker `POST /youtube/upload-sessions` (validates `www.googleapis.com` host); chunk PUTs skip Authorization in cloud mode; cloud-mode existing-upload lookup/tracking via worker mirrors; 401 → restart-once → `WAITING_FOR_CREDENTIALS`. Legacy refresh-token path unchanged (fallback).
+- Credential gate is now `accessToken.isBlank() && !cloudSessionActive()`.
+
+### H. Stuck Queued / Nondescript Failed States
+- **Root cause**: two independent bugs — (1) the worker checked YouTube status **once** and gave up; (2) `RecordingsScreen` mapped `UPLOADED_AWAITING_PROCESSING` to a phantom eternal "Queued".
+- **Fix**: Android DB v5 (`uploadOrigin`, `youtubeCheckAttempts`, `youtubeCheckAt`), `reconcileYouTubeProcessingStatuses()` (2-min cadence, 96-check cap → explicit `FAILED_YOUTUBE_PROCESSING`), periodic `dispatch_youtube_reconcile` work, and `RecordingsScreen` aggregation: processing/failed-with-banner ("YouTube Processing Failed") states involve separate processing branch logic. `retryUpload` accepts session ids (previous code passed sessionId to a segment-id lookup).
+
+### I. Offline Cloud Captions (no PC required)
+- **Root cause**: worker `GET /clips` never returned caption data, though PC sync.py already writes `window_transcripts.words` (`[{w,start,end}]` source-relative); ClipsScreen cloud mode hard-failed with "Connect to your PC to load captions".
+- **Fix** (migration `20261027000014_clips_caption_data.sql` + worker + phone):
+  - `GET /clips` attaches `captions`: edited saved track (`clips_cloud.caption_data`) when present, else window-relative words from `window_transcripts` joined by ready `edit_windows`.
+  - `PUT /clips/:id/captions` persists offline edits (256 KiB cap).
+  - ClipsScreen cloud mode seeds a grouped track client-side (`buildCloudCaptionGroups`: ~10 words/6 s per caption, punctuation/idle breaks) and saves full track JSON to the worker via Supabase JWT.
+
+### J. Caption Render Safety (PC)
+- `renderer.py`: the `existing_cap_json` and transcript branches no longer degrade to silent caption-less exports — both raise (`Existing caption export failed` / `Caption generation failed`), surface as failed renders. The captured-track branch already failed loudly.
+
+### K. Offline Reject: Undo + 24h Grace (Reject ≠ Delete)
+- **Root cause**: `/delete` is media-object-level only; clip reject had no cloud path.
+- **Fix** (migration `20261027000015_clip_commands.sql` + worker + phone + PC):
+  - `clip_commands` table (pending/claimed/voided/done/failed, lease, attempts) + RPCs; worker `POST /clips/:id/reject`, `POST /clips/:id/restore` (phone), `POST /sync/commands/claim|ack` (PC); live reject commands tombstone clips out of `GET /clips`.
+  - Phone: optimistic hide + **10s Undo bar** (`pendingRejectUndo`) that voids the queued command; no more "Connect to your PC to delete".
+  - PC (`dispatch/cloud/sync.py::drain_clip_commands`, `db.soft_reject_clip`): applies claims each sync cycle — records learning immediately, keeps media, tombstones `cloud_reject_purge_at = +24h`; `purge_expired_rejections()` removes media idempotently after grace (learning rows preserved); restore inside grace = true restore, after purge = no-throw metadata cleanup.
+- Not deployed: `npx wrangler deploy`, `supabase db push` (0014/0015), and an APK release (version bump required per §7 runbook) remain manual steps.
 
 ---
 
