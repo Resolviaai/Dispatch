@@ -49,6 +49,8 @@ export interface Env {
 }
 
 const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
+// Tolerance for PC/cloud clock drift when enforcing the reject purge deadline.
+const PURGE_CLOCK_SKEW_MS = 5 * 60_000;
 const KINDS = { clip_video: "video/mp4", thumbnail: "image/jpeg", edit_window: "video/mp4" } as const;
 type Kind = keyof typeof KINDS;
 const CAP_BYTES: Record<Kind, number> = { clip_video: 536870912, thumbnail: 8388608, edit_window: 536870912 };
@@ -213,6 +215,21 @@ async function readJson<T>(request: Request): Promise<T | null> {
 interface MediaObj {
   id: string; user_id: string; status: string; kind: Kind; mime_type: string;
   staging_key: string | null; final_key: string | null; expected_bytes?: number; byte_count?: number;
+}
+
+// PostgREST `in.()` list with double-quoted values (" doubled as escape) so
+// local clip ids containing commas or quotes stay single filter tokens.
+export function postgrestInList(values: string[]): string {
+  return values.filter(v => v.length > 0).map(v => `"${v.replace(/"/g, '""')}"`).join(",");
+}
+
+// Worker-token bearer check: distinguishes the trusted PC identity from an
+// ordinary Supabase end-user JWT (2026-10-27 audit: PC-only routes must not be
+// reachable with a plain user session).
+export function isPcWorkerAuth(env: Env, request: Request): boolean {
+  const auth = request.headers.get("Authorization") ?? "";
+  if (!auth.startsWith("Bearer ") || !env.DISPATCH_WORKER_TOKEN) return false;
+  return auth.slice(7) === env.DISPATCH_WORKER_TOKEN;
 }
 
 // ---------- routes ----------
@@ -1384,28 +1401,63 @@ export default {
     if (url.pathname === "/clips" && request.method === "GET") {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
-      const [clipsRes, jobsRes, mediaRes, editWindowsRes] = await Promise.all([
-        fetch(
-          `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,cloud_updated_at&order=cloud_updated_at.desc&limit=50`,
-          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-        ),
-        fetch(
-          `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&select=id`,
-          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-        ),
-        fetch(
-          `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${user.userId}&status=eq.active&select=id,clip_id,kind,mime_type,final_key`,
-          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-        ).catch(() => null),
-        fetch(
-          `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${user.userId}&status=eq.ready&select=id,local_clip_id,window_start,window_end,media_object_id`,
-          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-        ).catch(() => null),
-      ]);
-      const rawClips = clipsRes.ok ? (await clipsRes.json() as Array<Record<string, unknown>>) : [];
-      const rawMedia = (mediaRes && mediaRes.ok) ? await mediaRes.json() : [];
+
+      // Audit 2026-10-27: limit/offset pagination so accounts with more clips
+      // can page through them instead of silently missing older rows.
+      const limitRaw = Number(url.searchParams.get("limit") ?? 50);
+      const offsetRaw = Number(url.searchParams.get("offset") ?? 0);
+      const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 50, 1), 200);
+      const offset = Math.min(Math.max(Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0, 0), 100000);
+
+      // Audit 2026-10-27: the PRIMARY listing query must fail loudly. A failed
+      // Supabase round trip previously degraded to an empty 200 response, which
+      // wipe-cleaned; now it returns 502 so clients can keep their last data.
+      const clipsRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
+        { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+      );
+      if (!clipsRes.ok) {
+        const text = await clipsRes.text().catch(() => "");
+        return json(502, { error: `clip listing failed: HTTP ${clipsRes.status}`, detail: text.slice(0, 200) });
+      }
+      const parsedClips = await clipsRes.json() as unknown;
+      if (!Array.isArray(parsedClips)) {
+        // A malformed (non-array) body is an upstream failure, never a clean
+        // empty list — fail loudly instead of crash-rendering an error page.
+        return json(502, { error: "clip listing failed: unexpected response shape" });
+      }
+      const rawClips = parsedClips as Array<Record<string, unknown>>;
+
+      // Auxiliary queries are scoped to exactly the clips that were returned
+      // (no window truncation at odds with the clip page) and failures surface
+      // as degraded flags instead of silently empty collections.
+      const localClipIds = postgrestInList(rawClips.map(c => String(c.local_clip_id || c.id)));
+      const cloudClipIds = postgrestInList(rawClips.map(c => String(c.id)));
+      let jobsRes: Response | null = null;
+      let mediaRes: Response | null = null;
+      let editWindowsRes: Response | null = null;
+      if (rawClips.length > 0) {
+        const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+        [jobsRes, mediaRes, editWindowsRes] = await Promise.all([
+          fetch(
+            `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&select=id`,
+            { headers: svc }
+          ).catch(() => null),
+          fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${user.userId}&status=eq.active&clip_id=in.(${cloudClipIds})&select=id,clip_id,kind,mime_type,final_key&order=created_at.desc,id.desc`,
+            { headers: svc }
+          ).catch(() => null),
+          fetch(
+            `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${user.userId}&status=eq.ready&local_clip_id=in.(${localClipIds})&select=id,local_clip_id,window_start,window_end,media_object_id&order=created_at.desc`,
+            { headers: svc }
+          ).catch(() => null),
+        ]);
+      }
+      const mediaDegraded = !mediaRes || !mediaRes.ok;
+      const windowsDegraded = !editWindowsRes || !editWindowsRes.ok;
+      const rawMedia = mediaRes && mediaRes.ok ? await mediaRes.json() : [];
       const activeMedia = Array.isArray(rawMedia) ? (rawMedia as Array<Record<string, unknown>>) : [];
-      const rawEw = (editWindowsRes && editWindowsRes.ok) ? await editWindowsRes.json() : [];
+      const rawEw = editWindowsRes && editWindowsRes.ok ? await editWindowsRes.json() : [];
       const readyWindows = Array.isArray(rawEw) ? (rawEw as Array<Record<string, unknown>>) : [];
 
       // Cloud caption contract: window transcripts sit in window_transcripts
@@ -1413,11 +1465,11 @@ export default {
       // windows so offline editing can seed a caption track without the PC.
       const transcriptMap = new Map<string, Array<Record<string, unknown>>>();
       if (readyWindows.length > 0) {
-        const windowIds = readyWindows.map(w => String(w.id)).slice(0, 50);
+        const windowIds = readyWindows.map(w => String(w.id)).slice(0, 100);
         if (windowIds.length > 0) {
           try {
             const trRes = await fetch(
-              `${env.SUPABASE_URL}/rest/v1/window_transcripts?window_id=in.(${windowIds.join(",")})&select=window_id,words`,
+              `${env.SUPABASE_URL}/rest/v1/window_transcripts?window_id=in.(${windowIds.map(id => `"${id}"`).join(",")})&select=window_id,words`,
               { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
             );
             if (trRes.ok) {
@@ -1432,16 +1484,22 @@ export default {
           }
         }
       }
-      const buildCloudCaptions = (clip: Record<string, unknown>, clipEw: Record<string, unknown> | null) => {
-        // An edited track saved offline is authoritative over the seeded words.
+
+      // Audit 2026-10-27: a saved edited caption track is returned INDEPENDENT
+      // of whether a ready edit window exists (pc-consistency + offline editing
+      // no longer depend on a transcript proxy). Returns source so clients can
+      // distinguish an edited track from a window transcript seed.
+      const buildCloudCaptions = (clip: Record<string, unknown>, clipEw: Record<string, unknown> | null): { captions: Record<string, unknown> | undefined; source: string | undefined } => {
         const savedCaption = clip.caption_data;
         if (savedCaption && typeof savedCaption === "object" && !Array.isArray(savedCaption)) {
           const savedGroups = (savedCaption as Record<string, unknown>).groups;
-          if (Array.isArray(savedGroups)) return savedCaption;
+          if (Array.isArray(savedGroups) && savedGroups.length > 0) {
+            return { captions: savedCaption as Record<string, unknown>, source: "edited" };
+          }
         }
-        if (!clipEw) return undefined;
+        if (!clipEw) return { captions: undefined, source: undefined };
         const words = transcriptMap.get(String(clipEw.id));
-        if (!words || words.length === 0) return undefined;
+        if (!words || words.length === 0) return { captions: undefined, source: undefined };
         const windowStart = Number(clipEw.window_start || 0);
         const windowEnd = Number(clipEw.window_end || 0);
         const startWindow = windowEnd > windowStart ? windowStart : 0;
@@ -1452,31 +1510,42 @@ export default {
             end: Number(word.end) - startWindow,
           }))
           .filter(word => Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > 0);
-        if (relative.length === 0) return undefined;
+        if (relative.length === 0) return { captions: undefined, source: undefined };
         const clipEnd = Number(clip.end_time || 0);
         const clipStart = Number(clip.start_time || 0);
         // The editor renders against the window proxy span (window_end - window_start),
         // but the clip itself may sit inside a larger window; keep words clipped to span.
         const spanDuration = Math.max(0.1, windowEnd - startWindow, clipEnd - clipStart);
         return {
-          words: relative.filter(word => word.start < spanDuration),
-          span_duration: spanDuration,
+          captions: {
+            words: relative.filter(word => word.start < spanDuration),
+            span_duration: spanDuration,
+          },
+          source: "window_seed",
         };
       };
 
+      // Audit 2026-10-27: deterministic, kind-aware media selection. A clip's
+      // rendered video is the media object with kind='clip_video' linked to the
+      // cloud clip; edit-window proxies only surface through their ready window
+      // row; ordering comes from the query (created_at.desc, id.desc). A
+      // thumbnail can never stand in for the video URL again.
       const mapClipItem = async (c: Record<string, unknown>, targetStatus: string) => {
         const localId = String(c.local_clip_id || c.id);
-        const clipMo = activeMedia.find(m => m.clip_id === c.id);
-        const clipEw = readyWindows.find(w => String(w.local_clip_id) === localId);
-        const ewMo = clipEw ? activeMedia.find(m => m.id === clipEw.media_object_id) : null;
-        const thumbMo = activeMedia.find(m => (m.clip_id === c.id || m.clip_id === localId) && m.kind === "thumbnail");
+        const cloudClipId = String(c.id);
+        const clipEw = readyWindows.find(w => String(w.local_clip_id) === localId) ?? null;
+        const ewMo = clipEw
+          ? activeMedia.find(m => String(m.id) === String(clipEw.media_object_id)) ?? null
+          : null;
+        const renderedMo = activeMedia.find(m => String(m.clip_id) === cloudClipId && m.kind === "clip_video") ?? null;
+        const thumbMo = activeMedia.find(m => String(m.clip_id) === cloudClipId && m.kind === "thumbnail") ?? null;
 
         let videoUrl: string | undefined = undefined;
         let editWindowUrl: string | undefined = undefined;
         let thumbUrl: string | undefined = undefined;
 
-        if (clipMo?.final_key) {
-          try { videoUrl = await presign(env, "GET", String(clipMo.final_key)); } catch {}
+        if (renderedMo?.final_key) {
+          try { videoUrl = await presign(env, "GET", String(renderedMo.final_key)); } catch {}
         }
         if (ewMo?.final_key) {
           try { editWindowUrl = await presign(env, "GET", String(ewMo.final_key)); } catch {}
@@ -1487,6 +1556,9 @@ export default {
         if (thumbMo?.final_key) {
           try { thumbUrl = await presign(env, "GET", String(thumbMo.final_key)); } catch {}
         }
+
+        const { captions, source } = buildCloudCaptions(c, clipEw);
+        const hasVideo = Boolean(videoUrl || editWindowUrl);
 
         return {
           id: localId,
@@ -1499,6 +1571,7 @@ export default {
           ai_suggested_end_time: Number(c.ai_suggested_end_time || c.end_time || 0),
           duration: Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
           range_revision: Number(c.range_revision || 0),
+          is_render_stale: Boolean(c.render_stale),
           created_at: c.cloud_updated_at,
           video_url: videoUrl,
           source_video_url: undefined,
@@ -1506,8 +1579,11 @@ export default {
           edit_window_url: editWindowUrl,
           edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
           edit_window_end: clipEw ? Number(clipEw.window_end) : undefined,
-          captions: clipEw ? buildCloudCaptions(c, clipEw) : undefined,
+          captions,
+          captions_source: source,
           captions_revision: Number(c.caption_revision || 0),
+          // Explicit unavailable state instead of a silent missing player.
+          media_missing: !mediaDegraded && !hasVideo ? true : undefined,
           is_cloud: true,
         };
       };
@@ -1541,12 +1617,15 @@ export default {
       const ready = await Promise.all(readyRaw.map(c => mapClipItem(c, "ready")));
       const recent_approved = await Promise.all(approvedRaw.map(c => mapClipItem(c, String(c.status))));
 
-      const queuedJobs = jobsRes.ok ? (await jobsRes.json() as unknown[]) : [];
+      const queuedJobs = jobsRes?.ok ? (await jobsRes.json() as unknown[]) : [];
       return json(200, {
         ready,
         recent_approved,
         queue_stats: { queued_count: Array.isArray(queuedJobs) ? queuedJobs.length : 0, daily_quota_used: 0, daily_quota_max: 10 },
         cloud_mode: true,
+        media_degraded: mediaDegraded ? true : undefined,
+        windows_degraded: windowsDegraded ? true : undefined,
+        jobs_degraded: !jobsRes || !jobsRes.ok ? true : undefined,
       });
     }
 
@@ -1698,8 +1777,13 @@ export default {
       }
 
       // PC command drain: claim a lease-scoped batch of pending commands.
-      if (request.method === "POST" && url.pathname === "/sync/commands/claim"
-        && request.headers.get("X-Dispatch-User-Id")) {
+      // Audit 2026-10-27: these are PC-infrastructure routes — an ordinary
+      // Supabase user session must not be able to drive the PC command
+      // lifecycle (claim/ack/purge) even for their own clips.
+      if (request.method === "POST" && url.pathname === "/sync/commands/claim") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
         const body = await readJson<{ limit?: number; lease_seconds?: number }>(request);
         try {
           const rows = await rpcRaw(env, "cloud_claim_clip_commands",
@@ -1711,14 +1795,16 @@ export default {
         }
       }
 
-      // PC command drain: acknowledge a claimed command (done/voided/failed).
-      if (request.method === "POST" && url.pathname === "/sync/commands/ack"
-        && request.headers.get("X-Dispatch-User-Id")) {
+      // PC command drain: acknowledge a claimed command (done/voided/failed/unknown).
+      if (request.method === "POST" && url.pathname === "/sync/commands/ack") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
         const body = await readJson<{ command_id: string; result: string; error?: string }>(request);
         if (!body?.command_id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.command_id)) {
           return json(400, { error: "command_id required" });
         }
-        if (!body.result || !["done", "voided", "failed"].includes(body.result)) {
+        if (!body.result || !["done", "voided", "failed", "unknown"].includes(body.result)) {
           return json(400, { error: "invalid result" });
         }
         try {
@@ -1738,7 +1824,13 @@ export default {
       // Edit-window proxies and other sessions' assets are deliberately NOT
       // deleted — a reject never removes the source recording.
       const purgeMatch = url.pathname.match(/^\/sync\/clips\/([^/]+)\/purge-media$/);
-      if (request.method === "POST" && purgeMatch && request.headers.get("X-Dispatch-User-Id")) {
+      if (request.method === "POST" && purgeMatch) {
+        // Audit 2026-10-27: PC-infrastructure route. A plain user JWT must not
+        // be able to pull media deletion forward past the grace deadline; only
+        // the owner PC (worker token) may drive post-grace purges.
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
         const localClipId = decodeURIComponent(purgeMatch[1]);
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
         let cloudClipId: string | null = null;
@@ -1751,6 +1843,14 @@ export default {
           if (rows.length === 0) return json(404, { error: "clip not found" });
           cloudClipId = rows[0]?.id ?? null;
           if (!rows[0]?.reject_purge_after) return json(409, { error: "clip is not tombstoned for purge" });
+          // Audit 2026-10-27: the deadline is enforced SERVER-SIDE. Previously
+          // the mere existence of a stamp was enough, so a caller could delete
+          // media well before the request-time 24h grace elapsed. The PC's
+          // clock may drift a little, so a 5-minute skew tolerance applies.
+          const purgeMs = Date.parse(rows[0].reject_purge_after);
+          if (Number.isFinite(purgeMs) && purgeMs - PURGE_CLOCK_SKEW_MS > Date.now()) {
+            return json(409, { error: "purge window has not elapsed", purge_after: rows[0].reject_purge_after });
+          }
         } catch (e) {
           return json(502, { error: `clip lookup failed: ${e instanceof Error ? e.message : e}` });
         }
@@ -1799,6 +1899,301 @@ export default {
             return json(502, { error: `purge failed: ${e instanceof Error ? e.message : e}` });
           }
           return json(200, { purged: deleted, remaining, cloud_clip_id: cloudClipId });
+        }
+      }
+
+      // ---- PC sync endpoints (worker-token ONLY; audit 2026-10-27) ----
+      // The PC daemon no longer holds the Supabase service-role key: every
+      // privileged operation runs here on trusted infrastructure, scoped to the
+      // account named by the PC token's X-Dispatch-User-Id header.
+
+      // Clip upsert (metadata) with a server-side tombstone guard: an ACTIVE
+      // local push can never resurrect a cloud reject tombstone.
+      if (request.method === "POST" && url.pathname === "/sync/pc/clips") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        const body = await readJson<{
+          local_clip_id: string; title: string; status: string;
+          start_time: number; end_time: number;
+          ai_suggested_start_time?: number; ai_suggested_end_time?: number; range_revision?: number;
+        }>(request);
+        const localClipId = String(body?.local_clip_id ?? "");
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        try {
+          const existing = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id,status,reject_purge_after`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const rows = existing.ok ? (await existing.json() as Array<{ id: string; status: string; reject_purge_after: string | null }>) : [];
+          if (rows[0]?.status === "rejected" && rows[0]?.reject_purge_after && body && body.status !== "rejected") {
+            return json(200, { cloud_clip_id: rows[0].id, skipped_tombstoned: true });
+          }
+          const upsertRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?on_conflict=user_id,local_clip_id`,
+            {
+              method: "POST",
+              headers: {
+                apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+                Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                "Content-Type": "application/json",
+                Prefer: "resolution=merge-duplicates,return=representation",
+              },
+              body: JSON.stringify({
+                user_id: userId,
+                local_clip_id: localClipId,
+                title: String(body?.title ?? "Clip Highlight").slice(0, 300),
+                status: ["ready_review", "approved", "published", "rejected"].includes(String(body?.status)) ? body!.status : "ready_review",
+                ai_suggested_start_time: Number(body?.ai_suggested_start_time ?? body?.start_time ?? 0),
+                ai_suggested_end_time: Number(body?.ai_suggested_end_time ?? body?.end_time ?? 0),
+                start_time: Number(body?.start_time ?? 0),
+                end_time: Number(body?.end_time ?? 0),
+                range_revision: Number(body?.range_revision ?? 0),
+              }),
+            }
+          );
+          if (!upsertRes.ok) {
+            const text = await upsertRes.text().catch(() => "");
+            return json(502, { error: `clips_cloud upsert failed: ${upsertRes.status} ${text.slice(0, 200)}` });
+          }
+          const upsertRows = await upsertRes.json() as Array<{ id: string }>;
+          return json(200, { cloud_clip_id: upsertRows[0]?.id ?? null });
+        } catch (e) {
+          return json(502, { error: `clip upsert failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Cloud state for one local clip: tombstone, staging bookkeeping, cloud id.
+      const pcClipStateMatch = url.pathname.match(/^\/sync\/pc\/clips\/([^/]+)$/);
+      if (request.method === "GET" && pcClipStateMatch) {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        const localClipId = decodeURIComponent(pcClipStateMatch[1]);
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        try {
+          const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+          const [clipRes, windowRes] = await Promise.all([
+            fetch(
+              `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id,status,reject_requested_at,reject_purge_after`,
+              { headers: svc }
+            ),
+            fetch(
+              `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&status=eq.ready&select=id&limit=1`,
+              { headers: svc }
+            ),
+          ]);
+          const clipRows = clipRes.ok ? (await clipRes.json() as Array<Record<string, unknown>>) : [];
+          const clipRow = Array.isArray(clipRows) ? clipRows[0] : null;
+          const windowRows = windowRes.ok ? (await windowRes.json() as unknown[]) : [];
+          return json(200, {
+            local_clip_id: localClipId,
+            cloud_clip_id: (clipRow && typeof clipRow.id === "string") ? clipRow.id : null,
+            tombstoned: Boolean(clipRow && clipRow.status === "rejected" && clipRow.reject_purge_after),
+            reject_requested_at: clipRow ? clipRow.reject_requested_at : null,
+            reject_purge_after: clipRow ? clipRow.reject_purge_after : null,
+            already_staged: Array.isArray(windowRows) && windowRows.length > 0,
+          });
+        } catch (e) {
+          return json(502, { error: `clip state lookup failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Edit-window registration: records the ready 720p proxy row, links its
+      // media object to the cloud clip, and stores the window transcript.
+      if (request.method === "POST" && url.pathname === "/sync/pc/windows") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        const body = await readJson<{
+          local_clip_id: string; media_object_id: string;
+          window_start: number; window_end: number; words?: Array<Record<string, unknown>>;
+        }>(request);
+        const localClipId = String(body?.local_clip_id ?? "");
+        const mediaObjectId = String(body?.media_object_id ?? "");
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        if (!mediaObjectId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mediaObjectId)) {
+          return json(400, { error: "media_object_id required" });
+        }
+        const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+        const patchHeaders = { ...svc, "Content-Type": "application/json" };
+        try {
+          const clipRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id`,
+            { headers: svc }
+          );
+          const clipRows = clipRes.ok ? (await clipRes.json() as Array<{ id: string }>) : [];
+          const cloudClipId = Array.isArray(clipRows) ? clipRows[0]?.id : undefined;
+          if (!cloudClipId) return json(404, { error: "clip not found for this account" });
+
+          // Ownership + lifecycle check on the referenced media object.
+          const mediaRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${mediaObjectId}&select=user_id,status`,
+            { headers: svc }
+          );
+          const mediaRows = mediaRes.ok ? (await mediaRes.json() as Array<{ user_id: string; status: string }>) : [];
+          if (!mediaRows[0] || mediaRows[0].user_id !== userId) return json(403, { error: "media object not owned by caller" });
+          if (mediaRows[0].status !== "active" && mediaRows[0].status !== "deletion_pending") {
+            return json(409, { error: `media not usable (${mediaRows[0].status})` });
+          }
+
+          const insertWindow = async () => {
+            const res = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/edit_windows`,
+              {
+                method: "POST",
+                headers: { ...svc, "Content-Type": "application/json", Prefer: "return=representation" },
+                body: JSON.stringify({
+                  user_id: userId,
+                  local_clip_id: localClipId,
+                  window_start: Number(body!.window_start ?? 0),
+                  window_end: Number(body!.window_end ?? 0),
+                  status: "ready",
+                  media_object_id: mediaObjectId,
+                  staged_at: new Date().toISOString(),
+                }),
+              }
+            );
+            if (!res.ok) {
+              const text = await res.text().catch(() => "");
+              throw new Error(`edit_windows insert failed: ${res.status} ${text.slice(0, 200)}`);
+            }
+            const rows = await res.json() as Array<{ id: string }>;
+            return rows[0]?.id ?? null;
+          };
+
+          // Idempotent re-registration: same-bounds ready window is reused.
+          let windowId: string | null = null;
+          let reused = false;
+          const dupRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&status=eq.ready&window_start=eq.${Number(body?.window_start ?? 0)}&window_end=eq.${Number(body?.window_end ?? 0)}&select=id&limit=1`,
+            { headers: svc }
+          );
+          const dupRows = dupRes.ok ? (await dupRes.json() as Array<{ id: string }>) : [];
+          if (Array.isArray(dupRows) && dupRows.length > 0) {
+            windowId = dupRows[0].id;
+            reused = true;
+          } else {
+            windowId = await insertWindow();
+          }
+
+          // Link the media object to the cloud clip (idempotent) and store the
+          // staged transcript words when provided.
+          let transcriptsStored = false;
+          if (windowId) {
+            const linkRes = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${mediaObjectId}`,
+              { method: "PATCH", headers: patchHeaders, body: JSON.stringify({ clip_id: cloudClipId }) }
+            );
+            if (!linkRes.ok) return json(502, { error: `media link failed: ${linkRes.status}` });
+            const words = body?.words;
+            if (windowId && Array.isArray(words) && words.length > 0) {
+              const trRes = await fetch(
+                `${env.SUPABASE_URL}/rest/v1/window_transcripts`,
+                {
+                  method: "POST",
+                  headers: { ...svc, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+                  body: JSON.stringify({
+                    window_id: windowId,
+                    user_id: userId,
+                    words,
+                    transcribed_at: new Date().toISOString(),
+                  }),
+                }
+              );
+              if (!trRes.ok) {
+                // Transcripts seed offline caption editing; failure is not
+                // fatal but is surfaced so the PC can retry later.
+                return json(200, {
+                  window_id: windowId, cloud_clip_id: cloudClipId,
+                  window_reused: reused, media_linked: true, transcripts_stored: false,
+                });
+              }
+              transcriptsStored = true;
+            }
+          }
+          return json(200, {
+            window_id: windowId,
+            cloud_clip_id: cloudClipId,
+            window_reused: reused,
+            media_linked: true,
+            transcripts_stored: transcriptsStored,
+          });
+        } catch (e) {
+          return json(502, { error: `window registration failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Generic media-object-to-clip link (thumbnails): ownership-checked.
+      if (request.method === "POST" && url.pathname === "/sync/pc/media-link") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        const body = await readJson<{ media_object_id: string; local_clip_id: string }>(request);
+        const mediaObjectId = String(body?.media_object_id ?? "");
+        const localClipId = String(body?.local_clip_id ?? "");
+        if (!mediaObjectId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mediaObjectId)) {
+          return json(400, { error: "media_object_id required" });
+        }
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        try {
+          const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+          const [mediaRes, clipRes] = await Promise.all([
+            fetch(`${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${mediaObjectId}&select=user_id`, { headers: svc }),
+            fetch(
+              `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id`,
+              { headers: svc }
+            ),
+          ]);
+          const mediaRows = mediaRes.ok ? (await mediaRes.json() as Array<{ user_id: string }>) : [];
+          if (!mediaRows[0] || mediaRows[0].user_id !== userId) return json(403, { error: "media object not owned by caller" });
+          const clipRows = clipRes.ok ? (await clipRes.json() as Array<{ id: string }>) : [];
+          const cloudClipId = Array.isArray(clipRows) ? clipRows[0]?.id : undefined;
+          if (!cloudClipId) return json(404, { error: "clip not found for this account" });
+          const linkRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${mediaObjectId}`,
+            {
+              method: "PATCH",
+              headers: { ...svc, "Content-Type": "application/json" },
+              body: JSON.stringify({ clip_id: cloudClipId }),
+            }
+          );
+          if (!linkRes.ok) return json(502, { error: `media link failed: ${linkRes.status}` });
+          return json(200, { linked: true, cloud_clip_id: cloudClipId });
+        } catch (e) {
+          return json(502, { error: `media link failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Caption reconciliation download: revision>0 tracks saved by the phone.
+      if (request.method === "GET" && url.pathname === "/sync/pc/captions") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        try {
+          const res = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&caption_revision=gt.0&select=local_clip_id,caption_data,caption_revision,range_revision&order=caption_updated_at.desc&limit=200`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const rows = res.ok ? (await res.json() as unknown[]) : [];
+          return json(200, { clips: Array.isArray(rows) ? rows : [] });
+        } catch (e) {
+          return json(502, { error: `caption fetch failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Legacy single-profile bootstrap hint: ownership for unowned local clips
+      // is adoptable ONLY when the project has exactly one profile. On
+      // multi-profile projects there is no safe guess ("most recent profile"
+      // must never decide ownership) and the PC must be configured explicitly.
+      if (request.method === "GET" && url.pathname === "/sync/pc/eligible-owner") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        try {
+          const res = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/profiles?select=user_id&order=created_at.desc&limit=2`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const rows = res.ok ? (await res.json() as Array<{ user_id: string }>) : [];
+          if (!Array.isArray(rows) || rows.length === 0) {
+            return json(200, { user_id: null, reason: "no_profiles" });
+          }
+          if (rows.length > 1) {
+            return json(200, { user_id: null, reason: "multiple_profiles" });
+          }
+          const uid = String(rows[0].user_id ?? "");
+          return json(200, { user_id: uid || null, reason: uid ? "single_profile" : "no_profiles" });
+        } catch (e) {
+          return json(502, { error: `owner lookup failed: ${e instanceof Error ? e.message : e}` });
         }
       }
 

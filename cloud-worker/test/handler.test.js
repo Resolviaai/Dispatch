@@ -962,3 +962,198 @@ test("/sync/commands/claim and ack round-trip a lease-scoped batch", async () =>
   assert.equal(badId.status, 400);
 });
 
+// ---------------------------------------------------------------------------
+// Audit 2026-10-27: PC-boundary isolation + /clips honest-failure robustness
+// ---------------------------------------------------------------------------
+
+const userJwtHeaders = { "Authorization": "Bearer any-token", "content-type": "application/json" };
+const getUser = (req, e) => worker.fetch(req, e);
+
+test("user JWTs cannot drive PC-infrastructure routes (claim/ack/purge/sync/pc)", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  const routes = [
+    ["POST", "/sync/commands/claim", "{}", "application/json"],
+    ["POST", "/sync/commands/ack", JSON.stringify({ command_id: "77777777-7777-7777-7777-777777777777", result: "done" }), "application/json"],
+    ["POST", "/sync/clips/local-1/purge-media", "{}", "application/json"],
+    ["POST", "/sync/pc/clips", JSON.stringify({ local_clip_id: "clip_01", title: "T", status: "ready_review", start_time: 0, end_time: 5 }), "application/json"],
+    ["POST", "/sync/pc/windows", "{}", "application/json"],
+    ["POST", "/sync/pc/media-link", "{}", "application/json"],
+    ["GET", "/sync/pc/captions", null, null],
+    ["GET", "/sync/pc/clips/clip_01", null, null],
+    ["GET", "/sync/pc/eligible-owner", null, null],
+  ];
+  for (const [method, path, body, cType] of routes) {
+    const headers = { ...userJwtHeaders };
+    if (cType) headers["content-type"] = cType;
+    const res = await worker.fetch(new Request(`https://w.test${path}`, {
+      method, headers, body: body ?? undefined,
+    }), env());
+    assert.equal(res.status, 403, `${method} ${path} must be PC-worker-token-only`);
+  }
+});
+
+test("command ack accepts the 'unknown' verdict so commands are re-delivered", async () => {
+  let ackedResult = null;
+  supabase.set("/rpc/cloud_ack_clip_command", {
+    method: "POST",
+    fn: (url, init) => {
+      ackedResult = JSON.parse(init.body).p_result;
+      return { body: true };
+    }
+  });
+  const res = await post("/sync/commands/ack", {
+    command_id: "77777777-7777-7777-7777-777777777777",
+    result: "unknown",
+    error: "clip not present on this PC; re-deliver to the owning machine",
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).ok, true);
+  assert.equal(ackedResult, "unknown");
+});
+
+test("/clips returns 502 instead of an empty list when the primary query fails", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  supabase.set("/rest/v1/clips_cloud?user_id=eq." + USER_A, {
+    method: "GET",
+    fn: () => ({ status: 500, body: { message: "db down" } })
+  });
+  const res = await getUser(new Request("https://w.test/clips", {
+    method: "GET", headers: userJwtHeaders,
+  }), env());
+  assert.equal(res.status, 502, "a wipe-clean empty 200 must not mask a primary listing failure");
+  const body = await res.json();
+  assert.ok(String(body.error).includes("clip listing failed"));
+});
+
+test("/clips clamps paging bounds instead of passing them to PostgREST", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  supabase.set("/rpc/cloud_list_live_clip_commands", { method: "POST", fn: () => ({ body: [] }) });
+  const seenLimits = [];
+  supabase.set("/rest/v1/clips_cloud?user_id=eq." + USER_A, {
+    method: "GET",
+    fn: (url) => {
+      const m = String(url).match(/limit=(-?\d+)/);
+      seenLimits.push(m ? Number(m[1]) : null);
+      return { body: [] };
+    }
+  });
+  await getUser(new Request("https://w.test/clips?limit=100000", { method: "GET", headers: userJwtHeaders }), env());
+  await getUser(new Request("https://w.test/clips?limit=-5", { method: "GET", headers: userJwtHeaders }), env());
+  await getUser(new Request("https://w.test/clips", { method: "GET", headers: userJwtHeaders }), env());
+  assert.deepEqual(seenLimits, [200, 1, 50], "limit is clamped to [1,200]; default is 50");
+});
+
+test("/clips treats a malformed (non-array) listing body as a 502 upstream failure", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  supabase.set("/rest/v1/clips_cloud?user_id=eq." + USER_A, {
+    method: "GET",
+    fn: () => ({ body: { unexpected: "shape" } })
+  });
+  const res = await getUser(new Request("https://w.test/clips", {
+    method: "GET", headers: userJwtHeaders,
+  }), env());
+  assert.equal(res.status, 502, "a non-array body is an upstream failure, not an empty list");
+  const body = await res.json();
+  assert.ok(String(body.error).includes("clip listing failed"));
+});
+
+test("/clips kind-aware media selection: rendered > window proxy, never thumbnail; missing media flagged", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  supabase.set("/rpc/cloud_list_live_clip_commands", { method: "POST", fn: () => ({ body: [] }) });
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({ body: [
+      { id: "cc-rendered", local_clip_id: "clip_r", title: "Rendered", status: "ready_review", start_time: 10, end_time: 40, caption_revision: 0 },
+      { id: "cc-window", local_clip_id: "clip_w", title: "WindowOnly", status: "ready_review", start_time: 10, end_time: 40, caption_revision: 0 },
+      { id: "cc-thumb", local_clip_id: "clip_t", title: "ThumbOnly", status: "ready_review", start_time: 10, end_time: 40, caption_revision: 0 },
+      { id: "cc-none", local_clip_id: "clip_n", title: "NoMedia", status: "ready_review", start_time: 10, end_time: 40, caption_revision: 3 },
+    ] })
+  });
+  supabase.set("/rest/v1/media_objects", {
+    method: "GET",
+    fn: () => ({ body: [
+      { id: "m-rendered", clip_id: "cc-rendered", kind: "clip_video", mime_type: "video/mp4", final_key: "final/r.mp4" },
+      { id: "m-ew", clip_id: "cc-window", kind: "edit_window", mime_type: "video/mp4", final_key: "windows/w.mp4" },
+      { id: "m-thumb", clip_id: "cc-thumb", kind: "thumbnail", mime_type: "image/jpeg", final_key: "thumbs/t.jpg" },
+    ] })
+  });
+  supabase.set("/rest/v1/edit_windows", {
+    method: "GET",
+    fn: () => ({ body: [
+      { id: "ew-1", local_clip_id: "clip_w", window_start: 5, window_end: 45, media_object_id: "m-ew" },
+    ] })
+  });
+  supabase.set("/rest/v1/window_transcripts", { method: "GET", fn: () => ({ body: [] }) });
+
+  const res = await getUser(new Request("https://w.test/clips", {
+    method: "GET", headers: userJwtHeaders,
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ready.length, 4);
+  const byTitle = {};
+  for (const c of body.ready) byTitle[c.title] = c;
+
+  // 1. Rendered clip_video is the play target.
+  assert.match(byTitle.Rendered.video_url, /final\/r\.mp4/, "kind=clip_video object is the video");
+  assert.equal(byTitle.Rendered.edit_window_url, undefined);
+  assert.equal(byTitle.Rendered.media_missing, undefined);
+
+  // 2. Window proxy fallback when no render exists but a ready window does.
+  assert.match(byTitle.WindowOnly.video_url, /windows\/w\.mp4/, "proxy plays via the window");
+  assert.match(byTitle.WindowOnly.edit_window_url, /windows\/w\.mp4/);
+
+  // 3. A thumbnail NEVER stands in for the video (audit regression).
+  assert.equal(byTitle.ThumbOnly.video_url, undefined, "thumbnail must not become the video URL");
+  assert.match(byTitle.ThumbOnly.thumbnail_url, /thumbs\/t\.jpg/);
+  assert.equal(byTitle.ThumbOnly.media_missing, true, "explicit unavailable state instead of a silent player");
+
+  // 4. Nothing at all: media_missing is honest about the gap.
+  assert.equal(byTitle.NoMedia.video_url, undefined);
+  assert.equal(byTitle.NoMedia.thumbnail_url, undefined);
+  assert.equal(byTitle.NoMedia.media_missing, true);
+  assert.equal(byTitle.NoMedia.captions_revision, 3, "caption revision is exposed per clip");
+});
+
+test("/clips serves saved caption tracks even without a ready edit window", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_B, email: "b@test.com" } }) });
+  supabase.set("/rpc/cloud_list_live_clip_commands", { method: "POST", fn: () => ({ body: [] }) });
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({ body: [
+      {
+        id: "cc-1", local_clip_id: "clip_01", title: "CaptionOnly", status: "ready_review",
+        start_time: 10, end_time: 40, caption_revision: 2,
+        caption_data: { groups: [{ id: "g1", start: 0, end: 1.5, text: "hi", words: [] }] },
+      },
+    ] })
+  });
+  supabase.set("/rest/v1/media_objects", { method: "GET", fn: () => ({ body: [] }) });
+  supabase.set("/rest/v1/edit_windows", { method: "GET", fn: () => ({ body: [] }) });
+
+  const res = await getUser(new Request("https://w.test/clips", {
+    method: "GET", headers: userJwtHeaders,
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const clip = body.ready[0];
+  assert.ok(clip, "the edited-track clip is not dropped for missing media");
+  assert.equal(clip.captions_source, "edited", "saved track is returned without a window");
+  assert.equal(clip.captions.groups[0].text, "hi");
+  assert.equal(clip.captions_revision, 2);
+  assert.equal(clip.media_missing, true);
+});
+
+test("/sync/clips/:id purge enforces the server-side deadline (before grace -> 409)", async () => {
+  supabase.set("/rest/v1/clips_cloud?user_id=eq." + USER_A, {
+    method: "GET",
+    fn: () => ({ body: [{ id: "cloud-c1", reject_purge_after: new Date(Date.now() + 3600_000).toISOString() }] })
+  });
+  const res = await post("/sync/clips/local-1/purge-media", {});
+  assert.equal(res.status, 409, "a PC cannot pull deletion forward past the request-time grace");
+  const body = await res.json();
+  assert.ok(String(body.error).includes("not elapsed"));
+  assert.ok(!bucket.deleted.length, "nothing was deleted before the deadline");
+});
+
+

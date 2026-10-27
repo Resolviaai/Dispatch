@@ -998,6 +998,10 @@ def purge_expired_rejections(now_truth: Optional[str] = None) -> int:
     expiry). cloud_reject_purge_at is deliberately KEPT until the cloud/R2
     flush confirms deletion (mark_cloud_media_purged), so transient R2
     failures are retried by later sync cycles.
+
+    Path clearing is per-file: a failed unlink RETAINS that file's path so a
+    later sweep retries, while successfully deleted (or already absent) files
+    have their reference cleared immediately.
     """
     purged = 0
     try:
@@ -1015,23 +1019,29 @@ def purge_expired_rejections(now_truth: Optional[str] = None) -> int:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             for row in rows:
-                had_media = False
+                cleared_any = False
                 for file_key in ("video_path", "thumbnail_path"):
                     val = row[file_key]
-                    if val:
-                        had_media = True
-                        try:
-                            p = Path(val)
-                            if p.exists() and p.is_file():
-                                p.unlink()
-                                logger.info("Purged expired rejected media %s for clip %s", file_key, row["id"])
-                        except Exception as e:
-                            logger.warning("Failed to purge %s for rejected clip %s: %s", file_key, row["id"], e)
-                cursor.execute("""
-                    UPDATE clips SET video_path = NULL, thumbnail_path = NULL
-                    WHERE id = ?
-                """, (row["id"],))
-                if had_media:
+                    if not val:
+                        continue
+                    try:
+                        p = Path(val)
+                        if p.exists() and p.is_file():
+                            p.unlink()
+                            logger.info("Purged expired rejected media %s for clip %s", file_key, row["id"])
+                        # File removed (or was already gone): clear the dangling
+                        # reference. A failed unlink keeps the path for retry.
+                        cursor.execute(
+                            f"UPDATE clips SET {file_key} = NULL WHERE id = ?",
+                            (row["id"],),
+                        )
+                        cleared_any = True
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to purge %s for rejected clip %s; path retained for retry: %s",
+                            file_key, row["id"], e,
+                        )
+                if cleared_any:
                     purged += 1
             if rows:
                 conn.commit()
@@ -1062,7 +1072,14 @@ def list_expired_cloud_rejections(now_truth: Optional[str] = None) -> List[Dict[
 
 def mark_cloud_media_purged(clip_id: str) -> bool:
     """Durable acknowledgement that the cloud/R2 assets of a tombstoned clip
-    are deleted. Clears the purge anchor only once, keeping the status hidden."""
+    are deleted. Clears the purge anchor only once, keeping the status hidden.
+
+    Gated on local completion: the anchor flips only when BOTH local media
+    references are cleared (purge_expired_rejections removes them after a
+    successful unlink). If a local unlink failed, this returns False so the
+    sync sweep keeps the tombstone pending and retries — the pipeline never
+    reports fully purged while a local file or reference still exists.
+    """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -1070,6 +1087,8 @@ def mark_cloud_media_purged(clip_id: str) -> bool:
                 UPDATE clips
                 SET cloud_r2_purged_at = ?, cloud_reject_purge_at = NULL
                 WHERE id = ? AND status = 'rejected' AND cloud_reject_purge_at IS NOT NULL
+                  AND (video_path IS NULL OR video_path = '')
+                  AND (thumbnail_path IS NULL OR thumbnail_path = '')
             """, (datetime.now(timezone.utc).isoformat(), clip_id))
             conn.commit()
             return cursor.rowcount == 1

@@ -12,14 +12,19 @@ Covers:
 - Local purge after grace keeps cloud_reject_purge_at until the cloud/R2 flush
   confirms deletion (mark_cloud_media_purged), so failures retry.
 - restore of purged media is truthful ('gone' -> ack 'failed').
+- Unknown-clip commands are acked 'unknown' (re-delivered to the owning
+  machine), never swallowed as done/voided (audit 1A).
+- A failed local unlink RETAINS the media path; cloud purge confirmation is
+  gated on local completion (mark_cloud_media_purged).
 - The drain loop acks per-command results (mocked worker HTTP).
 """
+import json
 import os
 import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from dispatch.cloud import sync as cloud_sync
 from dispatch.db import (
@@ -293,6 +298,109 @@ class TestOfflineClipCommands(unittest.TestCase):
             flushed = cloud_sync._flush_cloud_purges("https://w.test", "tok")
         self.assertEqual(flushed, 1)
         self.assertIsNotNone(_fetch_clip(clip_id)["cloud_r2_purged_at"])
+
+    def test_unknown_clip_command_is_acked_unknown_for_redelivery(self):
+        """Audit 1A: a command for a clip this PC does not hold must be acked
+        'unknown' so the Worker re-delivers it to the owning machine. Acking
+        done/voided would swallow the user's request forever."""
+        ghost_id = "rej_not_on_this_pc"
+
+        class FakeResponse:
+            def __init__(self, status, body):
+                self.status_code = status
+                self.text = json.dumps(body)
+                self._body = body
+
+            @property
+            def ok(self):
+                return self.status_code < 400
+
+            def json(self):
+                return self._body
+
+        claims = [{
+            "id": "2f0d4a3b-1111-2222-3333-444455556667",
+            "local_clip_id": ghost_id,
+            "kind": "reject",
+            "payload": {"reason": "for whatever machine holds it"},
+            "attempts": 1,
+        }]
+        acks = []
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            if url.endswith("/sync/commands/claim"):
+                return FakeResponse(200, {"commands": claims})
+            if url.endswith("/sync/commands/ack"):
+                acks.append(json)
+                return FakeResponse(200, {"ok": True})
+            return FakeResponse(404, {})
+
+        def fake_get(url, headers=None, timeout=None):
+            return FakeResponse(200, [])
+
+        with patch.object(cloud_sync.requests, "post", side_effect=fake_post), \
+             patch.object(cloud_sync.requests, "get", side_effect=fake_get), \
+             patch.object(cloud_sync, "_resolve_drain_user_ids", return_value=[USER_A]):
+            applied = cloud_sync.drain_clip_commands(limit=5)
+        self.assertEqual(applied, 1)
+        self.assertEqual(len(acks), 1)
+        self.assertEqual(acks[0]["result"], "unknown", "missing clips are re-delivered, not voided")
+        self.assertTrue(acks[0].get("error"))
+        self.assertIsNone(_fetch_clip(ghost_id), "nothing was created locally by the ghost command")
+
+    def test_reject_race_vanished_clip_acks_unknown(self):
+        """If the clip disappears between the local precheck and the apply,
+        soft_reject_clip reports 'unknown'; the drain must surface that verbatim
+        instead of coercing it into 'failed'."""
+        with patch.object(cloud_sync.db, "soft_reject_clip", return_value="unknown"):
+            verdict, reason = cloud_sync._apply_clip_command(
+                {"id": "c-race", "kind": "reject", "local_clip_id": "rej_race_vanish",
+                 "payload": {"reason": "raced away"}},
+                context_user_id=USER_A,
+            )
+        self.assertEqual(verdict, "unknown")
+        self.assertIn("re-deliver", str(reason))
+
+    def test_purge_retains_path_when_unlink_fails(self):
+        """A locked/failed unlink must retain the media path (retry next sweep)
+        and must NOT let the cloud purge confirmation land while local media
+        still exists (mark_cloud_media_purged is gated on local completion)."""
+        clip_id = "rej_purge_retry"
+        video, thumb = self._make_media_files(clip_id)
+        _insert_clip(clip_id, video_path=video, thumbnail_path=thumb,
+                     user_id=USER_A)
+
+        purge_at = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        self.assertEqual(soft_reject_clip(clip_id, reason="expired grace",
+                                          purge_at=purge_at), "applied")
+
+        fake_file = MagicMock()
+        fake_file.exists.return_value = True
+        fake_file.is_file.return_value = True
+        fake_file.unlink.side_effect = OSError("file locked by renderer")
+        with patch("dispatch.db.Path", return_value=fake_file):
+            purged = purge_expired_rejections()
+        self.assertEqual(purged, 0, "nothing was cleared: the unlink failed")
+
+        clip = _fetch_clip(clip_id)
+        self.assertEqual(clip["video_path"], video, "failed unlink retains the path for retry")
+        self.assertEqual(clip["thumbnail_path"], thumb)
+        self.assertIsNotNone(clip["cloud_reject_purge_at"], "purge anchor kept while local media persists")
+        self.assertTrue(os.path.exists(video), "file untouched on failed unlink")
+
+        # Gate: cloud confirmation must not land while a local path remains.
+        self.assertFalse(mark_cloud_media_purged(clip_id))
+
+        # Once the lock clears, the retry completes the local purge ...
+        self.assertEqual(purge_expired_rejections(), 1)
+        self.assertFalse(os.path.exists(video))
+        self.assertFalse(os.path.exists(thumb))
+        clip = _fetch_clip(clip_id)
+        self.assertIsNone(clip["video_path"])
+        self.assertIsNone(clip["thumbnail_path"])
+        # ... and only then does the cloud confirmation flip the anchor.
+        self.assertTrue(mark_cloud_media_purged(clip_id))
+        self.assertIsNone(_fetch_clip(clip_id)["cloud_reject_purge_at"])
 
     def test_drain_claims_applies_and_acks(self):
         clip_id = "rej_drain_01"

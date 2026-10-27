@@ -8,6 +8,7 @@ The PC must:
 - mark the local render stale and stamp the authored range revision,
 - expose a sync wrapper that pulls newer tracks per account (mocked HTTP).
 """
+import json
 import unittest
 from unittest.mock import patch
 
@@ -119,25 +120,35 @@ class TestCloudCaptionReconciliation(unittest.TestCase):
             def __init__(self, status, body):
                 self.status_code = status
                 self.ok = status < 400
-                self.text = ""
+                self.text = json.dumps(body)
                 self._body = body
 
             def json(self):
                 return self._body
 
+        seen = []
+
         def fake_get(url, headers=None, timeout=None):
-            assert f"user_id=eq.{USER_A}" in url, "fetches are scoped per account"
-            assert "caption_revision=gt.0" in url
-            return FakeResponse(200, [{
+            seen.append((url, headers))
+            assert url.endswith("/sync/pc/captions"), (
+                "caption pulls go through the owner-scoped worker endpoint"
+            )
+            assert headers.get("X-Dispatch-User-Id") == USER_A, (
+                "each pull is scoped per account"
+            )
+            return FakeResponse(200, {"clips": [{
                 "local_clip_id": clip_id,
                 "caption_data": TRACK_V2,
                 "caption_revision": 9,
                 "range_revision": 3,
-            }])
+            }]})
 
         with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
             applied = cloud_sync.import_cloud_captions_for_clips([USER_A])
         self.assertEqual(applied, 1)
+        url, headers = seen[0]
+        self.assertTrue(url.endswith("/sync/pc/captions"))
+        self.assertEqual(headers.get("X-Dispatch-User-Id"), USER_A)
         row = _fetch(clip_id)
         self.assertEqual(row["cloud_caption_revision"], 9)
         self.assertIn("hi there", str(row["caption_data"]))
@@ -146,8 +157,37 @@ class TestCloudCaptionReconciliation(unittest.TestCase):
         with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
             self.assertEqual(cloud_sync.import_cloud_captions_for_clips([USER_A]), 0)
 
+    def test_sync_wrapper_tolerates_bare_list_body(self):
+        """Legacy/compat: the endpoint may respond with a bare clip array; the
+        wrapper must still import it."""
+        clip_id = "cap_sync_06b"
+        _insert_clip(clip_id, user_id=USER_A)
+
+        class FakeResponse:
+            def __init__(self, body):
+                self.status_code = 200
+                self.ok = True
+                self.text = json.dumps(body)
+                self._body = body
+
+            def json(self):
+                return self._body
+
+        def fake_get(url, headers=None, timeout=None):
+            self.assertTrue(url.endswith("/sync/pc/captions"))
+            return FakeResponse([{
+                "local_clip_id": clip_id,
+                "caption_data": TRACK_V1,
+                "caption_revision": 4,
+                "range_revision": 3,
+            }])
+
+        with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
+            self.assertEqual(cloud_sync.import_cloud_captions_for_clips([USER_A]), 1)
+        self.assertIn("hi", str(_fetch(clip_id)["caption_data"]))
+
     def test_sync_wrapper_wraps_track_objects_before_import(self):
-        """Supabase REST hands caption_data back as an OBJECT (jsonb); the
+        """The worker hands caption_data back as an OBJECT (jsonb); the
         wrapper must serialize it rather than choke on the type."""
         clip_id = "cap_sync_07"
         _insert_clip(clip_id, user_id=USER_A)
@@ -156,18 +196,19 @@ class TestCloudCaptionReconciliation(unittest.TestCase):
             def __init__(self, body):
                 self.status_code = 200
                 self.ok = True
-                self.text = ""
+                self.text = json.dumps(body)
                 self._body = body
 
             def json(self):
                 return self._body
 
-        fake_get = lambda url, headers=None, timeout=None: FakeResponse([{ 
-            "local_clip_id": clip_id,
-            "caption_data": TRACK_V1,
-            "caption_revision": 2,
-            "range_revision": 3,
-        }])
+        def fake_get(url, headers=None, timeout=None):
+            return FakeResponse({"clips": [{
+                "local_clip_id": clip_id,
+                "caption_data": TRACK_V1,
+                "caption_revision": 2,
+                "range_revision": 3,
+            }]})
 
         with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
             self.assertEqual(cloud_sync.import_cloud_captions_for_clips([USER_A]), 1)

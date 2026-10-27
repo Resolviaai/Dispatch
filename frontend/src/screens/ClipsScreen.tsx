@@ -216,6 +216,14 @@ export interface ClipItem {  id: string;
     span_duration?: number;
     [key: string]: unknown;
   };
+  /** Monotonic caption revision (optimistic-concurrency for cloud saves). */
+  captions_revision?: number;
+  /** How the captions payload was sourced (worker: track | window). */
+  captions_source?: string;
+  /** Presigned edit-window proxy URL (worker fallback player source). */
+  edit_window_url?: string;
+  /** True when the worker could not resolve ANY playable/presentable media. */
+  media_missing?: boolean;
 }
 
 export interface QueueStats {
@@ -1028,6 +1036,8 @@ interface FramedVideoStageProps {
   preferRendered?: boolean;
   onVideoClick?: () => void;
   muted?: boolean;
+  /** Worker-reported: no media (rendered clip, window proxy, thumbnail) resolved. */
+  mediaMissing?: boolean;
 }
 
 export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
@@ -1052,6 +1062,8 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   preferRendered = false,
   onVideoClick,
   muted = false,
+  /** Worker-reported: no media (rendered clip, window proxy, thumbnail) resolved. */
+  mediaMissing = false,
 }) => {
   const [sourceFailed, setSourceFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
@@ -1273,7 +1285,14 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
         ) : (
           <div className="flex flex-col items-center justify-center p-6 text-center text-text-muted z-10">
             <Film size={28} className="mb-2 text-text-muted" />
-            <div className="text-[12px] font-semibold text-text-secondary">Source video unavailable</div>
+            <div className="text-[12px] font-semibold text-text-secondary">
+              {mediaMissing ? 'Media not yet available' : 'Source video unavailable'}
+            </div>
+            {mediaMissing && (
+              <div className="text-[10px] text-text-muted mt-1 max-w-[220px] leading-relaxed">
+                This clip is missing its media on Dispatch Cloud. Reconnect the PC so it can re-stage.
+              </div>
+            )}
           </div>
         )}
 
@@ -1480,14 +1499,68 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
   }, [handleClearSelection]);
 
+  // ---------------------------------------------------------------------------
+  // Media URL stability cache (loading-glitch fix, audit 2026-10-27).
+  // Every 4s poll handed <video>/<img> freshly presigned (rotating) R2 URLs,
+  // visibly glitching playback as identical content was swapped mid-buffer.
+  // One stable URL string is served per (clip, revision, kind) for ~8 min —
+  // inside the presign validity window — so poll refreshes no longer flip src
+  // props. Rotations only flow through on a content revision or TTL expiry.
+  // ---------------------------------------------------------------------------
+  const mediaUrlCacheRef = useRef<Map<string, { url: string; expires: number }>>(new Map());
+  const stabilizeMediaUrls = useCallback((clip: ClipItem): ClipItem => {
+    const cache = mediaUrlCacheRef.current;
+    const now = Date.now();
+    if (cache.size > 400) {
+      for (const [k, v] of cache) if (v.expires <= now) cache.delete(k);
+      if (cache.size > 600) cache.clear();
+    }
+    const stable = (field: 'video_url' | 'thumbnail_url' | 'edit_window_url'): string | undefined => {
+      const raw = clip[field];
+      if (!raw) return undefined;
+      const url = raw.startsWith('http') ? raw : apiUrl(raw, pcHost);
+      const key = `${clip.id}|${clip.range_revision ?? 0}|${clip.thumbnail_version ?? 0}|${field}`;
+      const hit = cache.get(key);
+      if (hit && hit.expires > now) return hit.url; // keep the playing src stable
+      cache.set(key, { url, expires: now + 480_000 });
+      return url;
+    };
+    return {
+      ...clip,
+      video_url: stable('video_url'),
+      thumbnail_url: stable('thumbnail_url'),
+      edit_window_url: stable('edit_window_url'),
+    };
+  }, [pcHost]);
+
+  const clipsFetchBusyRef = useRef(false);
+  const clipsFetchPendingRef = useRef(false);
+  const clipFetchGenerationRef = useRef(0);
+  const cloudFailStreakRef = useRef(0);
+  // Optimistic-concurrency map (clipId -> last known cloud caption revision).
+  // Seeded when a cloud track loads; every save carries it as base_revision so
+  // a phone edit made while this editor was open is refused (409), not clobbered.
+  const cloudCaptionsRevisionRef = useRef<Map<string, number>>(new Map());
+
   // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
+    // In-flight lock: overlapping poll ticks / handler refreshes coalesce, with
+    // one trailing refresh so the latest caller's intent is not dropped.
+    if (clipsFetchBusyRef.current) {
+      clipsFetchPendingRef.current = true;
+      return;
+    }
+    clipsFetchPendingRef.current = false;
+    clipsFetchBusyRef.current = true;
+    clipFetchGenerationRef.current += 1;
+
     let loadedFromPc = false;
+    const generation = clipFetchGenerationRef.current;
 
     if (pcHost && pcHost.trim()) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
         const res = await fetch(apiUrl('/api/clips', pcHost), { headers: getAuthHeaders(), signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
@@ -1495,12 +1568,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           const rList = Array.isArray(data.ready) ? data.ready : [];
           const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
           const hiddenIds = optimisticRejectIdsRef.current;
-          setReadyClips(rList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
-          setApprovedClips(aList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
-          if (data.queue_stats) {
-            setQueueStats(data.queue_stats);
+          if (clipFetchGenerationRef.current === generation) {
+            setReadyClips(rList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+            setApprovedClips(aList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+            if (data.queue_stats) {
+              setQueueStats(data.queue_stats);
+            }
+            cloudFailStreakRef.current = 0;
+            setConnectionError(null);
           }
-          setConnectionError(null);
           setIsCloudMode(false);
           loadedFromPc = true;
         }
@@ -1513,47 +1589,82 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       try {
         const session = await currentSession();
         const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+        let cloudOk = false;
         if (token) {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          // Separate timeouts: a slow /jobs/status call can no longer push the
+          // media list request past its own deadline (the media list is what
+          // the page renders; job status is secondary).
+          const clipsController = new AbortController();
+          const jobsController = new AbortController();
+          const clipsTimeout = window.setTimeout(() => clipsController.abort(), 8000);
+          const jobsTimeout = window.setTimeout(() => jobsController.abort(), 5000);
           const [clipsRes, jobsRes] = await Promise.all([
             fetch(`${WORKER_BASE}/clips`, {
               headers: { 'Authorization': `Bearer ${token}` },
-              signal: controller.signal,
+              signal: clipsController.signal,
             }).catch(() => null),
             fetch(`${WORKER_BASE}/jobs/status`, {
               headers: { 'Authorization': `Bearer ${token}` },
-              signal: controller.signal,
+              signal: jobsController.signal,
             }).catch(() => null),
           ]);
-          clearTimeout(timeoutId);
+          window.clearTimeout(clipsTimeout);
+          window.clearTimeout(jobsTimeout);
 
           if (clipsRes && clipsRes.ok) {
             const data = await clipsRes.json();
             const rList = Array.isArray(data.ready) ? data.ready : [];
             const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
             const hiddenIds = optimisticRejectIdsRef.current;
-            setReadyClips(rList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
-            setApprovedClips(aList.filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
-            if (data.queue_stats) {
-              setQueueStats(data.queue_stats);
+            if (clipFetchGenerationRef.current === generation) {
+              setReadyClips(rList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+              setApprovedClips(aList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+              if (data.queue_stats) {
+                setQueueStats(data.queue_stats);
+              }
             }
+            cloudOk = true;
           }
           if (jobsRes && jobsRes.ok) {
             const jData = await jobsRes.json();
             if (Array.isArray(jData.jobs)) {
-              setRemoteJobs(jData.jobs);
+              if (clipFetchGenerationRef.current === generation) {
+                setRemoteJobs(jData.jobs);
+              }
             }
           }
         }
         setIsCloudMode(true);
-        setConnectionError(null);
+        if (clipFetchGenerationRef.current === generation) {
+          if (cloudOk) {
+            cloudFailStreakRef.current = 0;
+            setConnectionError(null);
+          } else {
+            // Honest offline signal: one hiccup is tolerated; a second
+            // consecutive failure surfaces the connection error.
+            cloudFailStreakRef.current += 1;
+            if (cloudFailStreakRef.current >= 2) {
+              setConnectionError('Dispatch Cloud is unreachable. Retrying every 10s…');
+            }
+          }
+        }
       } catch {
         setIsCloudMode(true);
-        setConnectionError(null);
+        cloudFailStreakRef.current += 1;
+        if (cloudFailStreakRef.current >= 2) {
+          setConnectionError('Dispatch Cloud is unreachable. Retrying every 10s…');
+        }
       }
     }
-    setIsLoading(false);
+    if (clipFetchGenerationRef.current === generation) {
+      setIsLoading(false);
+    }
+    // Release the in-flight lock and honor one queued trailing refresh.
+    clipsFetchBusyRef.current = false;
+    if (clipsFetchPendingRef.current) {
+      clipsFetchPendingRef.current = false;
+      void fetchClips();
+    }
   };
 
   const handleSubmitRemoteJob = async () => {
@@ -1594,10 +1705,20 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   useEffect(() => {
     fetchClips();
     if (viewMode !== 'library' && viewMode !== 'detail') return;
+    // 10s poll cadence; background tabs skip polling entirely (battery + no
+    // presigned media churn) and an immediate refresh runs on tab return.
     const interval = setInterval(() => {
+      if (document.hidden) return;
       fetchClips();
-    }, 4000);
-    return () => clearInterval(interval);
+    }, 10_000);
+    const onVisibilityChange = () => {
+      if (!document.hidden) fetchClips();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [pcHost, viewMode]);
 
   // 2. Synchronize Selected Clip State & Defensively Clear Stale Captions
@@ -1676,6 +1797,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       // an edited track (groups + default_style/...) or a transcript seed
       // (raw words relative to the edit window).
       const clipDuration = Math.max(0.1, currentClip.duration || 10);
+      // Seed the revision this editor session will save against (the worker
+      // refuses stale saves with 409 instead of silently overwriting a newer
+      // phone edit).
+      const seededRevision = Number(currentClip.captions_revision ?? 0);
+      cloudCaptionsRevisionRef.current.set(currentClip.id, Number.isFinite(seededRevision) ? Math.floor(seededRevision) : 0);
       const cloudCap = currentClip.captions as { words?: unknown[]; groups?: unknown[] } | undefined;
       const cloudGroups = cloudCap && Array.isArray(cloudCap.groups) ? cloudCap.groups : null;
       const cloudWords = cloudCap && Array.isArray(cloudCap.words) ? (cloudCap.words as Array<{ w?: string; text?: string; start: number; end: number }>) : null;
@@ -2190,15 +2316,28 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         if (!token) {
           throw new Error('Sign in to save cloud captions.');
         }
+        const baseRevision = cloudCaptionsRevisionRef.current.get(currentClip.id)
+          ?? Number((currentClip as any).captions_revision ?? 0);
         const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/captions`, {
           method: 'PUT',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ track: captionTrack }),
+          body: JSON.stringify({ track: captionTrack, base_revision: Number.isFinite(baseRevision) ? Math.floor(baseRevision) : 0 }),
         });
+        if (res.status === 409) {
+          // Another device saved a newer track while this editor was open.
+          setSaveStatus('error');
+          setFeedback('Captions changed on another device. Reopen this clip to load the latest track.');
+          return false;
+        }
         if (res.ok) {
+          const saveData = await res.json().catch(() => ({} as { revision?: unknown }));
+          const nextRevision = Number((saveData as { revision?: unknown })?.revision);
+          if (Number.isFinite(nextRevision)) {
+            cloudCaptionsRevisionRef.current.set(currentClip.id, Math.floor(nextRevision));
+          }
           setSaveStatus('saved');
           setFeedback('Captions saved to Dispatch Cloud.');
           setTimeout(() => setFeedback(null), 2500);
@@ -2524,13 +2663,35 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Cloud returned HTTP ${res.status}`);
+      const undoData = await res.json().catch(() => ({} as { state?: unknown }));
+      const state = typeof (undoData as { state?: unknown })?.state === 'string'
+        ? (undoData as { state: string }).state
+        : 'unknown';
       if (rejectUndoTimerRef.current) {
         window.clearTimeout(rejectUndoTimerRef.current);
         rejectUndoTimerRef.current = null;
       }
       setPendingRejectUndo(null);
-      setFeedback('Clip restored.');
-      setTimeout(() => setFeedback(null), 2500);
+      // Honest outcome reporting (audit 2026-10-27): the command is durable —
+      // "restored"/"voided" were applied instantly, "pending"/"claimed" are
+      // queued for the PC (clip is already back in the cloud list), while
+      // "expired" means the 24h grace lapsed and media may be gone.
+      if (state === 'restored' || state === 'voided') {
+        setFeedback('Clip restored.');
+        setTimeout(() => setFeedback(null), 2500);
+      } else if (state === 'pending' || state === 'claimed') {
+        setFeedback('Restore queued — the clip is back in your cloud list.');
+        setTimeout(() => setFeedback(null), 4000);
+      } else if (state === 'expired') {
+        setFeedback('The 24h undo window expired; the clip may have been removed.');
+        setTimeout(() => setFeedback(null), 5000);
+      } else if (state === 'not_rejected') {
+        setFeedback('Clip was already restored.');
+        setTimeout(() => setFeedback(null), 2500);
+      } else {
+        setFeedback('Restore requested. Refreshing to confirm…');
+        setTimeout(() => setFeedback(null), 4000);
+      }
       await fetchClips();
     } catch (e) {
       const message = e instanceof DOMException && e.name === 'AbortError'
@@ -2888,9 +3049,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                           <img
                             src={clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)}
                             alt=""
+                            loading="lazy"
+                            decoding="async"
                             className="absolute inset-0 w-full h-full object-cover"
                             onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
+                              // Hide (not remove) so layout never shifts; the
+                              // frame placeholder stays visible behind it.
+                              (e.target as HTMLElement).style.visibility = 'hidden';
                             }}
                           />
                         )}
@@ -3053,6 +3218,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               videoUrl={currentClip.video_url ? apiUrl(currentClip.video_url, pcHost) : undefined}
               poster={currentClip.thumbnail_url ? apiUrl(currentClip.thumbnail_url, pcHost) : undefined}
               preferRendered={true}
+              mediaMissing={currentClip.media_missing === true}
               clipStart={clipStart}
               clipEnd={clipEnd}
               clipDuration={clipDuration}
