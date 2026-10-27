@@ -1192,45 +1192,82 @@ export default {
     if (url.pathname === "/clips" && request.method === "GET") {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
-      const [clipsRes, jobsRes] = await Promise.all([
+      const [clipsRes, jobsRes, mediaRes, editWindowsRes] = await Promise.all([
         fetch(
-          `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,range_revision,render_stale,cloud_updated_at&order=cloud_updated_at.desc&limit=50`,
+          `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,cloud_updated_at&order=cloud_updated_at.desc&limit=50`,
           { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
         ),
         fetch(
           `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&select=id`,
           { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
         ),
+        fetch(
+          `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${user.userId}&status=eq.active&select=id,clip_id,kind,mime_type,final_key`,
+          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+        ).catch(() => null),
+        fetch(
+          `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${user.userId}&status=eq.ready&select=id,local_clip_id,window_start,window_end,media_object_id`,
+          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+        ).catch(() => null),
       ]);
       const rawClips = clipsRes.ok ? (await clipsRes.json() as Array<Record<string, unknown>>) : [];
-      const ready = rawClips
-        .filter(c => c.status === "ready_review" || c.status === "ready")
-        .map(c => ({
-          id: String(c.local_clip_id || c.id),
+      const rawMedia = (mediaRes && mediaRes.ok) ? await mediaRes.json() : [];
+      const activeMedia = Array.isArray(rawMedia) ? (rawMedia as Array<Record<string, unknown>>) : [];
+      const rawEw = (editWindowsRes && editWindowsRes.ok) ? await editWindowsRes.json() : [];
+      const readyWindows = Array.isArray(rawEw) ? (rawEw as Array<Record<string, unknown>>) : [];
+
+      const mapClipItem = async (c: Record<string, unknown>, targetStatus: string) => {
+        const localId = String(c.local_clip_id || c.id);
+        const clipMo = activeMedia.find(m => m.clip_id === c.id);
+        const clipEw = readyWindows.find(w => String(w.local_clip_id) === localId);
+        const ewMo = clipEw ? activeMedia.find(m => m.id === clipEw.media_object_id) : null;
+        const thumbMo = activeMedia.find(m => m.clip_id === c.id && m.kind === "thumbnail");
+
+        let videoUrl: string | undefined = undefined;
+        let editWindowUrl: string | undefined = undefined;
+        let thumbUrl: string | undefined = undefined;
+
+        if (clipMo?.final_key) {
+          try { videoUrl = await presign(env, "GET", String(clipMo.final_key)); } catch {}
+        }
+        if (ewMo?.final_key) {
+          try { editWindowUrl = await presign(env, "GET", String(ewMo.final_key)); } catch {}
+        }
+        if (!videoUrl && editWindowUrl) {
+          videoUrl = editWindowUrl;
+        }
+        if (thumbMo?.final_key) {
+          try { thumbUrl = await presign(env, "GET", String(thumbMo.final_key)); } catch {}
+        }
+
+        return {
+          id: localId,
           cloud_id: c.id,
           title: c.title,
-          status: "ready",
+          status: targetStatus,
           start_time: Number(c.start_time || 0),
           end_time: Number(c.end_time || 0),
+          ai_suggested_start_time: Number(c.ai_suggested_start_time || c.start_time || 0),
+          ai_suggested_end_time: Number(c.ai_suggested_end_time || c.end_time || 0),
           duration: Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
           range_revision: Number(c.range_revision || 0),
           created_at: c.cloud_updated_at,
+          video_url: videoUrl,
+          source_video_url: videoUrl,
+          thumbnail_url: thumbUrl,
+          edit_window_url: editWindowUrl,
+          edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
+          edit_window_end: clipEw ? Number(clipEw.window_end) : undefined,
           is_cloud: true,
-        }));
-      const recent_approved = rawClips
-        .filter(c => c.status === "approved" || c.status === "published")
-        .map(c => ({
-          id: String(c.local_clip_id || c.id),
-          cloud_id: c.id,
-          title: c.title,
-          status: c.status,
-          start_time: Number(c.start_time || 0),
-          end_time: Number(c.end_time || 0),
-          duration: Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
-          range_revision: Number(c.range_revision || 0),
-          created_at: c.cloud_updated_at,
-          is_cloud: true,
-        }));
+        };
+      };
+
+      const readyRaw = rawClips.filter(c => c.status === "ready_review" || c.status === "ready");
+      const approvedRaw = rawClips.filter(c => c.status === "approved" || c.status === "published");
+
+      const ready = await Promise.all(readyRaw.map(c => mapClipItem(c, "ready")));
+      const recent_approved = await Promise.all(approvedRaw.map(c => mapClipItem(c, String(c.status))));
+
       const queuedJobs = jobsRes.ok ? (await jobsRes.json() as unknown[]) : [];
       return json(200, {
         ready,

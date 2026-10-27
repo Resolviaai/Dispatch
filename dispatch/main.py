@@ -182,6 +182,14 @@ def start_dispatch(run_web: bool = True):
         except Exception as e:
             logger.warning("Remote job poller not started: %s", e)
 
+    # 9c. Pillar 8: Autonomous Cloud Sync Worker (syncs local clips & edit windows to Supabase and Cloudflare R2)
+    try:
+        from dispatch.cloud.sync import start_cloud_sync_worker
+        start_cloud_sync_worker()
+        logger.info("Autonomous Cloud Sync worker active (Syncs clips to Supabase and R2)")
+    except Exception as e:
+        logger.warning("Cloud Sync worker not started: %s", e)
+
     # 9. Start Web Dashboard
     if run_web:
         # Optional TLS (strongly recommended when pairing phones over LAN: the
