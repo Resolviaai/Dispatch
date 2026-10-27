@@ -230,14 +230,17 @@ class DispatchNativeBridge(
                 try {
                     segmenterEngine.stopSession(cameraManager = cameraCaptureManager)
                     (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(false)
-                    segmenterEngine.triggerYouTubeUpload()
-                    cameraCaptureManager.activePreviewView?.let { pv ->
-                        cameraCaptureManager.initializeCamera(activity, pv)
-                    }
+                    segmenterEngine.triggerYouTubeUpload()
+
+                    sendCameraEvent("recording_stopped", JsonObject())
+
                 } catch (e: Exception) {
                     (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(
                         segmenterEngine.isSessionActive || cameraCaptureManager.isRecording
                     )
+                    sendCameraEvent("recording_stop_failed", JsonObject().apply {
+                        addProperty("error", e.message ?: "Recording could not be finalized")
+                    })
                     android.util.Log.e("DispatchBridge", "stopRecording failed: ${e.message}", e)
                 }
             }

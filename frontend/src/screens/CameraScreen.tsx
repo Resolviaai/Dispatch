@@ -42,6 +42,7 @@ import {
 interface CameraScreenProps {
   onRecordingComplete?: (item: RecordingItem) => void;
   onRecordingStatusUpdate?: (segmentId: string, status: string, extra?: Partial<RecordingItem>) => void;
+  onNativeRecordingStopped?: () => void;
 }
 
 /**
@@ -201,9 +202,11 @@ const ContinuousZoomSlider: React.FC<{
 
 export const CameraScreen: React.FC<CameraScreenProps> = ({ 
   onRecordingComplete,
-  onRecordingStatusUpdate 
+  onRecordingStatusUpdate,
+  onNativeRecordingStopped
 }) => {
   const [isRecording, setIsRecording] = useState(false);
+  const [isFinalizingNativeRecording, setIsFinalizingNativeRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [torchActive, setTorchActive] = useState(false);
@@ -268,6 +271,8 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const lastZoomIntegerRef = useRef(1);
   const chainedUnlockFocusRef = useRef<number | null>(null);
   const [lockDimmed, setLockDimmed] = useState(false);
+  const onNativeRecordingStoppedRef = useRef(onNativeRecordingStopped);
+  onNativeRecordingStoppedRef.current = onNativeRecordingStopped;
 
   // Apply the user's default camera choice (Settings → Recording) once, when the
   // camera is first ready. A ref guard ensures we never fight a manual flip.
@@ -304,7 +309,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   // Subscribe to native camera lifecycle and focus events
   useEffect(() => {
     const unsub = Bridge.onCameraEvent((event) => {
-      if (event.type === 'camera_state') {
+      if (event.type === 'recording_stopped') {
+        setIsFinalizingNativeRecording(false);
+        onNativeRecordingStoppedRef.current?.();
+      } else if (event.type === 'recording_stop_failed') {
+        setIsFinalizingNativeRecording(false);
+        setIsRecording(Bridge.isRecording());
+        setRecentSavedSegment(`Recording could not be finalized: ${event.data?.error || 'Please retry stopping.'}`);
+      } else if (event.type === 'camera_state') {
         const data = event.data as CameraStateEvent;
         const previous = cameraStatusRef.current;
         cameraStatusRef.current = data;
@@ -943,13 +955,12 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     setIsRecording(false);
     isPausedRef.current = false;
     setIsPaused(false);
+    const isNativeRecording = Bridge.isAvailable();
+    if (isNativeRecording) setIsFinalizingNativeRecording(true);
     Bridge.stopRecording();
 
-    if (Bridge.isAvailable()) {
+    if (isNativeRecording) {
       setRecentSavedSegment(`Recording finalized (${finalSeconds}s) · Processing segment`);
-      setTimeout(() => {
-        setRecentSavedSegment(null);
-      }, 4000);
       return;
     }
 
@@ -1504,8 +1515,9 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             <button
               type="button"
               onClick={handleStartRecording}
-              aria-label="Start Recording"
-              className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-white/80 bg-white/10 backdrop-blur transition-all active:scale-95 hover:border-white shadow-xl"
+              disabled={isFinalizingNativeRecording}
+              aria-label={isFinalizingNativeRecording ? 'Finishing recording' : 'Start Recording'}
+              className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-white/80 bg-white/10 backdrop-blur transition-all active:scale-95 hover:border-white shadow-xl disabled:opacity-50 disabled:cursor-wait"
             >
               <span className="w-14 h-14 rounded-full bg-danger transition-all hover:bg-rose-500 shadow-md" />
             </button>

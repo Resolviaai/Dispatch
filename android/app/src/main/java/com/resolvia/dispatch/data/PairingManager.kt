@@ -9,6 +9,7 @@ import androidx.security.crypto.MasterKey
 /** Stores YouTube credentials for direct phone-to-YouTube cloud uploads. Starts empty on fresh install. */
 class PairingManager(context: Context) {
     private val prefs: SharedPreferences = createEncryptedOrFallbackPrefs(context)
+    private val cloudPrefs: SharedPreferences? = createSecureCloudPrefs(context)
 
     companion object {
         private const val TAG = "PairingManager"
@@ -53,6 +54,24 @@ class PairingManager(context: Context) {
                 legacyPrefs
             }
         }
+
+        private fun createSecureCloudPrefs(context: Context): SharedPreferences? {
+            return try {
+                val masterKey = MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                EncryptedSharedPreferences.create(
+                    context,
+                    "dispatch_cloud_secure",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+            } catch (e: Throwable) {
+                Log.e(TAG, "Secure cloud session storage unavailable; cloud uploads disabled", e)
+                null
+            }
+        }
     }
 
     var youtubeAccessToken: String
@@ -87,6 +106,27 @@ class PairingManager(context: Context) {
         get() = prefs.getString("pc_auth_token", "") ?: ""
         set(value) = prefs.edit().putString("pc_auth_token", value.trim()).apply()
 
+    /** Short-lived Supabase JWT used only to request a scoped YouTube upload session. */
+    var cloudAccessToken: String
+        get() = try { cloudPrefs?.getString("access_token", "") ?: "" } catch (_: Exception) { "" }
+        set(value) {
+            try {
+                cloudPrefs?.edit()?.putString("access_token", value.trim())?.apply()
+            } catch (e: Exception) {
+                Log.e(TAG, "Could not persist secure cloud session", e)
+            }
+        }
+
+    val canStoreCloudSession: Boolean get() = cloudPrefs != null
+
+    fun clearCloudAccessToken() {
+        try { cloudPrefs?.edit()?.remove("access_token")?.apply() } catch (_: Exception) {}
+    }
+
+    var rawVaultAccountId: String
+        get() = prefs.getString("raw_vault_account_id", "") ?: ""
+        set(value) = prefs.edit().putString("raw_vault_account_id", value.trim()).apply()
+
     val isYouTubeConfigured: Boolean
         get() = youtubeRefreshToken.isNotBlank() &&
             youtubeClientId.isNotBlank() && youtubeClientSecret.isNotBlank()
@@ -115,6 +155,14 @@ class PairingManager(context: Context) {
 
     fun clearUploadSessionUrl(segmentId: String) {
         prefs.edit().remove("session_url_$segmentId").apply()
+        prefs.edit().remove("cloud_upload_session_$segmentId").apply()
+    }
+
+    fun isCloudUploadSession(segmentId: String): Boolean =
+        prefs.getBoolean("cloud_upload_session_$segmentId", false)
+
+    fun markCloudUploadSession(segmentId: String, enabled: Boolean) {
+        prefs.edit().putBoolean("cloud_upload_session_$segmentId", enabled).apply()
     }
 
     var currentUserId: String?

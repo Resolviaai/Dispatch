@@ -12,6 +12,12 @@ import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
+  const handleTabChange = (tab: TabType) => {
+    setCurrentTab(tab);
+    if (tab === 'record' && Bridge.isAvailable()) {
+      Bridge.retryCameraInit();
+    }
+  };
   const [pcHost, setPcHost] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const native = (window as any).DispatchBridge?.getPcHost?.()?.trim();
@@ -325,6 +331,7 @@ export const App: React.FC = () => {
             <CameraScreen 
               onRecordingComplete={handleRecordingComplete} 
               onRecordingStatusUpdate={handleRecordingStatusUpdate}
+              onNativeRecordingStopped={() => handleTabChange('sessions')}
             />
           )}
 
@@ -335,7 +342,7 @@ export const App: React.FC = () => {
               onNavigateToSettings={() => setCurrentTab('settings')}
               onRetryUpload={handleRetryUpload} 
               onNavigateToClips={handleNavigateToClips}
-              onNavigateToRecord={() => setCurrentTab('record')}
+              onNavigateToRecord={() => handleTabChange('record')}
               onDeleteSession={(sessionId) => setRecordings(prev => prev.filter(r => (r.sessionId || 'direct') !== sessionId && r.segmentId !== sessionId))}
               pcHost={pcHost}
             />
@@ -361,7 +368,7 @@ export const App: React.FC = () => {
 
         {/* BOTTOM NAVIGATION DECK: Hidden inside Editor for dedicated workspace */}
         {!isEditorOpen && (
-          <BottomNav currentTab={currentTab} onTabChange={setCurrentTab} />
+          <BottomNav currentTab={currentTab} onTabChange={handleTabChange} />
         )}
 
         {/* HOME INDICATOR BAR (Only in desktop browser preview, hidden on Android device) */}

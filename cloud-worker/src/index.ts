@@ -105,6 +105,47 @@ async function selectOne<T>(env: Env, table: string, id: string, columns: string
   return ((await res.json()) as T[])[0] ?? null;
 }
 
+async function getUserYouTubeAccessToken(env: Env, accountId: string, userId: string): Promise<string | null> {
+  const accountUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+  accountUrl.searchParams.set("id", `eq.${accountId}`);
+  accountUrl.searchParams.set("user_id", `eq.${userId}`);
+  accountUrl.searchParams.set("provider", "eq.youtube");
+  accountUrl.searchParams.set("select", "credentials_encrypted,metadata");
+  const accountRes = await fetch(accountUrl, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+  });
+  if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
+  const rows = await accountRes.json() as Array<{ credentials_encrypted?: string; metadata?: Record<string, unknown> }>;
+  const account = rows[0];
+  if (!account?.credentials_encrypted || account.metadata?.is_source_vault === false) return null;
+
+  const stored = await decryptToken(env.TOKEN_VAULT_KEY, account.credentials_encrypted);
+  let refreshToken = stored.trim();
+  try {
+    const parsed = JSON.parse(stored) as { refresh_token?: unknown; token?: unknown };
+    refreshToken = typeof parsed.refresh_token === "string" ? parsed.refresh_token :
+      typeof parsed.token === "string" ? parsed.token : "";
+  } catch { /* OAuth callback stores a bare refresh-token string. */ }
+  if (!refreshToken) return null;
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.YOUTUBE_CLIENT_ID,
+      client_secret: env.YOUTUBE_CLIENT_SECRET,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!tokenRes.ok) return null;
+  const tokenBody = await tokenRes.json() as { access_token?: unknown };
+  return typeof tokenBody.access_token === "string" ? tokenBody.access_token : null;
+}
+
 // ---------- auth ----------
 export async function authenticate(env: Env, request: Request): Promise<{ userId: string; email: string } | null> {
   const auth = request.headers.get("Authorization") ?? "";
@@ -580,6 +621,139 @@ export default {
       });
       if (!updateRes.ok) return json(502, { error: "failed to update account roles" });
       return json(200, { ok: true, metadata: updatedMeta });
+    }
+
+    if (url.pathname === "/youtube/upload-sessions" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" }, reqOrigin);
+      const body = await request.json().catch(() => ({})) as {
+        account_id?: string;
+        segment_id?: string;
+        session_id?: string;
+        sequence_number?: number;
+        dispatch_id?: string;
+        sha256?: string;
+        file_size?: number;
+      };
+      const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
+      const segmentId = typeof body.segment_id === "string" ? body.segment_id.trim() : "";
+      const sessionId = typeof body.session_id === "string" ? body.session_id.trim() : "";
+      const dispatchId = typeof body.dispatch_id === "string" ? body.dispatch_id.trim() : "";
+      const fileSize = body.file_size;
+      if (!/^[0-9a-f-]{36}$/i.test(accountId) || !segmentId || segmentId.length > 128 ||
+          !sessionId || sessionId.length > 128 || !/^[a-zA-Z0-9_-]{1,128}$/.test(dispatchId) ||
+          !Number.isInteger(body.sequence_number) || (body.sequence_number ?? 0) < 1 ||
+          !Number.isSafeInteger(fileSize) || (fileSize ?? 0) <= 0 || (fileSize ?? 0) > 5 * 1024 ** 3) {
+        return json(400, { error: "invalid upload session request" }, reqOrigin);
+      }
+
+      try {
+        const accessToken = await getUserYouTubeAccessToken(env, accountId, user.userId);
+        if (!accessToken) return json(409, { error: "raw vault account is disconnected or not authorized for raw uploads" }, reqOrigin);
+        const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+        const sha = typeof body.sha256 === "string" ? body.sha256.slice(0, 128) : "";
+        const title = `[DISPATCH] Session ${sessionId.slice(-6)} - Part ${body.sequence_number} (${now})`;
+        const description = `dispatch_id: ${dispatchId}\nsession_id: ${sessionId}\nsegment_id: ${segmentId}\nsequence_number: ${body.sequence_number}\nsource_sha256: ${sha}\nsource_file_size: ${fileSize}\nAutonomous mobile recording uploaded by Dispatch.`;
+        const metadata = {
+          snippet: {
+            title,
+            description,
+            tags: ["dispatch", `dispatch_id_${dispatchId}`, `dispatch_session_${sessionId}`, `dispatch_seg_${body.sequence_number}`, ...(sha ? [`sha256_${sha}`] : [])],
+            categoryId: "22",
+          },
+          status: { privacyStatus: "unlisted", selfDeclaredMadeForKids: false },
+        };
+        const initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": "video/mp4",
+            "X-Upload-Content-Length": String(fileSize),
+          },
+          body: JSON.stringify(metadata),
+        });
+        if (!initRes.ok) {
+          console.error("YouTube resumable session init failed", initRes.status);
+          return json(502, { error: "YouTube could not start the upload session" }, reqOrigin);
+        }
+        const uploadUrl = initRes.headers.get("Location");
+        if (!uploadUrl || new URL(uploadUrl).hostname !== "www.googleapis.com") {
+          return json(502, { error: "YouTube returned an invalid upload session" }, reqOrigin);
+        }
+        return new Response(JSON.stringify({ upload_url: uploadUrl, account_id: accountId }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store, private",
+            "Access-Control-Allow-Origin": reqOrigin,
+            "Vary": "Origin",
+          },
+        });
+      } catch (error) {
+        console.error("YouTube upload session setup failed", error instanceof Error ? error.message : "unknown error");
+        return json(502, { error: "Could not prepare a YouTube upload" }, reqOrigin);
+      }
+    }
+
+    if (url.pathname === "/youtube/uploads/lookup" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" }, reqOrigin);
+      const body = await request.json().catch(() => ({})) as { account_id?: string; dispatch_id?: string };
+      const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
+      const dispatchId = typeof body.dispatch_id === "string" ? body.dispatch_id.trim() : "";
+      if (!/^[0-9a-f-]{36}$/i.test(accountId) || !/^[a-zA-Z0-9_-]{1,128}$/.test(dispatchId)) {
+        return json(400, { error: "invalid upload lookup request" }, reqOrigin);
+      }
+      try {
+        const accessToken = await getUserYouTubeAccessToken(env, accountId, user.userId);
+        if (!accessToken) return json(409, { error: "raw vault account is unavailable" }, reqOrigin);
+        const query = new URLSearchParams({
+          part: "snippet", forMine: "true", q: `dispatch_id_${dispatchId}`, type: "video", maxResults: "1",
+        });
+        const response = await fetch(`https://www.googleapis.com/youtube/v3/search?${query}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!response.ok) return json(502, { error: "YouTube upload lookup failed" }, reqOrigin);
+        const data = await response.json() as { items?: Array<{ id?: { videoId?: string } }> };
+        const videoId = data.items?.[0]?.id?.videoId ?? null;
+        return json(200, { video_id: videoId }, reqOrigin);
+      } catch (error) {
+        console.error("YouTube upload lookup failed", error instanceof Error ? error.message : "unknown error");
+        return json(502, { error: "Could not check YouTube upload status" }, reqOrigin);
+      }
+    }
+
+    if (url.pathname === "/youtube/videos/status" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" }, reqOrigin);
+      const body = await request.json().catch(() => ({})) as { account_id?: string; video_id?: string };
+      const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
+      const videoId = typeof body.video_id === "string" ? body.video_id.trim() : "";
+      if (!/^[0-9a-f-]{36}$/i.test(accountId) || !/^[a-zA-Z0-9_-]{6,32}$/.test(videoId)) {
+        return json(400, { error: "invalid YouTube status request" }, reqOrigin);
+      }
+      try {
+        const accessToken = await getUserYouTubeAccessToken(env, accountId, user.userId);
+        if (!accessToken) return json(409, { error: "raw vault account is unavailable" }, reqOrigin);
+        const query = new URLSearchParams({ part: "processingDetails,status", id: videoId });
+        const response = await fetch(`https://www.googleapis.com/youtube/v3/videos?${query}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!response.ok) return json(502, { error: "YouTube processing check failed" }, reqOrigin);
+        const data = await response.json() as { items?: Array<{ status?: { uploadStatus?: string }; processingDetails?: { processingStatus?: string } }> };
+        const item = data.items?.[0];
+        if (!item) return json(200, { status: "not_found" }, reqOrigin);
+        const upload = item.status?.uploadStatus ?? "";
+        const processing = item.processingDetails?.processingStatus ?? "";
+        const status = processing === "succeeded" ? "succeeded" :
+          processing === "failed" || upload === "rejected" || upload === "failed" ? "failed" :
+          processing === "processing" || upload === "uploaded" ? "processing" : "unknown";
+        return json(200, { status }, reqOrigin);
+      } catch (error) {
+        console.error("YouTube processing check failed", error instanceof Error ? error.message : "unknown error");
+        return json(502, { error: "Could not check YouTube processing status" }, reqOrigin);
+      }
     }
 
     // ---- Per-User Gemini API Keys Vault ----
