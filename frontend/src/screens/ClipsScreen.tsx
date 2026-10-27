@@ -53,6 +53,59 @@ import { currentSession } from '../auth/supabase';
 
 const CAPTION_LOAD_TIMEOUT_MS = 10_000;
 
+/**
+ * Builds caption groups from the cloud transcript seed (raw window-relative
+ * words) so offline cloud editing produces the same grouped structure as
+ * PC-side transcription: ~10 words / 6 s per caption, breaking on punctuation.
+ */
+function buildCloudCaptionGroups(
+  words: Array<{ w?: string; text?: string; start: number; end: number }>,
+  duration: number
+): Array<{ id: string; start: number; end: number; words: Array<{ id: string; text: string; start: number; end: number }> }> {
+  const clean = words
+    .map((w, i) => ({
+      id: `cw_${i}`,
+      text: String(w.w || w.text || '').trim(),
+      start: Number(w.start),
+      end: Number(w.end),
+    }))
+    .filter((w) => w.text.length > 0 && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+    .sort((a, b) => a.start - b.start);
+  if (clean.length === 0) return [];
+
+  const MAX_WORDS = 10;
+  const MAX_GAP_S = 1.2;
+  const MAX_SPAN_S = 6.0;
+  const PUNCTUATION_BREAK = /[.!?;,।]$/;
+
+  const chunks: Array<typeof clean> = [];
+  let current: typeof clean = [];
+  for (const word of clean) {
+    if (word.start >= duration) break; // never render beyond the verified proxy span
+    const last = current[current.length - 1];
+    const gapTooBig = last && word.start - last.end > MAX_GAP_S;
+    const spanTooLong = current[0] && word.end - current[0].start > MAX_SPAN_S;
+    const tooManyWords = current.length >= MAX_WORDS;
+    if (current.length > 0 && (gapTooBig || spanTooLong || tooManyWords)) {
+      chunks.push(current);
+      current = [];
+    }
+    current.push(word);
+    if (PUNCTUATION_BREAK.test(word.text)) {
+      chunks.push(current);
+      current = [];
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+
+  return chunks.map((chunk, i) => ({
+    id: `grp_${i}`,
+    start: Math.max(0, chunk[0].start),
+    end: Math.min(duration, chunk[chunk.length - 1].end),
+    words: chunk.map((w) => ({ id: w.id, text: w.text, start: w.start, end: w.end })),
+  }));
+}
+
 async function loadClipCaptionTrack(
   clipId: string,
   duration: number,
@@ -120,8 +173,7 @@ export const DEFAULT_LANDSCAPE_MODES: AvailableLayoutMode[] = [
   { id: 'native_169', label: 'Native 16:9', target_aspect: '16:9', description: '100% full original horizontal 16:9 (no bars, no crop)' },
 ];
 
-export interface ClipItem {
-  id: string;
+export interface ClipItem {  id: string;
   session_id?: string | null;
   chunk_id?: string | null;
   start_time: number;
@@ -157,6 +209,13 @@ export interface ClipItem {
   source_aspect_ratio?: '9:16' | '16:9';
   available_layout_modes?: AvailableLayoutMode[];
   target_aspect?: '16:9' | '9:16';
+  /** Cloud caption payload: an edited track (groups) or a transcript seed (words). */
+  captions?: {
+    words?: Array<{ w: string; text?: string; start: number; end: number }>;
+    groups?: unknown[];
+    span_duration?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface QueueStats {
@@ -1262,6 +1321,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isMoreModalOpen, setIsMoreModalOpen] = useState<boolean>(false);
   const [clipToReject, setClipToReject] = useState<ClipItem | null>(null);
   const optimisticRejectIdsRef = useRef<Set<string>>(new Set());
+  const [pendingRejectUndo, setPendingRejectUndo] = useState<{ clipId: string; title: string } | null>(null);
+  const cloudRejectWorkingRef = useRef(false);
+  const [rejectUndoWorking, setRejectUndoWorking] = useState(false);
+  const rejectUndoTimerRef = useRef<number | null>(null);
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
   const [isVideoSelected, setIsVideoSelected] = useState<boolean>(false);
   const [isFullscreenPreview, setIsFullscreenPreview] = useState<boolean>(false);
@@ -1583,8 +1646,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
 
     // Load captions independently; the timeline remains mounted while this request runs.
-    setCaptionLoadingState(isCloudMode ? 'error' : 'loading');
-    setCaptionErrorMessage(isCloudMode ? 'Connect to your PC to load captions.' : null);
+    setCaptionLoadingState('loading');
+    setCaptionErrorMessage(null);
     setCaptionClipId(null); // Clear previous track association immediately
 
     captionRequestControllerRef.current?.abort();
@@ -1607,6 +1670,39 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           setCaptionLoadingState('error');
           setCaptionErrorMessage(err instanceof Error ? err.message : 'Caption request failed. Retry.');
         });
+    } else {
+      // Cloud mode loads captions directly from the Dispatch cloud payload so
+      // editing works with no PC connection. Two shapes arrive in `captions`:
+      // an edited track (groups + default_style/...) or a transcript seed
+      // (raw words relative to the edit window).
+      const clipDuration = Math.max(0.1, currentClip.duration || 10);
+      const cloudCap = currentClip.captions as { words?: unknown[]; groups?: unknown[] } | undefined;
+      const cloudGroups = cloudCap && Array.isArray(cloudCap.groups) ? cloudCap.groups : null;
+      const cloudWords = cloudCap && Array.isArray(cloudCap.words) ? (cloudCap.words as Array<{ w?: string; text?: string; start: number; end: number }>) : null;
+      if (cloudGroups && cloudGroups.length > 0) {
+        const track = normalizeCaptionTrack({ ...(cloudCap as object), clip_id: currentClip.id }, currentClip.id, clipDuration);
+        resetHistory(track);
+        setCaptionClipId(currentClip.id);
+        setCaptionLoadingState('success');
+        setSaveStatus('saved');
+        setSelectedGroupId((track.groups[0]?.id as string | undefined) ?? null);
+      } else if (cloudWords && cloudWords.length > 0) {
+        const seeded = normalizeCaptionTrack(
+          { clip_id: currentClip.id, groups: buildCloudCaptionGroups(cloudWords, clipDuration) },
+          currentClip.id,
+          clipDuration
+        );
+        resetHistory(seeded);
+        setCaptionClipId(currentClip.id);
+        setCaptionLoadingState(seeded.groups.length > 0 ? 'success' : 'empty');
+        setSaveStatus('saved');
+        setSelectedGroupId((seeded.groups[0]?.id as string | undefined) ?? null);
+      } else {
+        // No caption payload yet: either the PC has not written window
+        // transcripts yet, or this clip's proxy is still staging. Treat as
+        // pending-empty, not a connection error.
+        setCaptionLoadingState('empty');
+      }
     }
 
     // Defer heavy filmstrip frame extraction so active video stream and captions have top network priority
@@ -2086,6 +2182,30 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
     setSaveStatus('saving');
     try {
+      if (isCloudMode) {
+        // Cloud save path: persist the edited caption track on the Dispatch
+        // cloud so it stays available offline and syncs to the PC later.
+        const session = await currentSession();
+        const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+        if (!token) {
+          throw new Error('Sign in to save cloud captions.');
+        }
+        const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/captions`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ track: captionTrack }),
+        });
+        if (res.ok) {
+          setSaveStatus('saved');
+          setFeedback('Captions saved to Dispatch Cloud.');
+          setTimeout(() => setFeedback(null), 2500);
+          return true;
+        }
+        throw new Error(`Cloud returned HTTP ${res.status}`);
+      }
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
@@ -2315,11 +2435,114 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // 6. Double Confirmation Reject Handlers
   const handlePromptReject = (clip: ClipItem) => {
     setIsMoreModalOpen(false);
-    if (isCloudMode) {
-      setFeedback('Connect to your PC to delete this clip.');
-      return;
-    }
     setClipToReject(clip);
+  };
+
+  /**
+   * Cloud-mode reject: hides the clip immediately, queues a durable command on
+   * Dispatch Cloud (applied + purged by the PC after the 24h grace window),
+   * and offers a 10s Undo that voids the command.
+   */
+  const performCloudReject = async (clip: ClipItem) => {
+    if (cloudRejectWorkingRef.current) return;
+    cloudRejectWorkingRef.current = true;
+    setIsSubmitting(true);
+    setFeedback('Removing clip…');
+    optimisticRejectIdsRef.current.add(clip.id);
+    setReadyClips((prev) => prev.filter((item) => item.id !== clip.id));
+    setApprovedClips((prev) => prev.filter((item) => item.id !== clip.id));
+    if (selectedClipId === clip.id) {
+      setViewMode('library');
+      setSelectedClipId(null);
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (!token) throw new Error('Sign in to manage cloud clips.');
+
+      const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(clip.id)}/reject`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ reason: 'Rejected from mobile review' }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        const detail = (err as any)?.error;
+        throw new Error(typeof detail === 'string' && detail ? detail : `Cloud returned HTTP ${res.status}`);
+      }
+
+      if (rejectUndoTimerRef.current) window.clearTimeout(rejectUndoTimerRef.current);
+      setPendingRejectUndo({ clipId: clip.id, title: clip.title || 'Clip' });
+      setFeedback(null);
+      const timerId = window.setTimeout(() => {
+        setPendingRejectUndo(null);
+        setFeedback('Clip removed. Deleted from your PC within 24h.');
+        setTimeout(() => setFeedback(null), 2500);
+      }, 10_000);
+      rejectUndoTimerRef.current = timerId;
+    } catch (e) {
+      optimisticRejectIdsRef.current.delete(clip.id);
+      await fetchClips();
+      const message = e instanceof DOMException && e.name === 'AbortError'
+        ? 'Couldn’t reach Dispatch Cloud. The clip stays in your list.'
+        : e instanceof Error
+          ? e.message
+          : 'Could not remove clip.';
+      setFeedback(message);
+    } finally {
+      window.clearTimeout(timeoutId);
+      optimisticRejectIdsRef.current.delete(clip.id);
+      setIsSubmitting(false);
+    }
+  };
+
+  /** Undo within the 10s window: voids the pending reject command server-side. */
+  const handleCloudRejectUndo = async () => {
+    const undoState = pendingRejectUndo;
+    if (!undoState || rejectUndoWorking) return;
+    setRejectUndoWorking(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (!token) throw new Error('Sign in to manage cloud clips.');
+      const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(undoState.clipId)}/restore`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`Cloud returned HTTP ${res.status}`);
+      if (rejectUndoTimerRef.current) {
+        window.clearTimeout(rejectUndoTimerRef.current);
+        rejectUndoTimerRef.current = null;
+      }
+      setPendingRejectUndo(null);
+      setFeedback('Clip restored.');
+      setTimeout(() => setFeedback(null), 2500);
+      await fetchClips();
+    } catch (e) {
+      const message = e instanceof DOMException && e.name === 'AbortError'
+        ? 'Restore timed out. Try again before the clip rebuilds.'
+        : e instanceof Error
+          ? e.message
+          : 'Restore failed.';
+      setFeedback(message);
+    } finally {
+      window.clearTimeout(timeoutId);
+      setRejectUndoWorking(false);
+    }
   };
 
   const handleConfirmReject = async () => {
@@ -2327,7 +2550,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const clip = clipToReject;
     if (isCloudMode) {
       setClipToReject(null);
-      setFeedback('Connect to your PC to delete this clip.');
+      setIsMoreModalOpen(false);
+      await performCloudReject(clip);
       return;
     }
 
@@ -2555,6 +2779,23 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           <span className="text-xs text-text-secondary truncate">{feedback}</span>
           <button type="button" onClick={() => setFeedback(null)} aria-label="Dismiss" className="text-text-muted hover:text-text-main">
             <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* CLOUD REJECT UNDO — 10s grace bar with real restore */}
+      {pendingRejectUndo && (
+        <div className="shrink-0 px-4 py-2 bg-surface-2 border-b border-border flex items-center justify-between gap-3">
+          <span className="text-xs text-text-secondary truncate">
+            '{pendingRejectUndo.title}' will be purged in 24h. Deleted from the list.
+          </span>
+          <button
+            type="button"
+            onClick={() => { void handleCloudRejectUndo(); }}
+            disabled={rejectUndoWorking}
+            className="shrink-0 text-xs font-semibold text-primary active:scale-[0.98] transition-all duration-150 disabled:opacity-50"
+          >
+            {rejectUndoWorking ? 'Restoring…' : 'Undo'}
           </button>
         </div>
       )}

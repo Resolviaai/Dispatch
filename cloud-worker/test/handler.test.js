@@ -417,6 +417,123 @@ test("cloud clips endpoint returns ready and approved clips", async () => {
   assert.equal(body.cloud_mode, true);
 });
 
+test("/clips attaches window-relative caption seed words from window_transcripts", async () => {
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { id: "c1", local_clip_id: "clip_01", title: "Captioned Clip", status: "ready_review", start_time: 10, end_time: 40 },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/edit_windows", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { id: "w1", local_clip_id: "clip_01", window_start: 10, window_end: 40, media_object_id: MEDIA },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/window_transcripts", {
+    method: "GET",
+    fn: (url) => ({
+      body: url.includes("w1")
+        ? [{ window_id: "w1", words: [
+            { w: "hello", start: 12.0, end: 12.5 },
+            { w: "world", start: 12.6, end: 13.1 },
+          ] }]
+        : []
+    })
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: pcHeaders(),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const cap = body.ready[0].captions;
+  assert.ok(cap, "caption seed attached");
+  assert.equal(cap.words.length, 2);
+  assert.ok(Math.abs(cap.words[0].start - 2.0) < 1e-6, `window-relative start (${cap.words[0].start})`);
+  assert.ok(Math.abs(cap.words[1].end - 3.1) < 1e-6, `window-relative end (${cap.words[1].end})`);
+  assert.ok(Math.abs(cap.span_duration - 30) < 1e-6);
+});
+
+test("/clips prefers an edited cloud caption track over the transcript seed", async () => {
+  const editedTrack = { groups: [{ id: "g1", start: 0, end: 2, words: [{ id: "w", text: "edited", start: 0, end: 2 }] }] };
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { id: "c1", local_clip_id: "clip_01", title: "Edited Clip", status: "ready_review", start_time: 10, end_time: 40, caption_data: editedTrack },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/edit_windows", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "w1", local_clip_id: "clip_01", window_start: 10, window_end: 40, media_object_id: MEDIA }] })
+  });
+  supabase.set("/rest/v1/window_transcripts", {
+    method: "GET",
+    fn: () => ({ body: [{ window_id: "w1", words: [{ w: "seed", start: 10, end: 10.5 }] }] })
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: pcHeaders(),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ready[0].captions.groups[0].words[0].text, "edited");
+  assert.equal(body.ready[0].captions.words, undefined);
+});
+
+test("PUT /clips/:id/captions persists an edited track via rpc", async () => {
+  const track = { groups: [{ id: "g1", start: 0, end: 1.5, words: [{ id: "w", text: "hi", start: 0, end: 1.5 }] }], default_style: {} };
+  let rpcArgs = null;
+  supabase.set("/rpc/cloud_put_clip_captions", {
+    method: "POST",
+    fn: (url, init) => {
+      rpcArgs = JSON.parse(init.body);
+      return { body: null };
+    }
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/clips/clip_01/captions", {
+    method: "PUT",
+    headers: pcHeaders(),
+    body: JSON.stringify({ track }),
+  }), env());
+  assert.equal(res.status, 200);
+  assert.equal(rpcArgs.p_local_clip_id, "clip_01");
+  assert.deepEqual(rpcArgs.p_caption.groups[0].words[0].text, "hi");
+});
+
+test("PUT /clips/:id/captions rejects invalid payloads", async () => {
+  let rpcCalled = false;
+  supabase.set("/rpc/cloud_put_clip_captions", {
+    method: "POST",
+    fn: () => { rpcCalled = true; return { body: null }; }
+  });
+
+  const nonObject = await worker.fetch(new Request("https://w.test/clips/clip_01/captions", {
+    method: "PUT",
+    headers: pcHeaders(),
+    body: JSON.stringify({ track: "nope" }),
+  }), env());
+  assert.equal(nonObject.status, 400);
+
+  const oversized = { groups: [{ text: "x".repeat(280 * 1024) }] };
+  const tooBig = await worker.fetch(new Request("https://w.test/clips/clip_01/captions", {
+    method: "PUT",
+    headers: pcHeaders(),
+    body: JSON.stringify({ track: oversized }),
+  }), env());
+  assert.equal(tooBig.status, 413);
+  assert.equal(rpcCalled, false);
+});
+
 test("admin users endpoint returns authoritative metrics, storage breakdown, and connected provider names without secrets", async () => {
   const adminEnv = {
     ...env(),
@@ -575,5 +692,112 @@ test("admin priority update rejects numbers outside 1-1000", async () => {
   assert.equal(resGood.status, 200);
   const data = await resGood.json();
   assert.equal(data.priority, 75);
+});
+
+test("POST /clips/:id/reject queues a durable command and tombstones it in /clips", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  let enqueueArgs = null;
+  supabase.set("/rpc/cloud_enqueue_clip_command", {
+    method: "POST",
+    fn: (url, init) => {
+      enqueueArgs = JSON.parse(init.body);
+      return { body: [{ command_id: "cmd-1", state: "pending" }] };
+    }
+  });
+  supabase.set("/rpc/cloud_list_live_clip_commands", {
+    method: "POST",
+    fn: () => ({ body: [{ local_clip_id: "clip_01", kind: "reject" }] })
+  });
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({ body: [
+      { id: "c1", local_clip_id: "clip_01", title: "Doomed Clip", status: "ready_review", start_time: 10, end_time: 40 },
+      { id: "c2", local_clip_id: "clip_02", title: "Survivor", status: "ready_review", start_time: 5, end_time: 35 },
+    ] })
+  });
+
+  const rejectRes = await worker.fetch(new Request("https://w.test/clips/clip_01/reject", {
+    method: "POST",
+    headers: { "Authorization": "Bearer any-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: "mobile reject" }),
+  }), env());
+  assert.equal(rejectRes.status, 200);
+  const rejectBody = await rejectRes.json();
+  assert.equal(rejectBody.command_id, "cmd-1");
+  assert.equal(enqueueArgs.p_kind, "reject");
+  assert.equal(enqueueArgs.p_payload.reason, "mobile reject");
+
+  const listRes = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: { "Authorization": "Bearer any-token" },
+  }), env());
+  assert.equal(listRes.status, 200);
+  const listBody = await listRes.json();
+  assert.equal(listBody.ready.length, 1);
+  assert.equal(listBody.ready[0].local_clip_id ?? listBody.ready[0].title, listBody.ready[0].title);
+  const surviving = listBody.ready.map(c => c.title);
+  assert.equal(surviving.includes("Doomed Clip"), false, "tombstoned clip hidden");
+  assert.equal(surviving.includes("Survivor"), true);
+});
+
+test("POST /clips/:id/restore queues undo and clears the /clips tombstone", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  supabase.set("/rpc/cloud_enqueue_clip_command", {
+    method: "POST",
+    fn: () => ({ body: [{ command_id: "cmd-2", state: "voided" }] })
+  });
+  supabase.set("/rpc/cloud_list_live_clip_commands", {
+    method: "POST",
+    fn: () => ({ body: [] })
+  });
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "c1", local_clip_id: "clip_01", title: "Restored Clip", status: "ready_review", start_time: 10, end_time: 40 }] })
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/clips/clip_01/restore", {
+    method: "POST",
+    headers: { "Authorization": "Bearer any-token", "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.state, "voided");
+
+  const listRes = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: { "Authorization": "Bearer any-token" },
+  }), env());
+  const listBody = await listRes.json();
+  assert.equal(listBody.ready.length, 1, "restored clip visible again");
+});
+
+test("/sync/commands/claim and ack round-trip a lease-scoped batch", async () => {
+  const CMD_ID = "77777777-7777-7777-7777-777777777777";
+  supabase.set("/rpc/cloud_claim_clip_commands", {
+    method: "POST",
+    fn: () => ({ body: [
+      { id: CMD_ID, local_clip_id: "clip_01", kind: "reject", payload: { reason: "x" }, attempts: 1 },
+    ] })
+  });
+  const claimRes = await post("/sync/commands/claim", { limit: 5, lease_seconds: 300 });
+  assert.equal(claimRes.status, 200);
+  const claimBody = await claimRes.json();
+  assert.equal(claimBody.commands.length, 1);
+  assert.equal(claimBody.commands[0].kind, "reject");
+
+  supabase.set("/rpc/cloud_ack_clip_command", {
+    method: "POST",
+    fn: () => ({ body: true })
+  });
+  const ackRes = await post("/sync/commands/ack", { command_id: CMD_ID, result: "done" });
+  assert.equal(ackRes.status, 200);
+  const ackBody = await ackRes.json();
+  assert.equal(ackBody.ok, true);
+
+  const badResult = await post("/sync/commands/ack", { command_id: CMD_ID, result: "zoom" });
+  assert.equal(badResult.status, 400);
+  const badId = await post("/sync/commands/ack", { command_id: "not-a-uuid", result: "done" });
+  assert.equal(badId.status, 400);
 });
 

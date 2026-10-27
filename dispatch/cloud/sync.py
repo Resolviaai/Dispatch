@@ -19,7 +19,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 import requests
 
@@ -333,6 +333,90 @@ def sync_all_clips_to_cloud():
         logger.error("Error in sync_all_clips_to_cloud: %s", e)
 
 
+# ---------------- Offline Reject/Restore command drain (phone -> PC) ----------------
+
+REJECT_PURGE_GRACE_SECONDS = 24 * 3600  # literal 24h cloud-administered grace
+
+
+def _cloud_headers(worker_token: str, user_id: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {worker_token}",
+        "X-Dispatch-User-Id": user_id,
+        "Content-Type": "application/json",
+    }
+
+
+def apply_clip_command(command: Dict[str, Any]) -> str:
+    """Apply a single queued clip command locally. Returns 'done' or 'voided'.
+    Never raises: unexpected failures surface as 'failed' for retry."""
+    kind = command.get("kind")
+    clip_id = str(command.get("local_clip_id", ""))
+    payload = command.get("payload") or {}
+    try:
+        if kind == "reject":
+            purge_at = (datetime.now(timezone.utc) + timedelta(seconds=REJECT_PURGE_GRACE_SECONDS)).isoformat()
+            ok = db.soft_reject_clip(clip_id, reason=str(payload.get("reason") or "Rejected from mobile"), purge_at=purge_at)
+            return "done" if ok else "voided"  # unknown clip locally -> nothing to apply
+        if kind == "restore":
+            result = db.restore_rejected_clip(clip_id)
+            # 'gone' means media purged past the grace window — the restore is
+            # a no-op but not a failure; the tombstone row is cleared anyway.
+            return "done"
+        return "voided"
+    except Exception as e:
+        logger.error("Failed to apply clip command %s: %s", command.get("id"), e)
+        return "failed"
+
+
+def drain_clip_commands(limit: int = 25) -> int:
+    """Claim queued phone commands from Dispatch Cloud, apply them locally, and
+    acknowledge. Runs every sync cycle; safe to run repeatedly."""
+    worker_url = os.getenv("DISPATCH_WORKER_URL") or "https://dispatch-cloud.resolviaai.workers.dev"
+    user_id = get_default_user_id()
+    worker_token = os.getenv("DISPATCH_WORKER_TOKEN")
+    if not worker_token:
+        return 0
+
+    applied = 0
+    try:
+        res = requests.post(
+            f"{worker_url}/sync/commands/claim",
+            headers=_cloud_headers(worker_token, user_id),
+            json={"limit": limit, "lease_seconds": 600},
+            timeout=15,
+        )
+        if not res.ok:
+            logger.warning("clip command claim failed: HTTP %s %s", res.status_code, res.text[:150])
+            return 0
+        commands = res.json().get("commands") or []
+        for command in commands:
+            command_id = command.get("id")
+            if not command_id:
+                continue
+            verdict = apply_clip_command(command)
+            ack_payload = {"command_id": command_id, "result": verdict}
+            if verdict == "failed":
+                ack_payload["error"] = "apply failed locally; see PC log"
+            ack = requests.post(
+                f"{worker_url}/sync/commands/ack",
+                headers=_cloud_headers(worker_token, user_id),
+                json=ack_payload,
+                timeout=15,
+            )
+            if ack.ok:
+                applied += 1
+            else:
+                logger.warning("clip command ack failed: HTTP %s", ack.status_code)
+    except Exception as e:
+        logger.error("drain_clip_commands failed: %s", e)
+
+    try:
+        db.purge_expired_rejections()
+    except Exception as e:
+        logger.error("purge_expired_rejections failed: %s", e)
+    return applied
+
+
 def start_cloud_sync_worker():
     """Start the periodic cloud sync daemon thread."""
     def _run():
@@ -340,6 +424,7 @@ def start_cloud_sync_worker():
         while True:
             time.sleep(300)
             sync_all_clips_to_cloud()
+            drain_clip_commands()
 
     t = threading.Thread(target=_run, daemon=True, name="dispatch-cloud-sync")
     t.start()

@@ -97,6 +97,24 @@ async function rpc<T>(env: Env, fn: string, params: Record<string, unknown>): Pr
   return firstRow<T>(text ? JSON.parse(text) : null);
 }
 
+// Multi-row table-returning RPCs (claim batches, live command lists).
+async function rpcRaw(env: Env, fn: string, params: Record<string, unknown>): Promise<unknown> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`rpc ${fn} failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return await res.json();
+}
+
 async function selectOne<T>(env: Env, table: string, id: string, columns: string): Promise<T | null> {
   const res = await fetch(
     `${env.SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}&select=${columns}`,
@@ -1368,7 +1386,7 @@ export default {
       if (!user) return json(401, { error: "unauthorized" });
       const [clipsRes, jobsRes, mediaRes, editWindowsRes] = await Promise.all([
         fetch(
-          `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,cloud_updated_at&order=cloud_updated_at.desc&limit=50`,
+          `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,cloud_updated_at&order=cloud_updated_at.desc&limit=50`,
           { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
         ),
         fetch(
@@ -1389,6 +1407,62 @@ export default {
       const activeMedia = Array.isArray(rawMedia) ? (rawMedia as Array<Record<string, unknown>>) : [];
       const rawEw = (editWindowsRes && editWindowsRes.ok) ? await editWindowsRes.json() : [];
       const readyWindows = Array.isArray(rawEw) ? (rawEw as Array<Record<string, unknown>>) : [];
+
+      // Cloud caption contract: window transcripts sit in window_transcripts
+      // (words SOURCE-relative seconds). Fetch the batch for this user's ready
+      // windows so offline editing can seed a caption track without the PC.
+      const transcriptMap = new Map<string, Array<Record<string, unknown>>>();
+      if (readyWindows.length > 0) {
+        const windowIds = readyWindows.map(w => String(w.id)).slice(0, 50);
+        if (windowIds.length > 0) {
+          try {
+            const trRes = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/window_transcripts?window_id=in.(${windowIds.join(",")})&select=window_id,words`,
+              { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+            );
+            if (trRes.ok) {
+              const rows = await trRes.json() as Array<{ window_id: string; words: unknown }>;
+              for (const row of rows) {
+                const words = Array.isArray(row?.words) ? (row.words as Array<Record<string, unknown>>) : [];
+                if (words.length > 0) transcriptMap.set(String(row.window_id), words);
+              }
+            }
+          } catch {
+            // Captions stay absent if transcripts cannot be loaded; clips still render.
+          }
+        }
+      }
+      const buildCloudCaptions = (clip: Record<string, unknown>, clipEw: Record<string, unknown> | null) => {
+        // An edited track saved offline is authoritative over the seeded words.
+        const savedCaption = clip.caption_data;
+        if (savedCaption && typeof savedCaption === "object" && !Array.isArray(savedCaption)) {
+          const savedGroups = (savedCaption as Record<string, unknown>).groups;
+          if (Array.isArray(savedGroups)) return savedCaption;
+        }
+        if (!clipEw) return undefined;
+        const words = transcriptMap.get(String(clipEw.id));
+        if (!words || words.length === 0) return undefined;
+        const windowStart = Number(clipEw.window_start || 0);
+        const windowEnd = Number(clipEw.window_end || 0);
+        const startWindow = windowEnd > windowStart ? windowStart : 0;
+        const relative = words
+          .map(word => ({
+            w: String(word.w ?? word.text ?? ""),
+            start: Number(word.start) - startWindow,
+            end: Number(word.end) - startWindow,
+          }))
+          .filter(word => Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > 0);
+        if (relative.length === 0) return undefined;
+        const clipEnd = Number(clip.end_time || 0);
+        const clipStart = Number(clip.start_time || 0);
+        // The editor renders against the window proxy span (window_end - window_start),
+        // but the clip itself may sit inside a larger window; keep words clipped to span.
+        const spanDuration = Math.max(0.1, windowEnd - startWindow, clipEnd - clipStart);
+        return {
+          words: relative.filter(word => word.start < spanDuration),
+          span_duration: spanDuration,
+        };
+      };
 
       const mapClipItem = async (c: Record<string, unknown>, targetStatus: string) => {
         const localId = String(c.local_clip_id || c.id);
@@ -1432,12 +1506,31 @@ export default {
           edit_window_url: editWindowUrl,
           edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
           edit_window_end: clipEw ? Number(clipEw.window_end) : undefined,
+          captions: clipEw ? buildCloudCaptions(c, clipEw) : undefined,
           is_cloud: true,
         };
       };
 
-      const readyRaw = rawClips.filter(c => c.status === "ready_review" || c.status === "ready");
-      const approvedRaw = rawClips.filter(c => c.status === "approved" || c.status === "published");
+      // Clips carrying a live reject command stay hidden until the PC applies
+      // or the user restores them, even while their PC is offline.
+      const tombstoned = new Set<string>();
+      try {
+        const cmdRes = await rpcRaw(env, "cloud_list_live_clip_commands", { p_user_id: user.userId });
+        if (Array.isArray(cmdRes)) {
+          for (const cmd of cmdRes as Array<{ local_clip_id: string; kind: string }>) {
+            if (cmd?.kind === "reject" && cmd?.local_clip_id) tombstoned.add(String(cmd.local_clip_id));
+          }
+        }
+      } catch {
+        // Filtering is best-effort; clips still render if lookup fails.
+      }
+
+      const readyRaw = rawClips
+        .filter(c => c.status === "ready_review" || c.status === "ready")
+        .filter(c => !tombstoned.has(String(c.local_clip_id)));
+      const approvedRaw = rawClips
+        .filter(c => c.status === "approved" || c.status === "published")
+        .filter(c => !tombstoned.has(String(c.local_clip_id)));
 
       const ready = await Promise.all(readyRaw.map(c => mapClipItem(c, "ready")));
       const recent_approved = await Promise.all(approvedRaw.map(c => mapClipItem(c, String(c.status))));
@@ -1539,6 +1632,84 @@ export default {
         if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
         if (obj.status !== "active") return json(409, { error: `media not active (${obj.status})` });
         return json(200, { url: await presign(env, "GET", obj.final_key as string), expires_in: PRESIGN_EXPIRES });
+      }
+
+      // Cloud caption editing: persist an edited offline caption track so it can
+      // be reloaded cloud-side without the PC, and so laptops sync it later.
+      if (request.method === "PUT" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/captions")) {
+        const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/captions".length));
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        const body = await readJson<{ track?: unknown; captions?: unknown }>(request);
+        const track = body?.track ?? body?.captions ?? null;
+        if (!track || typeof track !== "object" || Array.isArray(track)) return json(400, { error: "caption track required" });
+        const payloadSize = JSON.stringify(track).length;
+        if (payloadSize > 256 * 1024) return json(413, { error: `caption track too large (${payloadSize} bytes)` });
+        try {
+          await rpc(env, "cloud_put_clip_captions", { p_user_id: userId, p_local_clip_id: localClipId, p_caption: track });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json(502, { error: `failed to save captions: ${msg}` });
+        }
+        return json(200, { ok: true });
+      }
+
+      // Offline Reject: queues a durable command (24h grace enforced by the
+      // PC when it drains). Undo/restore voids the pending reject, or queues a
+      // restore once it has already been applied.
+      if (request.method === "POST"
+        && (url.pathname.startsWith("/clips/") && url.pathname.slice("/clips/".length).split("/")[1] === "reject"
+          || url.pathname.startsWith("/clips/") && url.pathname.slice("/clips/".length).split("/")[1] === "restore")) {
+        const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length).split("/")[0]);
+        const kind = url.pathname.slice("/clips/".length).split("/")[1] as "reject" | "restore";
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        const body = await readJson<{ reason?: string }>(request);
+        try {
+          const queued = await rpc<{ command_id: string; state: string }>(env, "cloud_enqueue_clip_command", {
+            p_user_id: userId,
+            p_local_clip_id: localClipId,
+            p_kind: kind,
+            p_payload: kind === "reject" ? { reason: typeof body?.reason === "string" ? body.reason.slice(0, 500) : "Rejected from mobile review" } : {},
+          });
+          return json(200, { ok: true, command_id: queued.command_id, state: queued.state });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json(502, { error: `failed to queue command: ${msg}` });
+        }
+      }
+
+      // PC command drain: claim a lease-scoped batch of pending commands.
+      if (request.method === "POST" && url.pathname === "/sync/commands/claim"
+        && request.headers.get("X-Dispatch-User-Id")) {
+        const body = await readJson<{ limit?: number; lease_seconds?: number }>(request);
+        try {
+          const rows = await rpcRaw(env, "cloud_claim_clip_commands",
+            { p_user_id: userId, p_limit: Number(body?.limit ?? 10), p_lease_seconds: Number(body?.lease_seconds ?? 600) });
+          return json(200, { commands: Array.isArray(rows) ? rows : [] });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json(502, { error: `claim failed: ${msg}` });
+        }
+      }
+
+      // PC command drain: acknowledge a claimed command (done/voided/failed).
+      if (request.method === "POST" && url.pathname === "/sync/commands/ack"
+        && request.headers.get("X-Dispatch-User-Id")) {
+        const body = await readJson<{ command_id: string; result: string; error?: string }>(request);
+        if (!body?.command_id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.command_id)) {
+          return json(400, { error: "command_id required" });
+        }
+        if (!body.result || !["done", "voided", "failed"].includes(body.result)) {
+          return json(400, { error: "invalid result" });
+        }
+        try {
+          const ok = await rpc<boolean>(env, "cloud_ack_clip_command", {
+            p_user_id: userId, p_command_id: body.command_id, p_result: body.result, p_error: body.error ?? null,
+          });
+          return json(200, { ok: ok === true });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json(502, { error: `ack failed: ${msg}` });
+        }
       }
 
       if (request.method === "POST" && url.pathname === "/delete") {

@@ -9,7 +9,7 @@ import uuid
 import contextlib
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from dispatch.config import (
@@ -375,7 +375,13 @@ def init_db():
         if "caption_timing_warning" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN caption_timing_warning TEXT;")
         if "user_id" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN user_id TEXT;");
+            cursor.execute("ALTER TABLE clips ADD COLUMN user_id TEXT;")
+        if "cloud_reject_purge_at" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_reject_purge_at TIMESTAMP;")
+        if "cloud_reject_reason" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_reject_reason TEXT;")
+        if "cloud_rejected_at" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_rejected_at TIMESTAMP;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
 
         # Suggestions are immutable candidate metadata. Legacy selected ranges
@@ -853,6 +859,118 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
         cursor.execute("UPDATE clips SET status = 'rejected', video_path = NULL, thumbnail_path = NULL WHERE id = ?", (clip_id,))
         conn.commit()
         return True
+
+
+def soft_reject_clip(clip_id: str, reason: str = "User rejected", purge_at: Optional[str] = None) -> bool:
+    """Cloud-drained REJECT: record negative preference learning + tombstone,
+    but KEEP rendered media for the 24h grace window so a late restore works.
+    Idempotent and no-throw from the caller's perspective (returns False only
+    when the clip no longer exists locally).
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        clip = cursor.fetchone()
+        if not clip:
+            return False
+        if clip["status"] == "rejected" and clip["cloud_reject_purge_at"]:
+            return True  # duplicate command delivery; nothing left to do
+        cursor.execute("""
+            INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason))
+        cursor.execute("""
+            UPDATE clips
+            SET status = 'rejected',
+                cloud_reject_purge_at = ?,
+                cloud_reject_reason = ?,
+                cloud_rejected_at = ?
+            WHERE id = ?
+        """, (
+            purge_at,
+            reason,
+            datetime.now(timezone.utc).isoformat(),
+            clip_id,
+        ))
+        conn.commit()
+        return True
+
+
+def restore_rejected_clip(clip_id: str) -> str:
+    """Cloud-drained RESTORE: undo a reject inside the grace window.
+    Returns 'restored', 'kept' (never rejected), or 'gone' (media already purged).
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        clip = cursor.fetchone()
+        if not clip:
+            return "kept"
+        if clip["status"] != "rejected" or not clip["cloud_reject_purge_at"]:
+            return "kept"
+        media_available = bool(clip["video_path"] or clip["thumbnail_path"])
+        if media_available:
+            cursor.execute("""
+                UPDATE clips
+                SET status = 'ready_review',
+                    cloud_reject_purge_at = NULL,
+                    cloud_reject_reason = NULL,
+                    cloud_rejected_at = NULL
+                WHERE id = ?
+            """, (clip_id,))
+            conn.commit()
+            return "restored"
+        # Media already purged; clear the tombstone so the record stops lurking.
+        cursor.execute("""
+            UPDATE clips
+            SET cloud_reject_purge_at = NULL
+            WHERE id = ?
+        """, (clip_id,))
+        conn.commit()
+        return "gone"
+
+
+def purge_expired_rejections(now_truth: Optional[str] = None) -> int:
+    """Permanently remove media for rejected clips whose grace window elapsed.
+    Idempotent, no-throw: files already missing are simply tolerated. Learning
+    records stay untouched (Reject != Delete the learning record).
+    """
+    purged = 0
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            params: list = []
+            sql = """
+                SELECT id, video_path, thumbnail_path, cloud_reject_purge_at
+                FROM clips
+                WHERE status = 'rejected'
+                  AND cloud_reject_purge_at IS NOT NULL
+                  AND cloud_reject_purge_at <= ?
+            """
+            params.append(now_truth or datetime.now(timezone.utc).isoformat())
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            for row in rows:
+                for file_key in ("video_path", "thumbnail_path"):
+                    val = row[file_key]
+                    if val:
+                        try:
+                            p = Path(val)
+                            if p.exists() and p.is_file():
+                                p.unlink()
+                                logger.info("Purged expired rejected media %s for clip %s", file_key, row["id"])
+                        except Exception as e:
+                            logger.warning("Failed to purge %s for rejected clip %s: %s", file_key, row["id"], e)
+                cursor.execute("""
+                    UPDATE clips SET video_path = NULL, thumbnail_path = NULL, cloud_reject_purge_at = NULL
+                    WHERE id = ?
+                """, (row["id"],))
+                purged += 1
+            if purged:
+                conn.commit()
+    except Exception as e:
+        logger.error("purge_expired_rejections failed: %s", e)
+    return purged
 
 
 def cleanup_expired_published_clips(retention_days: int = 7) -> int:
