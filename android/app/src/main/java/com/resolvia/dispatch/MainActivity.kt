@@ -229,9 +229,7 @@ class MainActivity : ComponentActivity() {
             .addPathHandler("/recordings/", object : WebViewAssetLoader.PathHandler {
                 override fun handle(path: String): WebResourceResponse? {
                     return try {
-                        val targetFile = listOf(extRecDir, intRecDir)
-                            .map { File(it, path).canonicalFile }
-                            .firstOrNull { it.exists() && it.canRead() && !it.isDirectory } ?: return null
+                        val targetFile = resolveRecordingFile(path, extRecDir, intRecDir) ?: return null
 
                         val mime = when {
                             targetFile.name.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
@@ -283,9 +281,7 @@ class MainActivity : ComponentActivity() {
                     val url = request.url
                     if (url.host == "appassets.androidplatform.net" && url.path?.startsWith("/recordings/") == true) {
                         val path = url.path!!.removePrefix("/recordings/")
-                        val targetFile = listOf(extRecDir, intRecDir)
-                            .map { File(it, path).canonicalFile }
-                            .firstOrNull { it.exists() && it.canRead() && !it.isDirectory }
+                        val targetFile = resolveRecordingFile(path, extRecDir, intRecDir)
                         if (targetFile != null) {
                             return handleMediaFileWithRange(targetFile, request.requestHeaders)
                         }
@@ -409,6 +405,35 @@ class MainActivity : ComponentActivity() {
         cameraCaptureManager.destroy()
         if (::webView.isInitialized) {
             webView.destroy()
+        }
+    }
+
+    /**
+     * Resolves a /recordings/ URL to a readable, in-scope media file.
+     * Enforces path containment (traversal outside the two recording roots is
+     * refused), URL-decodes the segment name, and refuses in-flight `.tmp`
+     * segment files so a half-written recording is never presented as a
+     * "LOCAL_FILE_READY" playable asset.
+     */
+    private fun resolveRecordingFile(path: String, extRecDir: File, intRecDir: File): File? {
+        return try {
+            val decoded = java.net.URLDecoder.decode(path.trim(), "UTF-8")
+            if (decoded.isEmpty()) return null
+            val name = decoded.replace('\\', '/').trim('/')
+            if (name.isEmpty() || name.contains("..") || name.contains(':')) return null
+            if (name.contains('/') || name.endsWith(".tmp")) return null
+
+            val roots = listOf(extRecDir, intRecDir).map { it.canonicalFile }
+            val target = roots
+                .map { root -> File(root, name).canonicalFile }
+                .firstOrNull { resolved ->
+                    resolved.exists() && resolved.canRead() && !resolved.isDirectory &&
+                        roots.any { root -> resolved.path.startsWith(root.path + File.separator) }
+                }
+            target
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Recording path refused: $path (${e.message})")
+            null
         }
     }
 

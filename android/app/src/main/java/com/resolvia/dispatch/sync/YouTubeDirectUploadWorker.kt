@@ -19,6 +19,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.net.URL
 import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -54,12 +55,148 @@ class YouTubeDirectUploadWorker(
         .readTimeout(300, TimeUnit.SECONDS)
         .build()
 
+    /** Dispatch cloud control plane; holds the YouTube vault credentials. */
+    private val workerUrl = "https://dispatch-cloud.resolviaai.workers.dev"
+
+    /** Minimum gap between YouTube processing-detail checks for one segment. */
+    private val processingRecheckIntervalMs = 2L * 60_000L
+
+    /** Upper bound of YouTube processing checks before an explicit verdict. */
+    private val maxProcessingChecks = 96
+
+    /** Outcome of asking the cloud control plane for a scoped resumable upload session. */
+    private sealed class CloudSessionRequest {
+        data class SessionUrl(val url: String) : CloudSessionRequest()
+        object AwaitingCredentials : CloudSessionRequest()
+        object Retryable : CloudSessionRequest()
+    }
+
+    /** True when the WebView pushed a usable Supabase JWT + vault account pairing. */
+    private fun cloudSessionActive(): Boolean =
+        pairingManager.cloudAccessToken.isNotBlank() && pairingManager.rawVaultAccountId.isNotBlank()
+
+    /**
+     * Route A credential boundary: uploads must not require the PC or legacy
+     * locally-stored OAuth while the cloud vault session is available. A segment
+     * that already carries a resumable session URL or a recorded upload origin
+     * keeps whichever mode created it; brand-new sessions prefer the cloud
+     * vault and fall back to legacy local credentials only when the cloud
+     * session is absent.
+     */
+    private fun decideUploadMode(seg: com.resolvia.dispatch.data.SegmentEntity): Boolean {
+        val savedUrl = pairingManager.getUploadSessionUrl(seg.segmentId)
+        if (savedUrl.isNotBlank()) return pairingManager.isCloudUploadSession(seg.segmentId)
+        return when (seg.uploadOrigin) {
+            "cloud" -> cloudSessionActive()
+            "legacy" -> false
+            else -> cloudSessionActive()
+        }
+    }
+
+    /**
+     * Asks the Dispatch cloud worker for a scoped YouTube resumable upload
+     * session (POST /youtube/upload-sessions). The phone never holds YouTube
+     * OAuth credentials here: the worker resolves the vault account and returns
+     * a pre-authorized upload URL on www.googleapis.com, which the phone then
+     * PUTs bytes directly to.
+     */
+    private suspend fun initiateCloudResumableSession(
+        seg: com.resolvia.dispatch.data.SegmentEntity,
+        file: File,
+        dispatchId: String
+    ): CloudSessionRequest {
+        val token = pairingManager.cloudAccessToken
+        val accountId = pairingManager.rawVaultAccountId.trim()
+        val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else calculateSha256(file)
+        val body = JsonObject().apply {
+            addProperty("account_id", accountId)
+            addProperty("segment_id", seg.segmentId)
+            addProperty("session_id", seg.sessionId)
+            addProperty("sequence_number", seg.sequenceNumber)
+            addProperty("dispatch_id", dispatchId)
+            addProperty("file_size", file.length())
+            if (sha.isNotBlank()) addProperty("sha256", sha)
+        }
+        val req = Request.Builder()
+            .url("$workerUrl/youtube/upload-sessions")
+            .header("Authorization", "Bearer $token")
+            .post(body.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()))
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val respBody = resp.body?.string()
+                when {
+                    resp.isSuccessful && !respBody.isNullOrBlank() -> {
+                        val json = gson.fromJson(respBody, JsonObject::class.java)
+                        val url = json?.get("upload_url")?.asString
+                        // Defense in depth: only PUT chunks to a genuine YouTube
+                        // resumable host even if the worker were compromised.
+                        val validHost = url != null && runCatching { URL(url) }.getOrNull()?.let { parsed ->
+                            parsed.protocol == "https" && parsed.host == "www.googleapis.com"
+                        } == true
+                        if (validHost) {
+                            pairingManager.saveUploadSessionUrl(seg.segmentId, url!!)
+                            pairingManager.markCloudUploadSession(seg.segmentId, true)
+                            CloudSessionRequest.SessionUrl(url)
+                        } else {
+                            android.util.Log.e("YouTubeUploader", "Worker returned an invalid resumable session URL for ${seg.segmentId}")
+                            CloudSessionRequest.Retryable
+                        }
+                    }
+                    // 401: handed-out Supabase JWT expired. 409: vault account
+                    // disconnected. Both are paused-until-token-push, not errors.
+                    resp.code == 401 || resp.code == 409 -> CloudSessionRequest.AwaitingCredentials
+                    else -> {
+                        android.util.Log.e("YouTubeUploader", "Upload session request failed: HTTP ${resp.code} for ${seg.segmentId}")
+                        CloudSessionRequest.Retryable
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("YouTubeUploader", "Cloud upload session request error for ${seg.segmentId}: ${e.message}")
+            CloudSessionRequest.Retryable
+        }
+    }
+
+    /** Scoped YouTube status checks and lookups performed by the cloud worker. */
+    private suspend fun cloudYouTubeApi(endpoint: String, payload: JsonObject): JsonObject? {
+        val body = JsonObject().apply {
+            addProperty("account_id", pairingManager.rawVaultAccountId.trim())
+            payload.entrySet().forEach { entry -> add(entry.key, entry.value) }
+        }
+        val req = Request.Builder()
+            .url("$workerUrl/$endpoint")
+            .header("Authorization", "Bearer ${pairingManager.cloudAccessToken}")
+            .post(body.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()))
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val respBody = resp.body?.string()
+                if (resp.code == 401 || resp.code == 409) {
+                    android.util.Log.w("YouTubeUploader", "Cloud API $endpoint paused on HTTP ${resp.code} (awaiting fresh cloud token)")
+                    null
+                } else if (resp.isSuccessful && !respBody.isNullOrBlank()) {
+                    gson.fromJson(respBody, JsonObject::class.java)
+                } else {
+                    android.util.Log.w("YouTubeUploader", "Cloud API $endpoint failed: HTTP ${resp.code}")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "Cloud API $endpoint failed: ${e.message}")
+            null
+        }
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         var hasFailures = false
         val failedInThisRun = mutableSetOf<String>()
 
         // 0. Recover any interrupted sessions from prior crashes before draining
         recoverInterruptedSessions(applicationContext)
+
+        // Advance segments already uploaded but still awaiting YouTube's verdict
+        reconcileYouTubeProcessingStatuses()
 
         // Reconcile any previously uploaded segments awaiting PC ingestion acknowledgement
         reconcilePendingPcAcknowledgements()
@@ -69,13 +206,14 @@ class YouTubeDirectUploadWorker(
             val pendingSegments = dao.getPendingUploadSegments().filter { it.segmentId !in failedInThisRun }
             if (pendingSegments.isEmpty()) break
 
-            // 1. Check if direct YouTube OAuth credentials exist
+            // 1. Check if direct upload credentials exist: the cloud vault session
+            // (Route A) or legacy locally-stored OAuth (PC-pairing fallback).
             var accessToken = pairingManager.youtubeAccessToken
             if (accessToken.isBlank() && pairingManager.youtubeRefreshToken.isNotBlank()) {
                 accessToken = refreshYouTubeToken() ?: ""
             }
 
-            if (accessToken.isBlank()) {
+            if (accessToken.isBlank() && !cloudSessionActive()) {
                 android.util.Log.w("YouTubeUploader", "YouTube credentials missing; marking segments waiting")
                 for (seg in pendingSegments) {
                     dao.updateSegmentStatus(seg.segmentId, "WAITING_FOR_YOUTUBE")
@@ -121,13 +259,21 @@ class YouTubeDirectUploadWorker(
 
                 val dispatchId = "dsp_${seg.finalizedAt ?: System.currentTimeMillis()}_${seg.segmentId.takeLast(6)}"
                 dao.updateSegmentStatus(seg.segmentId, "UPLOADING")
-                val result = uploadToYouTubeDirect(accessToken, file, dispatchId, seg)
+                val useCloud = decideUploadMode(seg)
+                dao.updateSegmentUploadOrigin(seg.segmentId, if (useCloud) "cloud" else "legacy")
+                val result = uploadToYouTubeDirect(accessToken, file, dispatchId, seg, useCloud)
+
+                if (result.failureReason == "WAITING_FOR_CREDENTIALS") {
+                    hasFailures = true
+                    android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} paused: awaiting fresh cloud token or vault reconnect")
+                    continue
+                }
 
                 if (result.success && !result.youtubeVideoId.isNullOrBlank()) {
                     val videoId = result.youtubeVideoId
                     // CRITICAL FORENSIC FIX: Receipt of videoId alone does NOT mean YouTube has finished processing!
                     // Check videos.list(part=processingDetails,status,id=videoId)
-                    val processingStatus = checkYouTubeProcessingStatus(accessToken, videoId)
+                    val processingStatus = checkYouTubeProcessingStatus(accessToken, videoId, useCloud)
                     android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} (Video: $videoId) processing status: $processingStatus")
 
                     if (processingStatus == "succeeded") {
@@ -198,6 +344,8 @@ class YouTubeDirectUploadWorker(
 
         // Final sweep: Reconcile any previously uploaded segments awaiting PC ingestion acknowledgement
         reconcilePendingPcAcknowledgements()
+        // But also advance any segments whose YouTube processing completed in the meantime
+        reconcileYouTubeProcessingStatuses()
 
         if (hasFailures) {
             Result.retry()
@@ -211,15 +359,16 @@ class YouTubeDirectUploadWorker(
         file: File,
         dispatchId: String,
         seg: com.resolvia.dispatch.data.SegmentEntity,
+        useCloud: Boolean,
         sessionRestarted: Boolean = false
     ): DirectUploadResult {
-        var currentAccessToken = accessToken
+        var currentAccessToken = accessToken.takeIf { !useCloud } ?: ""
         val segId = seg.segmentId
         val totalBytes = file.length()
         if (totalBytes == 0L) return DirectUploadResult(false)
 
         // 0. Idempotency protection: check if video was already published to YouTube during previous attempt
-        val existingVideoId = findExistingUploadByDispatchId(currentAccessToken, dispatchId)
+        val existingVideoId = findExistingUploadByDispatchId(currentAccessToken, dispatchId, useCloud)
         if (!existingVideoId.isNullOrBlank()) {
             android.util.Log.i("YouTubeUploader", "Upload already confirmed on YouTube for $dispatchId: $existingVideoId")
             return DirectUploadResult(success = true, youtubeVideoId = existingVideoId)
@@ -268,27 +417,38 @@ class YouTubeDirectUploadWorker(
 
         // If no existing resumable session URL, initiate new session
         if (uploadUrl == null) {
-            try {
-                client.newCall(initReq).execute().use { resp ->
-                    if (resp.code == 401) {
-                        val freshToken = refreshYouTubeToken()
-                        if (freshToken != null) {
-                            return uploadToYouTubeDirect(freshToken, file, dispatchId, seg)
-                        }
-                        return DirectUploadResult(false)
+            if (useCloud) {
+                when (val outcome = initiateCloudResumableSession(seg, file, dispatchId)) {
+                    is CloudSessionRequest.SessionUrl -> uploadUrl = outcome.url
+                    is CloudSessionRequest.AwaitingCredentials -> {
+                        dao.updateSegmentStatus(segId, "WAITING_FOR_YOUTUBE")
+                        return DirectUploadResult(false, failureReason = "WAITING_FOR_CREDENTIALS")
                     }
-                    if (!resp.isSuccessful) {
-                        android.util.Log.e("YouTubeUploader", "Init failed: HTTP ${resp.code}")
-                        return DirectUploadResult(false)
-                    }
-                    uploadUrl = resp.header("Location")
-                    if (uploadUrl != null) {
-                        pairingManager.saveUploadSessionUrl(segId, uploadUrl!!)
-                    }
+                    is CloudSessionRequest.Retryable -> return DirectUploadResult(false)
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("YouTubeUploader", "Failed to initiate resumable upload session: ${e.message}")
-                return DirectUploadResult(false)
+            } else {
+                try {
+                    client.newCall(initReq).execute().use { resp ->
+                        if (resp.code == 401) {
+                            val freshToken = refreshYouTubeToken()
+                            if (freshToken != null) {
+                                return uploadToYouTubeDirect(freshToken, file, dispatchId, seg, useCloud)
+                            }
+                            return DirectUploadResult(false)
+                        }
+                        if (!resp.isSuccessful) {
+                            android.util.Log.e("YouTubeUploader", "Init failed: HTTP ${resp.code}")
+                            return DirectUploadResult(false)
+                        }
+                        uploadUrl = resp.header("Location")
+                        if (uploadUrl != null) {
+                            pairingManager.saveUploadSessionUrl(segId, uploadUrl!!)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("YouTubeUploader", "Failed to initiate resumable upload session: ${e.message}")
+                    return DirectUploadResult(false)
+                }
             }
         }
 
@@ -307,7 +467,7 @@ class YouTubeDirectUploadWorker(
             }
             pairingManager.clearUploadSessionUrl(segId)
             dao.updateOutboxOffset(segId, 0L)
-            return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, sessionRestarted = true)
+            return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
         }
         val confirmedInitialOffset = probedOffset
             ?: return DirectUploadResult(false, failureReason = "Could not confirm resumable upload offset; source retained for retry")
@@ -345,13 +505,17 @@ class YouTubeDirectUploadWorker(
                 raf.readFully(buffer)
 
                 val chunkBody = buffer.toRequestBody("video/mp4".toMediaType(), 0, chunkLen)
-                val chunkReq = Request.Builder()
+                // Cloud vault sessions: the worker-handed upload URL is already
+                // scoped and pre-authorized; adding a phone OAuth header there
+                // would be meaningless. Legacy sessions carry the local token.
+                val chunkReqBuilder = Request.Builder()
                     .url(destination)
-                    .header("Authorization", "Bearer $currentAccessToken")
                     .header("Content-Length", chunkLen.toString())
                     .header("Content-Range", "bytes $start-$end/$totalBytes")
-                    .put(chunkBody)
-                    .build()
+                if (currentAccessToken.isNotBlank()) {
+                    chunkReqBuilder.header("Authorization", "Bearer $currentAccessToken")
+                }
+                val chunkReq = chunkReqBuilder.put(chunkBody).build()
 
                 var retryWithNewToken = false
                 var waitForNoProgress = false
@@ -366,7 +530,7 @@ class YouTubeDirectUploadWorker(
                         }
                         pairingManager.clearUploadSessionUrl(segId)
                         dao.updateOutboxOffset(segId, 0L)
-                        return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, sessionRestarted = true)
+                        return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
                     }
                     if (!reconcileServerOffset(probed)) {
                         if (!waitForNoProgressRetry()) {
@@ -395,7 +559,7 @@ class YouTubeDirectUploadWorker(
                                     }
                                     pairingManager.clearUploadSessionUrl(segId)
                                     dao.updateOutboxOffset(segId, 0L)
-                                    return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, sessionRestarted = true)
+                                    return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
                                 }
                                 probed
                             }
@@ -416,7 +580,7 @@ class YouTubeDirectUploadWorker(
                                 json.get("id")?.asString
                             } catch (_: Exception) {
                                 null
-                            } ?: findExistingUploadByDispatchId(currentAccessToken, dispatchId)
+                            } ?: findExistingUploadByDispatchId(currentAccessToken, dispatchId, useCloud)
 
                             if (!videoId.isNullOrBlank()) {
                                 pairingManager.clearUploadSessionUrl(segId)
@@ -428,6 +592,16 @@ class YouTubeDirectUploadWorker(
                             }
                         }
                         401 -> {
+                            if (useCloud) {
+                                // Cloud vault sessions cannot be refreshed locally:
+                                // a 401 means the session URL was invalidated, so
+                                // re-open through the worker once, then pause.
+                                pairingManager.clearUploadSessionUrl(segId)
+                                if (sessionRestarted) {
+                                    return DirectUploadResult(false, failureReason = "WAITING_FOR_CREDENTIALS")
+                                }
+                                return uploadToYouTubeDirect(accessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
+                            }
                             if (tokenRefreshAttempts < 2) {
                                 val freshToken = refreshYouTubeToken()
                                 if (freshToken != null) {
@@ -464,7 +638,7 @@ class YouTubeDirectUploadWorker(
             try { raf?.close() } catch (_: Exception) {}
         }
 
-        val finalCheckId = if (currentOffset >= totalBytes) findExistingUploadByDispatchId(accessToken, dispatchId) else null
+        val finalCheckId = if (currentOffset >= totalBytes) findExistingUploadByDispatchId(currentAccessToken, dispatchId, useCloud) else null
         val isConfirmed = currentOffset >= totalBytes && !finalCheckId.isNullOrBlank()
         if (isConfirmed) {
             pairingManager.clearUploadSessionUrl(segId)
@@ -475,7 +649,19 @@ class YouTubeDirectUploadWorker(
         )
     }
 
-    private suspend fun findExistingUploadByDispatchId(accessToken: String, dispatchId: String): String? {
+    private suspend fun findExistingUploadByDispatchId(accessToken: String, dispatchId: String, useCloud: Boolean): String? {
+        if (useCloud && cloudSessionActive()) {
+            // Route A: the worker resolves the vault account and searches YouTube
+            // for the dispatch_id tag; the phone holds no OAuth here.
+            val json = cloudYouTubeApi("youtube/uploads/lookup", JsonObject().apply {
+                addProperty("dispatch_id", dispatchId)
+            })
+            val videoId = json?.get("video_id")?.asString
+            if (!videoId.isNullOrBlank()) {
+                android.util.Log.i("YouTubeUploader", "Recovered existing YouTube upload for $dispatchId: $videoId")
+            }
+            return videoId
+        }
         try {
             val queryUrl = "https://www.googleapis.com/youtube/v3/search?part=snippet&forMine=true&q=dispatch_id_$dispatchId&type=video&maxResults=1"
             val req = Request.Builder()
@@ -505,7 +691,13 @@ class YouTubeDirectUploadWorker(
         return null
     }
 
-    private suspend fun checkYouTubeProcessingStatus(accessToken: String, videoId: String): String {
+    private suspend fun checkYouTubeProcessingStatus(accessToken: String, videoId: String, useCloud: Boolean): String {
+        if (useCloud && cloudSessionActive()) {
+            val json = cloudYouTubeApi("youtube/videos/status", JsonObject().apply {
+                addProperty("video_id", videoId)
+            })
+            return json?.get("status")?.asString ?: "unknown"
+        }
         return try {
             val url = "https://www.googleapis.com/youtube/v3/videos?part=processingDetails,status&id=$videoId"
             val req = Request.Builder()
@@ -803,6 +995,60 @@ class YouTubeDirectUploadWorker(
     }
 
     /**
+     * Stranded-Status fix: segments that reached UPLOADED_AWAITING_PROCESSING
+     * previously stayed there forever because the outbox row was deleted right
+     * after upload and YouTube was only polled once. This pass re-checks the
+     * video's processingDetails/status on every worker run until YouTube
+     * returns a definitive verdict, and requires an explicit FAILED state for
+     * processing failures instead of a stale "Queued" badge.
+     */
+    private suspend fun reconcileYouTubeProcessingStatuses(): Boolean {
+        val awaiting = dao.getSegmentsUploadedAwaitingProcessing()
+        if (awaiting.isEmpty()) return false
+
+        for (seg in awaiting) {
+            // Origin-aware credential selection; a legacy upload keeps using the
+            // locally-stored OAuth from the PC pairing flow.
+            val useCloud = when (seg.uploadOrigin) {
+                "cloud" -> cloudSessionActive()
+                "legacy" -> false
+                else -> cloudSessionActive() || pairingManager.isYouTubeConfigured
+            }
+            if (!useCloud && !pairingManager.isYouTubeConfigured) continue
+
+            val now = System.currentTimeMillis()
+            // Throttle: never hit the YouTube API twice for one segment within
+            // the recheck window, no matter how often the worker is triggered.
+            if (seg.youtubeCheckAt != 0L && now - seg.youtubeCheckAt < processingRecheckIntervalMs) continue
+
+            val attempts = seg.youtubeCheckAttempts + 1
+            if (attempts > maxProcessingChecks) {
+                android.util.Log.e(
+                    "YouTubeUploader",
+                    "Segment ${seg.segmentId}: YouTube processing unresolved after $maxProcessingChecks checks; failing explicitly."
+                )
+                dao.updateSegmentStatus(seg.segmentId, "FAILED_YOUTUBE_PROCESSING")
+                continue
+            }
+            dao.updateProcessingCheck(seg.segmentId, attempts, now)
+
+            when (val verdict = checkYouTubeProcessingStatus("", seg.youtubeVideoId ?: "", useCloud)) {
+                "succeeded" -> dao.updateSegmentStatus(seg.segmentId, "PROCESSED_ON_YOUTUBE")
+                "failed" -> {
+                    android.util.Log.e("YouTubeUploader", "Segment ${seg.segmentId} video ${seg.youtubeVideoId} failed processing on YouTube.")
+                    dao.updateSegmentStatus(seg.segmentId, "FAILED_YOUTUBE_PROCESSING")
+                }
+                else -> {
+                    // Not a definitive verdict; this segment stays in
+                    // UPLOADED_AWAITING_PROCESSING and the recheck continues.
+                    android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} processing verdict: $verdict (${maxProcessingChecks - attempts} checks left)")
+                }
+            }
+        }
+        return dao.getSegmentsUploadedAwaitingProcessing().isNotEmpty()
+    }
+
+    /**
      * Parses and strictly validates YouTube Resumable Upload Range header.
      * Expected format: "bytes=0-<end>" where 0 <= end < totalBytes.
      * Returns (end + 1L) as the next byte offset to send, or null if missing, invalid, or out of bounds.
@@ -835,19 +1081,22 @@ class YouTubeDirectUploadWorker(
      */
     private fun queryUploadStatus(uploadUrl: String, accessToken: String, totalBytes: Long): Long? {
         var token = accessToken
+        val hasToken = token.isNotBlank()
         for (attempt in 0..1) {
-            val queryReq = Request.Builder()
+            val queryReqBuilder = Request.Builder()
                 .url(uploadUrl)
-                .header("Authorization", "Bearer $token")
                 .header("Content-Range", "bytes */$totalBytes")
                 .header("Content-Length", "0")
+            // Cloud vault sessions are authorized by the worker-minted URL itself.
+            if (hasToken) queryReqBuilder.header("Authorization", "Bearer $token")
+            val queryReq = queryReqBuilder
                 .put("".toRequestBody("video/mp4".toMediaType()))
                 .build()
 
             try {
                 val resp = client.newCall(queryReq).execute()
                 resp.use {
-                    if (it.code == 401 && attempt == 0) {
+                    if (it.code == 401 && hasToken && attempt == 0) {
                         val freshToken = refreshYouTubeToken()
                         if (freshToken != null) {
                             token = freshToken
@@ -863,7 +1112,9 @@ class YouTubeDirectUploadWorker(
                         }
                     } else if (it.isSuccessful) {
                         return totalBytes
-                    } else if (it.code == 404 || it.code == 410) {
+                    } else if (it.code == 404 || it.code == 410 || (it.code == 401 && !hasToken)) {
+                        // For cloud sessions a 401 marks an invalidated URL: treat
+                        // as expired so the caller re-opens a session via the worker.
                         return -1L
                     } else {
                         return null

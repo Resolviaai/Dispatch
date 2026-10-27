@@ -1017,11 +1017,161 @@ class DispatchNativeBridge(
         pairingManager.clearCredentials()
     }
 
+    /**
+
+     * Pushes the Supabase session JWT and the raw-vault YouTube account id from
+
+     * the WebView into secure native storage so the direct YouTube upload
+
+     * worker can request scoped resumable upload sessions from the Dispatch
+
+     * cloud without the PC being online and without locally stored OAuth.
+
+     *
+
+     * Payload: {"access_token": "<jwt>", "account_id": "<youtube-vault-id>"}
+
+     * An empty payload clears the cloud session (sign-out).
+
+     */
+
     @JavascriptInterface
-    fun retryUpload(segmentId: String) {
+
+    fun pushCloudSession(payload: String?): Boolean {
+
+        val raw = payload?.trim() ?: ""
+
+        if (raw.isEmpty() || raw == "{}") {
+
+            pairingManager.clearCloudAccessToken()
+
+            pairingManager.rawVaultAccountId = ""
+
+            return true
+
+        }
+
+        return try {
+
+            val obj = gson.fromJson(raw, JsonObject::class.java)
+
+            val token = obj.get("access_token")?.asString?.trim() ?: ""
+
+            val accountId = obj.get("account_id")?.asString?.trim() ?: ""
+
+            // Reject malformed inputs early: a corrupted token must not poison the
+
+            // upload queue, and the vault id format must match the Worker contract.
+
+            val jwtLike = token.count { it == '.' } == 2 && token.length > 40
+
+            val uuidLike = Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(accountId)
+
+            if (!jwtLike || !uuidLike) {
+
+                android.util.Log.w("DispatchBridge", "Ignoring malformed cloud session push")
+
+                return false
+
+            }
+
+            pairingManager.cloudAccessToken = token
+
+            pairingManager.rawVaultAccountId = accountId
+
+            android.util.Log.i("DispatchBridge", "Cloud upload session updated for vault account ${accountId.take(8)}...")
+
+            activity.lifecycleScope.launch(Dispatchers.IO) {
+
+                try {
+
+                    val waiting = database.recordingDao().getPendingUploadSegments()
+
+                    var requeued = 0
+
+                    for (seg in waiting) {
+
+                        if (seg.status == "WAITING_FOR_YOUTUBE") {
+
+                            database.recordingDao().updateSegmentStatus(seg.segmentId, "QUEUED_FOR_UPLOAD")
+
+                            requeued++
+
+                        }
+
+                    }
+
+                    if (requeued > 0) {
+
+                        android.util.Log.i("DispatchBridge", "Fresh cloud token requeued $requeued waiting segments")
+
+                    }
+
+                    segmenterEngine.triggerYouTubeUpload()
+
+                } catch (e: Exception) {
+
+                    android.util.Log.e("DispatchBridge", "Cloud session push requeue failed: ${e.message}")
+
+                }
+
+            }
+
+            true
+
+        } catch (e: Exception) {
+
+            android.util.Log.w("DispatchBridge", "pushCloudSession parse failed: ${e.message}")
+
+            false
+
+        }
+
+    }
+
+    
+@JavascriptInterface
+    fun retryUpload(idOrSessionId: String) {
         activity.lifecycleScope.launch(Dispatchers.IO) {
-            database.recordingDao().updateSegmentStatus(segmentId, "QUEUED_FOR_UPLOAD")
-            segmenterEngine.triggerYouTubeUpload()
+            try {
+                // Accepts either a segment id or a session id: the Library passes
+                // session ids for phone recordings, so requeue every retryable
+                // segment of the session when the direct segment lookup misses.
+                val requeueable = setOf(
+                    "FAILED_RETRY",
+                    "FAILED_YOUTUBE_PROCESSING",
+                    "WAITING_FOR_YOUTUBE",
+                    "QUEUED_FOR_UPLOAD"
+                )
+                val direct = database.recordingDao().getSegmentById(idOrSessionId)
+                if (direct != null) {
+                    database.recordingDao().deleteOutboxItem(direct.segmentId)
+                    database.recordingDao().updateSegmentStatus(direct.segmentId, "QUEUED_FOR_UPLOAD")
+                    database.recordingDao().insertOutbox(com.resolvia.dispatch.data.OutboxEntity(
+                        segmentId = direct.segmentId,
+                        sessionId = direct.sessionId,
+                        status = "QUEUED_FOR_UPLOAD",
+                        updatedAt = System.currentTimeMillis()
+                    ))
+                } else {
+                    val segments = database.recordingDao().getSegmentsBySessionId(idOrSessionId)
+                    for (seg in segments) {
+                        if (seg.status in requeueable) {
+                            database.recordingDao().deleteOutboxItem(seg.segmentId)
+                            database.recordingDao().updateSegmentStatus(seg.segmentId, "QUEUED_FOR_UPLOAD")
+                            database.recordingDao().insertOutbox(com.resolvia.dispatch.data.OutboxEntity(
+                                segmentId = seg.segmentId,
+                                sessionId = seg.sessionId,
+                                status = "QUEUED_FOR_UPLOAD",
+                                updatedAt = System.currentTimeMillis()
+                            ))
+                        }
+                    }
+                }
+                segmenterEngine.triggerYouTubeUpload()
+            } catch (e: Exception) {
+                android.util.Log.e("DispatchBridge", "retryUpload failed: ${e.message}")
+            }
         }
     }
 

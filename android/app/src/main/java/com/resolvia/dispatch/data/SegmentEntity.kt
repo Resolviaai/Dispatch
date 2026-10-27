@@ -21,7 +21,12 @@ data class SegmentEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val finalizedAt: Long? = null,
     val youtubeVideoId: String? = null,
-    val userId: String? = null
+    val userId: String? = null,
+    // Which credential flow owns the uploaded video: "cloud" (vault session)
+    // or "legacy" (locally stored OAuth). Drives status reconciliation.
+    val uploadOrigin: String = "",
+    val youtubeCheckAttempts: Int = 0,
+    val youtubeCheckAt: Long = 0
 )
 
 val SegmentEntity.durationSeconds: Long

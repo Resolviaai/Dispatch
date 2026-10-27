@@ -11,6 +11,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
 
+import java.util.concurrent.TimeUnit
+
 /**
  * Native Android Recording Segmenter Engine.
  * Coordinates CameraX hardware video/audio capture into rolling 10-minute segments.
@@ -375,12 +377,25 @@ class SegmenterEngine(
             .setConstraints(constraints)
             .build()
 
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "dispatch_youtube_uploads",
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
-            ytSyncWork
-        )
-    }
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "dispatch_youtube_uploads",
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            ytSyncWork
+        )
+
+        // Stand up a periodic reconciliation pulse so segments left in
+        // UPLOADED_AWAITING_PROCESSING advance past the single in-flight poll
+        // even when nothing else happens on the phone. KEEP avoids re-schedule churn.
+        val reconcileWork = PeriodicWorkRequestBuilder<com.resolvia.dispatch.sync.YouTubeDirectUploadWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            "dispatch_youtube_reconcile",
+            ExistingPeriodicWorkPolicy.KEEP,
+            reconcileWork
+        )
+    }
 
     private fun calculateSha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")

@@ -88,4 +88,14 @@ interface RecordingDao {
 
     @Query("SELECT * FROM segments WHERE status IN ('UPLOADED_TO_YOUTUBE', 'PROCESSED_ON_YOUTUBE', 'UPLOADED_AWAITING_PROCESSING') AND status != 'VERIFIED_BY_LAPTOP' ORDER BY sequenceNumber ASC")
     suspend fun getSegmentsAwaitingPcAck(): List<SegmentEntity>
+
+    /** Segments uploaded and waiting for YouTube processing to reach a verdict. */
+    @Query("SELECT * FROM segments WHERE status = 'UPLOADED_AWAITING_PROCESSING' AND youtubeVideoId IS NOT NULL AND youtubeVideoId != '' ORDER BY youtubeCheckAttempts ASC")
+    suspend fun getSegmentsUploadedAwaitingProcessing(): List<SegmentEntity>
+
+    @Query("UPDATE segments SET youtubeCheckAttempts = :attempts, youtubeCheckAt = :checkedAt WHERE segmentId = :segmentId")
+    suspend fun updateProcessingCheck(segmentId: String, attempts: Int, checkedAt: Long)
+
+    @Query("UPDATE segments SET uploadOrigin = :origin WHERE segmentId = :segmentId")
+    suspend fun updateSegmentUploadOrigin(segmentId: String, origin: String)
 }
