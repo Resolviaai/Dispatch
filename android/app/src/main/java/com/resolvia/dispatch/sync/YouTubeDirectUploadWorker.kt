@@ -83,15 +83,14 @@ class YouTubeDirectUploadWorker(
      * vault and fall back to legacy local credentials only when the cloud
      * session is absent.
      */
-    private fun decideUploadMode(seg: com.resolvia.dispatch.data.SegmentEntity): Boolean {
-        val savedUrl = pairingManager.getUploadSessionUrl(seg.segmentId)
-        if (savedUrl.isNotBlank()) return pairingManager.isCloudUploadSession(seg.segmentId)
-        return when (seg.uploadOrigin) {
-            "cloud" -> cloudSessionActive()
-            "legacy" -> false
-            else -> cloudSessionActive()
-        }
-    }
+    private fun decideUploadMode(seg: com.resolvia.dispatch.data.SegmentEntity): Boolean =
+        UploadModePolicy.resolveUploadMode(
+            uploadOrigin = seg.uploadOrigin,
+            savedSessionUrl = pairingManager.getUploadSessionUrl(seg.segmentId),
+            savedSessionIsCloud = if (pairingManager.getUploadSessionUrl(seg.segmentId).isNotBlank())
+                pairingManager.isCloudUploadSession(seg.segmentId) else null,
+            cloudSessionActive = cloudSessionActive()
+        )
 
     /**
      * Asks the Dispatch cloud worker for a scoped YouTube resumable upload
@@ -265,6 +264,12 @@ class YouTubeDirectUploadWorker(
 
                 if (result.failureReason == "WAITING_FOR_CREDENTIALS") {
                     hasFailures = true
+                    // Exclude from the rest of THIS drain pass so the loop cannot
+                    // hot-spin re-selecting the same segment (the DAO pending set
+                    // includes WAITING_FOR_YOUTUBE). The paused segment is retried
+                    // on the next worker run, via pushed cloud credentials, or
+                    // via WorkManager backoff — never in this same tight loop.
+                    failedInThisRun.add(seg.segmentId)
                     android.util.Log.i("YouTubeUploader", "Segment ${seg.segmentId} paused: awaiting fresh cloud token or vault reconnect")
                     continue
                 }
@@ -366,6 +371,13 @@ class YouTubeDirectUploadWorker(
         val segId = seg.segmentId
         val totalBytes = file.length()
         if (totalBytes == 0L) return DirectUploadResult(false)
+
+        // Cloud route with no live vault session must never POST into the void
+        // (a blank-bearer request would surface as a 401 hot path, i.e. the
+        // repeated-retry loop) — pause immediately for credential re-push.
+        if (useCloud && !cloudSessionActive() && !pairingManager.isCloudUploadSession(segId)) {
+            return DirectUploadResult(false, failureReason = "WAITING_FOR_CREDENTIALS")
+        }
 
         // 0. Idempotency protection: check if video was already published to YouTube during previous attempt
         val existingVideoId = findExistingUploadByDispatchId(currentAccessToken, dispatchId, useCloud)
@@ -1008,12 +1020,11 @@ class YouTubeDirectUploadWorker(
 
         for (seg in awaiting) {
             // Origin-aware credential selection; a legacy upload keeps using the
-            // locally-stored OAuth from the PC pairing flow.
-            val useCloud = when (seg.uploadOrigin) {
-                "cloud" -> cloudSessionActive()
-                "legacy" -> false
-                else -> cloudSessionActive() || pairingManager.isYouTubeConfigured
-            }
+            // locally-stored OAuth from the PC pairing flow. Cloud-origin is
+            // hard-pinned: the verdict must come from the vault account that
+            // owns the video (resolveReconcileMode), never from whichever
+            // credentials happen to be present at poll time.
+            val useCloud = UploadModePolicy.resolveReconcileMode(seg.uploadOrigin)
             if (!useCloud && !pairingManager.isYouTubeConfigured) continue
 
             val now = System.currentTimeMillis()
