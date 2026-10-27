@@ -3088,7 +3088,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 <div className="flex items-center gap-2 min-w-0">
                   <Cloud size={14} className="shrink-0" />
                   <span className="text-xs truncate font-mono">
-                    Local MP4 deleted after 7d retention. Live on YouTube.
+                    Local MP4 deleted after 7d retention. Published to YouTube.
                   </span>
                 </div>
                 {(currentClip.remote_url || currentClip.remote_id) && (
@@ -3162,56 +3162,55 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               const liveUrl = currentClip.remote_url || (currentClip.remote_id ? `https://youtube.com/shorts/${currentClip.remote_id}` : '');
 
               if (isClipPublished) {
+                // Truthful destination label: the clip is PUBLISHED (not live).
+                // "Shorts" is only stated when the remote target is actually a
+                // Short (the youtube.com/shorts URL Dispatch exports to).
+                const destinationIsShorts = Boolean(
+                  currentClip.remote_id || (liveUrl && liveUrl.includes('/shorts/'))
+                );
                 return (
                   <section className="w-full space-y-3 pt-1">
-                    {/* Live Published Card */}
-                    <div className="w-full p-3.5 rounded-2xl bg-surface-100 border border-border flex flex-col gap-2.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-xs font-semibold text-status-success">
-                          <span className="w-2 h-2 rounded-full bg-status-success shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
-                          <span>Live on YouTube Shorts</span>
-                        </div>
-                        <span className="text-[11px] text-text-muted font-mono">
-                          {formatAge(currentClip.published_at || currentClip.approved_at)}
-                        </span>
-                      </div>
-
-                      {/* Direct URL Bar with Copy */}
-                      {liveUrl && (
-                        <div className="flex items-center gap-2 p-1.5 pl-3 rounded-xl bg-surface-200 border border-border">
-                          <span className="flex-1 min-w-0 font-mono text-xs text-text-secondary truncate select-all">
-                            {liveUrl}
+                    {/* Compact published status: state + age (+ visibility),
+                        with copy-link kept one tap away — no oversized URL panel. */}
+                    <div className="w-full px-3 py-2.5 rounded-2xl bg-surface-100 border border-border flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="w-2 h-2 rounded-full bg-status-success shadow-[0_0_8px_rgba(34,197,94,0.6)] shrink-0" />
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-xs font-semibold text-status-success">
+                            Published to YouTube{destinationIsShorts ? ' Shorts' : ''}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(liveUrl, 'YouTube link')}
-                            className="shrink-0 px-2.5 py-1 rounded-lg bg-surface-3 hover:bg-surface-200 text-xs font-medium text-text-main flex items-center gap-1 active:scale-95 transition-all"
-                            title="Copy link"
-                          >
-                            <Copy size={12} />
-                            <span>Copy</span>
-                          </button>
+                          <span className="text-[11px] text-text-muted font-mono tabular-nums truncate">
+                            {formatAge(currentClip.published_at || currentClip.approved_at)}
+                            {currentClip.publish_mode ? ` · ${currentClip.publish_mode}` : ''}
+                          </span>
                         </div>
-                      )}
-
-                      {/* Publishing Details */}
-                      <div className="flex items-center justify-between text-[11px] text-text-muted pt-1 border-t border-border/40">
-                        <span>Visibility: <strong className="text-text-secondary font-medium capitalize">{currentClip.publish_mode || 'unlisted'}</strong></span>
-                        <span className="font-mono text-text-secondary">Framing: {currentClip.layout_mode || '9:16'}</span>
                       </div>
+                      {liveUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(liveUrl, 'YouTube link')}
+                          className="shrink-0 w-11 h-11 rounded-xl bg-surface-200 hover:bg-surface-3 text-text-secondary hover:text-text-main flex items-center justify-center active:scale-95 transition-all"
+                          aria-label="Copy YouTube link"
+                          title="Copy link"
+                        >
+                          <Copy size={15} />
+                        </button>
+                      )}
                     </div>
 
-                    {/* Dual Action Buttons: Watch Live (Hero) + Edit a Copy */}
+                    {/* Single hero action (opens the published video) +
+                        secondary edit affordance. */}
                     <div className="w-full grid grid-cols-2 gap-2.5">
                       <button
                         type="button"
                         onClick={() => {
                           if (liveUrl) window.open(liveUrl, '_blank', 'noopener,noreferrer');
                         }}
-                        className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
+                        disabled={!liveUrl}
+                        className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40 disabled:pointer-events-none"
                       >
                         <ExternalLink size={15} />
-                        <span>Watch Live</span>
+                        <span>Open on YouTube</span>
                       </button>
 
                       <button

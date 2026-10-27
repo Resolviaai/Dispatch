@@ -459,8 +459,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         </h1>
       </div>
 
-      {/* CONTENT SCROLL AREA */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5">
+      {/* CONTENT SCROLL AREA — hierarchy from spacing + typography + hairlines,
+          not from wrapping every group in another bordered card (anti
+          "card-everything" guidance in dispatch-design-system-v3). */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
 
         {/* FEEDBACK BANNER */}
         {feedback && (
@@ -470,8 +472,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         )}
 
-        {/* 1. ACCOUNT PROFILE ROW */}
-        <section className="rounded-2xl bg-surface border border-border p-3.5 flex items-center justify-between gap-3">
+        {/* ACCOUNT PROFILE ROW (borderless; separated by a hairline) */}
+        <section className="pb-1 border-b border-border/60 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <span className="w-9 h-9 rounded-full bg-primary-soft border border-primary/30 flex items-center justify-center text-primary shrink-0">
               <UserRound size={17} />
@@ -484,16 +486,16 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           <button
             type="button"
             onClick={handleSignOut}
-            className="min-h-[36px] px-3 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-danger active:scale-[0.98] transition-all flex items-center gap-1.5 shrink-0"
+            className="min-h-[44px] px-3 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-danger active:scale-[0.98] transition-all flex items-center gap-1.5 shrink-0"
           >
             <LogOut size={13} />
             <span>Sign out</span>
           </button>
         </section>
 
-        {/* 1. APPEARANCE */}
-        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
-          <h2 className="text-base font-semibold tracking-tight text-text-main">Appearance</h2>
+        {/* 1. APPEARANCE — compact grouped selector, no outer card */}
+        <section className="space-y-2.5">
+          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Appearance</h2>
           <div className="space-y-2" role="radiogroup" aria-label="Theme">
             {themeOptions.map((opt) => {
               const isSelected = themePref === opt.id;
@@ -524,13 +526,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 2. RECORDING */}
-        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2.5">
-          <h2 className="text-sm font-semibold tracking-tight text-text-main">Recording</h2>
-
-          <div className="space-y-1.5">
-            <span className="flex items-center gap-1.5 text-xs text-text-secondary">
-              <Camera size={13} className="text-text-muted" />
+        {/* 2. RECORDING — one simple row with an inline lens control */}
+        <section className="space-y-2.5">
+          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Recording</h2>
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-text-main shrink-0">
+              <Camera size={14} className="text-text-muted" />
               Default lens
             </span>
             <div className="flex items-center p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Default camera">
@@ -543,7 +544,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                     role="radio"
                     aria-checked={isSelected}
                     onClick={() => handleLensChange(lens)}
-                    className={`flex-1 min-h-[34px] rounded-lg text-xs font-medium transition-all active:scale-[0.98] ${
+                    className={`min-h-[44px] px-4 rounded-lg text-xs font-medium transition-all active:scale-[0.98] ${
                       isSelected ? 'bg-primary text-white font-semibold' : 'text-text-secondary hover:text-text-main'
                     }`}
                   >
@@ -553,41 +554,34 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               })}
             </div>
           </div>
-
-          <p className="text-[11px] text-text-muted tabular-nums">
-            1080p · 30&nbsp;FPS · 10m segments
-          </p>
         </section>
 
-        {/* 3. DEFAULT EDITING STYLE */}
-        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sliders size={15} className="text-primary" />
-              <h2 className="text-sm font-semibold tracking-tight text-text-main">Default Editing Style</h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsTemplateEditorOpen(true)}
-              className="px-3 min-h-[36px] rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-hero-glow active:scale-[0.98] transition-all flex items-center gap-1.5"
-            >
-              <Sliders size={13} />
-              Customize
-            </button>
-          </div>
-          <p className="text-[11px] text-text-muted">
-            Framing & caption presets for new clips
-          </p>
+        {/* 3. DEFAULT EDITING STYLE — heading + action, no redundant helper text */}
+        <section className="flex items-center justify-between gap-3">
+          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary flex items-center gap-1.5 shrink-0">
+            <Sliders size={13} className="text-text-muted" />
+            Default Editing Style
+          </h2>
+          <button
+            type="button"
+            onClick={() => setIsTemplateEditorOpen(true)}
+            className="px-3 min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-hero-glow active:scale-[0.98] transition-all flex items-center gap-1.5 shrink-0"
+          >
+            <Sliders size={13} />
+            Customize
+          </button>
         </section>
 
-        {/* 4. CONNECTED ACCOUNTS (Single service of truth) */}
+        {/* 4. CONNECTED ACCOUNTS (Single service of truth) — the one deliberate
+            card on this screen: account entries, roles and disconnect actions
+            belong together. Inner rows are hairline-separated, not nested cards. */}
         <section className="rounded-2xl bg-surface border border-border p-4 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold tracking-tight text-text-main">Connected Accounts</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-text-main">Connected Accounts</h2>
             <button
               onClick={refreshAccounts}
               disabled={isLoadingAccounts}
-              className="p-2 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-text-secondary active:scale-[0.98]"
+              className="min-h-[44px] min-w-[44px] p-2 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-text-secondary active:scale-[0.98] flex items-center justify-center"
               title="Refresh connected accounts"
             >
               <RefreshCw size={14} className={isLoadingAccounts ? 'animate-spin' : ''} />
@@ -596,7 +590,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
           {/* YouTube Accounts */}
           <div className="space-y-2.5">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-wider font-semibold text-text-secondary">
               <span className="flex items-center gap-1.5"><Youtube size={14} className="text-danger" /> YouTube Channels</span>
               <span className="font-mono">{youtubeAccounts.length} connected</span>
             </div>
@@ -604,13 +598,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
 
             {youtubeAccounts.length > 0 ? (
-              <div className="space-y-2.5">
+              <div className="divide-y divide-border/60">
                 {youtubeAccounts.map((acc) => {
                   const isSourceVault = acc.metadata?.is_source_vault !== false;
                   const isPublisher = acc.metadata?.is_publisher !== false;
 
                   return (
-                    <div key={acc.id} className="p-3.5 rounded-xl bg-surface-2 border border-border space-y-2.5 text-sm">
+                    <div key={acc.id} className="py-3 first:pt-0 space-y-2.5 text-sm">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2.5 min-w-0">
                           {acc.avatar_url ? (
@@ -629,7 +623,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                         </div>
                         <button
                           onClick={() => handleDisconnectAccount(acc)}
-                          className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                          className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
                         >
                           Disconnect
                         </button>
@@ -640,7 +634,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                         <button
                           type="button"
                           onClick={() => handleToggleRole(acc, 'source_vault')}
-                          className={`min-h-[34px] px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                          className={`min-h-[44px] px-3 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
                             isSourceVault
                               ? 'bg-primary/15 border-primary/40 text-primary'
                               : 'bg-surface-3 border-border text-text-muted hover:text-text-secondary'
@@ -654,7 +648,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                         <button
                           type="button"
                           onClick={() => handleToggleRole(acc, 'publisher')}
-                          className={`min-h-[34px] px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                          className={`min-h-[44px] px-3 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
                             isPublisher
                               ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
                               : 'bg-surface-3 border-border text-text-muted hover:text-text-secondary'
@@ -684,13 +678,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
           {/* Social Destinations */}
           <div className="pt-3 border-t border-border space-y-2.5">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-text-secondary">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-wider font-semibold text-text-secondary">
               <span className="flex items-center gap-1.5"><Share2 size={13} className="text-primary" /> Social Destinations</span>
             </div>
 
-            <div className="space-y-2">
+            <div className="divide-y divide-border/60">
               {/* Instagram */}
-              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+              <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
                     <InstagramIcon />
@@ -705,14 +699,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {instagramAccounts.length > 0 ? (
                   <button
                     onClick={() => handleDisconnectAccount(instagramAccounts[0])}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('instagram')}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
                   >
                     Connect
                   </button>
@@ -720,7 +714,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </div>
 
               {/* Facebook */}
-              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+              <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
                     <FacebookIcon />
@@ -735,14 +729,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {facebookAccounts.length > 0 ? (
                   <button
                     onClick={() => handleDisconnectAccount(facebookAccounts[0])}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('facebook')}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
                   >
                     Connect
                   </button>
@@ -750,7 +744,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </div>
 
               {/* LinkedIn */}
-              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+              <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
                     <LinkedInIcon />
@@ -765,14 +759,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {linkedinAccount ? (
                   <button
                     onClick={() => handleDisconnectAccount(linkedinAccount)}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('linkedin')}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
                   >
                     Connect
                   </button>
@@ -780,7 +774,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </div>
 
               {/* X (Twitter) */}
-              <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+              <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
                     <XIcon />
@@ -795,14 +789,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {twitterAccount ? (
                   <button
                     onClick={() => handleDisconnectAccount(twitterAccount)}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('twitter')}
-                    className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
                   >
                     Connect
                   </button>
@@ -812,13 +806,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 5. PER-USER GEMINI API KEY */}
-        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sparkles size={17} className="text-primary" />
-              <h2 className="text-base font-semibold tracking-tight text-text-main">Gemini AI Key</h2>
-            </div>
+        {/* 5. PER-USER GEMINI API KEY — flat section; the status chip carries the
+            state, no helper copy or wrapping card */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary flex items-center gap-1.5">
+              <Sparkles size={13} className="text-text-muted" />
+              Gemini AI Key
+            </h2>
             {geminiStatus.configured ? (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border chip-success">
                 <span className="w-1.5 h-1.5 rounded-full bg-current" />
@@ -831,10 +826,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             )}
           </div>
 
-          <p className="text-[11px] text-text-muted leading-relaxed">
-            For clip highlight detection · Encrypted in cloud vault
-          </p>
-
           {geminiStatus.configured ? (
             <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
               <div className="flex items-center gap-2 min-w-0">
@@ -843,7 +834,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </div>
               <button
                 onClick={handleDeleteGeminiKey}
-                className="px-2.5 py-1.5 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors"
+                className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
               >
                 Remove
               </button>
@@ -867,13 +858,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 <button
                   onClick={handleSaveGeminiKey}
                   disabled={isSavingGemini || !geminiKeyInput.trim()}
-                  className="flex-1 min-h-[40px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-50"
+                  className="flex-1 min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-50"
                 >
                   {isSavingGemini ? 'Saving...' : 'Save Gemini Key'}
                 </button>
                 <button
                   onClick={() => { setShowGeminiInput(false); setGeminiKeyInput(''); setGeminiError(null); }}
-                  className="min-h-[40px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm text-text-secondary active:scale-[0.98]"
+                  className="min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm text-text-secondary active:scale-[0.98]"
                 >
                   Cancel
                 </button>
@@ -890,13 +881,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           )}
         </section>
 
-        {/* 6. UPLOADS — network behavior toggle */}
-        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-2.5">
-          <h2 className="text-sm font-semibold tracking-tight text-text-main">Uploads</h2>
+        {/* 6. UPLOADS — network behavior toggle, flat row */}
+        <section className="space-y-2.5">
+          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Uploads</h2>
 
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <span className="flex items-center gap-2 text-xs font-medium text-text-main">
+              <span className="flex items-center gap-2 text-sm font-medium text-text-main">
                 <Wifi size={14} className="text-text-muted" />
                 Wi-Fi only upload
               </span>
@@ -925,18 +916,16 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 7. STORAGE */}
-        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-3.5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold tracking-tight text-text-main">Storage</h2>
-          </div>
+        {/* 7. STORAGE — flat section; usage bars are the content, no wrap card */}
+        <section className="space-y-3.5">
+          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Storage</h2>
 
           {/* Device Local Storage */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs text-text-secondary">
                 <Smartphone size={13} className="text-text-muted" />
-                Device buffer
+                Device storage
               </span>
               <span className="text-[11px] font-mono tabular-nums text-text-muted">
                 {storageInfo?.available && Number.isFinite(storageInfo.freeGb) && Number.isFinite(storageInfo.totalGb)
@@ -972,7 +961,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs text-text-secondary">
                 <Cloud size={13} className="text-text-muted" />
-                Cloud space (Account)
+                Cloud storage
               </span>
               <span className="text-[11px] font-mono tabular-nums text-text-muted">
                 {cloudStorage
@@ -996,7 +985,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                   />
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-text-muted">
-                  <span>{cloudStorage.percentUsed}% used · R2 & Cloud highlights</span>
+                  <span>{cloudStorage.percentUsed}% used · Cloud files</span>
                   {cloudStorage.percentUsed >= 90 && (
                     <span className="text-danger font-medium">Near limit</span>
                   )}
@@ -1010,11 +999,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 8. APP UPDATES & ABOUT */}
-        <section className="rounded-2xl bg-surface border border-border p-3.5 space-y-3.5">
+        {/* 8. APP UPDATES & ABOUT — flat section; status banners carry the color */}
+        <section className="space-y-3.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold tracking-tight text-text-main">App Updates</h2>
+              <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">App Updates</h2>
               <span className="text-[11px] font-mono tabular-nums text-text-muted px-2 py-0.5 rounded-full bg-surface-2 border border-border">
                 v{appVersion.versionName} ({appVersion.versionCode})
               </span>
@@ -1090,7 +1079,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               <button
                 onClick={handleCheckUpdates}
                 disabled={isCheckingUpdate}
-                className="min-h-[36px] px-3 rounded-lg bg-surface-3 hover:bg-surface-3/80 border border-border text-xs text-text-main flex items-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-50"
+                className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-3/80 border border-border text-xs text-text-main flex items-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-50"
               >
                 <RefreshCw size={12} className={isCheckingUpdate ? 'animate-spin' : ''} />
                 <span>Check Again</span>
@@ -1104,7 +1093,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               </div>
               <button
                 onClick={handleCheckUpdates}
-                className="min-h-[36px] px-3 rounded-lg bg-surface-2 border border-border text-xs text-text-main active:scale-[0.98] transition-all"
+                className="min-h-[44px] px-3 rounded-lg bg-surface-2 border border-border text-xs text-text-main active:scale-[0.98] transition-all"
               >
                 Retry
               </button>
