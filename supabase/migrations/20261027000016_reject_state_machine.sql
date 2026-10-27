@@ -28,6 +28,10 @@ create unique index if not exists uq_clip_commands_live_kind
   where status in ('pending','claimed');
 
 -- ----------------------------------------------------------------- enqueue --
+-- Return shape grows (command_id, state, purge_after): Postgres refuses
+-- CREATE OR REPLACE across a changed row type (SQLSTATE 42P13), so the
+-- v1.4.0-alpha function is dropped first. Grants are re-issued below.
+drop function if exists public.cloud_enqueue_clip_command(uuid, text, text, jsonb);
 create or replace function public.cloud_enqueue_clip_command(
   p_user_id uuid, p_local_clip_id text, p_kind text, p_payload jsonb)
 returns table (command_id uuid, state text, purge_after timestamptz)
