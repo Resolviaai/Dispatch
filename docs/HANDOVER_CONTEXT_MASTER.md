@@ -1,7 +1,7 @@
 # Dispatch Master Architecture & Agent Handover Constitution
 > **Target Audience:** Next Agent (`Z code GLM 5.3 flash`) / Engineering Lead  
 > **Repository:** `c:\CODE\Dispatch` (`https://github.com/Resolviaai/Dispatch`)  
-> **Last Updated Release:** `v1.2.16-alpha` (Android `versionCode: 44`)  
+> **Last Updated Release:** `v1.3.0-alpha` (Android `versionCode: 45`)  
 > **Author:** Antigravity (Google DeepMind Pair Programming Assistant)  
 > **Date:** October 27, 2026
 
@@ -131,6 +131,23 @@ Every change to the mobile web frontend (`frontend/src/...`) and Android views m
 - **Status Correction**: In `RecordingsScreen.tsx`, `fetchClips` previously only ran when `pcHost && pcStatus.online`. When PC was offline, `clips` array was empty, so native recording sessions were stuck at status `"Queued"`. Added cloud fallback to `${WORKER_BASE}/clips`. Sessions now calculate `clipCount > 0` and correctly transition to status **`Ready`**.
 - **Session Thumbnails**: Added `thumbnailUrl` fallback to `UnifiedSession`. If YouTube ID is not yet synced, the session card displays `sessClips[0].thumbnail_url`.
 - **YouTube Failed Jobs**: Clarified why the two YouTube URLs in Screenshot 4 failed in cloud worker: the YouTube video visibility returned `'unknown'` / private, requiring public/unlisted visibility.
+
+---
+
+## 5b. Session Forensic History: v1.3.0-alpha (2026-10-27)
+
+### D. Optimistic Reject & Caption Timeline Resilience
+- **ClipsScreen**: reject now removes the clip instantly (`optimisticRejectIdsRef`), restores it on failure, 12&nbsp;s abort timeout with list re-download; cloud-only reject shows "Connect to your PC" notice; confirmation dialog text shortened (44px buttons).
+- **db.py `reject_clip`**: idempotent — a repeat request on an already-rejected clip returns success without duplicate preference records; `app.py` maps a missing clip to real 404.
+- **CaptionDock / StudioWorkstation / ClipsScreen**: timeline stays mounted while captions load (10&nbsp;s timeout, retry path, cloud-mode explainer) instead of a stuck full-panel spinner.
+
+### E. Direct Phone-to-YouTube Cloud Upload Sessions
+- **cloud-worker** new endpoints: `POST /youtube/upload-sessions` (resumable upload init via raw-vault refresh token), `POST /youtube/uploads/lookup`, `POST /youtube/videos/status` (processing tracker). Worker `tsc` OK, 38/38 tests pass.
+- **PairingManager**: encrypted `dispatch_cloud_secure` prefs for short-lived cloud JWT; `rawVaultAccountId` + cloud-session marker APIs.
+- **DispatchNativeBridge / CameraScreen / App**: native emits `recording_stopped` / `recording_stop_failed`; stop button shows finalizing state (disabled) and navigates to Sessions on completion.
+
+### F. Open Item (needs user input)
+- A video that finished YouTube processing still shows **Failed** locally. Waiting on the exact "Processing Issue" text from the failed session's detail view; two unexplained red YouTube entries likely = same video via two URL formats or a private/unlisted visibility gate.
 
 ---
 

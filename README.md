@@ -9,7 +9,7 @@
 
 Dispatch turns long speaking or work sessions into short, reviewable videos. It has two input routes: recording in the Android app, or submitting an existing YouTube link. Video processing and rendering are designed to run on the Windows PC; Android records, stores, and uploads Route A segments.
 
-**Current source version:** Android 1.2.16 (version code 44). A version number or successful build is not proof of live-service or physical-phone behavior. Check the current source and verification records before relying on older status claims.
+**Current source version:** Android 1.3.0 (version code 45). A version number or successful build is not proof of live-service or physical-phone behavior. Check the current source and verification records before relying on older status claims.
 
 ## How the workflow works
 
