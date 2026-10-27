@@ -40,7 +40,11 @@ export interface SessionGroup {
   segments: RecordingItem[];
   clipCount: number;
   approvedClipCount: number;
-  status: 'UPLOADED_TO_YOUTUBE' | 'PROCESSING' | 'QUEUED_FOR_UPLOAD' | 'FAILED_RETRY' | 'UPLOADING';
+  /**
+   * Raw native segment status string (FAILed_*, UPLOADING, PROCESSING, ...).
+   * Drives per-session badges; session-level label is derived from this.
+   */
+  status: string;
   youtubeVideoId?: string;
 }
 
@@ -52,6 +56,8 @@ export interface UnifiedSession {
   totalDuration: number;
   totalBytes: number;
   status: 'ready' | 'processing' | 'queued' | 'failed' | 'uploading';
+  /** Raw native status behind a 'failed' session, e.g. FAILED_YOUTUBE_PROCESSING. */
+  failureStatus?: string | undefined;
   clipCount: number;
   youtubeVideoId?: string;
   videoUrl?: string;
@@ -253,9 +259,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       let sessionStatus = 'QUEUED_FOR_UPLOAD';
       if (statuses.some(st => st.startsWith('FAILED_') || st.startsWith('ERROR_'))) {
         sessionStatus = statuses.find(st => st.startsWith('FAILED_') || st.startsWith('ERROR_'))!;
-      } else if (statuses.some(st => st === 'UPLOADING' || st === 'WAITING_FOR_YOUTUBE')) {
+      } else if (statuses.some(st => st === 'UPLOADING')) {
         sessionStatus = 'UPLOADING';
-      } else if (statuses.some(st => st === 'PROCESSING' || st === 'UPLOADED_TO_YOUTUBE' || st === 'PROCESSED_ON_YOUTUBE')) {
+      } else if (statuses.some(st => st === 'PROCESSING' || st === 'UPLOADED_AWAITING_PROCESSING' || st === 'UPLOADED_TO_YOUTUBE' || st === 'PROCESSED_ON_YOUTUBE')) {
         sessionStatus = 'PROCESSING';
       } else if (statuses.every(st => st === 'VERIFIED_BY_LAPTOP')) {
         sessionStatus = 'VERIFIED_BY_LAPTOP';
@@ -340,15 +346,19 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
       const allStatuses = ns.segments.map(s => s.status);
       let status: UnifiedSession['status'] = 'queued';
+      let failureStatus: string | null = null;
       if (clipCount > 0) {
         status = 'ready';
-      } else if (allStatuses.some(s => s.startsWith('FAILED_') || s.startsWith('ERROR_') || s === 'FAILED_RETRY')) {
+      } else if (allStatuses.some(st => st.startsWith('FAILED_') || st.startsWith('ERROR_'))) {
+        failureStatus = allStatuses.find(st => st.startsWith('FAILED_') || st.startsWith('ERROR_')) || null;
         status = 'failed';
-      } else if (allStatuses.some(s => s === 'UPLOADING' || s === 'WAITING_FOR_YOUTUBE')) {
+      } else if (allStatuses.some(st => st === 'UPLOADING' || st === 'WAITING_FOR_YOUTUBE')) {
         status = 'uploading';
-      } else if (allStatuses.some(s => s === 'PROCESSING' || s === 'UPLOADED_TO_YOUTUBE' || s === 'PROCESSED_ON_YOUTUBE')) {
+      } else if (allStatuses.some(st => st === 'PROCESSING' || st === 'UPLOADED_AWAITING_PROCESSING' || st === 'UPLOADED_TO_YOUTUBE' || st === 'PROCESSED_ON_YOUTUBE')) {
+        // UPLOADED_AWAITING_PROCESSING previously fell through to 'queued' forever;
+        // it is a real processing state and must read as such.
         status = 'processing';
-      } else if (allStatuses.every(s => s === 'VERIFIED_BY_LAPTOP')) {
+      } else if (allStatuses.every(st => st === 'VERIFIED_BY_LAPTOP')) {
         status = 'ready';
       } else {
         status = 'queued';
@@ -362,6 +372,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         totalDuration: ns.totalDuration,
         totalBytes: ns.totalBytes,
         status,
+        failureStatus: failureStatus ?? undefined,
         clipCount,
         youtubeVideoId: ytId,
         videoUrl: ns.segments[0]?.videoUrl,
@@ -613,10 +624,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs space-y-2">
               <div className="flex items-center gap-2 font-semibold text-danger">
                 <AlertCircle size={15} />
-                <span>Processing Issue</span>
+                <span>{s.failureStatus === 'FAILED_YOUTUBE_PROCESSING' ? 'YouTube Processing Failed' : 'Processing Issue'}</span>
               </div>
               <p className="text-[11px] text-text-secondary leading-relaxed">
-                {s.errorMessage || 'This video could not be processed. Tap below to retry.'}
+                {s.errorMessage || (s.failureStatus === 'FAILED_YOUTUBE_PROCESSING'
+                  ? 'The upload reached your channel, but YouTube could not post-process the media (unsupported codec or corrupt file). Retrying re-sends it from the phone.'
+                  : 'This video could not be processed. Tap below to retry.')}
               </p>
               <button
                 type="button"
