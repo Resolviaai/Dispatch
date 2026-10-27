@@ -97,8 +97,11 @@ def render_clip(
                 track = CaptionTrack.from_dict(json.loads(existing_cap_json))
                 export_to_ass(track, ass_path)
             except Exception as e:
-                logger.warning("Failed to export existing CaptionTrack for clip %s: %s", clip_id, e)
-                ass_path = None
+                logger.error("Failed to export existing CaptionTrack for clip %s: %s", clip_id, e)
+                ass_path.unlink(missing_ok=True)
+                # Fail loudly: a corrupted/unsupported saved track must surface as a
+                # failed render, never as a silent caption-less export.
+                raise RuntimeError(f"Existing caption export failed: {e}") from e
         elif segments:
             # Remap subtitle timestamps if silence cuts occurred
             active_segments = remap_timestamps_for_silence_cuts(segments, start_time, end_time, cuts) if has_silence_cuts else segments
@@ -123,8 +126,11 @@ def render_clip(
                 if render_range_revision is not None and not saved:
                     raise RuntimeError("Clip range changed while captions were being rendered")
             except Exception as e:
-                logger.warning("Failed to generate subtitles via CaptionTrack: %s", e)
-                ass_path = None
+                logger.error("Failed to generate subtitles via CaptionTrack for clip %s: %s", clip_id, e)
+                ass_path.unlink(missing_ok=True)
+                # Fail loudly: caption generation bugs must surface as failed
+                # renders, never as unexplained caption-less exports.
+                raise RuntimeError(f"Caption generation failed: {e}") from e
         else:
             ass_path = None
     else:
