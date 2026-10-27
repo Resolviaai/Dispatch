@@ -415,48 +415,19 @@ class MainActivity : ComponentActivity() {
      * segment files so a half-written recording is never presented as a
      * "LOCAL_FILE_READY" playable asset.
      */
-    private fun resolveRecordingFile(path: String, extRecDir: File, intRecDir: File): File? {
-        return try {
-            val decoded = java.net.URLDecoder.decode(path.trim(), "UTF-8")
-            if (decoded.isEmpty()) return null
-            val name = decoded.replace('\\', '/').trim('/')
-            if (name.isEmpty() || name.contains("..") || name.contains(':')) return null
-            if (name.contains('/') || name.endsWith(".tmp")) return null
-
-            val roots = listOf(extRecDir, intRecDir).map { it.canonicalFile }
-            val target = roots
-                .map { root -> File(root, name).canonicalFile }
-                .firstOrNull { resolved ->
-                    resolved.exists() && resolved.canRead() && !resolved.isDirectory &&
-                        roots.any { root -> resolved.path.startsWith(root.path + File.separator) }
-                }
-            target
-        } catch (e: Exception) {
-            android.util.Log.w("MainActivity", "Recording path refused: $path (${e.message})")
-            null
-        }
-    }
+    private fun resolveRecordingFile(path: String, extRecDir: File, intRecDir: File): File? =
+        com.resolvia.dispatch.sync.RecordingMediaPolicy.resolveRecordingPath(path, extRecDir, intRecDir)
 
     private fun handleMediaFileWithRange(file: File, requestHeaders: Map<String, String>?): WebResourceResponse {
         val fileLength = file.length()
-        val mime = when {
-            file.name.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
-            file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".jpeg", ignoreCase = true) -> "image/jpeg"
-            file.name.endsWith(".png", ignoreCase = true) -> "image/png"
-            else -> "application/octet-stream"
-        }
+        val mime = com.resolvia.dispatch.sync.RecordingMediaPolicy.mediaMimeFor(file.name)
 
         val rangeHeader = requestHeaders?.entries?.firstOrNull { it.key.equals("range", ignoreCase = true) }?.value
+        val parsedRange = com.resolvia.dispatch.sync.RecordingMediaPolicy.parseByteRange(rangeHeader, fileLength)
 
-        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+        if (parsedRange != null) {
+            val (start, end) = parsedRange
             try {
-                val range = rangeHeader.removePrefix("bytes=").trim()
-                val parts = range.split("-", limit = 2)
-                var start = parts[0].toLongOrNull() ?: 0L
-                var end = if (parts.size > 1 && parts[1].isNotBlank()) parts[1].toLongOrNull() ?: (fileLength - 1) else (fileLength - 1)
-                if (end >= fileLength) end = fileLength - 1
-                if (start > end) start = 0L
-
                 val contentLength = end - start + 1
                 val fis = FileInputStream(file)
                 fis.channel.position(start)
