@@ -258,6 +258,57 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
             except Exception as e:
                 logger.debug("Could not sync window transcripts for %s: %s", clip_id, e)
 
+        # Stage Thumbnail to R2 (if exists)
+        thumb_path = clip.get("thumbnail_path")
+        if thumb_path and Path(thumb_path).exists() and cloud_clip_id:
+            try:
+                tp = Path(thumb_path)
+                tb_size = tp.stat().st_size
+                if tb_size > 0:
+                    tb_client_token = str(uuid.uuid4())
+                    r_tb = requests.post(
+                        f"{worker_url}/reserve",
+                        headers={
+                            "Authorization": f"Bearer {worker_token}",
+                            "X-Dispatch-User-Id": user_id,
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "kind": "thumbnail",
+                            "mime_type": "image/jpeg",
+                            "expected_bytes": tb_size,
+                            "local_clip_id": clip_id,
+                            "client_token": tb_client_token,
+                        },
+                        timeout=10,
+                    )
+                    if r_tb.ok:
+                        tb_data = r_tb.json()
+                        with open(tp, "rb") as tf:
+                            requests.put(tb_data["upload_url"], data=tf, headers={"Content-Type": "image/jpeg"}, timeout=60)
+                        requests.post(
+                            f"{worker_url}/complete",
+                            headers={
+                                "Authorization": f"Bearer {worker_token}",
+                                "X-Dispatch-User-Id": user_id,
+                                "Content-Type": "application/json",
+                            },
+                            json={"reservation_id": tb_data["reservation_id"]},
+                            timeout=10,
+                        )
+                        requests.patch(
+                            f"{supabase_url}/rest/v1/media_objects?id=eq.{tb_data['media_object_id']}",
+                            headers={
+                                "apikey": supabase_key,
+                                "Authorization": f"Bearer {supabase_key}",
+                                "Content-Type": "application/json",
+                            },
+                            json={"clip_id": cloud_clip_id},
+                            timeout=10,
+                        )
+            except Exception as e:
+                logger.debug("Could not sync thumbnail for %s: %s", clip_id, e)
+
         logger.info("Successfully synced clip %s to Cloudflare R2 & Supabase!", clip_id)
         return True
 

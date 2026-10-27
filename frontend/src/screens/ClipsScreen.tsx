@@ -960,7 +960,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
     ? (!videoFailed && _videoUrl ? _videoUrl : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null))
     : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : (!videoFailed && _videoUrl ? _videoUrl : null));
 
-  const isSourceTimebase = activeVideoUrl === sourceVideoUrl;
+  const isSourceTimebase = Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
 
   // Determine whether the container must be 16:9 widescreen or 9:16 vertical
   const isTarget169 = useMemo(() => {
@@ -2750,10 +2750,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           {/* 1. CLEAN VIDEO PLAYER WITH DYNAMIC RESPONSIVE FRAMING: Stable center stage */}
           <div className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden py-1">
             <FramedVideoStage
-              sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
-              videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
-              poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
-              preferRendered={false}
+              sourceVideoUrl={currentClip.source_video_url ? apiUrl(currentClip.source_video_url, pcHost) : (pcHost ? apiUrl(`/api/clips/${currentClip.id}/source`, pcHost) : undefined)}
+              videoUrl={currentClip.video_url ? apiUrl(currentClip.video_url, pcHost) : undefined}
+              poster={currentClip.thumbnail_url ? apiUrl(currentClip.thumbnail_url, pcHost) : undefined}
+              preferRendered={true}
               clipStart={clipStart}
               clipEnd={clipEnd}
               clipDuration={clipDuration}

@@ -654,6 +654,10 @@ export function getApiBaseUrl(pcHost?: string): string {
 }
 
 export function apiUrl(path: string, pcHost?: string): string {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('blob:') || path.startsWith('data:')) {
+    return path;
+  }
   const base = getApiBaseUrl(pcHost);
   if (!base) return path;
   const cleanPath = path.startsWith('/') ? path : `/${path}`;

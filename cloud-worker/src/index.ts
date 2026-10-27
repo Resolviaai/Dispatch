@@ -1221,7 +1221,7 @@ export default {
         const clipMo = activeMedia.find(m => m.clip_id === c.id);
         const clipEw = readyWindows.find(w => String(w.local_clip_id) === localId);
         const ewMo = clipEw ? activeMedia.find(m => m.id === clipEw.media_object_id) : null;
-        const thumbMo = activeMedia.find(m => m.clip_id === c.id && m.kind === "thumbnail");
+        const thumbMo = activeMedia.find(m => (m.clip_id === c.id || m.clip_id === localId) && m.kind === "thumbnail");
 
         let videoUrl: string | undefined = undefined;
         let editWindowUrl: string | undefined = undefined;
@@ -1253,7 +1253,7 @@ export default {
           range_revision: Number(c.range_revision || 0),
           created_at: c.cloud_updated_at,
           video_url: videoUrl,
-          source_video_url: videoUrl,
+          source_video_url: undefined,
           thumbnail_url: thumbUrl,
           edit_window_url: editWindowUrl,
           edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
