@@ -65,6 +65,7 @@ from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglis
 from dispatch.sync.receiver import router as sync_router
 
 from dispatch.sync.receiver import is_trusted_localhost
+from dispatch.cloud.sync import import_cloud_captions_for_clip
 
 logger = logging.getLogger("dispatch.web")
 _CLIP_MUTATION_LOCKS: Dict[str, Any] = {}
@@ -1227,6 +1228,19 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
         return {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail=f"Clip cannot be approved from status '{clip.get('status')}'")
+
+    # Cloud caption reconciliation: the phone may have saved newer caption
+    # edits in Dispatch Cloud while this PC was offline. Pull them (monotonic
+    # revision guard, ownership-checked) BEFORE this render decides what
+    # caption data is authoritative, so an offline edit can never be silently
+    # skipped by the final render. Never fatal: on cloud errors the local
+    # state remains what it was.
+    try:
+        import_cloud_captions_for_clip(clip_id)
+        clip = db.get_clip_by_id(clip_id) or clip
+    except Exception as e:
+        logger.warning("Cloud caption reconciliation before approve failed for %s: %s", clip_id, e)
+
     current_revision = int(clip.get("range_revision") or 0)
     if payload.range_revision is not None and payload.range_revision != current_revision:
         raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")

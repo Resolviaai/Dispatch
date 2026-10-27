@@ -1507,12 +1507,15 @@ export default {
           edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
           edit_window_end: clipEw ? Number(clipEw.window_end) : undefined,
           captions: clipEw ? buildCloudCaptions(c, clipEw) : undefined,
+          captions_revision: Number(c.caption_revision || 0),
           is_cloud: true,
         };
       };
 
-      // Clips carrying a live reject command stay hidden until the PC applies
-      // or the user restores them, even while their PC is offline.
+      // Durable tombstones live on clips_cloud itself (status='rejected' +
+      // reject_purge_after stamped at request time), so a hidden clip cannot
+      // reappear after the PC acknowledges the reject command. The live-command
+      // lookup remains as belt-and-braces for rows that predate this contract.
       const tombstoned = new Set<string>();
       try {
         const cmdRes = await rpcRaw(env, "cloud_list_live_clip_commands", { p_user_id: user.userId });
@@ -1525,12 +1528,15 @@ export default {
         // Filtering is best-effort; clips still render if lookup fails.
       }
 
+      const isHiddenByReject = (c: Record<string, unknown>) =>
+        tombstoned.has(String(c.local_clip_id)) || c.status === "rejected";
+
       const readyRaw = rawClips
         .filter(c => c.status === "ready_review" || c.status === "ready")
-        .filter(c => !tombstoned.has(String(c.local_clip_id)));
+        .filter(c => !isHiddenByReject(c));
       const approvedRaw = rawClips
         .filter(c => c.status === "approved" || c.status === "published")
-        .filter(c => !tombstoned.has(String(c.local_clip_id)));
+        .filter(c => !isHiddenByReject(c));
 
       const ready = await Promise.all(readyRaw.map(c => mapClipItem(c, "ready")));
       const recent_approved = await Promise.all(approvedRaw.map(c => mapClipItem(c, String(c.status))));
@@ -1636,26 +1642,35 @@ export default {
 
       // Cloud caption editing: persist an edited offline caption track so it can
       // be reloaded cloud-side without the PC, and so laptops sync it later.
+      // Conflict-safe: the save carries the revision it was prepared against;
+      // stale saves are refused (409) instead of clobbering a newer edit.
       if (request.method === "PUT" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/captions")) {
         const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/captions".length));
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
-        const body = await readJson<{ track?: unknown; captions?: unknown }>(request);
+        const body = await readJson<{ track?: unknown; captions?: unknown; base_revision?: number }>(request);
         const track = body?.track ?? body?.captions ?? null;
         if (!track || typeof track !== "object" || Array.isArray(track)) return json(400, { error: "caption track required" });
-        const payloadSize = JSON.stringify(track).length;
-        if (payloadSize > 256 * 1024) return json(413, { error: `caption track too large (${payloadSize} bytes)` });
         try {
-          await rpc(env, "cloud_put_clip_captions", { p_user_id: userId, p_local_clip_id: localClipId, p_caption: track });
+          const result = await rpc<{ revision: number; conflict: boolean }>(env, "cloud_put_clip_captions", {
+            p_user_id: userId,
+            p_local_clip_id: localClipId,
+            p_caption: track,
+            p_base_revision: typeof body?.base_revision === "number" ? Math.floor(body.base_revision) : null,
+          });
+          if (result?.conflict) {
+            return json(409, { error: "caption_conflict", revision: result.revision });
+          }
+          return json(200, { ok: true, revision: result?.revision ?? 0 });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           return json(502, { error: `failed to save captions: ${msg}` });
         }
-        return json(200, { ok: true });
       }
 
-      // Offline Reject: queues a durable command (24h grace enforced by the
-      // PC when it drains). Undo/restore voids the pending reject, or queues a
-      // restore once it has already been applied.
+      // Offline Reject: tombstones the cloud row durably (status='rejected',
+      // purge_after = request time + 24h) and queues a command for the PC.
+      // Undo/restore voids a PENDING reject instantly, or queues a durable
+      // restore for a reject the PC has already claimed.
       if (request.method === "POST"
         && (url.pathname.startsWith("/clips/") && url.pathname.slice("/clips/".length).split("/")[1] === "reject"
           || url.pathname.startsWith("/clips/") && url.pathname.slice("/clips/".length).split("/")[1] === "restore")) {
@@ -1664,13 +1679,18 @@ export default {
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
         const body = await readJson<{ reason?: string }>(request);
         try {
-          const queued = await rpc<{ command_id: string; state: string }>(env, "cloud_enqueue_clip_command", {
+          const queued = await rpc<{ command_id: string; state: string; purge_after: string | null }>(env, "cloud_enqueue_clip_command", {
             p_user_id: userId,
             p_local_clip_id: localClipId,
             p_kind: kind,
             p_payload: kind === "reject" ? { reason: typeof body?.reason === "string" ? body.reason.slice(0, 500) : "Rejected from mobile review" } : {},
           });
-          return json(200, { ok: true, command_id: queued.command_id, state: queued.state });
+          return json(200, {
+            ok: true,
+            command_id: queued.command_id,
+            state: queued.state,
+            purge_after: queued.purge_after,
+          });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           return json(502, { error: `failed to queue command: ${msg}` });
@@ -1709,6 +1729,76 @@ export default {
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           return json(502, { error: `ack failed: ${msg}` });
+        }
+      }
+
+      // PC post-grace purge of cloud-rendered assets for a tombstoned clip.
+      // Owner-validated and idempotent: only media_objects whose clip_id points
+      // at THIS user's cloud clip are touched (rendered video + thumbnail).
+      // Edit-window proxies and other sessions' assets are deliberately NOT
+      // deleted — a reject never removes the source recording.
+      const purgeMatch = url.pathname.match(/^\/sync\/clips\/([^/]+)\/purge-media$/);
+      if (request.method === "POST" && purgeMatch && request.headers.get("X-Dispatch-User-Id")) {
+        const localClipId = decodeURIComponent(purgeMatch[1]);
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        let cloudClipId: string | null = null;
+        try {
+          const res = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id,reject_purge_after`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const rows = res.ok ? (await res.json() as Array<{ id: string; reject_purge_after: string | null }>) : [];
+          if (rows.length === 0) return json(404, { error: "clip not found" });
+          cloudClipId = rows[0]?.id ?? null;
+          if (!rows[0]?.reject_purge_after) return json(409, { error: "clip is not tombstoned for purge" });
+        } catch (e) {
+          return json(502, { error: `clip lookup failed: ${e instanceof Error ? e.message : e}` });
+        }
+        if (cloudClipId) {
+          let deleted = 0;
+          let remaining = 0;
+          try {
+            const res = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&clip_id=eq.${cloudClipId}&status=in.(active,deletion_pending)&select=id,kind,status,staging_key,final_key`,
+              { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+            );
+            const objs = res.ok ? (await res.json() as Array<{ id: string; kind: string; status: string; staging_key: string | null; final_key: string | null }>) : [];
+            if (!Array.isArray(objs)) return json(502, { error: "media lookup failed" });
+            for (const obj of objs) {
+              let r2Failed = false;
+              for (const key of [obj.final_key, obj.staging_key]) {
+                if (!key) continue;
+                try {
+                  await env.BUCKET.delete(key);
+                } catch {
+                  r2Failed = true; // retried on the next PC sweep; token retry-safe
+                }
+              }
+              if (r2Failed) {
+                if (obj.status !== "deletion_pending") {
+                  await rpc(env, "cloud_mark_deletion", { p_media_id: obj.id }).catch(() => {});
+                }
+                remaining++;
+                continue; // confirm deletion only once R2 accepts
+              }
+              // Deletion pipeline: active → deletion_pending → deleted.
+              // (cloud_confirm_deletion refuses to confirm an 'active' object.)
+              try {
+                await rpc(env, "cloud_mark_deletion", { p_media_id: obj.id });
+              } catch {
+                // Object may already be deletion_pending from an earlier sweep.
+              }
+              try {
+                await rpc(env, "cloud_confirm_deletion", { p_media_id: obj.id });
+                deleted++;
+              } catch {
+                remaining++; // retried by the next PC sweep
+              }
+            }
+          } catch (e) {
+            return json(502, { error: `purge failed: ${e instanceof Error ? e.message : e}` });
+          }
+          return json(200, { purged: deleted, remaining, cloud_clip_id: cloudClipId });
         }
       }
 

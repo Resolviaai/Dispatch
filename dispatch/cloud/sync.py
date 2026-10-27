@@ -77,6 +77,30 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
     }
     status = status_map.get(status_raw, "ready_review")
 
+    # Tombstone guard: if Dispatch Cloud still holds a durable reject
+    # tombstone for this clip while the local row is ACTIVE, the phone's
+    # offline reject happened after this row's last push. Never let this
+    # metadata refresh resurrect the clip: skip the whole sync (including
+    # any R2 staging) until the cloud state is restored by the user or the
+    # drain applies the tombstone locally.
+    if status != "rejected":
+        try:
+            r_tomb = requests.get(
+                f"{supabase_url}/rest/v1/clips_cloud?user_id=eq.{user_id}"
+                f"&local_clip_id=eq.{clip_id}&select=id,status,reject_requested_at&limit=1",
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+                timeout=8,
+            )
+            tomb_rows = r_tomb.json() if r_tomb.ok else []
+            if tomb_rows and tomb_rows[0].get("status") == "rejected":
+                logger.info(
+                    "Skipping cloud sync for clip %s: cloud row holds an active reject tombstone (requested %s)",
+                    clip_id, tomb_rows[0].get("reject_requested_at"),
+                )
+                return True
+        except Exception as e:
+            logger.debug("Tombstone check failed for clip %s (continuing): %s", clip_id, e)
+
     s_time = float(clip.get("start_time") or 0.0)
     e_time = float(clip.get("end_time") or (s_time + 10.0))
     if e_time <= s_time:
@@ -346,37 +370,115 @@ def _cloud_headers(worker_token: str, user_id: str) -> Dict[str, str]:
     }
 
 
-def apply_clip_command(command: Dict[str, Any]) -> str:
-    """Apply a single queued clip command locally. Returns 'done' or 'voided'.
-    Never raises: unexpected failures surface as 'failed' for retry."""
+def _resolve_drain_user_ids() -> List[str]:
+    """Accounts whose clip commands this PC is authorized to drain.
+
+    Owner set = every account that owns local clips, merged with the cloud
+    profiles registered on this Supabase project. A per-command ownership
+    check still gates every mutation (multi-account PCs cannot cross-apply
+    commands to another account's clips); the profile merge only covers
+    single-profile adoption of legacy clips without a local owner.
+    """
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    ordered: List[str] = []
+
+    # 1. Locally-owned clips are the authoritative set.
+    try:
+        with db.get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT user_id FROM clips "
+                "WHERE user_id IS NOT NULL AND user_id != '' "
+                "ORDER BY user_id"
+            ).fetchall()
+        for r in rows:
+            uid = str(r["user_id"] or "").strip()
+            if uid and uid not in ordered:
+                ordered.append(uid)
+    except Exception as e:
+        logger.warning("drain owner lookup (local clips) failed: %s", e)
+
+    # 2. Registered cloud profiles: covers legacy unowned clips via the
+    # single-profile adoption rule in the DB layer.
+    if supabase_url and supabase_key:
+        try:
+            res = requests.get(
+                f"{supabase_url}/rest/v1/profiles?select=user_id&order=created_at.desc&limit=25",
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+                timeout=5,
+            )
+            if res.ok and res.json():
+                for row in res.json():
+                    uid = str(row.get("user_id") or "").strip()
+                    if uid and uid not in ordered:
+                        ordered.append(uid)
+        except Exception as e:
+            logger.warning("drain owner lookup (profiles) failed: %s", e)
+
+    if not ordered:
+        # Legacy single-user PCs: keep draining for the default account. Every
+        # command is still ownership-checked per-clip at apply time.
+        ordered.append(get_default_user_id())
+    return ordered
+
+
+def _payload_purge_after(payload: Dict[str, Any]) -> Optional[str]:
+    """The 24h deadline MUST be measured from the original user request (the
+    phone enqueues `purge_after` at REQUEST time), not from whenever the PC
+    reconnects; a stale/missing value only exists for pre-0016 commands."""
+    raw = str(payload.get("purge_after") or "").strip()
+    return raw or None
+
+
+def _apply_clip_command(command: Dict[str, Any], context_user_id: Optional[str] = None) -> tuple:
+    """Apply a single queued clip command locally. Returns (verdict, error).
+    verdict: 'done' | 'voided' | 'failed'. Never raises. 'failed' is truthful:
+    the phone/cloud keeps tombstoned state until the PC genuinely resolves the
+    command (a restore whose media is gone must NOT ack as done — the clip
+    cannot resurrect)."""
     kind = command.get("kind")
     clip_id = str(command.get("local_clip_id", ""))
     payload = command.get("payload") or {}
+    if not isinstance(payload, dict):
+        payload = {}
     try:
         if kind == "reject":
-            purge_at = (datetime.now(timezone.utc) + timedelta(seconds=REJECT_PURGE_GRACE_SECONDS)).isoformat()
-            ok = db.soft_reject_clip(clip_id, reason=str(payload.get("reason") or "Rejected from mobile"), purge_at=purge_at)
-            return "done" if ok else "voided"  # unknown clip locally -> nothing to apply
+            purge_at = _payload_purge_after(payload) or (
+                datetime.now(timezone.utc) + timedelta(seconds=REJECT_PURGE_GRACE_SECONDS)
+            ).isoformat()
+            outcome = db.soft_reject_clip(
+                clip_id,
+                reason=str(payload.get("reason") or "Rejected from mobile"),
+                purge_at=purge_at,
+                expected_user_id=context_user_id,
+            )
+            if outcome == "applied":
+                return "done", None
+            if outcome == "denied":
+                return "failed", "account mismatch; command not applied to another user's clip"
+            return "voided", None  # unknown clip locally -> nothing to apply
         if kind == "restore":
-            result = db.restore_rejected_clip(clip_id)
-            # 'gone' means media purged past the grace window — the restore is
-            # a no-op but not a failure; the tombstone row is cleared anyway.
-            return "done"
-        return "voided"
+            outcome = db.restore_rejected_clip(clip_id, expected_user_id=context_user_id)
+            if outcome in ("restored", "kept"):
+                return "done", None
+            if outcome == "denied":
+                return "failed", "account mismatch; command not applied to another user's clip"
+            # 'gone': media purged past the original grace window. The cloud
+            # tombstone MUST stay (media cannot resurrect) — report failure.
+            return "failed", "media purged after grace expiry; clip cannot be restored"
+        return "voided", None
     except Exception as e:
         logger.error("Failed to apply clip command %s: %s", command.get("id"), e)
-        return "failed"
+        return "failed", "local apply error; see PC log"
 
 
-def drain_clip_commands(limit: int = 25) -> int:
-    """Claim queued phone commands from Dispatch Cloud, apply them locally, and
-    acknowledge. Runs every sync cycle; safe to run repeatedly."""
-    worker_url = os.getenv("DISPATCH_WORKER_URL") or "https://dispatch-cloud.resolviaai.workers.dev"
-    user_id = get_default_user_id()
-    worker_token = os.getenv("DISPATCH_WORKER_TOKEN")
-    if not worker_token:
-        return 0
+def apply_clip_command(command: Dict[str, Any], context_user_id: Optional[str] = None) -> str:
+    """Compat wrapper: apply a commanded action and return only the verdict."""
+    verdict, _reason = _apply_clip_command(command, context_user_id)
+    return verdict
 
+
+def _drain_for_user(worker_url: str, worker_token: str, user_id: str, limit: int) -> int:
     applied = 0
     try:
         res = requests.post(
@@ -386,17 +488,20 @@ def drain_clip_commands(limit: int = 25) -> int:
             timeout=15,
         )
         if not res.ok:
-            logger.warning("clip command claim failed: HTTP %s %s", res.status_code, res.text[:150])
+            logger.warning(
+                "clip command claim failed for %s: HTTP %s %s",
+                user_id, res.status_code, res.text[:150],
+            )
             return 0
         commands = res.json().get("commands") or []
         for command in commands:
             command_id = command.get("id")
             if not command_id:
                 continue
-            verdict = apply_clip_command(command)
+            verdict, reason = _apply_clip_command(command, context_user_id=user_id)
             ack_payload = {"command_id": command_id, "result": verdict}
             if verdict == "failed":
-                ack_payload["error"] = "apply failed locally; see PC log"
+                ack_payload["error"] = reason or "apply failed locally; see PC log"
             ack = requests.post(
                 f"{worker_url}/sync/commands/ack",
                 headers=_cloud_headers(worker_token, user_id),
@@ -408,7 +513,140 @@ def drain_clip_commands(limit: int = 25) -> int:
             else:
                 logger.warning("clip command ack failed: HTTP %s", ack.status_code)
     except Exception as e:
-        logger.error("drain_clip_commands failed: %s", e)
+        logger.error("drain_clip_commands(%s) failed: %s", user_id, e)
+    return applied
+
+
+def _flush_cloud_purges(worker_url: str, worker_token: str) -> int:
+    """Post-grace cloud/R2 deletion sweep. The LOCAL purge (files) already ran
+    in purge_expired_rejections; this flush removes the corresponding R2
+    objects + cloud media rows through the owner-validated worker endpoint and
+    marks local confirmation. Failures keep the purge anchor so the next sync
+    cycle retries (idempotent on the worker side)."""
+    flushed = 0
+    for row in db.list_expired_cloud_rejections():
+        owner = str(row.get("user_id") or "").strip()
+        if not owner:
+            logger.warning(
+                "Clip %s expired for cloud purge but has no owner; skipping cloud flush",
+                row["id"],
+            )
+            continue
+        try:
+            res = requests.post(
+                f"{worker_url}/sync/clips/{row['id']}/purge-media",
+                headers=_cloud_headers(worker_token, owner),
+                json={},
+                timeout=30,
+            )
+            if not res.ok:
+                logger.warning(
+                    "cloud purge-media for %s failed: HTTP %s %s",
+                    row["id"], res.status_code, res.text[:120],
+                )
+                continue
+            body = res.json() or {}
+            remaining = int(body.get("remaining") or 0)
+            if remaining:
+                logger.warning(
+                    "cloud purge-media for %s left %d object(s); retrying next cycle",
+                    row["id"], remaining,
+                )
+                continue
+            if db.mark_cloud_media_purged(row["id"]):
+                flushed += 1
+                logger.info("Cloud/R2 assets confirmed purged for clip %s", row["id"])
+        except Exception as e:
+            logger.error("cloud purge-media for %s errored: %s", row["id"], e)
+    return flushed
+
+
+def import_cloud_captions_for_clips(user_ids: Optional[List[str]] = None) -> int:
+    """Cloud-to-PC caption reconciliation: pull phone caption edits saved in
+    the cloud while the PC was offline and apply them under a monotonic
+    revision guard. Returns the number of tracks applied."""
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        return 0
+    if not user_ids:
+        user_ids = _resolve_drain_user_ids()
+
+    applied = 0
+    for user_id in user_ids:
+        try:
+            res = requests.get(
+                f"{supabase_url}/rest/v1/clips_cloud?user_id=eq.{user_id}"
+                "&caption_revision=gt.0&select=local_clip_id,caption_data,caption_revision,range_revision",
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+                timeout=10,
+            )
+            if not res.ok:
+                logger.warning(
+                    "cloud caption fetch failed for %s: HTTP %s",
+                    user_id, res.status_code,
+                )
+                continue
+            for row in (res.json() or []):
+                track = row.get("caption_data")
+                if not track:
+                    continue
+                outcome = db.import_cloud_caption_data(
+                    str(row.get("local_clip_id") or ""),
+                    json.dumps(track, ensure_ascii=False) if not isinstance(track, str) else track,
+                    int(row.get("caption_revision") or 0),
+                    expected_user_id=user_id,
+                    cloud_range_revision=int(row.get("range_revision") or 0) or None,
+                )
+                if outcome in ("applied", "stale", "unknown", "invalid"):
+                    if outcome == "applied":
+                        applied += 1
+                else:
+                    logger.warning(
+                        "cloud caption import for clip %s denied: owner mismatch with %s",
+                        row.get("local_clip_id"), user_id,
+                    )
+        except Exception as e:
+            logger.error("import_cloud_captions_for_clips(%s) failed: %s", user_id, e)
+    return applied
+
+
+def import_cloud_captions_for_clip(clip_id: str) -> int:
+    """Targeted, consent-free reconciliation used right before a render that
+    depends on this clip (approve). Never throws; returns applied count."""
+    try:
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            return 0
+        owner = str(clip.get("user_id") or "").strip()
+        return import_cloud_captions_for_clips([owner] if owner else None)
+    except Exception as e:
+        logger.error("import_cloud_captions_for_clip(%s) failed: %s", clip_id, e)
+        return 0
+
+
+def drain_clip_commands(limit: int = 25) -> int:
+    """Claim queued phone commands from Dispatch Cloud, apply them locally, and
+    acknowledge. Runs every sync cycle; safe to run repeatedly."""
+    worker_url = os.getenv("DISPATCH_WORKER_URL") or "https://dispatch-cloud.resolviaai.workers.dev"
+    worker_token = os.getenv("DISPATCH_WORKER_TOKEN")
+    if not worker_token:
+        return 0
+
+    applied = 0
+    for user_id in _resolve_drain_user_ids():
+        applied += _drain_for_user(worker_url, worker_token, user_id, limit)
+        # Reconcile phone caption edits saved offline before any dependent
+        # render can start (monotonic guard is inside db.import_cloud_caption_data).
+        try:
+            import_cloud_captions_for_clips([user_id])
+        except Exception as e:
+            logger.error("cloud caption reconciliation for %s failed: %s", user_id, e)
+
+    try:
+        _flush_cloud_purges(worker_url, worker_token)
+    except Exception as e:
+        logger.error("_flush_cloud_purges failed: %s", e)
 
     try:
         db.purge_expired_rejections()

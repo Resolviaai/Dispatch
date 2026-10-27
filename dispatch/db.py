@@ -382,6 +382,10 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN cloud_reject_reason TEXT;")
         if "cloud_rejected_at" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN cloud_rejected_at TIMESTAMP;")
+        if "cloud_caption_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_caption_revision INTEGER NOT NULL DEFAULT 0;")
+        if "cloud_r2_purged_at" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_r2_purged_at TIMESTAMP;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
 
         # Suggestions are immutable candidate metadata. Legacy selected ranges
@@ -861,24 +865,64 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
         return True
 
 
-def soft_reject_clip(clip_id: str, reason: str = "User rejected", purge_at: Optional[str] = None) -> bool:
-    """Cloud-drained REJECT: record negative preference learning + tombstone,
-    but KEEP rendered media for the 24h grace window so a late restore works.
-    Idempotent and no-throw from the caller's perspective (returns False only
-    when the clip no longer exists locally).
+def _ownership_denied(clip_row: Dict[str, Any], expected_user_id: Optional[str]) -> bool:
+    """Server-side authorization for cloud-drained mutations: a command may
+    only touch the local clip whose owner matches the command's account.
+    Multiple profiles on one PC must never cross-mutate each other's clips."""
+    if not expected_user_id:
+        return False  # no auth context (local-only callers keep legacy behavior)
+    clip_user = str(clip_row.get("user_id") or "").strip()
+    return bool(clip_user) and clip_user != expected_user_id
+
+
+def _adopt_owner(cursor, clip_id: str, expected_user_id: Optional[str]) -> None:
+    """Single-profile adoption: bind an unowned legacy clip to the account that
+    produced the first legitimate mutation so future commands are guarded."""
+    if expected_user_id:
+        cursor.execute(
+            "UPDATE clips SET user_id = ? WHERE id = ? AND (user_id IS NULL OR user_id = '')",
+            (expected_user_id, clip_id),
+        )
+
+
+def soft_reject_clip(
+    clip_id: str,
+    reason: str = "User rejected",
+    purge_at: Optional[str] = None,
+    expected_user_id: Optional[str] = None,
+) -> str:
+    """Cloud-drained REJECT (returns 'applied' | 'unknown' | 'denied').
+
+    Records negative preference learning + a durable tombstone keyed to the
+    ORIGINAL request time (`purge_at`), but KEEPS rendered media during the
+    24h grace window so a late restore stays possible (Reject != Delete).
+    Idempotent across duplicate command deliveries.
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
-        clip = cursor.fetchone()
-        if not clip:
-            return False
+        row = cursor.fetchone()
+        if not row:
+            return "unknown"
+        clip = dict(row)
+        if _ownership_denied(clip, expected_user_id):
+            logger.warning(
+                "Reject command for clip %s denied: clip owner %s != command account %s",
+                clip_id, clip["user_id"], expected_user_id,
+            )
+            return "denied"
         if clip["status"] == "rejected" and clip["cloud_reject_purge_at"]:
-            return True  # duplicate command delivery; nothing left to do
+            _adopt_owner(cursor, clip_id, expected_user_id)
+            conn.commit()
+            return "applied"  # duplicate delivery; already tombstoned
+        _adopt_owner(cursor, clip_id, expected_user_id)
         cursor.execute("""
             INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason)
-            VALUES (?, ?, ?, ?, ?)
-        """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason))
+            SELECT ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM rejections WHERE clip_id = ?
+            )
+        """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason, clip_id))
         cursor.execute("""
             UPDATE clips
             SET status = 'rejected',
@@ -893,20 +937,33 @@ def soft_reject_clip(clip_id: str, reason: str = "User rejected", purge_at: Opti
             clip_id,
         ))
         conn.commit()
-        return True
+        return "applied"
 
 
-def restore_rejected_clip(clip_id: str) -> str:
-    """Cloud-drained RESTORE: undo a reject inside the grace window.
-    Returns 'restored', 'kept' (never rejected), or 'gone' (media already purged).
+def restore_rejected_clip(clip_id: str, expected_user_id: Optional[str] = None) -> str:
+    """Cloud-drained RESTORE. Returns 'restored', 'kept' (nothing to undo),
+    'gone' (grace lapsed / media purged — tombstone MUST stay so the clip can
+    not resurrect), or 'denied' (account mismatch).
+
+    Undo inside grace is a FULL reversal: the negative learning record created
+    by the reject is explicitly deleted alongside the tombstone.
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
-        clip = cursor.fetchone()
-        if not clip:
+        row = cursor.fetchone()
+        if not row:
             return "kept"
+        clip = dict(row)
+        if _ownership_denied(clip, expected_user_id):
+            logger.warning(
+                "Restore command for clip %s denied: clip owner %s != command account %s",
+                clip_id, clip["user_id"], expected_user_id,
+            )
+            return "denied"
         if clip["status"] != "rejected" or not clip["cloud_reject_purge_at"]:
+            _adopt_owner(cursor, clip_id, expected_user_id)
+            conn.commit()
             return "kept"
         media_available = bool(clip["video_path"] or clip["thumbnail_path"])
         if media_available:
@@ -918,22 +975,29 @@ def restore_rejected_clip(clip_id: str) -> str:
                     cloud_rejected_at = NULL
                 WHERE id = ?
             """, (clip_id,))
+            cursor.execute("DELETE FROM rejections WHERE clip_id = ?", (clip_id,))
+            _adopt_owner(cursor, clip_id, expected_user_id)
             conn.commit()
             return "restored"
-        # Media already purged; clear the tombstone so the record stops lurking.
+        # Media purged past the grace window. Clear only the tombstone's
+        # reason; keep cloud_reject_purge_at so the R2/cloud flush sweep keeps
+        # retrying until the cloud side confirms actual deletion. The clip
+        # remains hidden ('rejected') — it must not resurrect.
         cursor.execute("""
-            UPDATE clips
-            SET cloud_reject_purge_at = NULL
-            WHERE id = ?
+            UPDATE clips SET cloud_reject_reason = NULL WHERE id = ?
         """, (clip_id,))
+        _adopt_owner(cursor, clip_id, expected_user_id)
         conn.commit()
         return "gone"
 
 
 def purge_expired_rejections(now_truth: Optional[str] = None) -> int:
-    """Permanently remove media for rejected clips whose grace window elapsed.
-    Idempotent, no-throw: files already missing are simply tolerated. Learning
-    records stay untouched (Reject != Delete the learning record).
+    """Local phase of post-grace deletion: permanently remove local rendered
+    media for rejected clips whose ORIGINAL request-time grace window elapsed.
+    Idempotent, no-throw. Learning records stay (Reject feedback survives undo
+    expiry). cloud_reject_purge_at is deliberately KEPT until the cloud/R2
+    flush confirms deletion (mark_cloud_media_purged), so transient R2
+    failures are retried by later sync cycles.
     """
     purged = 0
     try:
@@ -951,9 +1015,11 @@ def purge_expired_rejections(now_truth: Optional[str] = None) -> int:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             for row in rows:
+                had_media = False
                 for file_key in ("video_path", "thumbnail_path"):
                     val = row[file_key]
                     if val:
+                        had_media = True
                         try:
                             p = Path(val)
                             if p.exists() and p.is_file():
@@ -962,15 +1028,123 @@ def purge_expired_rejections(now_truth: Optional[str] = None) -> int:
                         except Exception as e:
                             logger.warning("Failed to purge %s for rejected clip %s: %s", file_key, row["id"], e)
                 cursor.execute("""
-                    UPDATE clips SET video_path = NULL, thumbnail_path = NULL, cloud_reject_purge_at = NULL
+                    UPDATE clips SET video_path = NULL, thumbnail_path = NULL
                     WHERE id = ?
                 """, (row["id"],))
-                purged += 1
-            if purged:
+                if had_media:
+                    purged += 1
+            if rows:
                 conn.commit()
     except Exception as e:
         logger.error("purge_expired_rejections failed: %s", e)
     return purged
+
+
+def list_expired_cloud_rejections(now_truth: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Rejected clips whose grace has elapsed and whose cloud/R2 assets have
+    not yet been confirmed purged. Used by the sync drain to flush cloud side."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, user_id, cloud_reject_purge_at, cloud_r2_purged_at
+                FROM clips
+                WHERE status = 'rejected'
+                  AND cloud_reject_purge_at IS NOT NULL
+                  AND cloud_reject_purge_at <= ?
+                  AND cloud_r2_purged_at IS NULL
+            """, (now_truth or datetime.now(timezone.utc).isoformat(),))
+            return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error("list_expired_cloud_rejections failed: %s", e)
+        return []
+
+
+def mark_cloud_media_purged(clip_id: str) -> bool:
+    """Durable acknowledgement that the cloud/R2 assets of a tombstoned clip
+    are deleted. Clears the purge anchor only once, keeping the status hidden."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE clips
+                SET cloud_r2_purged_at = ?, cloud_reject_purge_at = NULL
+                WHERE id = ? AND status = 'rejected' AND cloud_reject_purge_at IS NOT NULL
+            """, (datetime.now(timezone.utc).isoformat(), clip_id))
+            conn.commit()
+            return cursor.rowcount == 1
+    except Exception as e:
+        logger.error("mark_cloud_media_purged failed: %s", e)
+        return False
+
+
+def import_cloud_caption_data(
+    clip_id: str,
+    caption_json: str,
+    cloud_revision: int,
+    expected_user_id: Optional[str] = None,
+    cloud_range_revision: Optional[int] = None,
+) -> str:
+    """Cloud-to-PC caption reconciliation ('applied' | 'stale' | 'unknown' |
+    'denied' | 'invalid').
+
+    Applies an offline phone caption edit only when its cloud revision is
+    STRICTLY newer than the locally recorded one (monotonic authority). Marks
+    the render stale so previews/approvals cannot serve the old video, and
+    stamps the range revision the track was authored against so a stale-range
+    approval is refused truthfully (409) instead of silently rendering.
+    """
+    try:
+        parsed = json.loads(caption_json) if isinstance(caption_json, (str, bytes)) else caption_json
+    except Exception:
+        return "invalid"
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("groups"), list):
+        return "invalid"
+    try:
+        revision = int(cloud_revision or 0)
+    except Exception:
+        return "invalid"
+    if revision <= 0:
+        return "invalid"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, cloud_caption_revision, range_revision FROM clips WHERE id = ?",
+            (clip_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return "unknown"
+        clip = dict(row)
+        if _ownership_denied(clip, expected_user_id):
+            logger.warning(
+                "Cloud caption import for clip %s denied: clip owner %s != cloud owner %s",
+                clip_id, clip["user_id"], expected_user_id,
+            )
+            return "denied"
+        local_revision = int(clip["cloud_caption_revision"] or 0)
+        if revision <= local_revision:
+            return "stale"
+        timing_warning = parsed.get("timing_warning")
+        _adopt_owner(cursor, clip_id, expected_user_id)
+        cursor.execute("""
+            UPDATE clips
+            SET caption_data = ?,
+                cloud_caption_revision = ?,
+                caption_range_revision = ?,
+                caption_timing_warning = ?,
+                render_stale = 1
+            WHERE id = ?
+        """, (
+            json.dumps(parsed, ensure_ascii=False),
+            revision,
+            int(cloud_range_revision) if cloud_range_revision is not None else int(clip["range_revision"] or 0),
+            str(timing_warning) if timing_warning else None,
+            clip_id,
+        ))
+        conn.commit()
+        logger.info("Imported cloud caption revision %d for clip %s", revision, clip_id)
+        return "applied"
 
 
 def cleanup_expired_published_clips(retention_days: int = 7) -> int:
