@@ -153,7 +153,15 @@ Every change to the mobile web frontend (`frontend/src/...`) and Android views m
 
 ## 5c. Session Forensic History: Root-Cause Remediation (2026-10-27)
 
-Eight reported failures root-caused and fixed in five commits (`93ccba5` … `14c95bc`). **No deployment** was performed — migrations 0014/0015 and the rebuilt worker still need a user-approved deploy.
+Eight reported failures root-caused and fixed in five commits (`93ccba5` … `14c95bc`), then **fully deployed as `v1.4.0-alpha` (version code 46)** on 2026-10-27.
+
+### L. Deployment record (2026-10-27, all verified live)
+- **Supabase migrations** `20261027000014_clips_caption_data.sql` + `20261027000015_clip_commands.sql` applied via the Management API `GET /database/query` (`sbp_` token from root `.env`); verified: `clips_cloud.caption_data` column, `clip_commands` table + 4 RPCs.
+- **Cloudflare Worker** rebuilt and deployed — Version ID `32d9c875-464b-4247-88e2-025cff5c66df` (crontab unchanged). Live probes: invalid-auth requests to `/clips`, `/clips/:id/reject` correctly answer 401 (routes present).
+- **Android release**: `v1.4.0-alpha` (1.4.0 / code 46), signed cert `94f778…3804` verified by `scripts/prepare_release.ps1` (package `com.resolvia.dispatch`).
+- **Release**: tag `v1.4.0-alpha` + commit `aa07812` pushed; GitHub Release published with `Dispatch.apk` (GA digest `sha256:be699f5f…` = local hash) + `update.json` (v1.4.0/code 46).
+- **Download availability verified 200**: GitHub Release asset URL, gh-pages direct mirror `https://resolviaai.github.io/Dispatch/Dispatch.apk` (21,191,527 bytes = manifest size), `update.json` in root + `site/`, landing page (Alpha 1.4.0 pill + links).
+- In-app updater picks `-alpha` releases via `update.json` (`versionCode 46 > installed`), per `test_release_identity.py`/`DispatchUpdateManager` constants.
 
 ### G. Direct YouTube Upload Without PC (Route A credential boundary)
 - **Root cause**: Android worker required `accessToken` (PC-synced OAuth token) before any upload; cloud worker `/youtube/upload-sessions` existed but nothing wired the phone's Supabase JWT to it.
