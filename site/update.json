@@ -1,12 +1,12 @@
-﻿{
+{
     "schemaVersion":  1,
     "packageName":  "com.resolvia.dispatch",
-    "versionCode":  50,
-    "versionName":  "1.5.3",
-    "releaseTag":  "v1.5.3-alpha",
-    "generatedAt":  "2026-10-28T07:48:53Z",
-    "releaseNotes":  "Adds a subtle unsaved-changes dot on the studio Save controls. Unsaved edits are protected; the dot fades once saved. Full notes on the release page.",
+    "versionCode":  51,
+    "versionName":  "1.5.4",
+    "releaseTag":  "v1.5.4-alpha",
+    "generatedAt":  "2026-10-28T17:04:19Z",
+    "releaseNotes":  "Dispatch 1.5.4 alpha build.",
     "apkAsset":  "Dispatch.apk",
-    "apkSizeBytes":  21209328,
-    "apkSha256":  "e8f8260ec947aa5ac61a529ee57cd10d118fc2c0d04e3b01ec7aed2eadccf2e3"
+    "apkSizeBytes":  21210575,
+    "apkSha256":  "61b143d4da72e34aedff84fef9e3eb8d9bf550e65b7f3ef5c52215480307e240"
 }
