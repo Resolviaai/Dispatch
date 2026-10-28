@@ -99,10 +99,35 @@ DEFAULT_PUBLISH_MODE = os.getenv("DISPATCH_PUBLISH_MODE", "private")  # "private
 WEB_HOST = os.getenv("DISPATCH_WEB_HOST", "127.0.0.1")
 WEB_PORT = int(os.getenv("DISPATCH_WEB_PORT", "8000"))
 
+# Dashboard LAN-trust switch (dashboard hardening 2026-10-28, remediation work item D1).
+# "0" (default): unauthenticated local-network (private-IP, non-loopback) callers may
+#   only read approved media streams (clip videos/thumbnails, clip & recording source
+#   renders, filmstrips, font binaries). Every other request requires the paired
+#   device token (x-auth-token) or a Supabase session token.
+# "1": restores legacy full trust for local-network callers (dashboard reachable and
+#   origin-check gated from the LAN). Only enable on private, isolated networks.
+DISPATCH_TRUST_LAN = os.getenv("DISPATCH_TRUST_LAN", "0").strip().lower() in ("1", "true", "yes", "on")
+
+# Request body ceiling enforced by the web middleware (remediation work item D5).
+# Uploads to /api/media/upload, /api/recordings/upload and /api/fonts/import are exempt
+# from the cap itself (they still enforce their own auth/size rules).
+MAX_REQUEST_BODY_BYTES = int(os.getenv("DISPATCH_MAX_BODY_BYTES", str(2 * 1024 * 1024)))
+
+import logging
+
+_logger = logging.getLogger("dispatch.config")
+
 if WEB_HOST not in ("127.0.0.1", "localhost", "::1"):
-    import logging
-    logging.getLogger("dispatch.config").warning(
-        "DISPATCH_WEB_HOST is set to non-loopback address '%s'. Server is exposed to the local network.",
+    _logger.warning(
+        "DISPATCH_WEB_HOST is set to non-loopback address '%s'. Server is exposed to the local network. "
+        "Unauthenticated local-network callers are restricted to read-only media streams while "
+        "DISPATCH_TRUST_LAN is '0'; set DISPATCH_TRUST_LAN=1 only on private networks to restore legacy full LAN trust.",
         WEB_HOST
+    )
+
+if DISPATCH_TRUST_LAN:
+    _logger.warning(
+        "DISPATCH_TRUST_LAN is enabled: local-network callers receive legacy full trust and the dashboard "
+        "is reachable without a paired device token from the local network. Use only on private, isolated networks."
     )
 

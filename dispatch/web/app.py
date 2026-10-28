@@ -33,7 +33,9 @@ from dispatch.config import (
     STORAGE_DIR,
     FONTS_DIR,
     MAX_CLIP_DURATION,
-    MIN_CLIP_DURATION
+    MIN_CLIP_DURATION,
+    MAX_REQUEST_BODY_BYTES,
+    DISPATCH_TRUST_LAN
 )
 from dispatch import db
 from dispatch.video_engine import (
@@ -65,9 +67,14 @@ from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglis
 from dispatch.sync.receiver import router as sync_router
 
 from dispatch.sync.receiver import is_trusted_localhost
-from dispatch.cloud.sync import import_cloud_captions_for_clip
+from dispatch.cloud.sync import import_cloud_captions_for_clip, authorized_pc_owner_ids
 
 logger = logging.getLogger("dispatch.web")
+_BODY_CAP_EXEMPT_PATHS = frozenset({
+    "/api/media/upload",       # D5 exemption: bulk media uploads
+    "/api/recordings/upload",  # D5 exemption: phone recording upload
+    "/api/fonts/import",       # D5 exemption: font import (has its own 20MB cap, D4)
+})
 _CLIP_MUTATION_LOCKS: Dict[str, Any] = {}
 _CLIP_MUTATION_LOCKS_GUARD = threading.Lock()
 
@@ -108,19 +115,18 @@ app = FastAPI(title="Dispatch Dashboard", version="1.0.0")
 ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "http://192.168.0.102:8000",
-    "http://192.168.0.200:8000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://appassets.androidplatform.net",
     "http://appassets.androidplatform.net",
+    "https://dispatch-cloud.resolviaai.workers.dev",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|appassets\.androidplatform\.net)(:\d+)?$",
-    allow_credentials=True,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|appassets\.androidplatform\.net)(:\d+)?$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -128,6 +134,25 @@ app.add_middleware(
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     client_ip = request.client.host if request.client else "unknown"
+
+    # D5 hardening: reject oversized request bodies early. Upload endpoints are exempt
+    # from the cap itself (they still enforce their own auth and file-size rules).
+    content_length = request.headers.get("content-length")
+    if content_length and request.url.path not in _BODY_CAP_EXEMPT_PATHS:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > MAX_REQUEST_BODY_BYTES:
+            logger.warning(
+                "Rejected %s %s from %s: request body %d bytes exceeds the %d-byte request cap",
+                request.method, request.url.path, client_ip, declared_length, MAX_REQUEST_BODY_BYTES
+            )
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body too large: {declared_length} bytes exceeds the {MAX_REQUEST_BODY_BYTES}-byte limit"},
+            )
+
     logger.info("--> [HTTP REQ] %s %s from %s (Origin: %s, Range: %s)",
                 request.method, request.url.path, client_ip,
                 request.headers.get("origin"), request.headers.get("range"))
@@ -143,18 +168,19 @@ app.include_router(sync_router)
 
 
 def get_authenticated_user(request: Request) -> Dict[str, Any]:
-    """Identity boundary: verifies the Supabase JWT from the Authorization header,
-    x-auth-token, or query param against Supabase itself (signature + expiry validated server-side by Supabase).
-    Returns {user_id, email}. Fails closed with 401 for missing/invalid tokens.
-    Loopback dashboard calls keep their existing device-token path."""
+    """Identity boundary: verifies the Supabase JWT from the Authorization header
+    or x-auth-token header against Supabase itself (signature + expiry validated
+    server-side by Supabase). Returns {user_id, email}. Fails closed with 401 for
+    missing/invalid tokens. Loopback dashboard calls keep their existing
+    device-token path. Remediation D3: the legacy `?token=` query-parameter
+    acceptance was removed (no frontend call site consumes it; tokens in URLs leak
+    into logs/history)."""
     auth = request.headers.get("authorization") or ""
     token = None
     if auth.lower().startswith("bearer "):
         token = auth[7:].strip()
     elif request.headers.get("x-auth-token"):
         token = request.headers.get("x-auth-token").strip()
-    elif request.query_params.get("token"):
-        token = request.query_params.get("token").strip()
 
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -181,6 +207,10 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
       If a loopback caller supplies a Supabase Bearer token, resolve and return the user_id.
       Otherwise return None (system/all clips).
     - Non-loopback callers (LAN) authenticate via Supabase session token or paired device token.
+      A valid paired device token (x-auth-token) resolves to this PC's configured owner
+      account id (DISPATCH_PC_OWNER_USER_IDS, first entry — mirrors
+      dispatch/cloud/sync.py:authorized_pc_owner_ids) so phone-originated requests are
+      attributed to the operator instead of "system" (remediation work item D3).
     - If allow_lan_peer is True and caller is on the local network (or loopback), returns None
       when unauthenticated instead of raising 401. This allows media streams and thumbnails
       rendered via standard HTML <img> and <video> tags to load without custom headers.
@@ -188,7 +218,7 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
     client_host = request.client.host if request.client else "unknown"
     if is_trusted_localhost(client_host):
         auth = request.headers.get("authorization") or ""
-        token = auth[7:].strip() if auth.lower().startswith("bearer ") else (request.query_params.get("token") or "")
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         if token:
             try:
                 user = get_authenticated_user(request)
@@ -210,7 +240,8 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
         try:
             from dispatch.sync.receiver import verify_token
             verify_token(device_token)
-            return None
+            owners = authorized_pc_owner_ids()
+            return owners[0] if owners else None
         except HTTPException:
             pass
 
@@ -234,10 +265,84 @@ def require_secure_credential_transport(request: Request, client_host: str) -> N
         )
 
 
+# D1 LAN-trust policy: GET paths a (non-loopback) local-network caller may load
+# WITHOUT a paired device token while DISPATCH_TRUST_LAN is off. These are the
+# media streams consumed by HTML <img>/<video>/<source> tags and CSS @font-face
+# loads, which cannot attach custom headers:
+#   /clips/{filename}                        — rendered clip videos + thumbnails
+#   /api/clips/{clip_id}/source              — original source video (Range HTTP)
+#   /api/recordings/{segment_id}/source      — raw recording chunks (Range HTTP)
+#   /api/clips/{clip_id}/filmstrip           — filmstrip frame strips
+#   /api/fonts/{filename}                    — font binaries for the studio canvas
+#   /api/template/sample-video               — template-editing reference video
+#   /download/dispatch.apk                   — phone first-run APK transfer
+_MEDIA_STREAM_EXACT_PATHS = frozenset({"/api/template/sample-video", "/download/dispatch.apk"})
+_MEDIA_STREAM_SUFFIXES = ("/source", "/filmstrip")
+
+
+def _is_media_stream_get_path(path: str) -> bool:
+    """True when `path` is one of the tokenless read-only media-stream routes."""
+    raw_path = path or ""
+    if raw_path.startswith("/clips/") or raw_path.startswith("/api/fonts/"):
+        return True
+    if raw_path.endswith("/source") or raw_path.endswith("/filmstrip"):
+        return True
+    return raw_path in _MEDIA_STREAM_EXACT_PATHS
+
+
+def _validate_local_network_trust(request: Request, client_host: str) -> None:
+    """Shared Host-header + Origin hygiene for local (loopback or LAN) callers.
+    DNS-rebinding + forged-origin defence; never authenticates on its own."""
+    raw_host = request.headers.get("host", "").strip()
+    parsed_host = raw_host.split(":")[0].strip().lower()
+    if parsed_host and not (
+        parsed_host in ("localhost", "127.0.0.1", "::1", "testserver")
+        or _is_local_network_peer(parsed_host)
+    ):
+        logger.warning("Rejected request to %s: untrusted host header '%s'", request.url.path, raw_host)
+        raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
+
+    origin_header = request.headers.get("origin", "").strip()
+    if origin_header:
+        try:
+            split_origin = urllib.parse.urlsplit(origin_header)
+            origin_scheme = split_origin.scheme.lower()
+            origin_hostname = (split_origin.hostname or "").lower()
+            origin_port = split_origin.port
+
+            # Allow loopback/testserver origins and local network peer origins
+            is_valid = (
+                origin_scheme in ("http", "https")
+                and (
+                    origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
+                    or _is_local_network_peer(origin_hostname)
+                )
+                and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
+            )
+            if not is_valid:
+                logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
+                raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
+            logger.warning("Malformed Origin header rejected: %s", origin_header)
+            raise HTTPException(status_code=403, detail="Forbidden: Malformed Origin header")
+
+
 def verify_dashboard_auth(request: Request) -> None:
     """Enforce token validation or secure origin matching.
     Protects mutating endpoints and sensitive routes against unauthorized callers,
     CSRF, and DNS rebinding attacks while allowing first-party Android WebView and PC Studio.
+
+    D1 LAN-trust policy (hardening 2026-10-28):
+    - Explicit credentials win first (paired device token or Supabase session) from
+      any address, any method.
+    - When DISPATCH_TRUST_LAN is off (default): loopback callers keep the legacy
+      full trust (Host/Origin hygiene, then allow); any other private-IP caller is
+      restricted to the read-only media-stream allowlist on GET/HEAD — every
+      mutating request and every non-media GET raises 401.
+    - When DISPATCH_TRUST_LAN is on: legacy full-trust behavior for local-network
+      callers (Host/Origin hygiene, then allow), guarded by a startup warning.
     """
     token = request.headers.get("x-auth-token") or request.headers.get("authorization")
     if token:
@@ -253,60 +358,26 @@ def verify_dashboard_auth(request: Request) -> None:
         except HTTPException:
             pass
 
-    device_token = request.headers.get("x-auth-token")
-    if device_token:
-        try:
-            from dispatch.sync.receiver import verify_token
-            verify_token(device_token)
-            return
-        except HTTPException:
-            pass
-
-    auth_header = request.headers.get("authorization")
-    if auth_header:
-        try:
-            get_authenticated_user(request)
-            return
-        except HTTPException:
-            pass
-
-    # Validate local network callers & origin matching
-    origin_header = request.headers.get("origin", "").strip()
     client_host = request.client.host if request.client else "unknown"
-    if is_trusted_localhost(client_host) or _is_local_network_peer(client_host):
-        raw_host = request.headers.get("host", "").strip()
-        parsed_host = raw_host.split(":")[0].strip().lower()
-        if parsed_host and not (
-            parsed_host in ("localhost", "127.0.0.1", "::1", "testserver")
-            or _is_local_network_peer(parsed_host)
-        ):
-            logger.warning("Rejected request to %s: untrusted host header '%s'", request.url.path, raw_host)
-            raise HTTPException(status_code=403, detail="Forbidden: Untrusted Host header")
+    if is_trusted_localhost(client_host):
+        # Loopback callers keep full legacy trust (Host/Origin hygiene only).
+        _validate_local_network_trust(request, client_host)
+        return
 
-        if origin_header:
-            try:
-                split_origin = urllib.parse.urlsplit(origin_header)
-                origin_scheme = split_origin.scheme.lower()
-                origin_hostname = (split_origin.hostname or "").lower()
-                origin_port = split_origin.port
-
-                # Allow loopback/testserver origins and local network peer origins
-                is_valid = (
-                    origin_scheme in ("http", "https")
-                    and (
-                        origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
-                        or _is_local_network_peer(origin_hostname)
-                    )
-                    and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
+    if _is_local_network_peer(client_host):
+        if not DISPATCH_TRUST_LAN:
+            method = (getattr(request, "method", "GET") or "GET").strip().upper()
+            request_path = (request.url.path or "/")
+            if method not in ("GET", "HEAD") or not _is_media_stream_get_path(request_path):
+                logger.warning(
+                    "Rejected unauthenticated %s %s from local-network peer %s: DISPATCH_TRUST_LAN is disabled; "
+                    "LAN callers may only read approved media streams (pair the device for full access)",
+                    method, request_path, client_host
                 )
-                if not is_valid:
-                    logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
-                    raise HTTPException(status_code=403, detail="Forbidden: Untrusted Origin header")
-            except Exception as e:
-                if isinstance(e, HTTPException):
-                    raise
-                logger.warning("Malformed Origin header rejected: %s", origin_header)
-                raise HTTPException(status_code=403, detail="Forbidden: Malformed Origin header")
+                raise HTTPException(status_code=401, detail="Authentication required for this operation")
+        # Legacy LAN behavior (or allowlisted unauthenticated media stream):
+        # keep Host/Origin hygiene, then allow.
+        _validate_local_network_trust(request, client_host)
         return
 
     raise HTTPException(status_code=401, detail="Authentication required for this operation")
@@ -370,39 +441,6 @@ def _monitor_youtube_auth(process: subprocess.Popen) -> None:
                 _YOUTUBE_AUTH_PROCESS = None
 
 
-def _load_youtube_pairing_credentials() -> Dict[str, str]:
-    """Load only the fields required by the phone uploader; never log their values."""
-    token_path = ROOT_DIR / "youtube_token.json"
-    secrets_path = ROOT_DIR / "client_secrets.json"
-    token_data: Dict[str, Any] = {}
-    client_data: Dict[str, Any] = {}
-    try:
-        if token_path.exists():
-            token_data = json.loads(token_path.read_text(encoding="utf-8"))
-        if secrets_path.exists():
-            secrets_data = json.loads(secrets_path.read_text(encoding="utf-8"))
-            client_data = secrets_data.get("installed") or secrets_data.get("web") or {}
-    except (OSError, json.JSONDecodeError, AttributeError):
-        return {"refresh_token": "", "client_id": "", "client_secret": ""}
-
-    return {
-        "refresh_token": str(token_data.get("refresh_token") or ""),
-        "client_id": str(token_data.get("client_id") or client_data.get("client_id") or ""),
-        "client_secret": str(token_data.get("client_secret") or client_data.get("client_secret") or ""),
-    }
-
-
-def _youtube_credentials_response() -> Dict[str, Any]:
-    credentials = _load_youtube_pairing_credentials()
-    configured = all(credentials.values())
-    from dispatch.sync.receiver import get_auth_token
-    return {
-        "configured": configured,
-        "auth_token": get_auth_token(),
-        **credentials,
-    }
-
-
 def _is_local_network_peer(client_host: str) -> bool:
     if is_trusted_localhost(client_host):
         return True
@@ -427,6 +465,17 @@ class ApproveRequest(BaseModel):
 
 class RejectRequest(BaseModel):
     reason: Optional[str] = "User rejected"
+
+
+class ClipMetadataRequest(BaseModel):
+    """InspectorPane metadata editor save (remediation work item D8).
+    Only reviewable (ready_review) clips accept metadata edits; the save is
+    revision-fenced like every other ready-review mutation."""
+    title: Optional[str] = None
+    hook: Optional[str] = None
+    hashtags: Optional[str] = None
+    platform_targets: Optional[str] = None               # comma-separated, e.g. "youtube,instagram"
+    expected_range_revision: Optional[int] = None        # omit to trust the current revision
 
 
 class TrimClipRequest(BaseModel):
@@ -805,6 +854,7 @@ def clip_render_is_stale(clip: Dict[str, Any]) -> bool:
 @app.get("/api/clips")
 async def list_clips(request: Request):
     """List clips grouped by status with source media URLs and stale render flags."""
+    verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     ready_clips = db.get_clips_for_review(user_id=caller_user_id)
     for c in ready_clips:
@@ -819,11 +869,9 @@ async def list_clips(request: Request):
         c["target_aspect"] = ctx["target_aspect"]
         c["is_render_stale"] = clip_render_is_stale(c)
 
-    # 1. Trigger 7-day storage cleanup for expired local videos (preserves thumbnails!)
-    try:
-        db.cleanup_expired_published_clips(retention_days=7)
-    except Exception as e:
-        logger.warning("Auto-cleanup of expired published clips failed: %s", e)
+    # D7: the 7-day published-clip purge moved to the scheduled janitor in main.py
+    # (daemon thread "dispatch-published-clip-janitor", first sweep 5 min after
+    # boot, then every 6 h). This request-path cleanup flush is gone.
 
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
@@ -1393,6 +1441,51 @@ async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Requ
     if not db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected"):
         raise HTTPException(status_code=404, detail="Clip not found")
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
+
+
+@app.post("/api/clips/{clip_id}/metadata")
+@_serialize_clip_mutation
+async def handle_update_clip_metadata(clip_id: str, payload: ClipMetadataRequest, request: Request):
+    """Persist InspectorPane metadata edits (title/hook/hashtags/platform targets).
+
+    D8: wired to db.update_clip_metadata — enforced ready_review-only and
+    revision-fenced inside the DB helper (approved/rejected/published clips keep
+    their published metadata; stale revisions are refused).
+    """
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+
+    updated = db.update_clip_metadata(
+        clip_id,
+        title=payload.title,
+        hook=payload.hook,
+        hashtags=payload.hashtags,
+        platform_targets=payload.platform_targets,
+        expected_range_revision=payload.expected_range_revision,
+    )
+    if not updated:
+        if clip.get("status") != "ready_review":
+            raise HTTPException(status_code=409, detail="Only reviewable (ready) clips can edit metadata")
+        raise HTTPException(
+            status_code=409,
+            detail="Clip changed while editing (stale range revision); reload the clip and retry"
+        )
+
+    return {
+        "status": "success",
+        "clip_id": clip_id,
+        "saved": {
+            "title": payload.title,
+            "hook": payload.hook,
+            "hashtags": payload.hashtags,
+            "platform_targets": payload.platform_targets,
+        },
+    }
 
 
 @app.get("/api/publisher/outbox")
@@ -2754,13 +2847,45 @@ async def pairing_code_removed():
 
 # --- Embedded HTML Dashboard ---
 
+# D14 (remediation): the dashboard no longer loads Tailwind from cdn.tailwindcss.com
+# (remote code injection vector + offline breakage). The lead-generated precompiled
+# stylesheet is read from DASHBOARD_CSS_PATH and inlined as a <style> block; when the
+# file has not been generated yet the style block is omitted gracefully (page renders
+# unstyled, no crash).
+DASHBOARD_CSS_PATH = Path(__file__).parent / "dashboard.css"
+_TAILWIND_CDN_TAG = '<script src="https://cdn.tailwindcss.com"></script>'
+_DASHBOARD_CSS_PLACEHOLDER = "__DASHBOARD_CSS_INLINE__"
+
+
+def _dashboard_css_style_block() -> str:
+    """Return the precompiled dashboard CSS wrapped in a <style> block (empty when absent)."""
+    if not DASHBOARD_CSS_PATH.exists():
+        return ""
+    try:
+        css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("Could not read %s; serving dashboard without precompiled CSS: %s", DASHBOARD_CSS_PATH, e)
+        return ""
+    if not css.strip():
+        return ""
+    return "<style>\n" + css + "\n</style>"
+
+
+def _apply_dashboard_css(html: str) -> str:
+    """Swap the Tailwind CDN script / CSS placeholder for the inlined stylesheet."""
+    style_block = _dashboard_css_style_block()
+    if _TAILWIND_CDN_TAG in html:
+        return html.replace(_TAILWIND_CDN_TAG, style_block)
+    return html.replace(_DASHBOARD_CSS_PLACEHOLDER, style_block)
+
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dispatch | Autonomous Content Control</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  __DASHBOARD_CSS_INLINE__
   <style>
     body { background-color: #0B0F17; color: #F1F5F9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .surface { background-color: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
@@ -3035,12 +3160,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_home():
-    """Serve the single-page dashboard HTML."""
+    """Serve the single-page dashboard HTML with the precompiled stylesheet inlined (D14)."""
     template_path = Path(__file__).parent / "templates" / "index.html"
     if template_path.exists():
         with open(template_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    return HTMLResponse(content=DASHBOARD_HTML)
+            return HTMLResponse(content=_apply_dashboard_css(f.read()))
+    return HTMLResponse(content=_apply_dashboard_css(DASHBOARD_HTML))
 
 
 # Brand & Favicon Static Assets
@@ -3154,9 +3279,30 @@ async def list_fonts():
     return {"fonts": fonts}
 
 
+_FONT_IMPORT_MAX_BYTES = 20 * 1024 * 1024  # D4: fonts are vector outline data, not video
+
+
 @app.post("/api/fonts/import")
-async def import_custom_font(file: UploadFile = File(...)):
+async def import_custom_font(request: Request, file: UploadFile = File(...)):
     """Validate, register, and save a custom TTF or OTF font file."""
+    verify_dashboard_auth(request)
+
+    # D4 hardening: reject oversized font uploads from Content-Length before the
+    # handler reads them into memory (413 with an explicit, actionable detail).
+    content_length_header = request.headers.get("content-length")
+    if content_length_header:
+        try:
+            declared_length = int(content_length_header)
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > _FONT_IMPORT_MAX_BYTES:
+            logger.warning("Rejected font import from %s: declared %d bytes exceeds the %d-byte cap",
+                           request.client.host if request.client else "unknown", declared_length, _FONT_IMPORT_MAX_BYTES)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Font file too large: {declared_length} bytes exceeds the {_FONT_IMPORT_MAX_BYTES}-byte (20 MB) import limit"
+            )
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing font file")
     
@@ -3167,6 +3313,11 @@ async def import_custom_font(file: UploadFile = File(...)):
     content = await file.read()
     if len(content) < 1024:
         raise HTTPException(status_code=400, detail="Invalid or corrupt font file (file too small)")
+    if len(content) > _FONT_IMPORT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Font file too large: {len(content)} bytes exceeds the {_FONT_IMPORT_MAX_BYTES}-byte (20 MB) import limit"
+        )
     
     # Validate with fontTools
     try:
