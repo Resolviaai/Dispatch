@@ -328,7 +328,7 @@ export const AdminScreen: React.FC<{ pcHost?: string }> = ({ pcHost }) => {
             }`}
           >
             {feedback.isError ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
-            <span dangerouslySetInnerHTML={{ __html: feedback.message }} />
+            <span>{feedback.message}</span>
           </div>
         )}
 

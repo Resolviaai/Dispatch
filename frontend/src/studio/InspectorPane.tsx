@@ -21,6 +21,7 @@ import { ClipItem, IntegrationsStatus, LayoutMode } from './types';
 import { CaptionTrack, StyleConfig, LayoutConfig } from '../captions/types';
 import { StyleSection } from '../captions/applyToAll';
 import { ApplyToAllButton } from '../captions/ApplyToAllButton';
+import { apiUrl, getAuthHeaders } from '../bridge';
 
 interface InspectorPaneProps {
   clip: ClipItem | null;
@@ -120,13 +121,38 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
     });
   };
 
-  const handleSaveMetadataDraft = () => {
-    onUpdateClipMetadata({
+  const handleSaveMetadataDraft = async () => {
+    const clipId = clip?.id;
+    const patch = {
       title: title.trim(),
       hook: hook.trim(),
       hashtags: hashtags.trim(),
       platform_targets: selectedPlatforms.join(','),
-    });
+    };
+    // D8 (audit 2026-10-27): persist through the revision-fenced PC endpoint
+    // BEFORE reflecting locally. A failed save must never advertise success:
+    // revert the draft to the clip's persisted values and skip the saved notice.
+    if (clipId) {
+      try {
+        const res = await fetch(apiUrl(`/api/clips/${clipId}/metadata`), {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ ...patch, expected_range_revision: clip?.range_revision ?? 0 }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        console.warn('Metadata save failed; reverting draft to persisted values:', err);
+        if (clip) {
+          setTitle(clip.title || '');
+          setHook(clip.hook || '');
+          setHashtags(clip.hashtags || '#Shorts #Dispatch');
+          const platforms = (clip.platform_targets || 'youtube').split(',').map(p => p.trim()).filter(Boolean);
+          setSelectedPlatforms(platforms.length > 0 ? platforms : ['youtube']);
+        }
+        return;
+      }
+    }
+    onUpdateClipMetadata(patch);
     setIsSavedNotice(true);
     setTimeout(() => setIsSavedNotice(false), 2000);
   };

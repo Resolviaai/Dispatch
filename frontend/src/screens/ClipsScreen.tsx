@@ -2448,6 +2448,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       groups: captionTrack.groups.filter((grp) => grp.id !== groupId),
     });
     setSelectedGroupId(null);
+    setSaveStatus('unsaved');
   };
 
   const handleDuplicateGroup = (groupId: string) => {
@@ -2473,6 +2474,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       groups: [...captionTrack.groups, duplicated],
     });
     setSelectedGroupId(newId);
+    setSaveStatus('unsaved');
   };
 
   const handleApplyLayoutToAll = (groupId: string) => {
@@ -2509,6 +2511,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const accountsMap = { ...selectedAccountMap };
     const rev = clipToApprove.range_revision || 0;
 
+    // Snapshot pre-approval view state so a failed approve can restore the user's place
+    const previousViewMode = viewMode;
+    const previousSelectedClipId = selectedClipId;
+
+    // Show tactile spinner for one render frame before navigating away
+    setIsSubmitting(true);
+
     // Instant Optimistic State Update:
     const approvedItem: ClipItem = {
       ...clipToApprove,
@@ -2527,19 +2536,34 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setSelectedClipId(null);
     setIsSubmitting(false);
 
+    // Restore a failed approve: clip back to Ready, user back to where they were
+    const restoreToReady = (message: string) => {
+      setApprovedClips((prev) => prev.filter((c) => c.id !== clipToApprove.id));
+      setReadyClips((prev) => (prev.some((c) => c.id === clipToApprove.id) ? prev : [clipToApprove, ...prev]));
+      setViewMode(previousViewMode);
+      setSelectedClipId(previousSelectedClipId);
+      setFeedback(message);
+    };
+
     // Asynchronous background call without blocking UI:
     (async () => {
       try {
         if (trackSnapshot) {
           if (trackSnapshot.clip_id && trackSnapshot.clip_id !== clipToApprove.id) {
             console.error('Refusing to approve: caption track belongs to another clip');
+            restoreToReady('Caption track mismatch: approval cancelled, clip kept in Ready.');
             return;
           }
-          await fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
+          const capRes = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
             method: 'POST',
             headers: getAuthHeaders(),
             body: JSON.stringify(trackSnapshot),
           });
+          if (!capRes.ok) {
+            console.error('Caption save failed before approval:', capRes.status);
+            restoreToReady(`Caption save failed (HTTP ${capRes.status}) — clip kept in Ready review.`);
+            return;
+          }
         }
 
         const res = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/approve`, pcHost), {
@@ -2559,7 +2583,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         if (!res.ok) {
           const err = await res.json().catch(() => null);
           console.error('Approval failed:', err);
-          setFeedback(err?.detail || 'Approval request failed in background');
+          restoreToReady(err?.detail || 'Approval request failed — clip returned to Ready.');
         } else {
           // Poll server for published status & remote_id
           setTimeout(() => { fetchClips(); }, 2000);
@@ -3065,6 +3089,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                             Cloud
                           </span>
                         )}
+                        {/* Uploading shimmer overlay on thumbnail */}
+                        {isUploaded && !isPublished && (
+                          <div className="absolute inset-0 bg-primary/15 flex items-center justify-center">
+                            <span className="w-5 h-5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                          </div>
+                        )}
                         {/* Duration badge — black bg, white text, both themes */}
                         <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
                           {formatDuration(clip.duration)}
@@ -3084,7 +3114,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                           {isPublished ? (
                             !clip.is_cloud_only && <> &middot; {daysLeft}d left</>
                           ) : isUploaded ? (
-                            <> &middot; <span className="text-primary font-medium">Publishing…</span></>
+                            <> &middot; <span className="inline-flex items-center gap-1 text-primary font-medium"><span className="w-2.5 h-2.5 rounded-full border border-primary/30 border-t-primary animate-spin inline-block" /><span>Uploading…</span></span></>
                           ) : null}
                           {clip.is_cloud_only && <> &middot; Cloud only</>}
                         </p>
@@ -3394,21 +3424,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
               if (isClipPublishing) {
                 return (
-                  <section className="w-full space-y-3 pt-1">
-                    <div className="w-full p-4 rounded-2xl bg-surface-100 border border-primary/40 flex flex-col gap-2">
-                      <div className="flex items-center gap-2 text-sm font-semibold text-primary">
-                        <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
-                        <span>Publishing to YouTube Shorts…</span>
+                  <section className="w-full space-y-2.5 pt-1">
+                    <div className="w-full px-3.5 py-3 rounded-2xl bg-surface-100 border border-primary/30 flex items-center gap-3">
+                      <span className="shrink-0 w-5 h-5 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-primary leading-tight">Uploading to YouTube…</p>
+                        <p className="text-[11px] text-text-muted mt-0.5">Rendering captions &amp; sending to your channel</p>
                       </div>
-                      <p className="text-xs text-text-muted leading-relaxed">
-                        Dispatch is rendering your clip with burned-in captions and uploading it to your channel. You can preview the video above while upload completes.
-                      </p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <div className="flex-1 h-1.5 rounded-full bg-surface-200 overflow-hidden">
-                          <div className="h-full bg-primary rounded-full animate-pulse w-3/4" />
-                        </div>
-                        <span className="text-[10px] font-mono text-text-muted">In Progress</span>
-                      </div>
+                    </div>
+                    <div className="w-full h-1 rounded-full bg-surface-200 overflow-hidden">
+                      <div className="h-full w-1/2 bg-primary rounded-full" style={{ animation: 'dispatch-slide 1.4s ease-in-out infinite' }} />
                     </div>
                   </section>
                 );
@@ -4240,7 +4265,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   disabled={isDisabled}
                   className="w-full h-12 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
                 >
-                  <Send size={15} />
+                  {isSubmitting
+                    ? <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                    : <Send size={15} />}
                   <span>{ctaText}</span>
                 </button>
               </>

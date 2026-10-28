@@ -134,9 +134,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     if (pcHost) {
       try {
         const res = await fetch(apiUrl('/api/status', pcHost), {
-          signal: AbortSignal.timeout(2000)
+          signal: AbortSignal.timeout(2000),
+          headers: getAuthHeaders()
         });
-        lanOnline = res.ok;
+        // Any HTTP response proves the PC is reachable; a 401/403 for callers
+        // without a pairing token is still "online" (trust model changed with
+        // the LAN-trust flag on the PC; do not gate reachability on res.ok).
+        lanOnline = true;
       } catch {
         lanOnline = false;
       }

@@ -68,7 +68,7 @@ export const App: React.FC = () => {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch(apiUrl('/api/status', pcHost), { signal: controller.signal });
+        const res = await fetch(apiUrl('/api/status', pcHost), { signal: controller.signal, headers: getAuthHeaders() });
         clearTimeout(timeoutId);
         if (res.ok) {
           if (!isCancelled) setIsPcOnline(true);
@@ -119,7 +119,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     const checkYouTube = async () => {
       try {
-        const res = await fetch(apiUrl('/api/integrations/status', pcHost));
+        const res = await fetch(apiUrl('/api/integrations/status', pcHost), { headers: getAuthHeaders() });
         if (res.ok) {
           const data = await res.json();
           setIsYouTubeConnected(!!data.youtube?.connected);

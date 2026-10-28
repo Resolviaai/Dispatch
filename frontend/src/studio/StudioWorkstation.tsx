@@ -84,6 +84,9 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
   const prevCollapsedStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
   const metadataDraftsRef = useRef<Record<string, Partial<ClipItem>>>({});
+  // D9: unsaved caption-edit tracking (data-loss protection against polling refetch)
+  const captionDirtyClipIdRef = useRef<string | null>(null);
+  const [isCaptionDirty, setIsCaptionDirty] = useState<boolean>(false);
   const clipFetchControllerRef = useRef<AbortController | null>(null);
   const clipFetchSucceededRef = useRef(false);
   const clipListHasItemsRef = useRef(false);
@@ -91,6 +94,13 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // D9: mark local caption edits as unsaved for the currently viewed clip
+  const markCaptionDirty = () => {
+    if (!currentClip) return;
+    captionDirtyClipIdRef.current = currentClip.id;
+    setIsCaptionDirty(true);
   };
 
   // 1. Fetch Clips (preserves local metadata drafts across 6s background polling)
@@ -107,7 +117,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       controller.abort();
     }, 15_000);
     try {
-      const res = await fetch(apiUrl('/api/clips', pcHost), { signal: controller.signal });
+      const res = await fetch(apiUrl('/api/clips', pcHost), { signal: controller.signal, headers: getAuthHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load clips`);
       const data: unknown = await res.json();
       const allClips = parseClipListResponse(data);
@@ -143,8 +153,8 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   const fetchTelemetry = useCallback(async () => {
     try {
       const [resStatus, resInteg] = await Promise.all([
-        fetch(apiUrl('/api/status', pcHost)),
-        fetch(apiUrl('/api/integrations/status', pcHost)),
+        fetch(apiUrl('/api/status', pcHost), { headers: getAuthHeaders() }),
+        fetch(apiUrl('/api/integrations/status', pcHost), { headers: getAuthHeaders() }),
       ]);
       if (resStatus.ok) {
         const sData = await resStatus.json();
@@ -198,6 +208,11 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
     }
 
     const clipId = currentClip.id;
+    // D9: while the user has unsaved caption edits for this clip, skip the
+    // reset/refetch so polling-triggered revisions cannot wipe their work.
+    if (isCaptionDirty && captionDirtyClipIdRef.current === clipId) {
+      return;
+    }
     const controller = new AbortController();
     let timedOut = false;
     let isCurrentClip = true;
@@ -211,7 +226,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
     setCaptionLoadError(null);
     setSelectedGroupId(null);
 
-    fetch(apiUrl(`/api/clips/${clipId}/captions`, pcHost), { signal: controller.signal })
+    fetch(apiUrl(`/api/clips/${clipId}/captions`, pcHost), { signal: controller.signal, headers: getAuthHeaders() })
       .then(async (res) => {
         if (res.status === 404) return { groups: [] };
         if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load captions`);
@@ -224,6 +239,8 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
         setCaptionClipId(clipId);
         setCaptionLoadState(normalized.groups.length > 0 ? 'success' : 'empty');
         setSelectedGroupId(normalized.groups[0]?.id || null);
+        setIsCaptionDirty(false);
+        captionDirtyClipIdRef.current = null;
       })
       .catch((err: unknown) => {
         if (!isCurrentClip || ((err as DOMException)?.name === 'AbortError' && !timedOut)) return;
@@ -369,6 +386,9 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
         delete metadataDraftsRef.current[currentClip.id];
         showToast(`Clip Approved: Queued into Publishing Outbox (${publishMode})`);
         setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, status: 'approved' } : c));
+        // Captions were persisted with the approve payload
+        setIsCaptionDirty(false);
+        captionDirtyClipIdRef.current = null;
       } else {
         showToast(`Approval failed (HTTP ${res.status})`);
       }
@@ -445,7 +465,10 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       });
       if (res.ok) {
         showToast('Captions & Subtitle styling persisted');
+        setIsCaptionDirty(false);
+        captionDirtyClipIdRef.current = null;
       } else {
+        // Failed save keeps isCaptionDirty=true so edits stay protected from refetch
         showToast(`Save captions failed (HTTP ${res.status})`);
       }
     } catch (err: any) {
@@ -511,6 +534,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       ...track,
       groups: updatedGroups,
     });
+    markCaptionDirty();
   };
 
   const handleUpdateTrackLayout = (layoutPatch: Partial<LayoutConfig>) => {
@@ -528,6 +552,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       ...track,
       groups: updatedGroups,
     });
+    markCaptionDirty();
   };
 
   const handleApplySectionToAll = (section: StyleSection): number => {
@@ -538,6 +563,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       section
     );
     setTrack(nextTrack);
+    markCaptionDirty();
     return affectedCount;
   };
 
@@ -546,6 +572,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
     if (!track) return;
     const updatedGroups = track.groups.map(g => g.id === groupId ? { ...g, ...patch } : g);
     setTrack({ ...track, groups: updatedGroups });
+    markCaptionDirty();
   };
 
   // --- Batch Operations ---
@@ -706,7 +733,10 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
             currentTime={currentTime}
             duration={duration}
             onSeek={setCurrentTime}
-            onUpdateTrack={setTrack}
+            onUpdateTrack={(next) => {
+              setTrack(next);
+              markCaptionDirty();
+            }}
             selectedGroupId={selectedGroupId}
             onSelectGroup={setSelectedGroupId}
             captionLoadState={captionLoadState}

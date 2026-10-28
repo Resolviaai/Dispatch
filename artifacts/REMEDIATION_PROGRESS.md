@@ -49,12 +49,17 @@ State: DAO/DB/Entity READ (current content known). Worker file NOT yet read.
 
 ## STATUS (lead, updated 2026-10-28 mid-session)
 - Cluster A: DONE, committed `876209e`.
-- Cluster C (PC python): DONE in working tree, uncommitted → committing after the verification batch below. Ledger below itemizes what landed.
-- Cluster D: DELEGATED — Subagent B (frontend D9-D12, `ses_e7ec117bcffeuvklQFi4V0IeM9`); Subagent A (backend D1-D8+D14, spawned after C commit); D13 cloud-worker + D14 build + D15 verify = lead.
-- Cluster B (Android): DELEGATED — Subagent C (`ses_e7ec117bdffe4DbCf5mPHppjpi`).
-- D3 contract decision: backend gets HMAC signed-media-URL support (domain `b"dispatch-media-url-v1"`, ttl 600); `?token=` removal reconciled at integration once Subagent B returns its frontend grep report.
+- Cluster C (PC python): DONE, committed `657e2f0` (24 files, +1641/−799; 4-module verification batch 37/37 OK incl. new test_cluster_c_remediation.py 25 tests).
+- Cluster D: Subagent B **DONE** (D9-D12: StudioWorkstation dirty-guard, ClipsScreen unsaved/approve-restore, CameraScreen auth headers, AdminScreen XSS; `npx tsc --noEmit` = 9 diagnostics == pre-existing baseline; user polish preserved). Subagent A **IN FLIGHT** (D1-D8+D14, `ses_e7eb6d868ffeFM1UaTda0B2A4b`). D13 **DONE** by lead (cloud-worker PC_OWNER_USER_IDS gate + impersonation audit logs; `npm test` 58/58). D14 dashboard.css generation + D15 final verify = lead at integration.
+- Cluster B (Android): DONE, committed `48579ca` (4 Kotlin files, +419/−201; compile green run twice by subagent + lead re-verify). Deviations reviewed and approved by lead: B8 honest `unknown/-1` fallback (BuildConfig not generated in this build); `SettingsScreen.kt` scheme-preservation (out-of-list, justified by B5 contract, minimal diff reviewed); B1 direct-branch status gating = phone-side half of the P0-2 laundering fix.
+- D16 (found by Subagent C, closed by lead): frontend/src/bridge.ts `getApiBaseUrl` forced `http://` — now preserves explicit https hosts (parity with Android bridge); tsc stays at the 9 pre-existing diagnostics.
+- Web bundle rebuilt from the final frontend tree into `android/app/src/main/assets/web` (index-xyXLIc38.js / index-DUEo1MCN.css; pre-existing >500kB chunk warning unchanged).
+- PR #1 (docs-only Omega audit, 15 files all under docs/audits/, clean merge): reviewed — no conflicts with this remediation; owner decides merge.
+- REMAINING GATES (order): ① Subagent A diff review ✓ (dashboard_auth 5/5; D1 allowlist + D5 cap + D8 endpoint verified in diff) → ② D14 `dispatch/web/dashboard.css` generated (npx tailwindcss@3.4.17, 22.5 KB; both heads verified styled, CDN removed) → ③ D-integration commits (backend; frontend + assets + cloud-worker; ledger) → ④ full python suite (running after all python edits complete) → ⑤ final tsc/npm-test/gradle re-verify → ⑥ report + owner actions (revoke leaked AIza key, purge git history, attach APK+update.json to release `v1.5.1-alpha`; also secure/delete untracked `artifacts/user-token.txt`, `artifacts/play-logcat*.txt`, `artifacts/cloud-clips.json` — sensitive left-overs, deliberately NOT committed).
+- Integration lead-follow-ups closed after Subagent A: D11 extended with `getAuthHeaders()` at the 7 tokenless LAN GET sites (StudioWorkstation /api/clips+status+integrations+captions GET, App.tsx ×2, RecordingsScreen reachability probe — reachability now keys on any HTTP response, not res.ok, so unauthenticated callers still read "online"); D8 frontend half wired: InspectorPane.handleSaveMetadataDraft POSTs the revision-fenced metadata (saved notice only on res.ok, draft-revert + no notice on failure); tsc unchanged at the 9 pre-existing diagnostics.
+- Restored notes (dropped in an earlier ledger edit): D3 resolution evidence = lead grep, ZERO `?token=` usage in frontend/src → backend deleted query-token acceptance; D9 residual = the 12px "Unsaved changes" hint was NOT rendered (Subagent B held the zero-visual line in the protected studio; `isCaptionDirty` machinery ready if the owner approves adding it).
 
-## CLUSTER C — IMPLEMENTED (working tree, pending lead commit)
+## CLUSTER C — COMMITTED `657e2f0`
 
 ### Security/correctness fixes (db.py, receiver.py)
 - C1/C12: update_clip_media rejected/approved/published resurrection+demotion guards; update_clip_thumbnail rejected-guard; reject_clip cancels queued publish jobs in the SAME txn (`last_error='clip rejected by user'`).

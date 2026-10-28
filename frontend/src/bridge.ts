@@ -648,7 +648,11 @@ export function getApiBaseUrl(pcHost?: string): string {
     const host = pcHost || nativeHost || (typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_pc_host') : null) || '';
     if (!host) return '';
     const cleanHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    return `http://${cleanHost}`;
+    // Preserve an explicit https host (parity with the Android bridge's
+    // splitPcHostAddress and the worker's scheme-aware addressing); bare
+    // hosts keep legacy LAN http.
+    const explicitHttps = /^https:\/\//i.test(host.trim());
+    return `${explicitHttps ? 'https' : 'http'}://${cleanHost}`;
   }
   return '';
 }

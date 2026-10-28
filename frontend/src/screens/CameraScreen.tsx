@@ -18,7 +18,7 @@ import {
   Camera,
   Loader2
 } from 'lucide-react';
-import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent, ExposureResultEvent, triggerHaptic } from '../bridge';
+import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent, ExposureResultEvent, triggerHaptic, getAuthHeaders } from '../bridge';
 import { getDefaultLensPref } from './SettingsScreen';
 import {
   applyExposureResult,
@@ -1007,8 +1007,11 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         try {
           const formData = new FormData();
           formData.append('file', blob, 'web_recording.webm');
+          const authHeaders = getAuthHeaders();
+          delete authHeaders['Content-Type']; // keep browser-managed multipart boundary for FormData
           const res = await fetch('/api/recordings/upload', {
             method: 'POST',
+            headers: authHeaders,
             body: formData,
           });
           if (res.ok) {
