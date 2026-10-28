@@ -19,6 +19,14 @@ object RecordingMediaPolicy {
     }
 
     /**
+     * Poster file name derived from a finalized segment, e.g.
+     * `sess_x_seg_0001.mp4` -> `sess_x_seg_0001_thumb.jpg`. Derived rather than
+     * stored so no Room schema change (and therefore no new migration) is needed.
+     */
+    fun thumbnailNameFor(videoFileName: String): String =
+        videoFileName.substringBeforeLast('.') + "_thumb.jpg"
+
+    /**
      * Resolve a `/recordings/<name>` request path to a readable media file.
      *
      * Contract:

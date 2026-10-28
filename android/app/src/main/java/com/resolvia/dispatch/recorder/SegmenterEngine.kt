@@ -347,6 +347,10 @@ class SegmenterEngine(
         // lock window so a long session does not silently lose its CPU guarantee.
         RecordingForegroundService.renewWakeLock()
 
+        // The Sessions list cannot poster a <video> served through the local
+        // /recordings/ interceptor, so extract a real frame once, here.
+        RecordingPosterWriter.ensurePoster(finalMp4)
+
         // Trigger WorkManager background sync immediately
         triggerYouTubeUpload()
 

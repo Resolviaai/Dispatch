@@ -769,6 +769,13 @@ class DispatchNativeBridge(
                         addProperty("userId", s.userId)
                         addProperty("fileExists", fileExists)
                         addProperty("videoUrl", if (fileExists) "http://appassets.androidplatform.net/recordings/${s.filename}" else "")
+                        // Generated on demand so segments recorded before posters
+                        // existed still get a thumbnail instead of a permanent gray tile.
+                        val poster = com.resolvia.dispatch.recorder.RecordingPosterWriter.ensurePoster(localFile)
+                        addProperty(
+                            "thumbnailUrl",
+                            if (poster != null) "http://appassets.androidplatform.net/recordings/${poster.name}" else ""
+                        )
                     }
                     jsonArr.add(obj)
                 }

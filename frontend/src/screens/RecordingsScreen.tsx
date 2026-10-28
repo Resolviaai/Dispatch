@@ -380,7 +380,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         clipCount,
         youtubeVideoId: ytId ?? undefined,
         videoUrl: ns.segments[0]?.videoUrl,
-        thumbnailUrl: sessClips[0]?.thumbnail_url ?? undefined,
+        // Prefer the phone's own poster: PC-side clips have no thumbnail at all
+        // for recordings that have not been processed yet.
+        thumbnailUrl: ns.segments[0]?.thumbnailUrl || sessClips[0]?.thumbnail_url || undefined,
         segmentsCount: ns.segments.length,
         rawNative: ns
       });
@@ -1015,9 +1017,15 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                     />
                   ) : session.videoUrl ? (
                     <video
-                      src={session.videoUrl.startsWith('http') ? session.videoUrl : apiUrl(session.videoUrl, pcHost)}
+                      // A <video preload="metadata"> never paints a frame until it is
+                      // asked to seek, so the list showed a blank tile for every local
+                      // recording. The #t media fragment makes the WebView decode that
+                      // frame and keep it up as the poster.
+                      src={`${session.videoUrl.startsWith('http') ? session.videoUrl : apiUrl(session.videoUrl, pcHost)}#t=0.1`}
                       className="absolute inset-0 w-full h-full object-cover"
                       preload="metadata"
+                      muted
+                      playsInline
                     />
                   ) : null}
 

@@ -510,26 +510,33 @@ class MainActivity : ComponentActivity() {
             val (start, end) = parsedRange
             try {
                 val contentLength = end - start + 1
-                val fis = FileInputStream(file)
-                fis.channel.position(start)
+                // RandomAccessFile, not FileInputStream+FileChannel.position(): seeking the
+                // channel of a FileInputStream does NOT move the stream's read offset on
+                // Android, so every ranged read returned EOF immediately. That served zero
+                // bytes for any start > 0, which stalled <video> playback and left the
+                // Sessions thumbnails as placeholders (they must seek to the moov atom).
+                val raf = java.io.RandomAccessFile(file, "r")
+                raf.seek(start)
 
                 val boundedStream = object : java.io.InputStream() {
                     private var bytesRemaining = contentLength
                     override fun read(): Int {
                         if (bytesRemaining <= 0) return -1
-                        val b = fis.read()
+                        val b = raf.read()
                         if (b != -1) bytesRemaining--
                         return b
                     }
                     override fun read(b: ByteArray, off: Int, len: Int): Int {
                         if (bytesRemaining <= 0) return -1
                         val toRead = Math.min(len.toLong(), bytesRemaining).toInt()
-                        val count = fis.read(b, off, toRead)
-                        if (count != -1) bytesRemaining -= count
+                        val count = raf.read(b, off, toRead)
+                        if (count > 0) bytesRemaining -= count
                         return count
                     }
+                    override fun available(): Int =
+                        bytesRemaining.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                     override fun close() {
-                        fis.close()
+                        raf.close()
                     }
                 }
 

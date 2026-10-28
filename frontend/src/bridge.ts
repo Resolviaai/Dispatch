@@ -13,6 +13,8 @@ export interface RecordingItem {
   finalizedAt?: number | null;
   durationSeconds?: number;
   videoUrl?: string;
+  /** Poster JPEG served from /recordings/; empty when none has been generated yet. */
+  thumbnailUrl?: string;
   clipCount?: number;
   approvedClipCount?: number;
   chunkStatus?: string;
