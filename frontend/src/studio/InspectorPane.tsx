@@ -23,6 +23,25 @@ import { StyleSection } from '../captions/applyToAll';
 import { ApplyToAllButton } from '../captions/ApplyToAllButton';
 import { apiUrl, getAuthHeaders } from '../bridge';
 
+interface InspectorProps {
+  show: boolean;
+}
+
+/**
+ * Subtle unsaved-state indicator (owner-approved 2026-10-28): a 5px warning-amber
+ * dot pinned inside an existing control. No text, no layout shift, invisible when
+ * everything is saved — the IDE "modified file" pattern. Autofades gently while
+ * present and disappears the moment the change is persisted or the draft matches.
+ */
+const UnsavedDot = ({ show }: InspectorProps) =>
+  show ? (
+    <span
+      aria-label="Unsaved changes"
+      title="Unsaved changes"
+      className="pointer-events-none absolute right-1.5 top-1/2 h-[5px] w-[5px] -translate-y-1/2 rounded-full bg-[#F59E0B] animate-pulse"
+    />
+  ) : null;
+
 interface InspectorPaneProps {
   clip: ClipItem | null;
   track: CaptionTrack | null;
@@ -37,6 +56,8 @@ interface InspectorPaneProps {
   isApproving: boolean;
   isRejecting: boolean;
   isSavingCaptions: boolean;
+  /** True while the current clip has unsaved caption/track edits (D9 machinery). */
+  isCaptionDirty?: boolean;
   publishMode: 'private' | 'public';
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -73,6 +94,7 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
   isApproving,
   isRejecting,
   isSavingCaptions,
+  isCaptionDirty,
   publishMode,
   isCollapsed,
   onToggleCollapse,
@@ -101,6 +123,20 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
       setRejectConfirmOpen(false);
     }
   }, [clip?.id]);
+
+  // Draft-vs-persisted comparison for the metadata tab's unsaved dot: true only
+  // while the form diverges from the clip as last persisted.
+  const isMetadataDraftDirty = (() => {
+    if (!clip) return false;
+    const clipPlatforms = (clip.platform_targets || 'youtube').split(',').map(p => p.trim()).filter(Boolean);
+    const persistedPlatforms = clipPlatforms.length > 0 ? clipPlatforms : ['youtube'];
+    return (
+      title.trim() !== (clip.title || '').trim() ||
+      hook.trim() !== (clip.hook || '').trim() ||
+      hashtags.trim() !== (clip.hashtags || '').trim() ||
+      selectedPlatforms.filter(Boolean).join(',') !== persistedPlatforms.join(',')
+    );
+  })();
 
   const togglePlatform = (p: string) => {
     const next = selectedPlatforms.includes(p)
@@ -239,13 +275,15 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('captions')}
-            className={`flex-1 py-1 rounded-md text-[11px] font-medium transition-all ${
+            className={`relative flex-1 py-1 rounded-md text-[11px] font-medium transition-all ${
               activeTab === 'captions'
                 ? 'bg-[#16181C] text-[#F3F4F6] shadow-sm font-semibold'
                 : 'text-[#747D8A] hover:text-[#A3AAB5]'
             }`}
           >
             Captions
+            {/* Hidden while the captions tab itself is open — the Persist button's dot covers that case. */}
+            <UnsavedDot show={!!isCaptionDirty && activeTab !== 'captions'} />
           </button>
           <button
             type="button"
@@ -363,10 +401,11 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
             <button
               type="button"
               onClick={handleSaveMetadataDraft}
-              className="w-full py-1.5 rounded-lg bg-[#23262C] hover:bg-[#2E3239] border border-[#2E3239] text-xs text-[#F3F4F6] flex items-center justify-center gap-1.5 transition-all active:scale-95"
+              className="relative w-full py-1.5 rounded-lg bg-[#23262C] hover:bg-[#2E3239] border border-[#2E3239] text-xs text-[#F3F4F6] flex items-center justify-center gap-1.5 transition-all active:scale-95"
             >
               {isSavedNotice ? <Check size={13} className="text-[#10B981]" /> : <Save size={13} />}
               <span>{isSavedNotice ? 'Draft Changes Saved' : 'Save Draft'}</span>
+              <UnsavedDot show={!isSavedNotice && isMetadataDraftDirty} />
             </button>
           </div>
         ) : activeTab === 'captions' ? (
@@ -538,10 +577,11 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
               type="button"
               onClick={onSaveCaptions}
               disabled={isSavingCaptions}
-              className="w-full py-1.5 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium text-xs shadow-hero-sm transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
+              className="relative w-full py-1.5 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium text-xs shadow-hero-sm transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
               <Save size={13} />
               <span>{isSavingCaptions ? 'Saving to Backend...' : 'Persist Caption Styles'}</span>
+              <UnsavedDot show={!isSavingCaptions && !!isCaptionDirty} />
             </button>
           </div>
         ) : (

@@ -762,6 +762,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
           isApproving={isApproving}
           isRejecting={isRejecting}
           isSavingCaptions={isSavingCaptions}
+          isCaptionDirty={isCaptionDirty}
           publishMode={publishMode}
           isCollapsed={isRightCollapsed}
           onToggleCollapse={() => {
