@@ -37,6 +37,7 @@ export interface Env {
   YOUTUBE_CLIENT_SECRET: string;
   OAUTH_REDIRECT_URI: string;
   ADMIN_EMAILS: string; // comma-separated allowlist (server-side only)
+  PC_OWNER_USER_IDS?: string; // D13: comma-separated UUID allowlist binding the worker-token bearer to PC owner identity(ies); unset = legacy permissive (logged)
   SITE_ORIGIN: string;  // e.g. https://resolviaai.github.io — CORS-pinned admin origin
   INSTAGRAM_CLIENT_ID?: string;
   INSTAGRAM_CLIENT_SECRET?: string;
@@ -173,8 +174,18 @@ export async function authenticate(env: Env, request: Request): Promise<{ userId
   const token = auth.slice(7);
   if (env.DISPATCH_WORKER_TOKEN && token === env.DISPATCH_WORKER_TOKEN) {
     const uid = request.headers.get("X-Dispatch-User-Id");
-    return uid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)
-      ? { userId: uid, email: "" } : null;
+    if (!uid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)) return null;
+    // D13 (audit 2026-10-27): a worker-token bearer may act for a USER identity
+    // ONLY when that user is the PC owner (PC_OWNER_USER_IDS, comma-separated).
+    // Without this gate, a single leaked worker token could impersonate every
+    // end user by forging X-Dispatch-User-Id.
+    const owners = (env.PC_OWNER_USER_IDS ?? "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+    if (owners.length > 0 && !owners.includes(uid.toLowerCase())) return null;
+    if (owners.length === 0) {
+      console.log(JSON.stringify({ audit: true, warning: "PC_OWNER_USER_IDS not configured; worker-token user bind is permissive (legacy)", ts: new Date().toISOString() }));
+    }
+    console.log(JSON.stringify({ audit: true, impersonated: true, route: new URL(request.url).pathname, uid, ts: new Date().toISOString() }));
+    return { userId: uid, email: "" };
   }
   const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
