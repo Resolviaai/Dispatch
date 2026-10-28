@@ -1,0 +1,618 @@
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:119: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:125: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:131: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:193: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:231: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:249: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:255: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:283: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:295: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:323: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:405: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:411: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:451: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:492: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:506: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:512: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:526: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:540: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:586: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:604: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:622: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:640: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:662: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:916: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:934: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:998: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1078: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1088: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1170: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1180: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1212: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1274: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1318: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1344: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1426: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1542: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1656: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:1830: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:2022: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:2068: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:2258: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:2348: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:2354: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:2364: @JavascriptInterface
+android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt:2420: @JavascriptInterface
+cloud-worker/src/index.ts:283: const allowedOrigin = (url.pathname.startsWith("/admin/") || url.pathname === "/admin")
+cloud-worker/src/index.ts:297: if (url.pathname === "/health") return json(200, { ok: true });
+cloud-worker/src/index.ts:298: if (request.method === "POST" && url.pathname === "/cleanup") {
+cloud-worker/src/index.ts:309: if (url.pathname.startsWith("/admin/") || url.pathname === "/admin") {
+cloud-worker/src/index.ts:327: if (url.pathname === "/admin/whoami" && request.method === "GET") {
+cloud-worker/src/index.ts:330: if (url.pathname === "/admin/users" && request.method === "GET") {
+cloud-worker/src/index.ts:522: if (url.pathname === "/accounts" && request.method === "GET") {
+cloud-worker/src/index.ts:535: if (url.pathname === "/accounts/connect" && request.method === "POST") {
+cloud-worker/src/index.ts:644: if (url.pathname === "/youtube/upload-sessions" && request.method === "POST") {
+cloud-worker/src/index.ts:717: if (url.pathname === "/youtube/uploads/lookup" && request.method === "POST") {
+cloud-worker/src/index.ts:745: if (url.pathname === "/youtube/videos/status" && request.method === "POST") {
+cloud-worker/src/index.ts:778: if (url.pathname === "/keys/gemini" && request.method === "GET") {
+cloud-worker/src/index.ts:794: if (url.pathname === "/keys/gemini" && request.method === "POST") {
+cloud-worker/src/index.ts:813: if (url.pathname === "/keys/gemini" && request.method === "DELETE") {
+cloud-worker/src/index.ts:901: if (url.pathname === "/oauth/google/start" && request.method === "GET") {
+cloud-worker/src/index.ts:914: if (url.pathname === "/oauth/google/callback" && request.method === "GET") {
+cloud-worker/src/index.ts:983: if (url.pathname === "/oauth/instagram/start" && request.method === "GET") {
+cloud-worker/src/index.ts:997: if (url.pathname === "/oauth/instagram/callback" && request.method === "GET") {
+cloud-worker/src/index.ts:1084: if (url.pathname === "/oauth/facebook/start" && request.method === "GET") {
+cloud-worker/src/index.ts:1098: if (url.pathname === "/oauth/facebook/callback" && request.method === "GET") {
+cloud-worker/src/index.ts:1170: if (url.pathname === "/oauth/linkedin/start" && request.method === "GET") {
+cloud-worker/src/index.ts:1183: if (url.pathname === "/oauth/linkedin/callback" && request.method === "GET") {
+cloud-worker/src/index.ts:1252: if (url.pathname === "/oauth/twitter/start" && request.method === "GET") {
+cloud-worker/src/index.ts:1271: if (url.pathname === "/oauth/twitter/callback" && request.method === "GET") {
+cloud-worker/src/index.ts:1356: if (url.pathname === "/jobs/submit" && request.method === "POST") {
+cloud-worker/src/index.ts:1373: if (url.pathname === "/jobs/status" && request.method === "GET") {
+cloud-worker/src/index.ts:1384: if (url.pathname === "/clips" && request.method === "GET") {
+cloud-worker/src/index.ts:1557: if (request.method === "POST" && url.pathname === "/reserve") {
+cloud-worker/src/index.ts:1583: if (request.method === "POST" && url.pathname === "/complete") {
+cloud-worker/src/index.ts:1634: if (request.method === "POST" && url.pathname === "/media-url") {
+cloud-worker/src/index.ts:1701: if (request.method === "POST" && url.pathname === "/sync/commands/claim"
+cloud-worker/src/index.ts:1715: if (request.method === "POST" && url.pathname === "/sync/commands/ack"
+cloud-worker/src/index.ts:1805: if (request.method === "POST" && url.pathname === "/delete") {
+dispatch/sync/receiver.py:100: @router.get("/ping")
+dispatch/sync/receiver.py:214: @router.get("/pairing/config")
+dispatch/sync/receiver.py:303: @router.post("/pairing/handshake")
+dispatch/sync/receiver.py:338: @router.get("/verify-chunk")
+dispatch/sync/receiver.py:430: @router.post("/reconcile")
+dispatch/sync/receiver.py:516: @router.get("/youtube-ack")
+dispatch/sync/receiver.py:697: @router.post("/upload/init")
+dispatch/sync/receiver.py:754: @router.patch("/upload/chunk")
+dispatch/sync/receiver.py:876: @router.post("/upload/direct", include_in_schema=False)
+dispatch/web/app.py:128: @app.middleware("http")
+dispatch/web/app.py:459: @app.api_route("/clips/{filename}", methods=["GET", "HEAD"])
+dispatch/web/app.py:554: @app.api_route("/download/dispatch.apk", methods=["GET", "HEAD"])
+dispatch/web/app.py:575: @app.get("/api/pipeline/jobs")
+dispatch/web/app.py:606: @app.get("/api/status")
+dispatch/web/app.py:805: @app.get("/api/clips")
+dispatch/web/app.py:877: @app.get("/api/clips/{clip_id}")
+dispatch/web/app.py:899: @app.api_route("/api/clips/{clip_id}/source", methods=["GET", "HEAD"])
+dispatch/web/app.py:993: @app.api_route("/api/recordings/{segment_id}/source", methods=["GET", "HEAD"])
+dispatch/web/app.py:1013: @app.post("/api/clips/{clip_id}/layout")
+dispatch/web/app.py:1060: @app.post("/api/clips/{clip_id}/render")
+dispatch/web/app.py:1157: @app.post("/api/clips/{clip_id}/trim")
+dispatch/web/app.py:1212: @app.post("/api/clips/{clip_id}/approve")
+dispatch/web/app.py:1383: @app.post("/api/clips/{clip_id}/reject")
+dispatch/web/app.py:1398: @app.get("/api/publisher/outbox")
+dispatch/web/app.py:1411: @app.get("/api/publisher/reconcile")
+dispatch/web/app.py:1421: @app.post("/api/publisher/reconcile/{job_id}/resolve")
+dispatch/web/app.py:1480: @app.post("/api/publisher/reconcile/{job_id}/auto-reconcile")
+dispatch/web/app.py:1567: @app.get("/api/clips/{clip_id}/filmstrip")
+dispatch/web/app.py:1679: @app.get("/api/presets/captions")
+dispatch/web/app.py:1695: @app.get("/api/clips/{clip_id}/captions")
+dispatch/web/app.py:1893: @app.post("/api/clips/{clip_id}/captions")
+dispatch/web/app.py:1932: @app.post("/api/media/upload")
+dispatch/web/app.py:1988: @app.post("/api/recordings/upload")
+dispatch/web/app.py:2111: @app.get("/api/recordings")
+dispatch/web/app.py:2325: @app.get("/api/settings")
+dispatch/web/app.py:2333: @app.post("/api/settings")
+dispatch/web/app.py:2343: @app.get("/api/youtube/inbox")
+dispatch/web/app.py:2349: @app.delete("/api/youtube/inbox/{video_id}")
+dispatch/web/app.py:2359: @app.post("/api/youtube/ingest")
+dispatch/web/app.py:2419: @app.get("/api/integrations/status")
+dispatch/web/app.py:2466: @app.post("/api/integrations/gemini")
+dispatch/web/app.py:2500: @app.post("/api/integrations/youtube/start-auth")
+dispatch/web/app.py:2545: @app.get("/api/integrations/youtube/auth-status")
+dispatch/web/app.py:2552: @app.post("/api/integrations/youtube/disconnect")
+dispatch/web/app.py:2576: @app.get("/api/admin/whoami")
+dispatch/web/app.py:2587: @app.get("/api/admin/users")
+dispatch/web/app.py:2634: @app.post("/api/admin/users/{user_id}/ban")
+dispatch/web/app.py:2649: @app.post("/api/admin/users/{user_id}/unban")
+dispatch/web/app.py:2664: @app.post("/api/admin/users/{user_id}/quota")
+dispatch/web/app.py:2694: @app.post("/api/admin/users/{user_id}/priority")
+dispatch/web/app.py:2723: @app.get("/api/admin/stats")
+dispatch/web/app.py:2734: @app.get("/api/auth/session")
+dispatch/web/app.py:2741: @app.api_route("/api/youtube/credentials", methods=["GET", "POST"])
+dispatch/web/app.py:2749: @app.post("/api/integrations/youtube/pairing-code")
+dispatch/web/app.py:3036: @app.get("/", response_class=HTMLResponse)
+dispatch/web/app.py:3053: @app.get("/favicon.ico", include_in_schema=False)
+dispatch/web/app.py:3061: @app.get("/favicon.svg", include_in_schema=False)
+dispatch/web/app.py:3069: @app.get("/apple-touch-icon.png", include_in_schema=False)
+dispatch/web/app.py:3077: @app.get("/site.webmanifest", include_in_schema=False)
+dispatch/web/app.py:3091: @app.get("/studio")
+dispatch/web/app.py:3096: @app.get("/studio/", response_class=HTMLResponse)
+dispatch/web/app.py:3097: @app.get("/studio/{full_path:path}", response_class=HTMLResponse)
+dispatch/web/app.py:3110: @app.get("/api/fonts")
+dispatch/web/app.py:3157: @app.post("/api/fonts/import")
+dispatch/web/app.py:3229: @app.get("/api/fonts/{filename}")
+dispatch/web/app.py:3247: @app.get("/api/template/default")
+dispatch/web/app.py:3255: @app.post("/api/template/default")
+dispatch/web/app.py:3264: @app.get("/api/template/sample-video")
+frontend/src/App.tsx:276: onClick={() => {
+frontend/src/App.tsx:291: onClick={() => {
+frontend/src/auth/AuthGate.tsx:88: onChange={e => setEmail(e.target.value)}
+frontend/src/auth/AuthGate.tsx:92: minLength={8} value={password} onChange={e => setPassword(e.target.value)}
+frontend/src/auth/AuthGate.tsx:101: <button type="button" onClick={() => { setMode(m => m === 'signin' ? 'signup' : 'signin'); setError(null); setNotice(null) }}
+frontend/src/auth/AuthGate.tsx:106: <button type="button" onClick={() => signOut()} className="text-xs text-text-muted hover:underline hover:text-text-secondary">Clear session</button>
+frontend/src/captions/ApplyToAllButton.tsx:39: onClick={handleClick}
+frontend/src/captions/CaptionStudio.tsx:937: onChange={(e) => onChange(Number(e.target.value))}
+frontend/src/captions/CaptionStudio.tsx:964: onClick={onClick}
+frontend/src/captions/CaptionStudio.tsx:1019: onClick={onOpenCustom}
+frontend/src/captions/CaptionStudio.tsx:1046: onClick={() => onChange(c)}
+frontend/src/captions/CaptionStudio.tsx:1912: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:1921: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:1934: onClick={handleRotate90}
+frontend/src/captions/CaptionStudio.tsx:1942: onClick={handleToggleFlipH}
+frontend/src/captions/CaptionStudio.tsx:1952: onClick={handleToggleFlipV}
+frontend/src/captions/CaptionStudio.tsx:1962: onClick={handleResetTransform}
+frontend/src/captions/CaptionStudio.tsx:1977: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:1995: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:2038: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2048: onClick={() => setOverlayAnimTab('enter')}
+frontend/src/captions/CaptionStudio.tsx:2057: onClick={() => setOverlayAnimTab('exit')}
+frontend/src/captions/CaptionStudio.tsx:2068: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2084: onClick={() => handleUpdateOverlayAnimation({ enter: c.id as any })}
+frontend/src/captions/CaptionStudio.tsx:2102: onChange={(val) => handleUpdateOverlayAnimation({ enter_duration_ms: Math.round(val * 1000) })}
+frontend/src/captions/CaptionStudio.tsx:2112: onClick={() => handleUpdateOverlayAnimation({ exit: c.id as any })}
+frontend/src/captions/CaptionStudio.tsx:2130: onChange={(val) => handleUpdateOverlayAnimation({ exit_duration_ms: Math.round(val * 1000) })}
+frontend/src/captions/CaptionStudio.tsx:2147: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2156: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2172: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:2195: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2204: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2216: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:2240: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:2262: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2271: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:2283: onClick={() => onUpdateMainVideoAudio?.(mainVideoVolume, !isMainVideoMuted)}
+frontend/src/captions/CaptionStudio.tsx:2299: onChange={(val) => onUpdateMainVideoAudio?.(val, isMainVideoMuted)}
+frontend/src/captions/CaptionStudio.tsx:2356: onChange={(e) => handleTextDraftChange(e.target.value)}
+frontend/src/captions/CaptionStudio.tsx:2381: onClick={(e) => {
+frontend/src/captions/CaptionStudio.tsx:2416: onClick={() => handleSelectTextMainTab(tab.id)}
+frontend/src/captions/CaptionStudio.tsx:2437: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:2463: onClick={() => handleSelectTemplate(tmpl)}
+frontend/src/captions/CaptionStudio.tsx:2494: onChange={(e) => setFontSearch(e.target.value)}
+frontend/src/captions/CaptionStudio.tsx:2501: onClick={() => setFontSearch('')}
+frontend/src/captions/CaptionStudio.tsx:2514: onChange={handleImportFont}
+frontend/src/captions/CaptionStudio.tsx:2518: onClick={() => fontFileInputRef.current?.click()}
+frontend/src/captions/CaptionStudio.tsx:2535: <button type="button" onClick={() => setFontImportError(null)} className="text-red-400 hover:text-white">
+frontend/src/captions/CaptionStudio.tsx:2547: onClick={() => setSelectedFontCategory(cat.key)}
+frontend/src/captions/CaptionStudio.tsx:2580: onClick={() => patch({ font_weight: wt }, undefined, undefined, true)}
+frontend/src/captions/CaptionStudio.tsx:2618: onClick={() => handleSelectFont(f)}
+frontend/src/captions/CaptionStudio.tsx:2641: onClick={(e) => handleToggleFavorite(e, f.family)}
+frontend/src/captions/CaptionStudio.tsx:2681: onClick={() => setStyleTab(tab.id)}
+frontend/src/captions/CaptionStudio.tsx:2703: onChange={(c) => patch({ primary_color: c })}
+frontend/src/captions/CaptionStudio.tsx:2719: onChange={(c) => patch({ highlight_color: c })}
+frontend/src/captions/CaptionStudio.tsx:2738: onChange={(val) => patch({ text_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:2748: onChange={(val) => patch({ font_size: val })}
+frontend/src/captions/CaptionStudio.tsx:2765: onClick={() => patch(undefined, { alignment: align as any })}
+frontend/src/captions/CaptionStudio.tsx:2791: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:2816: onClick={() => patch({ font_style: isItalic ? 'normal' : 'italic' })}
+frontend/src/captions/CaptionStudio.tsx:2836: onClick={() => patch({ underline: !isUnderline })}
+frontend/src/captions/CaptionStudio.tsx:2876: onClick={() => patch({ font_weight: wt })}
+frontend/src/captions/CaptionStudio.tsx:2906: onClick={() => patch({ text_transform: mode.id as any })}
+frontend/src/captions/CaptionStudio.tsx:2933: onChange={(e) => patch({ outline_enabled: e.target.checked })}
+frontend/src/captions/CaptionStudio.tsx:2946: onChange={(val) => patch({ outline_width: val })}
+frontend/src/captions/CaptionStudio.tsx:2955: onChange={(val) => patch({ outline_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:2961: onChange={(c) => patch({ outline_color: c })}
+frontend/src/captions/CaptionStudio.tsx:2982: onChange={(e) => patch({ glow_enabled: e.target.checked })}
+frontend/src/captions/CaptionStudio.tsx:2995: onChange={(val) => patch({ glow_blur: val })}
+frontend/src/captions/CaptionStudio.tsx:3004: onChange={(val) => patch({ glow_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3010: onChange={(c) => patch({ glow_color: c })}
+frontend/src/captions/CaptionStudio.tsx:3040: onClick={() => patch({
+frontend/src/captions/CaptionStudio.tsx:3063: onChange={(c) => patch({ background_color: c })}
+frontend/src/captions/CaptionStudio.tsx:3081: onChange={(val) => patch({ background_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3092: onChange={(val) => patch({ background_corner_radius: val })}
+frontend/src/captions/CaptionStudio.tsx:3103: onChange={(val) => patch({ background_padding_x: val })}
+frontend/src/captions/CaptionStudio.tsx:3114: onChange={(val) => patch({ background_padding_y: val })}
+frontend/src/captions/CaptionStudio.tsx:3125: onChange={(val) => patch({ background_offset_x: val })}
+frontend/src/captions/CaptionStudio.tsx:3136: onChange={(val) => patch({ background_offset_y: val })}
+frontend/src/captions/CaptionStudio.tsx:3152: onChange={(e) => patch({ shadow_enabled: e.target.checked })}
+frontend/src/captions/CaptionStudio.tsx:3162: onChange={(c) => patch({ shadow_color: c })}
+frontend/src/captions/CaptionStudio.tsx:3179: onChange={(val) => patch({ shadow_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3190: onChange={(val) => patch({ shadow_blur: val })}
+frontend/src/captions/CaptionStudio.tsx:3201: onChange={(dist) => {
+frontend/src/captions/CaptionStudio.tsx:3218: onChange={(angle) => {
+frontend/src/captions/CaptionStudio.tsx:3248: onClick={() => patch(undefined, { alignment: align as any })}
+frontend/src/captions/CaptionStudio.tsx:3271: onChange={(val) => patch(undefined, { scale: Number(val.toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3282: onChange={(val) => patch({ letter_spacing: Number(val.toFixed(1)) })}
+frontend/src/captions/CaptionStudio.tsx:3293: onChange={(val) => patch({ line_height: Number(val.toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3303: onClick={() => patch(undefined, { position_y: 0.22, position_x: 0.5 })}
+frontend/src/captions/CaptionStudio.tsx:3310: onClick={() => patch(undefined, { position_y: 0.50, position_x: 0.5 })}
+frontend/src/captions/CaptionStudio.tsx:3317: onClick={() => patch(undefined, { position_y: 0.78, position_x: 0.5 })}
+frontend/src/captions/CaptionStudio.tsx:3332: onChange={(val) => patch(undefined, { position_y: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3342: onChange={(val) => patch(undefined, { position_x: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3373: onClick={() => setEffectsTab(tab.id)}
+frontend/src/captions/CaptionStudio.tsx:3395: onChange={(e) => patch({ outline_enabled: e.target.checked })}
+frontend/src/captions/CaptionStudio.tsx:3408: onChange={(val) => patch({ outline_width: val })}
+frontend/src/captions/CaptionStudio.tsx:3417: onChange={(val) => patch({ outline_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3423: onChange={(c) => patch({ outline_color: c })}
+frontend/src/captions/CaptionStudio.tsx:3445: onChange={(e) => patch({ glow_enabled: e.target.checked })}
+frontend/src/captions/CaptionStudio.tsx:3458: onChange={(val) => patch({ glow_blur: val })}
+frontend/src/captions/CaptionStudio.tsx:3467: onChange={(val) => patch({ glow_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3473: onChange={(c) => patch({ glow_color: c })}
+frontend/src/captions/CaptionStudio.tsx:3495: onChange={(e) => patch({ shadow_enabled: e.target.checked })}
+frontend/src/captions/CaptionStudio.tsx:3505: onChange={(c) => patch({ shadow_color: c })}
+frontend/src/captions/CaptionStudio.tsx:3520: onChange={(val) => patch({ shadow_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3529: onChange={(val) => patch({ shadow_blur: val })}
+frontend/src/captions/CaptionStudio.tsx:3538: onChange={(val) => patch({ shadow_offset_x: val })}
+frontend/src/captions/CaptionStudio.tsx:3547: onChange={(val) => patch({ shadow_offset_y: val })}
+frontend/src/captions/CaptionStudio.tsx:3571: onClick={() => patch({
+frontend/src/captions/CaptionStudio.tsx:3594: onChange={(c) => patch({ background_color: c })}
+frontend/src/captions/CaptionStudio.tsx:3610: onChange={(val) => patch({ background_opacity: Number((val / 100).toFixed(2)) })}
+frontend/src/captions/CaptionStudio.tsx:3619: onChange={(val) => patch({ background_corner_radius: val })}
+frontend/src/captions/CaptionStudio.tsx:3628: onChange={(val) => patch({ background_padding_x: val })}
+frontend/src/captions/CaptionStudio.tsx:3637: onChange={(val) => patch({ background_padding_y: val })}
+frontend/src/captions/CaptionStudio.tsx:3646: onChange={(val) => patch({ background_offset_x: val })}
+frontend/src/captions/CaptionStudio.tsx:3655: onChange={(val) => patch({ background_offset_y: val })}
+frontend/src/captions/CaptionStudio.tsx:3679: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:3744: onClick={() => patch(prev.style, undefined, undefined, true)}
+frontend/src/captions/CaptionStudio.tsx:3810: onClick={() => patch(eff.style, undefined, undefined, true)}
+frontend/src/captions/CaptionStudio.tsx:3922: onClick={() => setAnimCategory(cat)}
+frontend/src/captions/CaptionStudio.tsx:4030: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4064: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:4087: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4121: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:4144: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4178: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:4201: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4237: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:4258: onChange={(val) => {
+frontend/src/captions/CaptionStudio.tsx:4291: onChange={(newColor) => {
+frontend/src/captions/CaptionStudio.tsx:4309: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:4318: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:4330: onClick={() => handleMoveLayer('up')}
+frontend/src/captions/CaptionStudio.tsx:4337: onClick={() => handleMoveLayer('down')}
+frontend/src/captions/CaptionStudio.tsx:4351: onClick={() => onSelectGroup?.(grp.id)}
+frontend/src/captions/CaptionStudio.tsx:4376: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:4385: onClick={() => setActivePanel('none')}
+frontend/src/captions/CaptionStudio.tsx:4399: onClick={() => onLayoutChange?.(m.id)}
+frontend/src/captions/CaptionStudio.tsx:4429: onChange={handleOverlayFileSelect}
+frontend/src/captions/CaptionStudio.tsx:4437: onChange={handleAudioFileSelect}
+frontend/src/captions/CaptionStudio.tsx:4446: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4454: onClick={() => setActiveCategory('audio')}
+frontend/src/captions/CaptionStudio.tsx:4459: onClick={() => setActiveCategory('text')}
+frontend/src/captions/CaptionStudio.tsx:4464: onClick={() => setActiveCategory('overlay')}
+frontend/src/captions/CaptionStudio.tsx:4475: onClick={handleBackToPrimary}
+frontend/src/captions/CaptionStudio.tsx:4488: onClick={() => fileInputRef.current?.click()}
+frontend/src/captions/CaptionStudio.tsx:4496: onClick={handleSplit}
+frontend/src/captions/CaptionStudio.tsx:4502: onClick={() => setActivePanel('layer_volume')}
+frontend/src/captions/CaptionStudio.tsx:4512: onClick={() => setActivePanel('overlay_animation')}
+frontend/src/captions/CaptionStudio.tsx:4517: onClick={handleDelete}
+frontend/src/captions/CaptionStudio.tsx:4522: onClick={() => setActivePanel('overlay_transform')}
+frontend/src/captions/CaptionStudio.tsx:4527: onClick={() => setActivePanel('layers')}
+frontend/src/captions/CaptionStudio.tsx:4532: onClick={handleDuplicate}
+frontend/src/captions/CaptionStudio.tsx:4537: onClick={() => setActivePanel('layer_opacity')}
+frontend/src/captions/CaptionStudio.tsx:4549: onClick={handleBackToPrimary}
+frontend/src/captions/CaptionStudio.tsx:4561: onClick={() => setIsTranscriptOpen(true)}
+frontend/src/captions/CaptionStudio.tsx:4566: onClick={handleAddText}
+frontend/src/captions/CaptionStudio.tsx:4571: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4585: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4600: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4615: onClick={handleSplit}
+frontend/src/captions/CaptionStudio.tsx:4621: onClick={handleDelete}
+frontend/src/captions/CaptionStudio.tsx:4627: onClick={handleMergeNext}
+frontend/src/captions/CaptionStudio.tsx:4633: onClick={handleLastingText}
+frontend/src/captions/CaptionStudio.tsx:4638: onClick={handleExportSrt}
+frontend/src/captions/CaptionStudio.tsx:4644: onClick={handleDuplicate}
+frontend/src/captions/CaptionStudio.tsx:4649: onClick={() => setActivePanel('layers')}
+frontend/src/captions/CaptionStudio.tsx:4659: onClick={handleBackToPrimary}
+frontend/src/captions/CaptionStudio.tsx:4672: onClick={() => setActivePanel('layer_volume')}
+frontend/src/captions/CaptionStudio.tsx:4677: onClick={() => {
+frontend/src/captions/CaptionStudio.tsx:4687: <ToolButton icon={<Scissors size={18} />} label="Split" onClick={handleSplit} />
+frontend/src/captions/CaptionStudio.tsx:4688: <ToolButton icon={<Copy size={18} />} label="Duplicate" onClick={handleDuplicate} />
+frontend/src/captions/CaptionStudio.tsx:4689: <ToolButton icon={<Trash2 size={18} className="text-red-400" />} label="Delete" onClick={handleDelete} />
+frontend/src/captions/CaptionStudio.tsx:4696: onClick={() => setActivePanel('main_volume')}
+frontend/src/captions/CaptionStudio.tsx:4701: onClick={() => onUpdateMainVideoAudio?.(mainVideoVolume, !isMainVideoMuted)}
+frontend/src/captions/CaptionStudio.tsx:4706: onClick={() => handleImportAudio()}
+frontend/src/captions/CaptionStudio.tsx:4717: onClick={() => handleRecordVoiceover()}
+frontend/src/captions/CaptionStudio.tsx:4729: onClick={handleBackToPrimary}
+frontend/src/captions/CaptionStudio.tsx:4737: <ToolButton icon={<Crop size={18} />} label="Framing" onClick={() => setActivePanel('framing')} />
+frontend/src/captions/CaptionStudio.tsx:4741: onClick={() => setActivePanel('main_volume')}
+frontend/src/captions/CaptionStudio.tsx:4746: onClick={() => onLayoutChange?.('crop_916')}
+frontend/src/captions/CaptionStudio.tsx:4780: onChange={(newColor) => {
+frontend/src/captions/CaptionTimeline.tsx:1917: onClick={() => setIsSnapEnabled(!isSnapEnabled)}
+frontend/src/captions/CaptionTimeline.tsx:1953: onClick={() => handleZoom(-15)}
+frontend/src/captions/CaptionTimeline.tsx:1973: onClick={() => handleZoom(15)}
+frontend/src/captions/CaptionTimeline.tsx:1993: onClick={handleZoomFit}
+frontend/src/captions/CaptionTimeline.tsx:2031: onClick={() => applyRangeExtension('start', -RANGE_CONTROL_STEP_SECONDS)}
+frontend/src/captions/CaptionTimeline.tsx:2043: onClick={() => applyRangeExtension('end', RANGE_CONTROL_STEP_SECONDS)}
+frontend/src/captions/CaptionTimeline.tsx:2057: onClick={() => beforeContext && onPreviewContext?.(beforeContext)}
+frontend/src/captions/CaptionTimeline.tsx:2073: onClick={() => afterContext && onPreviewContext?.(afterContext)}
+frontend/src/captions/CaptionTimeline.tsx:2141: onClick={onSelectVideo}
+frontend/src/captions/CaptionTimeline.tsx:2181: onClick={() => toggleTrackVisibility(idx)}
+frontend/src/captions/CaptionTimeline.tsx:2227: onClick={(e) => {
+frontend/src/captions/CaptionTimeline.tsx:2327: onClick={(e) => {
+frontend/src/captions/CaptionTimeline.tsx:2413: onClick={(e) => {
+frontend/src/captions/CaptionTimeline.tsx:2681: onClick={(e) => {
+frontend/src/captions/InteractiveTextCanvas.tsx:290: onClick={(e) => {
+frontend/src/captions/InteractiveTextCanvas.tsx:309: onClick={(e) => { e.stopPropagation(); onSelectGroup(null); }}
+frontend/src/captions/InteractiveTextCanvas.tsx:341: onClick={(e) => {
+frontend/src/captions/TemplateStudio.tsx:1415: onClick={() => setShowExitConfirm(true)}
+frontend/src/captions/TemplateStudio.tsx:1447: onClick={handleResetToFactory}
+frontend/src/captions/TemplateStudio.tsx:1471: onClick={handleSaveTemplate}
+frontend/src/captions/TemplateStudio.tsx:1511: onClick={() => {
+frontend/src/captions/TemplateStudio.tsx:1607: onClick={() => setIsFullscreenPreview(true)}
+frontend/src/captions/TemplateStudio.tsx:1633: onClick={(e) => e.stopPropagation()}
+frontend/src/captions/TemplateStudio.tsx:1641: onClick={() => handleToggleOrientation('portrait')}
+frontend/src/captions/TemplateStudio.tsx:1667: onClick={() => handleToggleOrientation('landscape')}
+frontend/src/captions/TemplateStudio.tsx:1723: onClick={handleTogglePlay}
+frontend/src/captions/TemplateStudio.tsx:1747: onClick={undo}
+frontend/src/captions/TemplateStudio.tsx:1765: onClick={redo}
+frontend/src/captions/TemplateStudio.tsx:1799: onClick={() => handleLayoutChange(opt.id)}
+frontend/src/captions/TemplateStudio.tsx:2041: onClick={async () => {
+frontend/src/captions/TemplateStudio.tsx:2063: onClick={() => {
+frontend/src/captions/TemplateStudio.tsx:2085: onClick={() => setShowExitConfirm(false)}
+frontend/src/captions/TemplateStudio.tsx:2119: onClick={() => setIsFullscreenPreview(false)}
+frontend/src/captions/TranscriptEditor.tsx:170: onClick={onClose}
+frontend/src/captions/TranscriptEditor.tsx:185: onChange={(e) => setSearchQuery(e.target.value)}
+frontend/src/captions/TranscriptEditor.tsx:201: onChange={(e) => setReplaceQuery(e.target.value)}
+frontend/src/captions/TranscriptEditor.tsx:210: onClick={handleBatchReplace}
+frontend/src/captions/TranscriptEditor.tsx:244: onClick={() => {
+frontend/src/captions/TranscriptEditor.tsx:263: onClick={() => handleStartEdit(grp)}
+frontend/src/captions/TranscriptEditor.tsx:273: onClick={() => handleSaveEdit(grp)}
+frontend/src/captions/TranscriptEditor.tsx:281: onClick={() => setEditingGroupId(null)}
+frontend/src/captions/TranscriptEditor.tsx:296: onChange={(e) => setEditDraftText(e.target.value)}
+frontend/src/captions/TranscriptEditor.tsx:302: onClick={() => {
+frontend/src/captions/TranscriptEditor.tsx:316: onClick={(e) => {
+frontend/src/captions/TranscriptEditor.tsx:346: onClick={onClose}
+frontend/src/components/BottomNav.tsx:39: onClick={() => onTabChange(tab.id)}
+frontend/src/components/ColorPickerModal.tsx:282: onClick={onClose}
+frontend/src/components/ColorPickerModal.tsx:286: onClick={(e) => e.stopPropagation()}
+frontend/src/components/ColorPickerModal.tsx:298: onClick={handleReset}
+frontend/src/components/ColorPickerModal.tsx:307: onClick={onClose}
+frontend/src/components/ColorPickerModal.tsx:368: onChange={(e) => handleHueChange(Number(e.target.value))}
+frontend/src/components/ColorPickerModal.tsx:397: onChange={(e) => handleAlphaChange(Number(e.target.value) / 100)}
+frontend/src/components/ColorPickerModal.tsx:437: onChange={handleHexInputChange}
+frontend/src/components/ColorPickerModal.tsx:456: onChange={(e) => handleRgbChange(ch, parseInt(e.target.value, 10))}
+frontend/src/components/ColorPickerModal.tsx:473: onClick={() => {
+frontend/src/components/ColorPickerModal.tsx:496: onClick={handleDone}
+frontend/src/components/ScreenErrorBoundary.tsx:51: onClick={this.retry}
+frontend/src/screens/AdminScreen.tsx:309: onClick={loadData}
+frontend/src/screens/AdminScreen.tsx:344: onClick={loadData}
+frontend/src/screens/AdminScreen.tsx:422: onChange={e => setSearchQuery(e.target.value)}
+frontend/src/screens/AdminScreen.tsx:429: onChange={e => setStatusFilter(e.target.value as any)}
+frontend/src/screens/AdminScreen.tsx:492: onClick={() => handleSetBan(user, false)}
+frontend/src/screens/AdminScreen.tsx:500: onClick={() => setConfirmDisableUser(user)}
+frontend/src/screens/AdminScreen.tsx:554: onClick={() => {
+frontend/src/screens/AdminScreen.tsx:570: onChange={e => {
+frontend/src/screens/AdminScreen.tsx:578: onClick={() => {
+frontend/src/screens/AdminScreen.tsx:601: onClick={() => {
+frontend/src/screens/AdminScreen.tsx:621: onChange={e => {
+frontend/src/screens/AdminScreen.tsx:630: onClick={() => {
+frontend/src/screens/AdminScreen.tsx:645: onClick={() => {
+frontend/src/screens/AdminScreen.tsx:684: onClick={() => setConfirmDisableUser(null)}
+frontend/src/screens/AdminScreen.tsx:691: onClick={() => handleSetBan(confirmDisableUser, true)}
+frontend/src/screens/CameraScreen.tsx:142: onClick={() => stepZoom(-0.2)}
+frontend/src/screens/CameraScreen.tsx:192: onClick={() => stepZoom(0.2)}
+frontend/src/screens/CameraScreen.tsx:1334: onClick={() => Bridge.retryCameraInit()}
+frontend/src/screens/CameraScreen.tsx:1353: onClick={() => Bridge.retryCameraInit()}
+frontend/src/screens/CameraScreen.tsx:1410: onClick={() => {
+frontend/src/screens/CameraScreen.tsx:1422: onClick={() => {
+frontend/src/screens/CameraScreen.tsx:1451: onClick={() => Bridge.retryCameraInit()}
+frontend/src/screens/CameraScreen.tsx:1478: onChange={handleSliderZoom}
+frontend/src/screens/CameraScreen.tsx:1488: onClick={handlePauseToggle}
+frontend/src/screens/CameraScreen.tsx:1508: onClick={handleStopRecording}
+frontend/src/screens/CameraScreen.tsx:1517: onClick={handleStartRecording}
+frontend/src/screens/ClipsScreen.tsx:626: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:645: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:662: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:680: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:713: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:1195: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:1289: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:2688: onClick={() => setShowSubmitModal(true)}
+frontend/src/screens/ClipsScreen.tsx:2697: onClick={fetchClips}
+frontend/src/screens/ClipsScreen.tsx:2719: onClick={() => setFilterStatus(chip.id)}
+frontend/src/screens/ClipsScreen.tsx:2766: onClick={onClearSessionFilter}
+frontend/src/screens/ClipsScreen.tsx:2780: <button type="button" onClick={() => setFeedback(null)} aria-label="Dismiss" className="text-text-muted hover:text-text-main">
+frontend/src/screens/ClipsScreen.tsx:2794: onClick={() => { void handleCloudRejectUndo(); }}
+frontend/src/screens/ClipsScreen.tsx:2834: onClick={() => setShowSubmitModal(true)}
+frontend/src/screens/ClipsScreen.tsx:2842: onClick={fetchClips}
+frontend/src/screens/ClipsScreen.tsx:2874: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:2931: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:2961: onClick={() => setShowSubmitModal(false)}
+frontend/src/screens/ClipsScreen.tsx:2973: onChange={(e) => setSubmitUrlInput(e.target.value)}
+frontend/src/screens/ClipsScreen.tsx:2980: onClick={() => setShowSubmitModal(false)}
+frontend/src/screens/ClipsScreen.tsx:2987: onClick={handleSubmitRemoteJob}
+frontend/src/screens/ClipsScreen.tsx:3016: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3038: onClick={() => setIsMoreModalOpen(true)}
+frontend/src/screens/ClipsScreen.tsx:3097: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3114: onClick={handleTogglePlay}
+frontend/src/screens/ClipsScreen.tsx:3125: onClick={(e) => e.stopPropagation()}
+frontend/src/screens/ClipsScreen.tsx:3134: onChange={(e) => handleSeek(parseFloat(e.target.value))}
+frontend/src/screens/ClipsScreen.tsx:3191: onClick={() => handleCopy(liveUrl, 'YouTube link')}
+frontend/src/screens/ClipsScreen.tsx:3206: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3218: onClick={() => setViewMode('studio')}
+frontend/src/screens/ClipsScreen.tsx:3263: onClick={() => setViewMode('studio')}
+frontend/src/screens/ClipsScreen.tsx:3271: onClick={() => setViewMode('publish')}
+frontend/src/screens/ClipsScreen.tsx:3295: onClick={() => handleLayoutChange(opt.id)}
+frontend/src/screens/ClipsScreen.tsx:3331: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3352: onClick={async () => {
+frontend/src/screens/ClipsScreen.tsx:3377: onClick={() => handleSaveCaptions()}
+frontend/src/screens/ClipsScreen.tsx:3388: onClick={async () => {
+frontend/src/screens/ClipsScreen.tsx:3412: onClick={handleClearSelection}
+frontend/src/screens/ClipsScreen.tsx:3465: onClick={(e) => {
+frontend/src/screens/ClipsScreen.tsx:3495: onClick={() => setIsFullscreenPreview(true)}
+frontend/src/screens/ClipsScreen.tsx:3512: onClick={handleTogglePlay}
+frontend/src/screens/ClipsScreen.tsx:3523: onClick={handleSaveAsDefaultTemplate}
+frontend/src/screens/ClipsScreen.tsx:3534: onClick={undo}
+frontend/src/screens/ClipsScreen.tsx:3544: onClick={redo}
+frontend/src/screens/ClipsScreen.tsx:3571: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3604: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3723: onClick={() => setIsFullscreenPreview(false)}
+frontend/src/screens/ClipsScreen.tsx:3767: onClick={handleTogglePlay}
+frontend/src/screens/ClipsScreen.tsx:3778: onChange={(e) => handleSeek(parseFloat(e.target.value))}
+frontend/src/screens/ClipsScreen.tsx:3799: onClick={async () => {
+frontend/src/screens/ClipsScreen.tsx:3815: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3828: onClick={() => setShowStudioExitConfirm(false)}
+frontend/src/screens/ClipsScreen.tsx:3854: onClick={() => setViewMode('detail')}
+frontend/src/screens/ClipsScreen.tsx:3899: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:3931: onClick={() => togglePlatform(p.id)}
+frontend/src/screens/ClipsScreen.tsx:3942: onClick={() => setFeedback(`To connect ${p.label}, open Settings -> Connected Accounts`)}
+frontend/src/screens/ClipsScreen.tsx:3958: onClick={() => setSelectedAccountMap(prev => ({ ...prev, [p.id]: acc.account_id }))}
+frontend/src/screens/ClipsScreen.tsx:3998: onClick={() => setPublishMode(m.id as 'private' | 'unlisted' | 'public')}
+frontend/src/screens/ClipsScreen.tsx:4023: onChange={(e) => setTitleDraft(e.target.value)}
+frontend/src/screens/ClipsScreen.tsx:4035: onChange={(e) => setCaptionDraft(e.target.value)}
+frontend/src/screens/ClipsScreen.tsx:4073: onClick={handleApprove}
+frontend/src/screens/ClipsScreen.tsx:4095: onClick={() => setIsMoreModalOpen(false)}
+frontend/src/screens/ClipsScreen.tsx:4099: onClick={(e) => e.stopPropagation()}
+frontend/src/screens/ClipsScreen.tsx:4109: onClick={() => setIsMoreModalOpen(false)}
+frontend/src/screens/ClipsScreen.tsx:4126: onClick={() => handleCopy(currentClip.id, 'Clip ID')}
+frontend/src/screens/ClipsScreen.tsx:4141: onClick={() => handleCopy(currentClip.session_id!, 'Session ID')}
+frontend/src/screens/ClipsScreen.tsx:4156: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:4168: onClick={() => {
+frontend/src/screens/ClipsScreen.tsx:4181: onClick={() => handlePromptReject(currentClip)}
+frontend/src/screens/ClipsScreen.tsx:4203: onClick={() => setClipToReject(null)}
+frontend/src/screens/ClipsScreen.tsx:4207: onClick={(e) => e.stopPropagation()}
+frontend/src/screens/ClipsScreen.tsx:4231: onClick={() => setClipToReject(null)}
+frontend/src/screens/ClipsScreen.tsx:4239: onClick={handleConfirmReject}
+frontend/src/screens/ProcessingScreen.tsx:97: onClick={() => setShowSamplePreview(!showSamplePreview)}
+frontend/src/screens/ProcessingScreen.tsx:139: onClick={checkDaemonHealth}
+frontend/src/screens/RecordingsScreen.tsx:528: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:552: onClick={() => setIsOptionsModalOpen(true)}
+frontend/src/screens/RecordingsScreen.tsx:612: onClick={() => Bridge.openNativePreview(s.id)}
+frontend/src/screens/RecordingsScreen.tsx:636: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:687: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:703: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:719: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:731: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:746: onClick={() => setShowConfirmDelete(s)}
+frontend/src/screens/RecordingsScreen.tsx:848: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:869: onChange={e => setImportUrl(e.target.value)}
+frontend/src/screens/RecordingsScreen.tsx:878: onClick={() => handleImportSubmit()}
+frontend/src/screens/RecordingsScreen.tsx:911: onClick={() => setFilter(chip.id)}
+frontend/src/screens/RecordingsScreen.tsx:944: onClick={() => setToastMessage(null)}
+frontend/src/screens/RecordingsScreen.tsx:968: onClick={onNavigateToRecord}
+frontend/src/screens/RecordingsScreen.tsx:985: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:1058: onClick={e => {
+frontend/src/screens/RecordingsScreen.tsx:1091: onClick={() => setIsOptionsModalOpen(false)}
+frontend/src/screens/RecordingsScreen.tsx:1101: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:1114: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:1132: onClick={() => setIsOptionsModalOpen(false)}
+frontend/src/screens/RecordingsScreen.tsx:1142: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:1158: onClick={() => {
+frontend/src/screens/RecordingsScreen.tsx:1185: onClick={() => setShowConfirmDelete(null)}
+frontend/src/screens/RecordingsScreen.tsx:1192: onClick={() => handleDeleteSession(showConfirmDelete)}
+frontend/src/screens/SettingsScreen.tsx:471: <button onClick={() => setFeedback(null)} className="text-xs text-text-muted hover:text-text-main">Dismiss</button>
+frontend/src/screens/SettingsScreen.tsx:488: onClick={handleSignOut}
+frontend/src/screens/SettingsScreen.tsx:508: onClick={() => handleThemeChange(opt.id)}
+frontend/src/screens/SettingsScreen.tsx:546: onClick={() => handleLensChange(lens)}
+frontend/src/screens/SettingsScreen.tsx:567: onClick={() => setIsTemplateEditorOpen(true)}
+frontend/src/screens/SettingsScreen.tsx:582: onClick={refreshAccounts}
+frontend/src/screens/SettingsScreen.tsx:625: onClick={() => handleDisconnectAccount(acc)}
+frontend/src/screens/SettingsScreen.tsx:636: onClick={() => handleToggleRole(acc, 'source_vault')}
+frontend/src/screens/SettingsScreen.tsx:650: onClick={() => handleToggleRole(acc, 'publisher')}
+frontend/src/screens/SettingsScreen.tsx:671: onClick={handleConnectYouTube}
+frontend/src/screens/SettingsScreen.tsx:701: onClick={() => handleDisconnectAccount(instagramAccounts[0])}
+frontend/src/screens/SettingsScreen.tsx:708: onClick={() => handleConnectProvider('instagram')}
+frontend/src/screens/SettingsScreen.tsx:731: onClick={() => handleDisconnectAccount(facebookAccounts[0])}
+frontend/src/screens/SettingsScreen.tsx:738: onClick={() => handleConnectProvider('facebook')}
+frontend/src/screens/SettingsScreen.tsx:761: onClick={() => handleDisconnectAccount(linkedinAccount)}
+frontend/src/screens/SettingsScreen.tsx:768: onClick={() => handleConnectProvider('linkedin')}
+frontend/src/screens/SettingsScreen.tsx:791: onClick={() => handleDisconnectAccount(twitterAccount)}
+frontend/src/screens/SettingsScreen.tsx:798: onClick={() => handleConnectProvider('twitter')}
+frontend/src/screens/SettingsScreen.tsx:836: onClick={handleDeleteGeminiKey}
+frontend/src/screens/SettingsScreen.tsx:847: onChange={(e) => setGeminiKeyInput(e.target.value)}
+frontend/src/screens/SettingsScreen.tsx:859: onClick={handleSaveGeminiKey}
+frontend/src/screens/SettingsScreen.tsx:866: onClick={() => { setShowGeminiInput(false); setGeminiKeyInput(''); setGeminiError(null); }}
+frontend/src/screens/SettingsScreen.tsx:875: onClick={() => setShowGeminiInput(true)}
+frontend/src/screens/SettingsScreen.tsx:900: onClick={() => {
+frontend/src/screens/SettingsScreen.tsx:1040: onClick={handleDownloadUpdate}
+frontend/src/screens/SettingsScreen.tsx:1058: onClick={() => Bridge.openDownloadUrl('https://resolviaai.github.io/Dispatch/Dispatch.apk')}
+frontend/src/screens/SettingsScreen.tsx:1080: onClick={handleCheckUpdates}
+frontend/src/screens/SettingsScreen.tsx:1095: onClick={handleCheckUpdates}
+frontend/src/screens/SettingsScreen.tsx:1103: onClick={handleCheckUpdates}
+frontend/src/studio/BatchConfirmModal.tsx:45: onClick={onClose}
+frontend/src/studio/BatchConfirmModal.tsx:94: onClick={onClose}
+frontend/src/studio/BatchConfirmModal.tsx:103: onClick={onConfirm}
+frontend/src/studio/CaptionDock.tsx:109: onClick={() => setZoom(prev => Math.max(30, prev - 15))}
+frontend/src/studio/CaptionDock.tsx:120: onClick={() => setZoom(prev => Math.min(160, prev + 15))}
+frontend/src/studio/CaptionDock.tsx:141: onClick={onRetryCaptions}
+frontend/src/studio/CaptionDock.tsx:155: onClick={handleRulerClick}
+frontend/src/studio/CaptionDock.tsx:185: onClick={() => {
+frontend/src/studio/CaptionDock.tsx:207: onClick={(e) => e.stopPropagation()}
+frontend/src/studio/CaptionDock.tsx:213: onChange={(e) => setEditText(e.target.value)}
+frontend/src/studio/CaptionDock.tsx:222: onClick={() => handleSaveWordText(group.id, w.id)}
+frontend/src/studio/CaptionDock.tsx:234: onClick={(e) => {
+frontend/src/studio/ClipLibraryNotice.tsx:24: onClick={onRetry}
+frontend/src/studio/InspectorPane.tsx:163: onClick={onToggleCollapse}
+frontend/src/studio/InspectorPane.tsx:192: onClick={onToggleCollapse}
+frontend/src/studio/InspectorPane.tsx:204: onClick={() => setActiveTab('metadata')}
+frontend/src/studio/InspectorPane.tsx:215: onClick={() => setActiveTab('captions')}
+frontend/src/studio/InspectorPane.tsx:226: onClick={() => setActiveTab('destinations')}
+frontend/src/studio/InspectorPane.tsx:266: onChange={(e) => {
+frontend/src/studio/InspectorPane.tsx:287: onChange={(e) => {
+frontend/src/studio/InspectorPane.tsx:302: onChange={(e) => {
+frontend/src/studio/InspectorPane.tsx:339: onClick={handleSaveMetadataDraft}
+frontend/src/studio/InspectorPane.tsx:360: onClick={() => handleApplyPreset(p)}
+frontend/src/studio/InspectorPane.tsx:387: onChange={(e) => onUpdateTrackStyle({ font_family: e.target.value })}
+frontend/src/studio/InspectorPane.tsx:408: onChange={(e) => onUpdateTrackStyle({ font_size: parseInt(e.target.value) })}
+frontend/src/studio/InspectorPane.tsx:429: onChange={(e) => onUpdateTrackStyle({ primary_color: e.target.value })}
+frontend/src/studio/InspectorPane.tsx:442: onChange={(e) => onUpdateTrackStyle({ highlight_color: e.target.value })}
+frontend/src/studio/InspectorPane.tsx:478: onChange={(e) => onUpdateTrackLayout?.({ position_y: Number((Number(e.target.value) / 100).toFixed(2)) })}
+frontend/src/studio/InspectorPane.tsx:495: onChange={(e) => onUpdateTrackLayout?.({ scale: Number((Number(e.target.value) / 100).toFixed(2)) })}
+frontend/src/studio/InspectorPane.tsx:513: onClick={onSaveCaptions}
+frontend/src/studio/InspectorPane.tsx:526: onClick={() => togglePlatform('youtube')}
+frontend/src/studio/InspectorPane.tsx:543: onChange={() => {}}
+frontend/src/studio/InspectorPane.tsx:555: onClick={() => togglePlatform('instagram')}
+frontend/src/studio/InspectorPane.tsx:572: onChange={() => {}}
+frontend/src/studio/InspectorPane.tsx:584: onClick={() => togglePlatform('linkedin')}
+frontend/src/studio/InspectorPane.tsx:601: onChange={() => {}}
+frontend/src/studio/InspectorPane.tsx:613: onClick={() => togglePlatform('x')}
+frontend/src/studio/InspectorPane.tsx:630: onChange={() => {}}
+frontend/src/studio/InspectorPane.tsx:667: onClick={() => setRejectConfirmOpen(!rejectConfirmOpen)}
+frontend/src/studio/InspectorPane.tsx:677: onClick={onApproveClip}
+frontend/src/studio/InspectorPane.tsx:703: onChange={(e) => setRejectReason(e.target.value)}
+frontend/src/studio/InspectorPane.tsx:714: onClick={() => setRejectConfirmOpen(false)}
+frontend/src/studio/InspectorPane.tsx:721: onClick={() => onRejectClip(rejectReason)}
+frontend/src/studio/KeyboardShortcutsModal.tsx:43: onClick={onClose}
+frontend/src/studio/PreviewStage.tsx:51: onClick={onRetry}
+frontend/src/studio/PreviewStage.tsx:188: onChange={(e) => onLayoutChange(e.target.value as LayoutMode)}
+frontend/src/studio/PreviewStage.tsx:209: onClick={onTriggerRender}
+frontend/src/studio/PreviewStage.tsx:250: onClick={onTogglePlay}
+frontend/src/studio/PreviewStage.tsx:286: onClick={onTogglePlay}
+frontend/src/studio/PreviewStage.tsx:310: onClick={onTogglePlay}
+frontend/src/studio/PreviewStage.tsx:320: onClick={() => onSeek(Math.max(0, currentTime - 5))}
+frontend/src/studio/PreviewStage.tsx:330: onClick={() => onSeek(Math.min(duration || 100, currentTime + 5))}
+frontend/src/studio/PreviewStage.tsx:354: onChange={(e) => {
+frontend/src/studio/PreviewStage.tsx:374: onClick={toggleMute}
+frontend/src/studio/PreviewStage.tsx:386: onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+frontend/src/studio/PreviewStage.tsx:393: onClick={toggleFullscreen}
+frontend/src/studio/QueuePane.tsx:160: onClick={onToggleCollapse}
+frontend/src/studio/QueuePane.tsx:192: onClick={onToggleCollapse}
+frontend/src/studio/QueuePane.tsx:207: onChange={(e) => setSearchQuery(e.target.value)}
+frontend/src/studio/QueuePane.tsx:213: onClick={() => setSearchQuery('')}
+frontend/src/studio/QueuePane.tsx:227: onClick={() => setFilter(f)}
+frontend/src/studio/QueuePane.tsx:248: onChange={(e) => setSort(e.target.value as QueueSort)}
+frontend/src/studio/QueuePane.tsx:260: onClick={() => onSelectByScoreThreshold(85)}
+frontend/src/studio/QueuePane.tsx:281: onClick={onRequestBatchApprove}
+frontend/src/studio/QueuePane.tsx:290: onClick={onRequestBatchReject}
+frontend/src/studio/QueuePane.tsx:298: onClick={onClearSelection}
+frontend/src/studio/QueuePane.tsx:326: onClick={() => toggleSessionCollapse(group.sessionId)}
+frontend/src/studio/QueuePane.tsx:357: onClick={() => onSelectClip(clip)}
+frontend/src/studio/QueuePane.tsx:367: onClick={(e) => onToggleSelectId(clip.id, e)}
+frontend/src/studio/QueuePane.tsx:453: onClick={() => onSelectAllVisible(allVisibleIds)}
+frontend/src/studio/StudioHeader.tsx:104: onClick={() => onTogglePublishMode('private')}
+frontend/src/studio/StudioHeader.tsx:119: onClick={() => onTogglePublishMode('public')}
+frontend/src/studio/StudioHeader.tsx:173: onClick={onToggleFocusMode}
+frontend/src/studio/StudioHeader.tsx:187: onClick={onOpenShortcuts}
+frontend/src/studio/StudioHeader.tsx:197: onClick={onSwitchToMobileFrame}
+frontend/src/studio/StudioWorkstation.tsx:679: <button type="button" onClick={() => { void fetchClips(true); }} className="min-h-[44px] px-3 text-text-main underline">Retry</button>
+frontend/src/studio/StudioWorkstation.tsx:690: onDurationChange={setDuration}
