@@ -14,6 +14,7 @@ Usage:
   python scripts/backfill_window_transcripts.py --dry-run
   python scripts/backfill_window_transcripts.py --limit 20
   python scripts/backfill_window_transcripts.py --clip-id clip_20261028_...
+  python scripts/backfill_window_transcripts.py --owner-user-id <uuid>   # legacy unowned clips
 """
 
 from __future__ import annotations
@@ -24,7 +25,12 @@ import sys
 from typing import Any, Dict, List
 
 from dispatch import db
-from dispatch.cloud.sync import extract_source_words, get_worker_token, push_window_transcript
+from dispatch.cloud.sync import (
+    authorized_pc_owner_ids,
+    extract_source_words,
+    get_worker_token,
+    push_window_transcript,
+)
 
 
 def _candidates(limit: int, clip_id: str | None) -> List[Dict[str, Any]]:
@@ -49,10 +55,16 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="report actions without contacting the Worker")
     parser.add_argument("--limit", type=int, default=20, help="maximum clips to inspect (default 20)")
     parser.add_argument("--clip-id", default=None, help="backfill one specific local clip id")
+    parser.add_argument("--owner-user-id", default=None,
+                        help="account to attribute LOCAL clips that have no user_id (legacy rows). "
+                             "Must already be in DISPATCH_PC_OWNER_USER_IDS; the Worker still verifies ownership.")
     args = parser.parse_args(argv)
 
     if not get_worker_token() and not args.dry_run:
         print("DISPATCH_WORKER_TOKEN is not configured; cannot backfill cloud transcripts.", file=sys.stderr)
+        return 2
+    if args.owner_user_id and args.owner_user_id.strip() not in authorized_pc_owner_ids():
+        print("--owner-user-id is not in DISPATCH_PC_OWNER_USER_IDS; refusing to touch another account.", file=sys.stderr)
         return 2
 
     clips = _candidates(args.limit, args.clip_id)
@@ -80,20 +92,29 @@ def main(argv: List[str] | None = None) -> int:
                 "last_word": words[-1]["word"],
             })
             continue
-        outcome = push_window_transcript(clip_id, clip, only_if_missing=True)
+        outcome = push_window_transcript(clip_id, clip, only_if_missing=True,
+                                         owner_user_id=args.owner_user_id)
         action = {
             "pushed": "pushed_transcript",
             "skipped_existing": "skipped_existing_transcript",
             "no_words": "unrecoverable_no_local_transcript",
             "not_staged": "not_staged_window",
+            "unauthorized_owner": "needs_owner_attribution",
             "failed": "push_failed",
             "no_credentials": "push_failed",
         }.get(outcome, "push_failed")
-        results.append({
+        entry = {
             "clip_id": clip_id,
             "action": action,
             "words": len(words),
-        })
+        }
+        if action == "needs_owner_attribution":
+            entry["next_step"] = (
+                "This local clip has no user_id and no single-profile owner could be "
+                "resolved. Re-run with --owner-user-id <uuid> for an account listed in "
+                "DISPATCH_PC_OWNER_USER_IDS."
+            )
+        results.append(entry)
 
     summary = {
         "status": "dry_run" if args.dry_run else "complete",
@@ -103,11 +124,12 @@ def main(argv: List[str] | None = None) -> int:
         "skipped_existing": sum(1 for r in results if r["action"] == "skipped_existing_transcript"),
         "not_staged": sum(1 for r in results if r["action"] == "not_staged_window"),
         "failed": sum(1 for r in results if r["action"] == "push_failed"),
+        "needs_owner": sum(1 for r in results if r["action"] == "needs_owner_attribution"),
         "unrecoverable": sum(1 for r in results if r["action"] == "unrecoverable_no_local_transcript"),
         "results": results,
     }
     print(json.dumps(summary, indent=2))
-    return 1 if summary["failed"] else 0
+    return 1 if (summary["failed"] or summary["needs_owner"]) else 0
 
 
 if __name__ == "__main__":

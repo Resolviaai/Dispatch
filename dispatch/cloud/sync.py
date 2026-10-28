@@ -219,11 +219,12 @@ def _render_fingerprint(clip: Dict[str, Any], video_path: Path) -> str:
     return f"{stat.st_size}:{stat.st_mtime_ns}:{int(clip.get('range_revision') or 0)}"
 
 
-def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, only_if_missing: bool = True) -> str:
+def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, only_if_missing: bool = True,
+                           owner_user_id: Optional[str] = None) -> str:
     """Persist words for an ALREADY-STAGED window without re-uploading media.
 
-    Returns: pushed | skipped_existing | no_words | not_staged | failed |
-    no_credentials. Backfill uses `only_if_missing=True` so it can never
+    Returns: pushed | skipped_existing | no_words | not_staged | unauthorized_owner |
+    failed | no_credentials. Backfill uses `only_if_missing=True` so it can never
     overwrite a newer cloud transcript.
     """
     if not get_worker_token():
@@ -233,9 +234,20 @@ def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, 
     if not clip:
         return "failed"
 
-    user_id = str(clip.get("user_id") or "").strip() or resolve_single_profile_owner()
+    user_id = str(clip.get("user_id") or "").strip()
+    if not user_id and owner_user_id:
+        # Legacy unowned clip: an operator may explicitly assert the owning account,
+        # but only for an account this PC is authorized to act as. The Worker still
+        # enforces row ownership server-side, so a wrong assertion fails closed.
+        asserted = owner_user_id.strip()
+        if asserted not in authorized_pc_owner_ids():
+            logger.warning("Transcript backfill refused for %s: asserted owner is not an authorized PC owner.", clip_id)
+            return "unauthorized_owner"
+        user_id = asserted
+    if not user_id:
+        user_id = resolve_single_profile_owner() or ""
     if not user_id or not _UUID_RE.match(user_id):
-        return "failed"
+        return "unauthorized_owner"
     try:
         r_state = requests.get(
             f"{_worker_base()}/sync/pc/clips/{urlquote(clip_id, safe='')}",
@@ -250,6 +262,7 @@ def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, 
     media_id = str(state.get("media_object_id") or "").strip()
     if not media_id:
         return "failed"
+    window_id = str(state.get("window_id") or "").strip()
     words = extract_source_words(clip)
     if not words:
         return "no_words"
@@ -260,6 +273,7 @@ def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, 
             json={
                 "local_clip_id": clip_id,
                 "media_object_id": media_id,
+                "window_id": window_id or None,
                 "window_start": float(state.get("window_start") or clip.get("start_time") or 0.0),
                 "window_end": float(state.get("window_end") or clip.get("end_time") or 0.0),
                 "words": words,

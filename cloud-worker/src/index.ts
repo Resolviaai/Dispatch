@@ -2049,25 +2049,27 @@ export default {
               { headers: svc }
             ),
             fetch(
-              `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&status=eq.ready&select=id,media_object_id,window_start,window_end,transcript_status,render_fingerprint&limit=1`,
+              `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&status=eq.ready&select=id,media_object_id,window_start,window_end,transcript_status,render_fingerprint&order=created_at.asc&limit=1`,
               { headers: svc }
             ),
           ]);
           const clipRows = clipRes.ok ? (await clipRes.json() as Array<Record<string, unknown>>) : [];
           const clipRow = Array.isArray(clipRows) ? clipRows[0] : null;
-          const windowRows = windowRes.ok ? (await windowRes.json() as unknown[]) : [];
+          const windowRows = windowRes.ok ? (await windowRes.json() as Array<Record<string, unknown>>) : [];
+          const windowRow = Array.isArray(windowRows) ? windowRows[0] : undefined;
           return json(200, {
             local_clip_id: localClipId,
             cloud_clip_id: (clipRow && typeof clipRow.id === "string") ? clipRow.id : null,
             tombstoned: Boolean(clipRow && clipRow.status === "rejected" && clipRow.reject_purge_after),
             reject_requested_at: clipRow ? clipRow.reject_requested_at : null,
             reject_purge_after: clipRow ? clipRow.reject_purge_after : null,
-            already_staged: Array.isArray(windowRows) && windowRows.length > 0,
-            media_object_id: Array.isArray(windowRows) ? (windowRows[0]?.media_object_id ?? null) : null,
-            window_start: Array.isArray(windowRows) ? (windowRows[0]?.window_start ?? null) : null,
-            window_end: Array.isArray(windowRows) ? (windowRows[0]?.window_end ?? null) : null,
-            transcript_status: Array.isArray(windowRows) ? (windowRows[0]?.transcript_status ?? null) : null,
-            render_fingerprint: Array.isArray(windowRows) ? (windowRows[0]?.render_fingerprint ?? null) : null,
+            already_staged: Boolean(windowRow),
+            window_id: windowRow?.id ?? null,
+            media_object_id: windowRow?.media_object_id ?? null,
+            window_start: windowRow?.window_start ?? null,
+            window_end: windowRow?.window_end ?? null,
+            transcript_status: windowRow?.transcript_status ?? null,
+            render_fingerprint: windowRow?.render_fingerprint ?? null,
           });
         } catch (e) {
           return json(502, { error: `clip state lookup failed: ${e instanceof Error ? e.message : e}` });
@@ -2081,7 +2083,7 @@ export default {
         const body = await readJson<{
           local_clip_id: string; media_object_id: string;
           window_start: number; window_end: number; words?: Array<Record<string, unknown>>;
-          render_fingerprint?: string; only_if_missing?: boolean;
+          render_fingerprint?: string; only_if_missing?: boolean; window_id?: string;
         }>(request);
         const renderFingerprint = typeof body?.render_fingerprint === "string"
           ? body.render_fingerprint.slice(0, 200)
@@ -2159,19 +2161,45 @@ export default {
             return rows[0]?.id ?? null;
           };
 
-          // Idempotent re-registration: same-bounds ready window is reused.
+          // Idempotent re-registration. Window identity is the row's primary key,
+          // never its float bounds: PostgREST renders float8 with 15 significant
+          // digits, so a value read back from the state endpoint can be a
+          // different double than the one stored (318.04 vs 318.03999999999996)
+          // and an exact-equality lookup would insert a duplicate window.
           let windowId: string | null = null;
           let reused = false;
-          const dupRes = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&status=eq.ready&window_start=eq.${Number(body?.window_start ?? 0)}&window_end=eq.${Number(body?.window_end ?? 0)}&select=id&limit=1`,
-            { headers: svc }
-          );
-          const dupRows = dupRes.ok ? (await dupRes.json() as Array<{ id: string }>) : [];
-          if (Array.isArray(dupRows) && dupRows.length > 0) {
-            windowId = dupRows[0].id;
-            reused = true;
-          } else {
-            windowId = await insertWindow();
+          const explicitWindowId = typeof body?.window_id === "string" ? body.window_id.trim() : "";
+          if (UUID_RE.test(explicitWindowId)) {
+            const ownedRes = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/edit_windows?id=eq.${explicitWindowId}&user_id=eq.${userId}&status=eq.ready&select=id&limit=1`,
+              { headers: svc }
+            );
+            const ownedRows = ownedRes.ok ? (await ownedRes.json() as Array<{ id: string }>) : [];
+            if (Array.isArray(ownedRows) && ownedRows.length > 0) {
+              windowId = ownedRows[0].id;
+              reused = true;
+            }
+          }
+          if (!windowId) {
+            const siblingsRes = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&status=eq.ready&select=id,window_start,window_end&order=created_at.asc`,
+              { headers: svc }
+            );
+            const siblings = siblingsRes.ok ? (await siblingsRes.json() as Array<{ id: string; window_start: number; window_end: number }>) : [];
+            const wantStart = Number(body?.window_start ?? 0);
+            const wantEnd = Number(body?.window_end ?? 0);
+            // Tolerant bounds match (sub-frame) for first-time staging of a clip
+            // whose window row was created from the same local floats.
+            const match = (Array.isArray(siblings) ? siblings : []).find(
+              (row) => Math.abs(Number(row.window_start) - wantStart) < 0.005
+                && Math.abs(Number(row.window_end) - wantEnd) < 0.005
+            );
+            if (match) {
+              windowId = match.id;
+              reused = true;
+            } else {
+              windowId = await insertWindow();
+            }
           }
 
           // Link the media object to the cloud clip (idempotent) and store the

@@ -1243,7 +1243,9 @@ test("backfill transcript registration never overwrites an existing transcript",
       ? { body: [] }
       : { body: [{ user_id: USER_A, status: "active" }] },
   });
-  supabase.set("/rest/v1/edit_windows?user_id=eq.", { method: "GET", fn: () => ({ body: [{ id: "w1" }] }) });
+  supabase.set("/rest/v1/edit_windows?user_id=eq.", {
+    method: "GET", fn: () => ({ body: [{ id: "w1", window_start: 0, window_end: 10 }] }),
+  });
   supabase.set("/rest/v1/window_transcripts?window_id=eq.", { method: "GET", fn: () => ({ body: [{ words: [{ word: "existing" }] }] }) });
 
   const res = await worker.fetch(new Request("https://w.test/sync/pc/windows", {
@@ -1260,6 +1262,99 @@ test("backfill transcript registration never overwrites an existing transcript",
   const body = await res.json();
   assert.equal(body.transcript_skipped, "existing");
   assert.equal(body.transcripts_stored, true);
+});
+
+test("window_id from the state endpoint reuses the row despite float rendering drift", async () => {
+  // Postgres renders float8 with 15 significant digits, so the bounds the PC
+  // reads back (318.04) can be a different double than the stored one
+  // (318.03999999999996). Exact-equality lookups used to miss and insert a
+  // duplicate ready window; identity is the primary key instead.
+  const WOLD = "55555555-5555-5555-5555-555555555555";
+  let inserted = 0;
+  supabase.set("/rest/v1/clips_cloud?user_id=eq.", { method: "GET", fn: () => ({ body: [{ id: "cloud-1" }] }) });
+  supabase.set("/rest/v1/media_objects?id=eq.", {
+    fn: (_url, init) => init?.method === "PATCH"
+      ? { body: [] }
+      : { body: [{ user_id: USER_A, status: "active" }] },
+  });
+  supabase.set("/rest/v1/edit_windows?id=eq.", {
+    method: "GET", fn: () => ({ body: [{ id: WOLD }] }),
+  });
+  supabase.set("/rest/v1/edit_windows?user_id=eq.", {
+    method: "GET", fn: () => ({ body: [{ id: WOLD, window_start: 257.61, window_end: 318.03999999999996 }] }),
+  });
+  supabase.set("/rest/v1/edit_windows", {
+    method: "POST", fn: () => { inserted++; return { body: [{ id: "w-new" }] }; },
+  });
+  supabase.set("/rest/v1/window_transcripts?window_id=eq.", { method: "GET", fn: () => ({ body: [] }) });
+
+  const res = await worker.fetch(new Request("https://w.test/sync/pc/windows", {
+    method: "POST",
+    headers: pcHeaders(USER_A),
+    body: JSON.stringify({
+      local_clip_id: "clip-1", media_object_id: MEDIA, window_id: WOLD,
+      window_start: 257.61, window_end: 318.04,
+      words: [{ word: "hi", start: 1, end: 2 }],
+      only_if_missing: true,
+    }),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.window_id, WOLD, "explicit window_id is honoured");
+  assert.equal(body.window_reused, true);
+  assert.equal(inserted, 0, "no duplicate ready window may be inserted");
+  assert.equal(body.transcripts_stored, true);
+});
+
+test("window_id belonging to another account is ignored, not adopted", async () => {
+  let inserted = 0;
+  supabase.set("/rest/v1/clips_cloud?user_id=eq.", { method: "GET", fn: () => ({ body: [{ id: "cloud-1" }] }) });
+  supabase.set("/rest/v1/media_objects?id=eq.", {
+    fn: (_url, init) => init?.method === "PATCH"
+      ? { body: [] }
+      : { body: [{ user_id: USER_A, status: "active" }] },
+  });
+  // Ownership filter returns nothing: the id is not this caller's ready window.
+  supabase.set("/rest/v1/edit_windows?id=eq.", { method: "GET", fn: () => ({ body: [] }) });
+  supabase.set("/rest/v1/edit_windows?user_id=eq.", { method: "GET", fn: () => ({ body: [] }) });
+  supabase.set("/rest/v1/edit_windows", { method: "POST", fn: () => { inserted++; return { body: [{ id: "w-new" }] }; } });
+
+  const res = await worker.fetch(new Request("https://w.test/sync/pc/windows", {
+    method: "POST",
+    headers: pcHeaders(USER_A),
+    body: JSON.stringify({
+      local_clip_id: "clip-1", media_object_id: MEDIA,
+      window_id: "66666666-6666-6666-6666-666666666666",
+      window_start: 0, window_end: 10,
+      words: [{ word: "hi", start: 1, end: 2 }],
+    }),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.window_reused, false, "a foreign window_id must not be adopted");
+  assert.equal(inserted, 1, "own fresh window is created instead");
+});
+
+test("clip state endpoint returns the window id the PC must reuse", async () => {
+  const WID = "77777777-7777-7777-7777-777777777777";
+  supabase.set("/rest/v1/clips_cloud?user_id=eq.", {
+    method: "GET", fn: () => ({ body: [{ id: "cloud-1", status: "ready_review" }] }),
+  });
+  supabase.set("/rest/v1/edit_windows?user_id=eq.", {
+    method: "GET",
+    fn: (url) => {
+      assert.match(url, /order=created_at\.asc/, "oldest canonical window wins");
+      return { body: [{ id: WID, media_object_id: MEDIA, window_start: 257.61, window_end: 318.04, transcript_status: "ready", render_fingerprint: "fp" }] };
+    },
+  });
+  const res = await worker.fetch(
+    new Request("https://w.test/sync/pc/clips/clip-1", { method: "GET", headers: pcHeaders(USER_A) }),
+    env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.window_id, WID);
+  assert.equal(body.already_staged, true);
+  assert.equal(body.transcript_status, "ready");
 });
 
 test("consistency report is authenticated and owner-scoped", async () => {
