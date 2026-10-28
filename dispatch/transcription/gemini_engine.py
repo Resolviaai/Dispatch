@@ -57,29 +57,72 @@ def _parse_offset_to_seconds(offset_str: Any) -> float:
 
 
 def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> bool:
-    """Check if gemini-3.5-transcribe is within daily limit, and increment on approval.
-    
-    Returns True if quota is available, False if daily limit is reached.
+    """Check if gemini-3.5-transcribe is within the daily limit and atomically reserve one request.
+
+    Single conditional UPDATE replaces the old two-setting read-modify-write, which
+    let two worker threads both observe 24/25 and both fire the API call. Returns
+    True if the slot is reserved, False if the daily limit is reached.
     """
+    from datetime import datetime, timezone
+    import sqlite3
+
     today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    current_date = db.get_setting("transcribe_quota_date", "")
-    current_count = int(db.get_setting("transcribe_quota_count", "0") or 0)
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('transcribe_quota_date', ?)",
+                (today_utc,)
+            )
+            cursor.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('transcribe_quota_count', '0')"
+            )
+            # Read the stored date; if it is stale, reset the counter and ADVANCE
+            # THE DATE inside the same transaction, then take the slot with a
+            # conditional increment. (The date must be written on roll-over:
+            # resetting the counter while leaving yesterday's date would zero
+            # the counter on EVERY call and defeat the limit entirely.)
+            cursor.execute("SELECT value FROM settings WHERE key = 'transcribe_quota_date'")
+            stored_date_row = cursor.fetchone()
+            if stored_date_row and stored_date_row["value"] != today_utc:
+                cursor.execute("UPDATE settings SET value = '0' WHERE key = 'transcribe_quota_count'")
+                cursor.execute("UPDATE settings SET value = ? WHERE key = 'transcribe_quota_date'", (today_utc,))
+            cursor.execute(
+                "UPDATE settings SET value = CAST(COALESCE(value, '0') AS INTEGER) + 1 "
+                "WHERE key = 'transcribe_quota_count' AND CAST(COALESCE(value, '0') AS INTEGER) < ?",
+                (max_daily_requests,)
+            )
+            reserved = cursor.rowcount == 1
+            conn.commit()
+            return reserved
+        except sqlite3.Error as e:
+            logger.error("Daily transcribe quota reservation failed: %s", e)
+            conn.rollback()
+            # Reserve nothing on failure so we never spend on a broken counter.
+            return False
 
-    if current_date != today_utc:
-        # Reset counter for new day
-        db.set_setting("transcribe_quota_date", today_utc)
-        db.set_setting("transcribe_quota_count", "1")
-        return True
 
-    if current_count >= max_daily_requests:
-        logger.warning(
-            "gemini-3.5-transcribe daily quota reached (%d/%d requests for %s). Overflow guard active.",
-            current_count, max_daily_requests, today_utc
+def refund_daily_transcribe_quota() -> None:
+    """Return a reserved transcribe slot (floor 0) when the request never reached Gemini.
+
+    Called after a Stage-2 failure that happened before/without the provider call,
+    so a stuck render cannot race the daily counter upward (audit 2026-10-27).
+    """
+    from datetime import datetime, timezone
+
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Only refund against today's counter to avoid gifting yesterday's
+        # unused slot to a different day by accident.
+        cursor.execute(
+            "UPDATE settings SET value = MAX(CAST(value AS INTEGER) - 1, 0) "
+            "WHERE key = 'transcribe_quota_count' AND value IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM settings WHERE key = 'transcribe_quota_date' "
+            "AND value = ?)",
+            (today_utc,)
         )
-        return False
-
-    db.set_setting("transcribe_quota_count", str(current_count + 1))
-    return True
+        conn.commit()
 
 
 def transcribe_stage1_flash_lite(

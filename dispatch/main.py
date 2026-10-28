@@ -190,6 +190,34 @@ def start_dispatch(run_web: bool = True):
     except Exception as e:
         logger.warning("Cloud Sync worker not started: %s", e)
 
+    # 9d. Housekeeping (C2/D7, audit 2026-10-27): purge heavy rendered MP4 media for
+    # expired published clips. Previously GET /api/clips flushed this implicitly —
+    # now it runs on a fixed schedule so the review API stays read-only. First sweep
+    # 5 minutes after boot (frees disk soon after a publish completes), then every
+    # 6 hours. cleanup_expired_published_clips() only purges VERIFIED published clips
+    # (outbox row with a real remote_id) and always preserves thumbnails + metadata.
+    try:
+        import threading
+
+        def _published_clip_janitor() -> None:
+            first = True
+            while True:
+                try:
+                    time.sleep(300 if first else 6 * 60 * 60)
+                    purged = db.cleanup_expired_published_clips(retention_days=7)
+                    if purged:
+                        logger.info("Published-clip janitor purged media for %d expired clip(s).", purged)
+                except Exception as sweep_err:
+                    logger.warning("Published-clip janitor sweep failed: %s", sweep_err)
+                finally:
+                    first = False
+
+        threading.Thread(target=_published_clip_janitor, daemon=True,
+                          name="dispatch-published-clip-janitor").start()
+        logger.info("Published-clip janitor active (first sweep in 5 min, then every 6 h)")
+    except Exception as e:
+        logger.warning("Published-clip janitor not started: %s", e)
+
     # 9. Start Web Dashboard
     if run_web:
         # Optional TLS (strongly recommended when pairing phones over LAN: the

@@ -50,7 +50,7 @@ class TestLanAuthAndOwnership(unittest.TestCase):
         with db.get_db_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO clips (id, user_id, title, status, video_path, start_time, end_time, duration)
-                VALUES ('clip_auth_test', 'usr_alpha', 'Auth Test', 'ready_review', ?, 0.0, 15.0, 15.0)
+                VALUES ('clip_auth_test', 'usr_alpha', 'Auth Test', 'approved', ?, 0.0, 15.0, 15.0)
             """, (temp_path,))
             conn.execute("""
                 INSERT OR REPLACE INTO publishing_outbox (id, clip_id, user_id, platform, account_id, status, publish_mode, idempotency_key)

@@ -222,12 +222,13 @@ class YouTubeInboxCatcher:
                 candidates.sort(key=lambda f: f.stat().st_size, reverse=True)
                 cand = candidates[0]
                 if cand.suffix.lower() != ".mp4":
-                    # Convert/remux to MP4
-                    proc = subprocess.run(
+                    # Convert/remux to MP4 with a hard deadline; a hung demuxer must
+                    # not hold the poller/ingest lock open forever (audit 2026-10-27).
+                    from dispatch.transcription.subprocess_utils import run_checked
+                    proc = run_checked(
                         ["ffmpeg", "-y", "-i", str(cand), "-c", "copy", str(target_path)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False
+                        timeout_seconds=600,
+                        label="ffmpeg inbox remux",
                     )
                     if proc.returncode == 0 and target_path.exists() and target_path.stat().st_size > 1024:
                         cand.unlink(missing_ok=True)
@@ -270,11 +271,13 @@ class YouTubeInboxCatcher:
             raise ValueError(f"Invalid YouTube URL or ID: {url_or_id}")
 
         existing = db.get_youtube_video(video_id)
-        # Idempotency check: If already DOWNLOADED or completed downstream, return existing record
+        # Idempotency check: If already DOWNLOADED or completed downstream, return existing record.
+        # CAPTIONS_UNAVAILABLE with an intact file is skipped too: a bounded whisper
+        # retry must not trigger a full yt-dlp re-download each time.
         if existing and existing["status"] in (
             "DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED",
             "TRANSCRIPT_FETCHED", "ANALYZING", "CLIPS_DEFINED",
-            "CLIPS_CREATED", "COMPLETED"
+            "CLIPS_CREATED", "COMPLETED", "CAPTIONS_UNAVAILABLE"
         ):
             local_path = Path(existing["local_video_path"]) if existing.get("local_video_path") else None
             if local_path and local_path.exists() and local_path.stat().st_size > 0:

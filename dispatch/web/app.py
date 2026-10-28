@@ -1329,7 +1329,7 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
             aspect_ratio=ctx["source_aspect_ratio"],
             layout_mode=target_layout,
             segments=segments,
-            subtitle_options={"enabled": True, "caption_track": caption_snapshot, "preserve_timing": True},
+            subtitle_options={"enabled": bool(caption_snapshot or segments), "caption_track": caption_snapshot, "preserve_timing": True},
             expected_range_revision=current_revision,
         )
         out_file = Path(render_res["video_path"])

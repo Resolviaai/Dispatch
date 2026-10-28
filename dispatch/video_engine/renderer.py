@@ -5,6 +5,7 @@ normalizes audio, generates preview thumbnails, and enforces strict duration lim
 """
 import subprocess
 import logging
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dispatch.config import CLIPS_DIR, PROCESSING_DIR, MAX_CLIP_DURATION, MIN_CLIP_DURATION
@@ -71,9 +72,14 @@ def render_clip(
 
     output_video_path = CLIPS_DIR / f"{clip_id}.mp4"
     output_thumb_path = CLIPS_DIR / f"{clip_id}.jpg"
-    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
-    temp_video_path = CLIPS_DIR / f"{clip_id}.tmp.mp4"
-    temp_thumb_path = CLIPS_DIR / f"{clip_id}.tmp.jpg"
+    # Working files carry a per-render suffix so overlapping renders of the same clip
+    # (worker auto-render + dashboard preview) never clobber each other's temp media
+    # or a stale ASS from an earlier attempt; final artifacts still land on the one
+    # canonical path via atomic replace below (audit 2026-10-27).
+    render_suffix = f"_{uuid.uuid4().hex[:8]}"
+    ass_path = PROCESSING_DIR / f"{clip_id}{render_suffix}.ass"
+    temp_video_path = CLIPS_DIR / f"{clip_id}{render_suffix}.tmp.mp4"
+    temp_thumb_path = CLIPS_DIR / f"{clip_id}{render_suffix}.tmp.jpg"
 
     # 2. Subtitle generation with synchronized timeline.
     # Rendering contract (v1.5 remediation):

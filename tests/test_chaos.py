@@ -22,6 +22,7 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from dispatch.web.app import app
+from dispatch.config import INCOMING_DIR
 from dispatch.db import (
     init_db,
     get_db_connection,
@@ -70,27 +71,19 @@ class TestDispatchChaosEngineering(unittest.TestCase):
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     # =========================================================================
-    # CATEGORY 1: NETWORK INTERRUPTIONS & RESUMABLE UPLOADS (Scenarios 1, 2, 3, 23)
+    # CATEGORY 1: NETWORK INTERRUPTIONS (Scenarios 1, 2, 3, 23) — RETIRED LAN BYTE PATH
     # =========================================================================
     def test_scenarios_1_to_3_network_interruption_at_5_50_99_percent(self):
-        """Validates network disconnect at 5%, 50%, and 99% does not lose bytes and resumes accurately."""
-        payload_size = 10000
+        """Post-retirement: interrupting a transfer at 5%, 50%, or 99% is
+        structurally impossible — the LAN byte receiver answers 410 Gone at
+        every offset state, so no partial byte state can ever be lost or
+        stranded. Phone media now arrives via YouTube; resumable-byte
+        semantics are intentionally gone."""
         test_bytes = b"CHAOS_RECOVERY_PAYLOAD_BYTE_STREAM_" * 280  # ~10,080 bytes
         file_size = len(test_bytes)
         sha256_full = hashlib.sha256(test_bytes).hexdigest()
         seg_id = f"seg_chaos_net_{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
-
-        # Init upload on server
-        init_resp = client.post("/api/sync/upload/init", json={
-            "session_id": "sess_chaos_net",
-            "segment_id": seg_id,
-            "filename": f"{seg_id}.mp4",
-            "file_size_bytes": file_size,
-            "sha256_hash": sha256_full,
-            "auth_token": AUTH_TOKEN
-        })
-        self.assertEqual(init_resp.status_code, 200)
-        self.assertEqual(init_resp.json()["remote_offset"], 0)
+        part_file = INCOMING_DIR / f"{seg_id}.part"
 
         def make_headers(offset: int):
             return {
@@ -103,18 +96,20 @@ class TestDispatchChaosEngineering(unittest.TestCase):
                 "content-type": "application/octet-stream"
             }
 
-        # SCENARIO 1: Cut at ~5% (500 bytes)
-        cut_5 = int(file_size * 0.05)
-        c5_resp = client.patch(
-            "/api/sync/upload/chunk",
-            content=test_bytes[:cut_5],
-            headers=make_headers(0)
-        )
-        self.assertEqual(c5_resp.status_code, 200)
-        self.assertEqual(c5_resp.json()["remote_offset"], cut_5)
+        # SCENARIOS 1-3: an interrupted transfer at any progress is a 410 no-op
+        for progress_fraction in (0.05, 0.50, 0.99):
+            cut = int(file_size * progress_fraction)
+            resp = client.patch(
+                "/api/sync/upload/chunk",
+                content=test_bytes[:cut],
+                headers=make_headers(0)
+            )
+            self.assertEqual(resp.status_code, 410, f"fraction {progress_fraction} must be 410")
+            self.assertIn("retired", resp.json()["detail"])
 
-        # Connection drops! Re-query offset
-        recon5 = client.post("/api/sync/upload/init", json={
+        # SCENARIO 23 (old resume re-query): the init remote-offset oracle is
+        # equally retired — replays cannot resurrect a receiver.
+        recon = client.post("/api/sync/upload/init", json={
             "session_id": "sess_chaos_net",
             "segment_id": seg_id,
             "filename": f"{seg_id}.mp4",
@@ -122,55 +117,10 @@ class TestDispatchChaosEngineering(unittest.TestCase):
             "sha256_hash": sha256_full,
             "auth_token": AUTH_TOKEN
         })
-        self.assertEqual(recon5.json()["remote_offset"], cut_5, "Must resume from 5% offset!")
+        self.assertEqual(recon.status_code, 410)
 
-        # SCENARIO 2: Upload to ~50% and drop again
-        cut_50 = int(file_size * 0.50)
-        c50_resp = client.patch(
-            "/api/sync/upload/chunk",
-            content=test_bytes[cut_5:cut_50],
-            headers=make_headers(cut_5)
-        )
-        self.assertEqual(c50_resp.json()["remote_offset"], cut_50)
-
-        # Drop again! Re-query offset
-        recon50 = client.post("/api/sync/upload/init", json={
-            "session_id": "sess_chaos_net",
-            "segment_id": seg_id,
-            "filename": f"{seg_id}.mp4",
-            "file_size_bytes": file_size,
-            "sha256_hash": sha256_full,
-            "auth_token": AUTH_TOKEN
-        })
-        self.assertEqual(recon50.json()["remote_offset"], cut_50, "Must resume from 50% offset!")
-
-        # SCENARIO 3: Upload to ~99% and drop
-        cut_99 = int(file_size * 0.99)
-        c99_resp = client.patch(
-            "/api/sync/upload/chunk",
-            content=test_bytes[cut_50:cut_99],
-            headers=make_headers(cut_50)
-        )
-        self.assertEqual(c99_resp.json()["remote_offset"], cut_99)
-
-        # Finish remaining 1%
-        cfinal_resp = client.patch(
-            "/api/sync/upload/chunk",
-            content=test_bytes[cut_99:],
-            headers=make_headers(cut_99)
-        )
-        self.assertEqual(cfinal_resp.json()["status"], "completed")
-
-        # SCENARIO 23: Duplicate upload (Idempotency)
-        dup_resp = client.post("/api/sync/upload/init", json={
-            "session_id": "sess_chaos_net",
-            "segment_id": seg_id,
-            "filename": f"{seg_id}.mp4",
-            "file_size_bytes": file_size,
-            "sha256_hash": sha256_full,
-            "auth_token": AUTH_TOKEN
-        })
-        self.assertEqual(dup_resp.json()["status"], "already_completed")
+        # The retired receiver never left byte state behind
+        self.assertFalse(part_file.exists())
 
     # =========================================================================
     # CATEGORY 2: PHONE CRASH, BATTERY DEATH & APP KILL (Scenarios 10, 11, 21)
@@ -295,14 +245,17 @@ class TestDispatchChaosEngineering(unittest.TestCase):
     # CATEGORY 5: DISK SAFETY THRESHOLD (< 5 GB) & MISMATCH (Scenarios 20, 22)
     # =========================================================================
     def test_scenarios_20_and_22_disk_safety_threshold_and_checksum_mismatch(self):
-        """Verifies Resource Governor pauses when disk < 5GB, and receiver rejects bad checksums."""
+        """Verifies Resource Governor pauses when disk < 5GB; scenario 22's
+        checksum receiver is retired (410 Gone, no byte state)."""
         # SCENARIO 20: Disk Space < 5 GB
         gov = ResourceGovernor(policy=GovernorPolicy(min_free_disk_gb=1000.0))
         can_run, reason = gov.can_process_heavy_task()
         self.assertFalse(can_run)
         self.assertIn("Disk space low", reason)
 
-        # SCENARIO 22: Checksum mismatch on laptop receiver
+        # SCENARIO 22 (retired LAN byte path): corrupted bytes can no longer be
+        # handed to any receiver — probes fail closed with 410 Gone, and no
+        # partial file state is created.
         bad_payload = b"GENUINE_DATA_PAYLOAD"
         init_resp = client.post("/api/sync/upload/init", json={
             "session_id": "sess_bad_chk",
@@ -312,9 +265,9 @@ class TestDispatchChaosEngineering(unittest.TestCase):
             "sha256_hash": "EXPECTED_CORRECT_HASH_THAT_WILL_NOT_MATCH",
             "auth_token": AUTH_TOKEN
         })
-        self.assertEqual(init_resp.status_code, 200)
+        self.assertEqual(init_resp.status_code, 410)
+        self.assertIn("retired", init_resp.json()["detail"])
 
-        # Upload bad payload
         bad_headers = {
             "x-segment-id": "seg_bad_chk",
             "x-upload-offset": "0",
@@ -329,8 +282,9 @@ class TestDispatchChaosEngineering(unittest.TestCase):
             content=bad_payload,
             headers=bad_headers
         )
-        self.assertEqual(patch_resp.status_code, 422)
-        self.assertIn("Checksum mismatch", patch_resp.json()["detail"])
+        self.assertEqual(patch_resp.status_code, 410)
+        self.assertIn("retired", patch_resp.json()["detail"])
+        self.assertFalse((INCOMING_DIR / "seg_bad_chk.part").exists())
 
     # =========================================================================
     # CATEGORY 6: NEGATIVE PREFERENCE LEARNING (Scenario 25)

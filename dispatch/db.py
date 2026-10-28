@@ -386,6 +386,10 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN cloud_caption_revision INTEGER NOT NULL DEFAULT 0;")
         if "cloud_r2_purged_at" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN cloud_r2_purged_at TIMESTAMP;")
+        if "render_attempt_count" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN render_attempt_count INTEGER NOT NULL DEFAULT 0;")
+        if "last_render_error" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN last_render_error TEXT;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
 
         # Suggestions are immutable candidate metadata. Legacy selected ranges
@@ -707,23 +711,94 @@ def update_clip_media(
     rendered_layout_mode: Optional[str] = None,
     expected_range_revision: Optional[int] = None,
 ) -> bool:
+    """Attach rendered media to a clip and promote it back to ready_review.
+
+    Guarded so a late async render can never resurrect a clip the user already
+    decided about: rejected media must stay removed, and an approved/published
+    clip must not be demoted back into the review queue (rejected-resurrection
+    guard, audit 2026-10-27). Thumbnail-only updates from any status use
+    update_clip_thumbnail() instead.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        revision_clause = " AND range_revision = ?" if expected_range_revision is not None else ""
+        revision_clause = (" AND range_revision = ?" if expected_range_revision is not None else "")
+        status_clause = " AND status IN ('ready_review', 'queued_transcription')"
         if rendered_layout_mode:
             cursor.execute("""
                 UPDATE clips 
                 SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = ?, render_stale = 0, status = 'ready_review'
-                WHERE id = ?""" + revision_clause,
+                WHERE id = ?""" + status_clause + revision_clause,
                 (video_path, thumbnail_path, rendered_layout_mode, clip_id)
                 + ((expected_range_revision,) if expected_range_revision is not None else ()))
         else:
             cursor.execute("""
                 UPDATE clips 
                 SET video_path = ?, thumbnail_path = ?, status = 'ready_review'
-                WHERE id = ?""" + revision_clause,
+                WHERE id = ?""" + status_clause + revision_clause,
                 (video_path, thumbnail_path, clip_id)
                 + ((expected_range_revision,) if expected_range_revision is not None else ()))
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def update_clip_thumbnail(clip_id: str, thumbnail_path: str) -> bool:
+    """Persist a regenerated thumbnail without touching clip state or media paths.
+
+    Safe to call from any status except rejected (whose media is already purged);
+    avoids retro-demotion of approved/published clips back into review.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE clips SET thumbnail_path = ? WHERE id = ? AND status != 'rejected'",
+            (thumbnail_path, clip_id)
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def update_clip_metadata(
+    clip_id: str,
+    title: Optional[str] = None,
+    hook: Optional[str] = None,
+    hashtags: Optional[str] = None,
+    platform_targets: Optional[str] = None,
+    expected_range_revision: Optional[int] = None,
+) -> bool:
+    """Revision-fenced metadata save for the InspectorPane metadata editor.
+
+    Returns False when the clip no longer exists, is not reviewable (approved /
+    rejected / published renders must keep their published metadata), or the
+    range revision moved underneath the editor. Pass expected_range_revision=None
+    to skip revision fencing (server trusts current revision).
+    """
+    sets: List[str] = []
+    params: List[Any] = []
+    if title is not None:
+        sets.append("title = ?")
+        params.append(title)
+    if hook is not None:
+        sets.append("hook = ?")
+        params.append(hook)
+    if hashtags is not None:
+        sets.append("hashtags = ?")
+        params.append(hashtags)
+    if platform_targets is not None:
+        sets.append("platform_targets = ?")
+        params.append(platform_targets)
+    if not sets:
+        return False
+
+    revision_clause = " AND range_revision = ?" if expected_range_revision is not None else ""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE clips SET "
+            + ", ".join(sets)
+            + " WHERE id = ? AND status = 'ready_review'" + revision_clause,
+            tuple(params) + (clip_id,)
+            + ((expected_range_revision,) if expected_range_revision is not None else ())
+        )
         conn.commit()
         return cursor.rowcount == 1
 
@@ -858,6 +933,14 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
             INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason)
             VALUES (?, ?, ?, ?, ?)
         """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason))
+
+        # 2.5 Cancel any queued publish jobs in the same transaction so approve->reject
+        # races cannot resurrect the rejection into an outbox upload after commit.
+        cursor.execute("""
+            UPDATE publishing_outbox
+            SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP, last_error = ?
+            WHERE clip_id = ? AND status = 'queued'
+        """, ("clip rejected by user", clip_id))
 
         # 3. Mark status as 'rejected' and clear file paths
         cursor.execute("UPDATE clips SET status = 'rejected', video_path = NULL, thumbnail_path = NULL WHERE id = ?", (clip_id,))
@@ -1174,13 +1257,22 @@ def cleanup_expired_published_clips(retention_days: int = 7) -> int:
     purged_count = 0
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # Find published clips with published_at older than retention_days that still have a local video_path
+        # Purge ONLY clips the pipeline has verifiably completed: status published AND
+        # every remaining path backed by a publishing_outbox row that reached a remote
+        # platform with a real id. Pending/silently-deleted clips (approved and waiting,
+        # flush-on-GET callers) must never lose their local media (audit 2026-10-27).
         cursor.execute("""
             SELECT id, video_path, thumbnail_path, published_at, created_at 
             FROM clips 
-            WHERE status IN ('published', 'approved') 
+            WHERE status = 'published'
               AND video_path IS NOT NULL 
               AND datetime(COALESCE(published_at, approved_at, created_at)) <= datetime('now', '-' || ? || ' days')
+              AND EXISTS (
+                    SELECT 1 FROM publishing_outbox po
+                    WHERE po.clip_id = clips.id
+                      AND po.status = 'published'
+                      AND po.remote_id IS NOT NULL AND po.remote_id != ''
+              )
         """, (retention_days,))
         expired_clips = cursor.fetchall()
 
@@ -1230,6 +1322,7 @@ def get_outbox_queue() -> List[Dict[str, Any]]:
             FROM publishing_outbox po
             JOIN clips c ON po.clip_id = c.id
             WHERE po.status = 'queued'
+              AND c.status = 'approved'
               AND (po.next_retry_at IS NULL OR po.next_retry_at <= CURRENT_TIMESTAMP)
             ORDER BY po.created_at ASC
         """)
@@ -1320,9 +1413,15 @@ def update_youtube_video(
     last_ai_error: Optional[str] = None,
     source_sha256: Optional[str] = None,
     source_file_size: Optional[int] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    expected_status: Optional[str] = None
 ):
-    """Update status, paths, errors, or retry schedule on YouTube inbox item."""
+    """Update status, paths, errors, or retry schedule on YouTube inbox item.
+
+    Pass expected_status to make the write a compare-and-swap: the update only
+    applies when the row still holds the status the caller read. Returns the
+    number of rows updated (0 when another writer moved the row first).
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         updates = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
@@ -1397,8 +1496,12 @@ def update_youtube_video(
 
         query = f"UPDATE youtube_inbox SET {', '.join(updates)} WHERE video_id = ?"
         params.append(video_id)
+        if expected_status is not None:
+            query += " AND status = ?"
+            params.append(expected_status)
         cursor.execute(query, params)
         conn.commit()
+        return cursor.rowcount
 
 
 def list_youtube_inbox(status: Optional[str] = None, limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1416,7 +1519,7 @@ def list_youtube_inbox(status: Optional[str] = None, limit: int = 50, user_id: O
         where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(limit)
         cursor.execute(
-            f"SELECT * FROM youtube_inbox {where_sql} ORDER BY discovered_at DESC LIMIT ?",
+            f"SELECT * FROM youtube_inbox {where_sql} ORDER BY discovered_at ASC LIMIT ?",
             tuple(params)
         )
         return [dict(row) for row in cursor.fetchall()]
@@ -1459,8 +1562,11 @@ def is_youtube_video_processed(video_id: str) -> bool:
         # If completed or analyzing downstream, return True directly
         if row["status"] in ("ANALYZING", "CLIPS_DEFINED", "CLIPS_CREATED", "COMPLETED"):
             return True
-        # If in progress with downloaded media, check if local file is intact
-        if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED", "TRANSCRIPT_FETCHED"):
+        # If in progress with downloaded media (or a caption-gap row whose local file
+        # is intact), check if local file is intact. An intact file must NOT be
+        # re-ingested just because the row is waiting on captions.
+        if row["status"] in ("DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED",
+                             "TRANSCRIPT_FETCHED", "CAPTIONS_UNAVAILABLE"):
             from pathlib import Path
             path = Path(row["local_video_path"]) if row["local_video_path"] else None
             return bool(path and path.exists() and path.stat().st_size > 0)
@@ -1498,11 +1604,15 @@ def save_clip_definitions(
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
-        # 1. Clean up prior candidate/unrendered clips for this chunk to ensure idempotency
+        # 1. Clean up prior candidate/unrendered clips for this chunk to ensure idempotency.
+        # PRESERVED CONTENT NEVER DELETED: clips the user trimmed (range_revision != 0)
+        # or typed captions into (caption_data IS NOT NULL) must survive a re-analysis,
+        # otherwise an AI retry silently destroys human edits (audit 2026-10-27).
         if chunk_id:
             cursor.execute("""
                 DELETE FROM clips 
                 WHERE chunk_id = ? AND (video_path IS NULL OR video_path = '') AND status = 'ready_review'
+                  AND range_revision = 0 AND caption_data IS NULL
             """, (chunk_id,))
 
         # 2. Insert all validated clips

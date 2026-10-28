@@ -82,7 +82,8 @@ class TestTier2BoundaryCornerCases(DispatchE2EBaseTestCase):
     # =========================================================================
 
     def test_t2_02_negative_chunk_upload_offset_rejected(self):
-        """T2.2.1: Upload chunk with negative byte offset is rejected with HTTP 409 Conflict / 400."""
+        """T2.2.1: The LAN byte receiver is retired; a negative-offset probe is
+        a 410 Gone no-op (there is no offset state machine left to attack)."""
         seg_id = "seg_t2_neg_offset"
         headers = {
             "x-segment-id": seg_id,
@@ -94,7 +95,9 @@ class TestTier2BoundaryCornerCases(DispatchE2EBaseTestCase):
             "content-type": "application/octet-stream"
         }
         res = self.client.patch("/api/sync/upload/chunk", content=b"12345", headers=headers)
-        self.assertIn(res.status_code, (400, 409))
+        self.assertEqual(res.status_code, 410)
+        self.assertIn("retired", res.json()["detail"])
+        self.assertFalse((INCOMING_DIR / f"{seg_id}.part").exists())
 
     def test_t2_02_inverted_clip_timestamps_handled_safely(self):
         """T2.2.2: Subtitle generation with start_time >= end_time generates valid header with 0 events."""
@@ -212,13 +215,14 @@ class TestTier2BoundaryCornerCases(DispatchE2EBaseTestCase):
         self.assertFalse(is_valid)
 
     def test_t2_04_sha256_checksum_mismatch_purges_partial_file(self):
-        """T2.4.2: Chunk upload with SHA-256 mismatch purges .part file and raises 422."""
+        """T2.4.2: Post-retirement there is no receiver to hand corrupted bytes
+        to: both the init and chunk probes are 410 Gone and no partial state
+        may linger on disk."""
         seg_id = f"seg_mismatch_{int(time.time() * 1000)}"
         real_payload = b"GENUINE_DATA"
         mismatched_sha = "f" * 64
 
-        # Init upload
-        self.client.post("/api/sync/upload/init", json={
+        res_init = self.client.post("/api/sync/upload/init", json={
             "session_id": "sess_mis",
             "segment_id": seg_id,
             "filename": f"{seg_id}.mp4",
@@ -226,6 +230,7 @@ class TestTier2BoundaryCornerCases(DispatchE2EBaseTestCase):
             "sha256_hash": mismatched_sha,
             "auth_token": self.auth_token
         })
+        self.assertEqual(res_init.status_code, 410)
 
         headers = {
             "x-segment-id": seg_id,
@@ -237,9 +242,9 @@ class TestTier2BoundaryCornerCases(DispatchE2EBaseTestCase):
             "content-type": "application/octet-stream"
         }
         res = self.client.patch("/api/sync/upload/chunk", content=real_payload, headers=headers)
-        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.status_code, 410)
 
-        # .part file must have been purged
+        # No partial file may ever have been created
         self.assertFalse((INCOMING_DIR / f"{seg_id}.part").exists())
 
     def test_t2_04_malformed_vtt_timestamp_syntax_recovery(self):
@@ -291,15 +296,16 @@ Valid speech caption.
             self.assertIsNone(best)
 
     def test_t2_05_simulated_network_drop_at_50_percent_chunk_upload(self):
-        """T2.5.2: Disconnect at 50% retains exact byte offset in .part file on disk."""
+        """T2.5.2: Disconnect-at-50% recovery is structurally moot after the
+        LAN byte path retirement: every transfer probe is 410 Gone and no
+        .part file may ever exist on the PC side."""
         seg_id = f"seg_drop_50_{int(time.time() * 1000)}"
         full_payload = b"RELIABLE_PAYLOAD_CHUNK_BYTES_" * 400  # ~11,600 bytes
         half_size = len(full_payload) // 2
         chunk1 = full_payload[:half_size]
         full_sha256 = hashlib.sha256(full_payload).hexdigest()
 
-        # Init upload
-        self.client.post("/api/sync/upload/init", json={
+        res_init = self.client.post("/api/sync/upload/init", json={
             "session_id": "sess_drop",
             "segment_id": seg_id,
             "filename": f"{seg_id}.mp4",
@@ -307,6 +313,7 @@ Valid speech caption.
             "sha256_hash": full_sha256,
             "auth_token": self.auth_token
         })
+        self.assertEqual(res_init.status_code, 410)
 
         headers = {
             "x-segment-id": seg_id,
@@ -318,18 +325,16 @@ Valid speech caption.
             "content-type": "application/octet-stream"
         }
         res = self.client.patch("/api/sync/upload/chunk", content=chunk1, headers=headers)
-        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.status_code, 410)
 
-        # Simulate network drop: verify .part file on disk has exactly half_size bytes
+        # The interrupted-transfer invariant: no partial byte state on disk
         part_file = INCOMING_DIR / f"{seg_id}.part"
-        self.assertTrue(part_file.exists())
-        self.assertEqual(part_file.stat().st_size, half_size)
-
-        # Clean up
-        part_file.unlink(missing_ok=True)
+        self.assertFalse(part_file.exists())
 
     def test_t2_05_missing_auth_token_all_sync_endpoints_fail_closed(self):
-        """T2.5.3: Sync endpoints fail-closed with 401 when auth token is omitted."""
+        """T2.5.3: Live sync endpoints fail-closed with 401 when auth is
+        omitted; the retired byte path answers 410 regardless of credentials
+        (fail-closed by absence)."""
         res_ping = self.client.get("/api/sync/verify-chunk?segment_id=seg1&sha256=hash")
         self.assertEqual(res_ping.status_code, 401)
 
@@ -337,7 +342,7 @@ Valid speech caption.
             "session_id": "s", "segment_id": "seg", "filename": "seg.mp4",
             "file_size_bytes": 100, "sha256_hash": "hash", "auth_token": "wrong_token"
         })
-        self.assertEqual(res_init.status_code, 401)
+        self.assertEqual(res_init.status_code, 410)
 
     def test_t2_05_expired_lease_worker_fenced_out(self):
         """T2.5.4: Worker attempting checkpoint 60 seconds after lease expiration is fenced out."""

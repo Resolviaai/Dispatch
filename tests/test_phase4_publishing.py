@@ -33,7 +33,7 @@ class TestPhase4Publishing(unittest.TestCase):
         with db.get_db_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
-                VALUES (?, 'Sample Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+                VALUES (?, 'Sample Clip', 0.0, 15.0, 15.0, 'approved', 'tests/fixtures/sample.mp4')
             """, (clip_id,))
             conn.execute("""
                 INSERT OR REPLACE INTO publishing_outbox 
@@ -59,7 +59,7 @@ class TestPhase4Publishing(unittest.TestCase):
         with db.get_db_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
-                VALUES (?, 'Remote Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+                VALUES (?, 'Remote Clip', 0.0, 15.0, 15.0, 'approved', 'tests/fixtures/sample.mp4')
             """, (clip_id,))
             conn.execute("""
                 INSERT OR REPLACE INTO publishing_outbox 
@@ -86,7 +86,7 @@ class TestPhase4Publishing(unittest.TestCase):
         with db.get_db_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
-                VALUES (?, 'Timeout Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+                VALUES (?, 'Timeout Clip', 0.0, 15.0, 15.0, 'approved', 'tests/fixtures/sample.mp4')
             """, (clip_id,))
             conn.execute("""
                 INSERT OR REPLACE INTO publishing_outbox 
@@ -148,7 +148,7 @@ class TestPhase4Publishing(unittest.TestCase):
         with db.get_db_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status, video_path)
-                VALUES (?, 'WinError Clip', 0.0, 15.0, 15.0, 'ready_review', 'tests/fixtures/sample.mp4')
+                VALUES (?, 'WinError Clip', 0.0, 15.0, 15.0, 'approved', 'tests/fixtures/sample.mp4')
             """, (clip_id,))
             conn.execute("""
                 INSERT OR REPLACE INTO publishing_outbox 

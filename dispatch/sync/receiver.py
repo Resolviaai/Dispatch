@@ -6,18 +6,15 @@ import re
 import hashlib
 import hmac
 import logging
-import shutil
 import time
 import secrets
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, Header, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from dispatch.config import INCOMING_DIR, PROCESSING_DIR
 from dispatch import db
-from dispatch.ingestion.validator import probe_video
-from dispatch.orchestrator.job_queue import enqueue_job
 
 logger = logging.getLogger("dispatch.sync.receiver")
 
@@ -59,6 +56,17 @@ def get_auth_token() -> str:
     return generated_token
 
 
+def _derive_receipt_hmac_key(token: str) -> bytes:
+    """Domain-separated HMAC key for deletion receipts.
+
+    Mirrors Android's YouTubeDirectUploadWorker.deriveAckReceiptKey(): the
+    receipt key is HMAC-SHA256(token, "dispatch-ack-receipt-v1") so a sniffed
+    bearer token alone cannot forge receipts. The phone verifies derived
+    receipts and still accepts legacy token-keyed ones during the transition.
+    """
+    return hmac.new(token.encode("utf-8"), b"dispatch-ack-receipt-v1", hashlib.sha256).digest()
+
+
 def verify_token(token: Optional[str] = None):
     """Enforce token validation for sync endpoints.
     Rejects missing or invalid tokens with HTTP 401 Unauthorized.
@@ -74,15 +82,6 @@ def verify_token(token: Optional[str] = None):
     if not secrets.compare_digest(clean_token, expected_token):
         logger.warning("Rejected sync request: invalid auth token")
         raise HTTPException(status_code=401, detail="Invalid authentication token")
-
-
-class InitUploadRequest(BaseModel):
-    session_id: str
-    segment_id: str
-    filename: str
-    file_size_bytes: int
-    sha256_hash: str
-    auth_token: str
 
 
 class ReconcileItem(BaseModel):
@@ -556,9 +555,14 @@ async def verify_youtube_ingestion_acknowledgement(
         if row:
             item = dict(row)
             status = item.get("status")
+            # Durably-downloaded bytes mean "safe to satisfy the ack": rows sitting in
+            # WAITING_FOR_TRANSCRIPT (caption probing) or CLIPS_DEFINED (render) hold
+            # an intact local file and must acknowledge, or phones keep re-uploading
+            # identical segments during long downstream stages.
             ingested_statuses = (
-                "DOWNLOADED", "TRANSCRIPT_FETCHED", "TRANSCRIBED",
-                "ANALYZING", "RENDERING", "CLIPS_CREATED", "COMPLETED"
+                "DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIPT_FETCHED",
+                "TRANSCRIBED", "ANALYZING", "CLIPS_DEFINED", "RENDERING",
+                "CLIPS_CREATED", "COMPLETED"
             )
 
             # Verify physical file existence and non-zero size on PC disk
@@ -578,10 +582,18 @@ async def verify_youtube_ingestion_acknowledgement(
             if status in ingested_statuses and has_valid_file:
                 recorded_source_sha = (item.get("source_sha256") or "").strip().lower()
 
-                # Cryptographic hash verification:
+                # Cryptographic hash verification. DISK BYTES ARE THE ONLY TRUTH:
+                # when the recorded hash is empty, seed it from what is actually on
+                # disk and STILL require equality with the phone's claim. Trust-on-
+                # first-use of the client's hash over a mismatched-but-probeable file
+                # previously signed a deletion receipt for bytes the PC did not hold.
                 if clean_sha:
-                    if recorded_source_sha and recorded_source_sha != clean_sha:
-                        logger.warning("youtube-ack hash mismatch: recorded source_sha %s != requested %s", recorded_source_sha, clean_sha)
+                    if not recorded_source_sha:
+                        recorded_source_sha = actual_file_hash
+                        cursor.execute("UPDATE youtube_inbox SET source_sha256 = ? WHERE video_id = ?", (actual_file_hash, item.get("video_id")))
+                        conn.commit()
+                    if not actual_file_hash or recorded_source_sha != clean_sha or actual_file_hash != clean_sha:
+                        logger.warning("youtube-ack hash mismatch: disk=%s recorded=%s requested=%s", actual_file_hash, recorded_source_sha, clean_sha)
                         return {
                             "acknowledged": False,
                             "ingested": False,
@@ -592,31 +604,13 @@ async def verify_youtube_ingestion_acknowledgement(
                             "error": "hash_mismatch",
                             "message": "Cryptographic hash mismatch with recorded source hash."
                         }
-                    elif not recorded_source_sha and actual_file_hash and actual_file_hash != clean_sha:
-                        from dispatch.ingestion.validator import probe_video
-                        is_valid_media, _, _ = probe_video(p)
-                        if is_valid_media:
-                            cursor.execute("UPDATE youtube_inbox SET source_sha256 = ? WHERE video_id = ?", (clean_sha, item.get("video_id")))
-                            conn.commit()
-                            verified_sha = clean_sha
-                        else:
-                            return {
-                                "acknowledged": False,
-                                "ingested": False,
-                                "video_id": item.get("video_id"),
-                                "dispatch_id": item.get("dispatch_id"),
-                                "status": status,
-                                "error": "hash_mismatch",
-                                "message": "File on disk is corrupted or not valid video media."
-                            }
-                    else:
-                        verified_sha = clean_sha
+                    verified_sha = clean_sha
                 else:
                     verified_sha = recorded_source_sha or actual_file_hash or "verified"
 
                 canonical_id = segment_id or item.get("dispatch_id") or item.get("video_id")
                 receipt_msg = f"{canonical_id}:{verified_sha}:{status}:VERIFIED".encode("utf-8")
-                receipt = hmac.new(expected_token.encode("utf-8"), receipt_msg, hashlib.sha256).hexdigest()
+                receipt = hmac.new(_derive_receipt_hmac_key(expected_token), receipt_msg, hashlib.sha256).hexdigest()
 
                 return {
                     "acknowledged": True,
@@ -670,7 +664,7 @@ async def verify_youtube_ingestion_acknowledgement(
 
                     canonical_id = segment_id
                     receipt_msg = f"{canonical_id}:{verified_sha}:{c_dict.get('status')}:VERIFIED".encode("utf-8")
-                    receipt = hmac.new(expected_token.encode("utf-8"), receipt_msg, hashlib.sha256).hexdigest()
+                    receipt = hmac.new(_derive_receipt_hmac_key(expected_token), receipt_msg, hashlib.sha256).hexdigest()
 
                     return {
                         "acknowledged": True,
@@ -694,183 +688,27 @@ async def verify_youtube_ingestion_acknowledgement(
     }
 
 
-@router.post("/upload/init")
-async def init_upload(payload: InitUploadRequest):
-    """Initialize a chunked resumable upload and query remote offset.
-    Strictly verifies existing files against expected file_size_bytes and sha256_hash.
-    """
-    verify_token(payload.auth_token)
-    seg_id = sanitize_segment_id(payload.segment_id)
-    final_name = f"{seg_id}.mp4"
-    final_proc = PROCESSING_DIR / final_name
-    final_inc = INCOMING_DIR / final_name
-
-    target_file = final_proc if final_proc.exists() else (final_inc if final_inc.exists() else None)
-
-    if target_file is not None:
-        if verify_file_integrity(target_file, payload.file_size_bytes, payload.sha256_hash):
-            return {
-                "status": "already_completed",
-                "remote_offset": payload.file_size_bytes,
-                "verified": True
-            }
-        else:
-            logger.warning("Existing file %s failed size/SHA256 check on upload init. Purging corrupted bytes.", target_file.name)
-            target_file.unlink(missing_ok=True)
-    else:
-        with db.get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT status, file_hash, filepath FROM chunks WHERE filename = ? OR filename LIKE ? ORDER BY created_at DESC", (final_name, f"{seg_id}%"))
-            db_chunk = cursor.fetchone()
-            if db_chunk and (db_chunk["file_hash"] or "").lower() == payload.sha256_hash.lower():
-                chunk_dict = dict(db_chunk)
-                db_path = Path(chunk_dict["filepath"]) if chunk_dict.get("filepath") else None
-                if db_path and db_path.exists() and verify_file_integrity(db_path, payload.file_size_bytes, payload.sha256_hash):
-                    return {
-                        "status": "already_completed",
-                        "remote_offset": payload.file_size_bytes,
-                        "verified": True
-                    }
-                logger.warning("init_upload: Chunk %s found in DB, but physical file %s is missing from disk. Requesting full upload.", seg_id, chunk_dict.get("filepath"))
-
-    part_file = INCOMING_DIR / f"{seg_id}.part"
-    if part_file.exists():
-        part_size = part_file.stat().st_size
-        if part_size > payload.file_size_bytes:
-            part_file.unlink(missing_ok=True)
-            current_offset = 0
-        else:
-            current_offset = part_size
-    else:
-        current_offset = 0
-
-    return {
-        "status": "in_progress",
-        "remote_offset": current_offset,
-        "verified": False
-    }
+@router.post("/upload/init", include_in_schema=False)
+async def init_upload_disabled():
+    """RETIRED (2026-10-28, YouTube-only architecture): the LAN chunked byte
+    path fed the legacy chunks pipeline, which no longer has a live client —
+    phone segments arrive via the YouTube inbox and are ACKed with
+    hash-verified cryptographic receipts (see mobile_recorder.html note)."""
+    raise HTTPException(
+        status_code=410,
+        detail="Chunked LAN upload retired. Recordings arrive via YouTube.",
+    )
 
 
-@router.patch("/upload/chunk")
-async def upload_chunk(
-    request: Request,
-    x_segment_id: str = Header(...),
-    x_upload_offset: int = Header(...),
-    x_file_size: int = Header(...),
-    x_sha256: str = Header(...),
-    x_session_id: str = Header(...),
-    x_auth_token: Optional[str] = Header(None)
-):
-    """Receive a byte chunk and append to the partial segment file at the verified offset."""
-    verify_token(x_auth_token)
-    seg_id = sanitize_segment_id(x_segment_id)
-    part_file = INCOMING_DIR / f"{seg_id}.part"
-    final_file = INCOMING_DIR / f"{seg_id}.mp4"
-
-    # Offset consistency check
-    current_size = part_file.stat().st_size if part_file.exists() else 0
-    if x_upload_offset != current_size:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Offset mismatch: client has {x_upload_offset}, server has {current_size}"
-        )
-
-    # Read binary body chunk
-    chunk_bytes = await request.body()
-    if not chunk_bytes:
-        return {"remote_offset": current_size, "completed": False}
-
-    # Pre-write validation: for offset=0 (fresh start), verify body hash against expected sha256
-    # before writing anything to disk. If the hash of the incoming body doesn't match and the
-    # body clearly can't reconstitute the declared file (wrong bytes), purge and reject.
-    # Pre-write validation: for single-shot uploads (len == x_file_size), verify hash
-    if x_upload_offset == 0 and len(chunk_bytes) == x_file_size:
-        incoming_sha = hashlib.sha256(chunk_bytes).hexdigest()
-        if incoming_sha.lower() != x_sha256.lower():
-            logger.error("Pre-write SHA-256 mismatch for %s (single-shot): expected %s, got %s",
-                         seg_id, x_sha256, incoming_sha)
-            part_file.unlink(missing_ok=True)
-            raise HTTPException(status_code=422, detail="Checksum mismatch; partial file purged")
-
-    with open(part_file, "ab") as f:
-        f.write(chunk_bytes)
-
-    new_offset = part_file.stat().st_size
-
-    # Guard: if uploaded bytes exceed declared file size, data is corrupt — purge and reject
-    if new_offset > x_file_size:
-        logger.error(
-            "Chunk overflow for %s: received %d bytes but declared size is %d. Purging partial file.",
-            seg_id, new_offset, x_file_size
-        )
-        part_file.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail="Chunk overflow: received more bytes than declared file size; partial file purged")
-
-    # Check if upload is complete
-    if new_offset == x_file_size:
-        logger.info("Upload complete for %s. Verifying SHA-256...", seg_id)
-        hasher = hashlib.sha256()
-        with open(part_file, "rb") as f:
-            for b in iter(lambda: f.read(65536), b""):
-                hasher.update(b)
-        computed_sha = hasher.hexdigest()
-
-        if computed_sha.lower() != x_sha256.lower():
-            logger.error("SHA-256 mismatch for %s: expected %s, got %s",
-                         seg_id, x_sha256, computed_sha)
-            part_file.unlink()
-            raise HTTPException(status_code=422, detail="Checksum mismatch; partial file purged")
-
-        # Atomic rename from .part to .mp4 using replace() to prevent Windows WinError 183
-        if final_file.exists():
-            final_file.unlink(missing_ok=True)
-        part_file.replace(final_file)
-        logger.info("Segment %s verified and finalized to %s (%d bytes)",
-                    seg_id, final_file.name, new_offset)
-
-        # Move immediately to processing to avoid double scan delays
-        target_path = PROCESSING_DIR / final_file.name
-        if target_path.exists():
-            target_path.unlink(missing_ok=True)
-        shutil.move(str(final_file), str(target_path))
-
-        # Register in laptop database
-        chunk_id = db.register_chunk(
-            session_id=x_session_id,
-            filename=target_path.name,
-            filepath=str(target_path),
-            file_hash=computed_sha
-        )
-
-        # Probe video and normalize orientation
-        is_valid, meta, err = probe_video(target_path, chunk_id=chunk_id)
-        if is_valid:
-            db.update_chunk_metadata(
-                chunk_id=chunk_id,
-                duration=meta["duration"],
-                width=meta["width"],
-                height=meta["height"],
-                aspect_ratio=meta["aspect_ratio"],
-                status="verified"
-            )
-
-        # Immediately trigger pipeline job!
-        job_id = enqueue_job(chunk_id=chunk_id, session_id=x_session_id)
-        logger.info("Directly enqueued pipeline job %s for chunk %s", job_id, chunk_id)
-
-        return {
-            "status": "completed",
-            "remote_offset": new_offset,
-            "verified": True,
-            "chunk_id": chunk_id,
-            "job_id": job_id
-        }
-
-    return {
-        "status": "in_progress",
-        "remote_offset": new_offset,
-        "verified": False
-    }
+@router.patch("/upload/chunk", include_in_schema=False)
+async def upload_chunk_disabled():
+    """RETIRED (2026-10-28, YouTube-only architecture): see /upload/init.
+    This endpoint appended unbounded request bodies to disk before full-file
+    verification; do not reintroduce a LAN byte path."""
+    raise HTTPException(
+        status_code=410,
+        detail="Chunked LAN upload retired. Recordings arrive via YouTube.",
+    )
 
 
 @router.post("/upload/direct", include_in_schema=False)

@@ -331,14 +331,17 @@ def get_youtube_processing_status(video_ids: List[str]) -> Dict[str, Dict[str, A
                 if not vid:
                     continue
                 st = item.get("status", {})
-                pr = item.get("processingDetails", {})
+                pr = item.get("processingDetails") or {}
                 cd = item.get("contentDetails", {})
                 snip = item.get("snippet", {})
 
                 results[vid] = {
                     "video_id": vid,
                     "upload_status": st.get("uploadStatus"),
-                    "processing_status": pr.get("processingStatus") if pr else "succeeded",
+                    # An absent processingDetails object is an UNKNOWN state, never a
+                    # synthesized "succeeded": the poller and catcher must not download
+                    # a video whose transcode state cannot be verified (audit 2026-10-27).
+                    "processing_status": pr.get("processingStatus") if pr else None,
                     "failure_reason": pr.get("processingFailureReason") or st.get("rejectionReason"),
                     "duration": cd.get("duration"),
                     "title": snip.get("title", ""),

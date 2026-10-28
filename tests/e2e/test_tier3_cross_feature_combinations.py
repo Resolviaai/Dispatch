@@ -1,6 +1,6 @@
 """Tier 3: Cross-Feature Combinations & Pairwise Interaction Tests.
 Covers:
-- Pairwise 1: LAN Chunked Resumable Sync + 5-Stage Checkpointed Media Pipeline
+- Pairwise 1: Ingested Chunk (PC-hold bytes; LAN byte path retired) + 5-Stage Checkpointed Media Pipeline
 - Pairwise 2: YouTube Cloud Inbox Catcher + 5-Stage Checkpointed Media Pipeline
 - Pairwise 3: Web Dashboard Approval Flow + Multi-Platform Publishing Outbox + blocked_needs_auth
 - Pairwise 4: Pipeline Stage Failure + Retry Engine Exponential Backoff + Retry Cap
@@ -45,7 +45,9 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
     """Tier 3: Cross-Feature Pairwise Interactions."""
 
     def test_p01_lan_sync_plus_5_stage_checkpointed_pipeline(self):
-        """Pairwise 1: LAN chunked upload -> verify -> pipeline job -> 5-stage sequential completion."""
+        """Pairwise 1: Ingested chunk (PC-held bytes seeded directly; the LAN
+        byte receiver is retired) -> pipeline job -> 5-stage sequential
+        checkpoint completion."""
         from dispatch.db import create_session
         create_session(session_id="sess_p01")
 
@@ -54,43 +56,37 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
         file_size = len(video_payload)
         sha256_hash = hashlib.sha256(video_payload).hexdigest()
 
-        # Step 1: Init upload
-        init_res = self.client.post("/api/sync/upload/init", json={
-            "session_id": "sess_p01",
-            "segment_id": seg_id,
-            "filename": f"{seg_id}.mp4",
-            "file_size_bytes": file_size,
-            "sha256_hash": sha256_hash,
-            "auth_token": self.auth_token
-        })
-        self.assertEqual(init_res.status_code, 200)
+        # Step 1: Seed the ingested state on the PC side directly (LAN transfer
+        # is retired — phone recordings arrive via YouTube).
+        target_file = PROCESSING_DIR / f"{seg_id}.mp4"
+        target_file.write_bytes(video_payload)
+        chunk_id = register_chunk(
+            session_id="sess_p01",
+            filename=f"{seg_id}.mp4",
+            filepath=str(target_file),
+            file_hash=sha256_hash
+        )
+        with get_db_connection() as conn:
+            conn.execute(
+                "UPDATE chunks SET duration = ?, width = 1280, height = 720, aspect_ratio = '16:9', status = 'verified' WHERE id = ?",
+                (10.0, chunk_id)
+            )
 
-        # Step 2: Upload chunk to completion
-        headers = {
-            "x-segment-id": seg_id,
-            "x-upload-offset": "0",
-            "x-file-size": str(file_size),
-            "x-sha256": sha256_hash,
-            "x-session-id": "sess_p01",
-            "x-auth-token": self.auth_token,
-            "content-type": "application/octet-stream"
-        }
-        upload_res = self.client.patch("/api/sync/upload/chunk", content=video_payload, headers=headers)
-        self.assertEqual(upload_res.status_code, 200)
-        self.assertEqual(upload_res.json()["status"], "completed")
+        # Step 2: The pipeline job is created for the ingested chunk
+        job_id = enqueue_job(chunk_id=chunk_id, session_id="sess_p01")
+        self.assertIsNotNone(job_id)
 
-        # Step 3: Verify pipeline job was automatically created in database
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM chunks WHERE filename = ?", (f"{seg_id}.mp4",))
             chunk_row = cursor.fetchone()
             self.assertIsNotNone(chunk_row)
-            chunk_id = chunk_row["id"]
+            self.assertEqual(chunk_row["id"], chunk_id)
 
             cursor.execute("SELECT job_id, current_stage, status FROM pipeline_jobs WHERE chunk_id = ?", (chunk_id,))
             job_row = cursor.fetchone()
             self.assertIsNotNone(job_row)
-            job_id = job_row["job_id"]
+            self.assertEqual(job_row["job_id"], job_id)
             self.assertEqual(job_row["current_stage"], "VERIFY")
             self.assertEqual(job_row["status"], "QUEUED")
 
@@ -367,20 +363,41 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
         self.assertEqual(next_s, PipelineStage.TRANSCRIBE)
 
     def test_p10_ingestion_deduplication_and_idempotent_processing(self):
-        """Pairwise 10: Ingestion receiver detects duplicate hash and reuses existing chunk/job."""
+        """Pairwise 10: Idempotent ingestion state after the LAN byte path
+        retirement: verify-chunk proves the PC already holds the exact bytes
+        (VERIFIED), tamper/hallucinated replays are refused, and the retired
+        init route answers 410 instead of resurrecting a receiver."""
         setup = self.register_test_chunk_and_job(filename="p10_dedup.mp4")
-        chunk_id = setup["chunk_id"]
         sha256 = setup["sha256"]
+        real_size = setup["filepath"].stat().st_size
 
-        # Duplicate init with same hash returns already_completed
+        # The duplicate-detection contract lives on the verify endpoint: the
+        # PC holding identical bytes reports VERIFIED for the same hash+size.
+        res_dup = self.client.get(
+            f"/api/sync/verify-chunk?segment_id=p10_dedup&sha256={sha256}&file_size={real_size}",
+            headers={"x-auth-token": self.auth_token}
+        )
+        self.assertEqual(res_dup.status_code, 200)
+        self.assertTrue(res_dup.json()["verified"])
+        self.assertEqual(res_dup.json()["status"], "VERIFIED")
+
+        # A hostile replay claiming a DIFFERENT sha must never verify.
+        res_evil = self.client.get(
+            f"/api/sync/verify-chunk?segment_id=p10_dedup&sha256={'0' * 64}&file_size={real_size}",
+            headers={"x-auth-token": self.auth_token}
+        )
+        self.assertEqual(res_evil.status_code, 200)
+        self.assertFalse(res_evil.json()["verified"])
+
+        # The retired init route is 410 Gone: dedup cannot be subverted by
+        # re-transfer attempts.
         init_dup = self.client.post("/api/sync/upload/init", json={
             "session_id": "sess_p10_dup",
             "segment_id": "p10_dedup",
             "filename": "p10_dedup.mp4",
-            "file_size_bytes": setup["filepath"].stat().st_size,
+            "file_size_bytes": real_size,
             "sha256_hash": sha256,
             "auth_token": self.auth_token
         })
-        self.assertEqual(init_dup.status_code, 200)
-        self.assertEqual(init_dup.json()["status"], "already_completed")
-        self.assertTrue(init_dup.json()["verified"])
+        self.assertEqual(init_dup.status_code, 410)
+        self.assertIn("retired", init_dup.json()["detail"])

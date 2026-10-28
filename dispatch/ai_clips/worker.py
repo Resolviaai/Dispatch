@@ -151,7 +151,11 @@ class HighlightWorker:
                             logger.info("Using session-stitched transcript for %s across session %s (total duration: %.1fs)", video_id, session_id, duration)
                     with db.get_db_connection() as conn:
                         cursor = conn.cursor()
-                        cursor.execute("SELECT id FROM clips WHERE chunk_id = ?", (chunk_id,))
+                        cursor.execute("""
+                            SELECT id FROM clips
+                            WHERE chunk_id = ?
+                              AND status IN ('ready_review', 'queued_transcription')
+                        """, (chunk_id,))
                         rows = cursor.fetchall()
                         clip_ids = [r["id"] for r in rows] if rows else []
 
@@ -381,6 +385,7 @@ class HighlightWorker:
         from dispatch.transcription.gemini_engine import (
             check_and_increment_daily_transcribe_quota,
             extract_stage2_clip_audio,
+            refund_daily_transcribe_quota,
             transcribe_stage2_precision_words,
         )
 
@@ -389,6 +394,14 @@ class HighlightWorker:
         for clip_id in saved_ids:
             clip = db.get_clip_by_id(clip_id)
             if not clip:
+                continue
+
+            # Rejected/resurrected guard: only reviewable clips may be rendered or
+            # have media written. Render failures past the retry cap park in
+            # 'render_failed' (below), and approved/published/rejected clips are
+            # inviolate here whatever the earlier queue snapshot said.
+            clip_status = (clip.get("status") or "").strip()
+            if clip_status not in ("ready_review", "queued_transcription"):
                 continue
 
             # Check if clip is already rendered and non-empty
@@ -554,6 +567,10 @@ class HighlightWorker:
                         temp_cleanup.unlink(missing_ok=True)
                     continue
 
+                # Non-quota Stage-2 failure: the provider request never completed,
+                # so give the reserved quota slot back instead of burning it.
+                refund_daily_transcribe_quota()
+
                 # Otherwise fallback to Stage 1 segments
                 clip_segs = [s for s in segments if s.get("end", 0.0) > float(clip["start_time"]) and s.get("start", 0.0) < float(clip["end_time"])]
                 offset_diff = float(clip["start_time"]) - eff_c_start
@@ -609,6 +626,25 @@ class HighlightWorker:
                         conn.commit()
                 except Exception as e:
                     logger.error("Auto-render failed for clip %s: %s", clip_id, e)
+                    # Render-failure cap: increment the attempt counter and store the
+                    # error. After 3 consecutive failures park the clip in
+                    # 'render_failed' so the 15s poll loop stops re-spending Stage-2
+                    # quota on the same broken clip indefinitely.
+                    with db.get_db_connection() as conn:
+                        conn.execute("""
+                            UPDATE clips
+                            SET render_attempt_count = COALESCE(render_attempt_count, 0) + 1,
+                                last_render_error = ?,
+                                status = CASE
+                                    WHEN COALESCE(render_attempt_count, 0) + 1 >= 3 THEN 'render_failed'
+                                    ELSE status END
+                            WHERE id = ? AND status IN ('ready_review', 'queued_transcription')
+                        """, (str(e)[:500], clip_id))
+                        conn.commit()
+                    new_attempts = int((clip.get("render_attempt_count") or 0) + 1)
+                    if new_attempts >= 3:
+                        logger.warning("Clip %s parked in 'render_failed' after %d attempts: %s",
+                                       clip_id, new_attempts, e)
             else:
                 logger.warning("Source video file not found on disk for auto-rendering clip %s", clip_id)
 

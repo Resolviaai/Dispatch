@@ -1,4 +1,5 @@
-"""Unit test for Phase 2: Resumable phone-to-laptop sync and reconciliation."""
+"""Unit tests for the sync module: reconciliation states, verify-chunk
+receipts, YouTube ingestion acknowledgement, and the retired LAN byte path."""
 import os
 import unittest
 import tempfile
@@ -21,7 +22,10 @@ AUTH_TOKEN = "dispatch_paired_secret_default"
 
 class TestSyncEngine(unittest.TestCase):
 
-    def test_resumable_sync_and_reconcile(self):
+    def test_reconcile_reports_missing_then_verified_for_seeded_file(self):
+        """Reconciliation stays live after the LAN byte path retirement: it must
+        report MISSING until the PC holds verified bytes, and VERIFIED only
+        against a size+SHA-256-checked physical file."""
         os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
         init_db()
         init_mobile_db()
@@ -30,7 +34,8 @@ class TestSyncEngine(unittest.TestCase):
         manager = RecordingSessionManager(storage_dir=test_storage)
 
         try:
-            # 1. Mobile starts session and generates a 40 KB test segment
+            # 1. Phone-side segment exists (mobile engine stand-in), the laptop
+            #    holds nothing yet.
             sess_id = manager.start_session(notes="Sync Test Session")
             seg_tmp = manager.current_tmp_path
 
@@ -47,7 +52,7 @@ class TestSyncEngine(unittest.TestCase):
             final_phone_path = test_storage / f"{seg_id}.mp4"
             self.assertTrue(final_phone_path.exists())
 
-            # 2. Test Reconciliation BEFORE upload (should report MISSING)
+            # 2. Reconciliation BEFORE any PC-side state (should report MISSING)
             reconcile_payload = {
                 "auth_token": AUTH_TOKEN,
                 "manifest": [
@@ -65,88 +70,28 @@ class TestSyncEngine(unittest.TestCase):
             self.assertEqual(rec_data["status"], "MISSING")
             self.assertEqual(rec_data["remote_offset"], 0)
 
-            # 3. Initialize upload on laptop
-            init_res = client.post("/api/sync/upload/init", json={
-                "session_id": sess_id,
-                "segment_id": seg_id,
-                "filename": f"{seg_id}.mp4",
-                "file_size_bytes": total_size,
-                "sha256_hash": sha256,
-                "auth_token": AUTH_TOKEN
-            })
-            self.assertEqual(init_res.status_code, 200)
-            self.assertEqual(init_res.json()["remote_offset"], 0)
-
-            # 4. Upload FIRST CHUNK (approx 50% of the file: 20,480 bytes)
-            half_size = total_size // 2
-            chunk1 = test_payload[:half_size]
-
-            headers1 = {
-                "x-segment-id": seg_id,
-                "x-upload-offset": "0",
-                "x-file-size": str(total_size),
-                "x-sha256": sha256,
-                "x-session-id": sess_id,
-                "x-auth-token": AUTH_TOKEN,
-                "content-type": "application/octet-stream"
-            }
-            res_chunk1 = client.patch("/api/sync/upload/chunk", content=chunk1, headers=headers1)
-            self.assertEqual(res_chunk1.status_code, 200)
-            self.assertEqual(res_chunk1.json()["remote_offset"], half_size)
-            self.assertFalse(res_chunk1.json()["verified"])
-
-            # 5. SIMULATE NETWORK INTERRUPTION AT 50%
-            # Partial file must exist on laptop disk
-            part_on_laptop = INCOMING_DIR / f"{seg_id}.part"
-            self.assertTrue(part_on_laptop.exists())
-            self.assertEqual(part_on_laptop.stat().st_size, half_size)
-
-            # Test reconciliation during interruption (should report PARTIAL at exactly half_size)
-            res_rec2 = client.post("/api/sync/reconcile", json=reconcile_payload)
-            rec2_data = res_rec2.json()["reconciled"][0]
-            self.assertEqual(rec2_data["status"], "PARTIAL")
-            self.assertEqual(rec2_data["remote_offset"], half_size)
-
-            # 6. RESUME UPLOAD: Upload SECOND CHUNK from byte offset half_size
-            chunk2 = test_payload[half_size:]
-            headers2 = {
-                "x-segment-id": seg_id,
-                "x-upload-offset": str(half_size),
-                "x-file-size": str(total_size),
-                "x-sha256": sha256,
-                "x-session-id": sess_id,
-                "x-auth-token": AUTH_TOKEN,
-                "content-type": "application/octet-stream"
-            }
-            res_chunk2 = client.patch("/api/sync/upload/chunk", content=chunk2, headers=headers2)
-            self.assertEqual(res_chunk2.status_code, 200)
-            res_chunk2_data = res_chunk2.json()
-            self.assertEqual(res_chunk2_data["remote_offset"], total_size)
-            self.assertTrue(res_chunk2_data["verified"])
-            self.assertFalse(part_on_laptop.exists(), ".part file should be atomically renamed")
-
-            # Final file should now exist on laptop (in PROCESSING_DIR or INCOMING_DIR)
-            final_proc = PROCESSING_DIR / f"{seg_id}.mp4"
-            final_inc = INCOMING_DIR / f"{seg_id}.mp4"
-            final_on_laptop = final_proc if final_proc.exists() else final_inc
-            self.assertTrue(final_on_laptop.exists())
-            self.assertEqual(final_on_laptop.stat().st_size, total_size)
-
-            # Check laptop DB has verified chunk
+            # 3. Seed the PC side directly (LAN transfer retired): a real file on
+            #    disk plus a matching verified chunks row.
+            final_on_laptop = PROCESSING_DIR / f"{seg_id}.mp4"
+            shutil.copyfile(final_phone_path, final_on_laptop)
             with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT status, file_hash FROM chunks WHERE filename = ?", (f"{seg_id}.mp4",))
-                chunk_row = cursor.fetchone()
-                self.assertIsNotNone(chunk_row)
-                self.assertEqual(chunk_row["file_hash"], sha256)
+                conn.execute(
+                    "INSERT OR REPLACE INTO sessions (id, status, notes) VALUES (?, ?, ?)",
+                    (sess_id, "processing", "Sync Test Session")
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, file_hash, status) VALUES (?, ?, ?, ?, ?, ?)",
+                    (seg_id, sess_id, f"{seg_id}.mp4", str(final_on_laptop), sha256, "verified")
+                )
+                conn.commit()
 
-            # 7. Post-upload reconciliation: laptop reports VERIFIED
+            # 4. Post-seed reconciliation: laptop reports VERIFIED
             res_rec3 = client.post("/api/sync/reconcile", json=reconcile_payload)
             rec3_data = res_rec3.json()["reconciled"][0]
             self.assertEqual(rec3_data["status"], "VERIFIED")
             self.assertEqual(rec3_data["remote_offset"], total_size)
 
-            # 8. Mark verified on phone and trigger safe retention cleanup
+            # 5. Mark verified on phone and trigger safe retention cleanup
             with get_mobile_db() as conn:
                 conn.execute("""
                     UPDATE mobile_segments 
@@ -212,42 +157,45 @@ class TestSyncEngine(unittest.TestCase):
         finally:
             test_file.unlink(missing_ok=True)
 
-    def test_chunk_upload_offset_mismatch_returns_409(self):
-        """Chunk upload with mismatched offset must return HTTP 409 Conflict."""
+    def test_retired_lan_upload_endpoints_return_410(self):
+        """The LAN byte path (/upload/init, /upload/chunk) is RETIRED: phone
+        segments arrive via YouTube. Every request — valid token, forged token,
+        wrong offset, or none — must fail closed with 410 Gone, never a live
+        byte receiver."""
         os.environ["DISPATCH_AUTH_TOKEN"] = AUTH_TOKEN
         init_db()
 
-        seg_id = "seg_offset_mismatch_test"
-        part_file = INCOMING_DIR / f"{seg_id}.part"
-        part_file.unlink(missing_ok=True)
-
         payload = b"TEST_CHUNK_PAYLOAD_OFFSET"
-        headers = {
-            "x-segment-id": seg_id,
-            "x-upload-offset": "100",  # Incorrect offset (server has 0 bytes)
+        base_headers = {
+            "x-segment-id": "seg_retired_test",
+            "x-upload-offset": "100",  # incorrect offset anyway
             "x-file-size": str(len(payload)),
             "x-sha256": hashlib.sha256(payload).hexdigest(),
-            "x-session-id": "sess_offset_test",
-            "x-auth-token": AUTH_TOKEN,
+            "x-session-id": "sess_retired_test",
             "content-type": "application/octet-stream"
         }
-        res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
-        self.assertEqual(res.status_code, 409)
-        self.assertIn("Offset mismatch", res.json()["detail"])
 
-    def test_chunk_upload_unauthenticated_returns_401(self):
-        """Chunk upload without auth token returns HTTP 401 Unauthorized."""
-        payload = b"TEST_PAYLOAD"
-        headers = {
-            "x-segment-id": "seg_unauth_test",
-            "x-upload-offset": "0",
-            "x-file-size": str(len(payload)),
-            "x-sha256": hashlib.sha256(payload).hexdigest(),
-            "x-session-id": "sess_unauth",
-            "content-type": "application/octet-stream"
-        }
-        res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
-        self.assertEqual(res.status_code, 401)
+        for token_header in (
+            {"x-auth-token": AUTH_TOKEN},
+            {"x-auth-token": "forged_evil_token"},
+            {},
+        ):
+            headers = {**base_headers, **token_header}
+            res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
+            self.assertEqual(res.status_code, 410, f"chunk must be gone for {token_header}")
+            if res.status_code == 410:
+                self.assertIn("retired", res.json()["detail"])
+
+        init_res = client.post("/api/sync/upload/init", json={
+            "session_id": "sess_retired_test",
+            "segment_id": "seg_retired_test",
+            "filename": "seg_retired_test.mp4",
+            "file_size_bytes": len(payload),
+            "sha256_hash": hashlib.sha256(payload).hexdigest(),
+            "auth_token": AUTH_TOKEN
+        })
+        self.assertEqual(init_res.status_code, 410)
+        self.assertIn("retired", init_res.json()["detail"])
 
 
     def test_verify_chunk_missing_file_with_db_row_returns_missing(self):
@@ -300,22 +248,10 @@ class TestSyncEngine(unittest.TestCase):
             self.assertNotEqual(rec_data[0]["status"], "VERIFIED", "Reconcile must not report VERIFIED without physical file")
             self.assertEqual(rec_data[0]["status"], "MISSING")
 
-            # 3. upload/init must not return already_completed or verified: True
-            init_res = client.post(
-                "/api/sync/upload/init",
-                json={
-                    "segment_id": seg_id,
-                    "session_id": "sess_ghost",
-                    "filename": f"{seg_id}.mp4",
-                    "file_size_bytes": 100,
-                    "sha256_hash": dummy_hash,
-                    "auth_token": AUTH_TOKEN
-                }
-            )
-            self.assertEqual(init_res.status_code, 200)
-            init_data = init_res.json()
-            self.assertFalse(init_data["verified"], "Upload init must not report verified: True when physical file is missing")
-            self.assertEqual(init_data["status"], "in_progress")
+            # 3. The LAN upload path is retired (covered by
+            #    test_retired_lan_upload_endpoints_return_410). The ghost-row
+            #    protection lives in verify-chunk (1) and reconcile (2) above,
+            #    which must never report VERIFIED without physical bytes.
         finally:
             with get_db_connection() as conn:
                 conn.execute("DELETE FROM chunks WHERE id = ?", (seg_id,))
@@ -424,11 +360,15 @@ class TestSyncEngine(unittest.TestCase):
             self.assertTrue(res.json()["ingested"])
             self.assertIn("receipt", res.json())
 
-            # Verify the HMAC receipt format and signature
+            # Verify the HMAC receipt format and signature. The PC signs with
+            # the domain-separated ack key (mirrors Android's
+            # deriveAckReceiptKey); the phone additionally accepts legacy
+            # token-keyed receipts during the transition.
             receipt = res.json()["receipt"]
             canonical_id = res.json().get("canonical_id")
             expected_msg = f"{canonical_id}:{dummy_sha256}:DOWNLOADED:VERIFIED".encode("utf-8")
-            expected_receipt = hmac.new(auth_token.encode("utf-8"), expected_msg, hashlib.sha256).hexdigest()
+            ack_key = hmac.new(auth_token.encode("utf-8"), b"dispatch-ack-receipt-v1", hashlib.sha256).digest()
+            expected_receipt = hmac.new(ack_key, expected_msg, hashlib.sha256).hexdigest()
             self.assertEqual(receipt, expected_receipt)
 
             # 7. Query by dispatch_id also succeeds with verified receipt

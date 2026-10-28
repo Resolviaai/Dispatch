@@ -143,86 +143,63 @@ if claimed:
             self.assertIsNone(row["worker_id"])
 
     def test_02_corrupt_chunk_quarantine_and_phone_proof_refusal(self):
-        """Simulates corrupt or truncated data transmission.
-        Ensures receiver quarantines the bad file and verify-chunk refuses cryptographic proof.
-        """
+        """Data corruption on the PC side must never yield a cryptographic
+        proof: verify-chunk refuses CORRUPT_RETRY_REQUIRED, reconcile
+        quarantines the corrupt bytes, and the phone NEVER deletes its local
+        recording until genuine bytes are actually present and verified.
+        (The LAN receiver is retired; corruption now means a bad file sitting
+        on PC disk under the segment id.)"""
         seg_id = f"seg_corrupt_{int(time.time() * 1000)}"
         genuine_bytes = b"GENUINE_VIDEO_STREAM_BYTES_VALID" * 50
         genuine_sha256 = hashlib.sha256(genuine_bytes).hexdigest()
         corrupt_bytes = b"CORRUPTED_STREAM_GARBAGE_PAYLOAD" * 50
-        corrupt_sha256 = hashlib.sha256(corrupt_bytes).hexdigest()
 
-        # Step 1: Upload corrupt bytes with genuine SHA256 header expectation
-        init_resp = client.post("/api/sync/upload/init", json={
-            "session_id": "sess_corrupt",
-            "segment_id": seg_id,
-            "filename": f"{seg_id}.mp4",
-            "file_size_bytes": len(genuine_bytes),
-            "sha256_hash": genuine_sha256,
-            "auth_token": AUTH_TOKEN
-        })
-        self.assertEqual(init_resp.status_code, 200)
+        # Step 1: Plant corrupt bytes under the expected final name
+        corrupt_file = PROCESSING_DIR / f"{seg_id}.mp4"
+        corrupt_file.write_bytes(corrupt_bytes)
 
-        patch_resp = client.patch(
-            "/api/sync/upload/chunk",
-            content=corrupt_bytes,
-            headers={
-                "x-segment-id": seg_id,
-                "x-upload-offset": "0",
-                "x-file-size": str(len(genuine_bytes)),
-                "x-sha256": genuine_sha256,
-                "x-session-id": "sess_corrupt",
-                "x-auth-token": AUTH_TOKEN,
-                "content-type": "application/octet-stream"
-            }
-        )
-        # Server must reject SHA mismatch
-        self.assertEqual(patch_resp.status_code, 422)
+        try:
+            # Step 2: Phone requests proof of receipt before deleting local video
+            proof_resp = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_sha256}&file_size={len(genuine_bytes)}",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(proof_resp.status_code, 200)
+            # Phone MUST be told verified = False so phone NEVER deletes local recording!
+            self.assertFalse(proof_resp.json()["verified"])
+            self.assertEqual(proof_resp.json()["status"], "CORRUPT_RETRY_REQUIRED")
 
-        # Step 2: Phone requests proof of receipt before deleting local video
-        proof_resp = client.get(
-            f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_sha256}&file_size={len(genuine_bytes)}",
-            headers={"x-auth-token": AUTH_TOKEN}
-        )
-        self.assertEqual(proof_resp.status_code, 200)
-        # Phone MUST be told verified = False so phone NEVER deletes local recording!
-        self.assertFalse(proof_resp.json()["verified"])
+            # Step 2b: Reconcile treats the corrupt collateral as quarantined
+            recon_resp = client.post("/api/sync/reconcile", json={
+                "auth_token": AUTH_TOKEN,
+                "manifest": [{
+                    "segment_id": seg_id,
+                    "session_id": "sess_corrupt",
+                    "file_size_bytes": len(genuine_bytes),
+                    "sha256_hash": genuine_sha256
+                }]
+            })
+            self.assertEqual(recon_resp.status_code, 200)
+            self.assertFalse(recon_resp.json()["reconciled"][0]["status"] == "VERIFIED")
+            # Corrupt file removed from the active name (quarantine/rejection)
+            corrupt_file.unlink(missing_ok=True)
 
-        # Step 3: Now simulate clean re-upload of genuine bytes
-        init_clean = client.post("/api/sync/upload/init", json={
-            "session_id": "sess_corrupt",
-            "segment_id": seg_id,
-            "filename": f"{seg_id}.mp4",
-            "file_size_bytes": len(genuine_bytes),
-            "sha256_hash": genuine_sha256,
-            "auth_token": AUTH_TOKEN
-        })
-        self.assertEqual(init_clean.status_code, 200)
+            # Step 3: Simulate the corruption being repaired on disk with
+            # genuine bytes (no byte receiver exists to re-upload through)
+            patched = PROCESSING_DIR / f"{seg_id}.mp4"
+            patched.write_bytes(genuine_bytes)
 
-        patch_clean = client.patch(
-            "/api/sync/upload/chunk",
-            content=genuine_bytes,
-            headers={
-                "x-segment-id": seg_id,
-                "x-upload-offset": "0",
-                "x-file-size": str(len(genuine_bytes)),
-                "x-sha256": genuine_sha256,
-                "x-session-id": "sess_corrupt",
-                "x-auth-token": AUTH_TOKEN,
-                "content-type": "application/octet-stream"
-            }
-        )
-        self.assertEqual(patch_clean.status_code, 200)
-        self.assertEqual(patch_clean.json()["status"], "completed")
-
-        # Step 4: Phone re-queries proof of receipt
-        proof_verified = client.get(
-            f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_sha256}&file_size={len(genuine_bytes)}",
-            headers={"x-auth-token": AUTH_TOKEN}
-        )
-        self.assertEqual(proof_verified.status_code, 200)
-        self.assertTrue(proof_verified.json()["verified"])
-        self.assertEqual(proof_verified.json()["status"], "VERIFIED")
+            # Step 4: Phone re-queries proof of receipt
+            proof_verified = client.get(
+                f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_sha256}&file_size={len(genuine_bytes)}",
+                headers={"x-auth-token": AUTH_TOKEN}
+            )
+            self.assertEqual(proof_verified.status_code, 200)
+            self.assertTrue(proof_verified.json()["verified"])
+            self.assertEqual(proof_verified.json()["status"], "VERIFIED")
+        finally:
+            (PROCESSING_DIR / f"{seg_id}.mp4").unlink(missing_ok=True)
+            (INCOMING_DIR / f"corrupt_{seg_id}.bad").unlink(missing_ok=True)
 
     def test_03_concurrent_worker_claim_collision_and_lease_fencing(self):
         """Launches 10 simultaneous threads attempting to claim a single job.

@@ -1,15 +1,13 @@
-"""Adversarial Stress Test Suite: Chunked Upload and Cryptographic Verification Engine.
+"""Adversarial Stress Test Suite: Cryptographic Verification Engine.
 
-Tests:
-1. Chunk offset mismatch: Verify PATCH /api/sync/upload/chunk returns 409 Conflict
-   when client offset does not match server partial file size across multiple offset drift scenarios.
-2. Unauthenticated chunk upload: Verify PATCH /api/sync/upload/chunk strictly rejects
-   requests without valid x-auth-token with HTTP 401 Unauthorized (missing, empty, forged, malformed).
-3. Final chunk checksum tampering: Verify corrupted chunk bytes at completion trigger
-   HTTP 422 Unprocessable Entity and immediately purge/unlink the partial file from disk.
-4. Cryptographic proof endpoint /api/sync/verify-chunk: Test valid hash vs tampered hash vs missing file,
-   size mismatch, database fallback, unauthenticated access, and directory traversal injection.
-5. Post-corruption recovery: Verify client can cleanly resume/re-upload after a 422 corruption rejection.
+The LAN byte path (POST /api/sync/upload/init, PATCH /api/sync/upload/chunk,
+POST /api/sync/upload/direct) is RETIRED: phone segments arrive via YouTube.
+Every byte-transfer adversarial scenario must therefore fail closed with
+410 Gone — there is no receiver left to attack, and no partial byte state may
+ever be created. The live cryptographic proof endpoint /api/sync/verify-chunk
+keeps its full adversarial coverage (tests 10-15): valid hash vs tampered hash
+vs missing file, size mismatch, unauthenticated access, and directory
+traversal injection.
 """
 import os
 import unittest
@@ -42,12 +40,12 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
                     pass
 
     # =========================================================================
-    # 1. CHUNK OFFSET MISMATCH ADVERSARIAL CHALLENGES (HTTP 409)
+    # 1. RETIRED LAN BYTE PATH: OFFSET DRIFT CHALLENGES (HTTP 410 FAIL-CLOSED)
     # =========================================================================
 
     def test_01_offset_mismatch_empty_server_nonzero_client_offset(self):
-        """Server has 0 bytes, client sends offset > 0 -> must return HTTP 409 Conflict."""
-        seg_id = f"adv_offset_empty_{int(time.time() * 1000)}"
+        """Server has 0 bytes, client sends offset > 0 -> retired endpoint returns 410 Gone."""
+        seg_id = "adv_retired_offset_1"
         part_file = INCOMING_DIR / f"{seg_id}.part"
         part_file.unlink(missing_ok=True)
 
@@ -63,14 +61,14 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
         }
 
         res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
-        self.assertEqual(res.status_code, 409, f"Expected 409 Conflict, got {res.status_code}: {res.text}")
-        self.assertIn("Offset mismatch", res.json().get("detail", ""))
-        self.assertIn("client has 100, server has 0", res.json().get("detail", ""))
-        self.assertFalse(part_file.exists(), "Partial file should not be created on 409 rejection")
+        self.assertEqual(res.status_code, 410, f"Expected 410 Gone, got {res.status_code}: {res.text}")
+        self.assertIn("retired", res.json().get("detail", ""))
+        self.assertFalse(part_file.exists(), "Retired endpoint must never create partial bytes")
 
     def test_02_offset_mismatch_replay_zero_offset_against_existing_partial(self):
-        """Server has partial bytes, client replays offset 0 -> must return HTTP 409 Conflict."""
-        seg_id = f"adv_offset_replay_{int(time.time() * 1000)}"
+        """Replaying offset 0 against a planted partial must be a 410 no-op: no
+        receiver exists, so the planted bytes stay exactly as they were."""
+        seg_id = "adv_retired_replay_2"
         part_file = INCOMING_DIR / f"{seg_id}.part"
         self.created_files.append(part_file)
 
@@ -91,16 +89,17 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
         }
 
         res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
-        self.assertEqual(res.status_code, 409)
-        self.assertIn("Offset mismatch: client has 0, server has 256", res.json().get("detail", ""))
-        # Verify existing partial file was NOT modified or corrupted
+        self.assertEqual(res.status_code, 410)
+        self.assertIn("retired", res.json().get("detail", ""))
+        # The planted partial was untouched: the retirement stub performs no
+        # server-side byte operations whatsoever.
         self.assertEqual(part_file.stat().st_size, 256)
         with open(part_file, "rb") as f:
             self.assertEqual(f.read(), initial_bytes)
 
     def test_03_offset_mismatch_skip_ahead_beyond_server_offset(self):
-        """Server has 256 bytes, client skips ahead to offset 512 -> must return HTTP 409 Conflict."""
-        seg_id = f"adv_offset_skip_{int(time.time() * 1000)}"
+        """Skip-ahead offset 512 against a planted 256-byte partial -> 410 no-op."""
+        seg_id = "adv_retired_skip_3"
         part_file = INCOMING_DIR / f"{seg_id}.part"
         self.created_files.append(part_file)
 
@@ -120,13 +119,13 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
         }
 
         res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
-        self.assertEqual(res.status_code, 409)
-        self.assertIn("Offset mismatch: client has 512, server has 256", res.json().get("detail", ""))
+        self.assertEqual(res.status_code, 410)
+        self.assertIn("retired", res.json().get("detail", ""))
         self.assertEqual(part_file.stat().st_size, 256)
 
     def test_04_offset_mismatch_off_by_one_boundaries(self):
-        """Server has 100 bytes: test offset 99 (-1) and offset 101 (+1) -> both must return HTTP 409."""
-        seg_id = f"adv_offset_boundary_{int(time.time() * 1000)}"
+        """Off-by-one offsets (99/101) -> both retired, both 410 Gone."""
+        seg_id = "adv_retired_boundary_4"
         part_file = INCOMING_DIR / f"{seg_id}.part"
         self.created_files.append(part_file)
 
@@ -143,8 +142,8 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
             "x-auth-token": AUTH_TOKEN,
             "content-type": "application/octet-stream",
         })
-        self.assertEqual(res_under.status_code, 409)
-        self.assertIn("client has 99, server has 100", res_under.json().get("detail", ""))
+        self.assertEqual(res_under.status_code, 410)
+        self.assertIn("retired", res_under.json().get("detail", ""))
 
         # Off by one: 101
         res_over = client.patch("/api/sync/upload/chunk", content=b"A", headers={
@@ -156,18 +155,19 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
             "x-auth-token": AUTH_TOKEN,
             "content-type": "application/octet-stream",
         })
-        self.assertEqual(res_over.status_code, 409)
-        self.assertIn("client has 101, server has 100", res_over.json().get("detail", ""))
+        self.assertEqual(res_over.status_code, 410)
+        self.assertIn("retired", res_over.json().get("detail", ""))
 
     # =========================================================================
-    # 2. UNAUTHENTICATED CHUNK UPLOAD ADVERSARIAL CHALLENGES (HTTP 401)
+    # 2. RETIRED LAN BYTE PATH: AUTH CHALLENGES ARE MOOT (HTTP 410 FAIL-CLOSED)
     # =========================================================================
 
     def test_05_unauthenticated_chunk_upload_missing_header(self):
-        """Request without x-auth-token header must return HTTP 401 Unauthorized."""
+        """The endpoint is gone for ANY caller — a missing token header yields
+        410 Gone (no auth oracle, no byte receiver)."""
         payload = b"UNAUTHORIZED_ATTEMPT_BYTES"
         headers = {
-            "x-segment-id": "adv_unauth_no_header",
+            "x-segment-id": "adv_retired_auth_5",
             "x-upload-offset": "0",
             "x-file-size": str(len(payload)),
             "x-sha256": hashlib.sha256(payload).hexdigest(),
@@ -175,14 +175,14 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
             "content-type": "application/octet-stream",
         }
         res = client.patch("/api/sync/upload/chunk", content=payload, headers=headers)
-        self.assertEqual(res.status_code, 401)
-        self.assertEqual(res.json().get("detail"), "Authentication token missing")
+        self.assertEqual(res.status_code, 410)
+        self.assertIn("retired", res.json().get("detail", ""))
 
     def test_06_unauthenticated_chunk_upload_empty_and_whitespace_token(self):
-        """Request with empty or whitespace-only token must return HTTP 401 Unauthorized."""
+        """Empty or whitespace-only tokens are also 410 Gone (endpoint is gone)."""
         payload = b"UNAUTHORIZED_BLANK_BYTES"
         base_headers = {
-            "x-segment-id": "adv_unauth_blank",
+            "x-segment-id": "adv_retired_auth_6",
             "x-upload-offset": "0",
             "x-file-size": str(len(payload)),
             "x-sha256": hashlib.sha256(payload).hexdigest(),
@@ -192,19 +192,19 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
 
         # Empty string
         res_empty = client.patch("/api/sync/upload/chunk", content=payload, headers={**base_headers, "x-auth-token": ""})
-        self.assertEqual(res_empty.status_code, 401)
-        self.assertEqual(res_empty.json().get("detail"), "Authentication token missing")
+        self.assertEqual(res_empty.status_code, 410)
+        self.assertIn("retired", res_empty.json().get("detail", ""))
 
         # Whitespace
         res_ws = client.patch("/api/sync/upload/chunk", content=payload, headers={**base_headers, "x-auth-token": "   "})
-        self.assertEqual(res_ws.status_code, 401)
-        self.assertEqual(res_ws.json().get("detail"), "Authentication token missing")
+        self.assertEqual(res_ws.status_code, 410)
+        self.assertIn("retired", res_ws.json().get("detail", ""))
 
     def test_07_unauthenticated_chunk_upload_invalid_and_forged_tokens(self):
-        """Request with wrong or forged token must return HTTP 401 Unauthorized."""
+        """Wrong, forged, and even VALID tokens must all see the same 410 Gone."""
         payload = b"FORGED_TOKEN_PAYLOAD"
         base_headers = {
-            "x-segment-id": "adv_unauth_forged",
+            "x-segment-id": "adv_retired_auth_7",
             "x-upload-offset": "0",
             "x-file-size": str(len(payload)),
             "x-sha256": hashlib.sha256(payload).hexdigest(),
@@ -214,27 +214,32 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
 
         # Completely wrong token
         res_wrong = client.patch("/api/sync/upload/chunk", content=payload, headers={**base_headers, "x-auth-token": "evil_hacker_token"})
-        self.assertEqual(res_wrong.status_code, 401)
-        self.assertEqual(res_wrong.json().get("detail"), "Invalid authentication token")
+        self.assertEqual(res_wrong.status_code, 410)
+        self.assertIn("retired", res_wrong.json().get("detail", ""))
 
         # Bearer prefix with wrong token
         res_bearer_wrong = client.patch("/api/sync/upload/chunk", content=payload, headers={**base_headers, "x-auth-token": "Bearer evil_token_xyz"})
-        self.assertEqual(res_bearer_wrong.status_code, 401)
-        self.assertEqual(res_bearer_wrong.json().get("detail"), "Invalid authentication token")
+        self.assertEqual(res_bearer_wrong.status_code, 410)
+        self.assertIn("retired", res_bearer_wrong.json().get("detail", ""))
+
+        # Even the valid token no longer resurrects a byte receiver
+        res_valid = client.patch("/api/sync/upload/chunk", content=payload, headers={**base_headers, "x-auth-token": AUTH_TOKEN})
+        self.assertEqual(res_valid.status_code, 410)
 
         # Verify no file was written to disk
-        part_file = INCOMING_DIR / "adv_unauth_forged.part"
+        part_file = INCOMING_DIR / "adv_retired_auth_7.part"
         self.assertFalse(part_file.exists())
 
     # =========================================================================
-    # 3. FINAL CHUNK CHECKSUM TAMPERING & PARTIAL FILE DELETION (HTTP 422)
+    # 3. RETIRED LAN BYTE PATH: CHECKSUM TAMPERING IS MOOT (NO BYTE RECEIVER)
     # =========================================================================
 
     def test_08_final_chunk_checksum_tampering_multi_chunk_purges_partial_file(self):
-        """Multi-chunk upload with corrupted bytes in the final chunk must trigger HTTP 422
-        and immediately delete/unlink the partial file from disk.
+        """Multi-chunk tampering scenario: the receiver is gone, so every
+        chunk PATCH (correct-offset or not) sees 410 Gone, no partial ever
+        exists, no final artifact is created, and no chunk row is registered.
         """
-        seg_id = f"adv_tamper_multi_{int(time.time() * 1000)}"
+        seg_id = "adv_retired_multi_8"
         part_file = INCOMING_DIR / f"{seg_id}.part"
         final_inc = INCOMING_DIR / f"{seg_id}.mp4"
         final_proc = PROCESSING_DIR / f"{seg_id}.mp4"
@@ -244,91 +249,39 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
         final_inc.unlink(missing_ok=True)
         final_proc.unlink(missing_ok=True)
 
-        # 3 chunks of 1000 bytes = 3000 bytes total
         genuine_chunk1 = b"A" * 1000
-        genuine_chunk2 = b"B" * 1000
-        genuine_chunk3 = b"C" * 1000
-        full_genuine_file = genuine_chunk1 + genuine_chunk2 + genuine_chunk3
-        genuine_sha256 = hashlib.sha256(full_genuine_file).hexdigest()
-        total_size = len(full_genuine_file)
+        genuine_sha256 = hashlib.sha256(b"A" * 3000).hexdigest()
 
-        sess_id = f"sess_multi_{seg_id}"
+        for offset in ("0", "1000", "2000"):
+            res = client.patch(
+                "/api/sync/upload/chunk",
+                content=genuine_chunk1,
+                headers={
+                    "x-segment-id": seg_id,
+                    "x-upload-offset": offset,
+                    "x-file-size": "3000",
+                    "x-sha256": genuine_sha256,
+                    "x-session-id": "sess_multi_retired",
+                    "x-auth-token": AUTH_TOKEN,
+                    "content-type": "application/octet-stream",
+                }
+            )
+            self.assertEqual(res.status_code, 410, f"chunk at offset {offset} must be 410")
+            self.assertIn("retired", res.json().get("detail", ""))
 
-        # Upload Chunk 1 (0 -> 1000)
-        res_c1 = client.patch(
-            "/api/sync/upload/chunk",
-            content=genuine_chunk1,
-            headers={
-                "x-segment-id": seg_id,
-                "x-upload-offset": "0",
-                "x-file-size": str(total_size),
-                "x-sha256": genuine_sha256,
-                "x-session-id": sess_id,
-                "x-auth-token": AUTH_TOKEN,
-                "content-type": "application/octet-stream",
-            }
-        )
-        self.assertEqual(res_c1.status_code, 200)
-        self.assertEqual(res_c1.json()["remote_offset"], 1000)
-        self.assertFalse(res_c1.json()["verified"])
-        self.assertTrue(part_file.exists())
-        self.assertEqual(part_file.stat().st_size, 1000)
+        # No partial was ever created, nothing was finalized, nothing registered
+        self.assertFalse(part_file.exists(), "Retired endpoint must never write partial bytes")
+        self.assertFalse(final_inc.exists(), "Retired endpoint must never finalize media into INCOMING_DIR")
+        self.assertFalse(final_proc.exists(), "Retired endpoint must never finalize media into PROCESSING_DIR")
 
-        # Upload Chunk 2 (1000 -> 2000)
-        res_c2 = client.patch(
-            "/api/sync/upload/chunk",
-            content=genuine_chunk2,
-            headers={
-                "x-segment-id": seg_id,
-                "x-upload-offset": "1000",
-                "x-file-size": str(total_size),
-                "x-sha256": genuine_sha256,
-                "x-session-id": sess_id,
-                "x-auth-token": AUTH_TOKEN,
-                "content-type": "application/octet-stream",
-            }
-        )
-        self.assertEqual(res_c2.status_code, 200)
-        self.assertEqual(res_c2.json()["remote_offset"], 2000)
-        self.assertFalse(res_c2.json()["verified"])
-        self.assertTrue(part_file.exists())
-        self.assertEqual(part_file.stat().st_size, 2000)
-
-        # Upload Chunk 3 (2000 -> 3000) TAMPERED: inject corrupted bytes
-        tampered_chunk3 = b"X" * 1000  # Corrupted bytes instead of genuine "C" * 1000
-        res_c3 = client.patch(
-            "/api/sync/upload/chunk",
-            content=tampered_chunk3,
-            headers={
-                "x-segment-id": seg_id,
-                "x-upload-offset": "2000",
-                "x-file-size": str(total_size),
-                "x-sha256": genuine_sha256,  # Claims genuine hash, but bytes are tampered
-                "x-session-id": sess_id,
-                "x-auth-token": AUTH_TOKEN,
-                "content-type": "application/octet-stream",
-            }
-        )
-
-        # Assert: server rejects with HTTP 422
-        self.assertEqual(res_c3.status_code, 422, f"Expected 422, got {res_c3.status_code}: {res_c3.text}")
-        self.assertIn("Checksum mismatch; partial file purged", res_c3.json().get("detail", ""))
-
-        # CRITICAL ASSERTION: The partial file MUST BE IMMEDIATELY UNLINKED / DELETED
-        self.assertFalse(part_file.exists(), f"CRITICAL SECURITY FAILURE: Partial file {part_file} was NOT deleted!")
-
-        # Verify no corrupt file was finalized
-        self.assertFalse(final_inc.exists(), "Corrupt file was erroneously saved to INCOMING_DIR")
-        self.assertFalse(final_proc.exists(), "Corrupt file was erroneously saved to PROCESSING_DIR")
-
-        # Verify no verified chunk registered in database
         with get_db_connection() as conn:
             row = conn.execute("SELECT status FROM chunks WHERE filename = ?", (f"{seg_id}.mp4",)).fetchone()
-            self.assertIsNone(row, "Corrupt chunk should not be registered in database")
+            self.assertIsNone(row, "Retired path must not register chunk rows")
 
     def test_09_single_chunk_checksum_tampering_purges_partial_file(self):
-        """Single-chunk upload with mismatched checksum header must return HTTP 422 and leave no partial file."""
-        seg_id = f"adv_tamper_single_{int(time.time() * 1000)}"
+        """Single-chunk attempt with a fraudulent checksum header: 410 Gone and
+        no partial file left behind (checksum enforcement is moot post-retirement)."""
+        seg_id = "adv_retired_single_9"
         part_file = INCOMING_DIR / f"{seg_id}.part"
         final_proc = PROCESSING_DIR / f"{seg_id}.mp4"
         self.created_files.extend([part_file, final_proc])
@@ -349,9 +302,9 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
                 "content-type": "application/octet-stream",
             }
         )
-        self.assertEqual(res.status_code, 422)
-        self.assertIn("Checksum mismatch; partial file purged", res.json().get("detail", ""))
-        self.assertFalse(part_file.exists(), "Partial file must be purged after single-chunk checksum failure")
+        self.assertEqual(res.status_code, 410)
+        self.assertIn("retired", res.json().get("detail", ""))
+        self.assertFalse(part_file.exists(), "Retired endpoint must never leave a partial file")
         self.assertFalse(final_proc.exists())
 
     # =========================================================================
@@ -470,81 +423,75 @@ class TestAdversarialChunkCrypto(unittest.TestCase):
             )
 
     # =========================================================================
-    # 5. POST-CORRUPTION CLEAN RECOVERY WORKFLOW
+    # 5. RETIRED LAN BYTE PATH: RECOVERY CYCLE AND RESIDUAL ROUTES
     # =========================================================================
 
     def test_16_clean_recovery_after_checksum_corruption_failure(self):
-        """Verifies full recovery cycle:
-        1. Upload fails due to corrupted chunk bytes -> 422, partial file purged.
-        2. Client initializes fresh upload and sends clean genuine bytes.
-        3. Upload completes successfully -> 200, verified=True.
-        4. Mobile client queries /api/sync/verify-chunk -> confirmed VERIFIED.
-        """
-        seg_id = f"adv_recovery_{int(time.time() * 1000)}"
+        """The corruption-recovery cycle is structurally obsolete: init and
+        chunk PATCH are 410 Gone so no bytes can ever arrive, and a subsequent
+        verify-chunk probe truthfully reports MISSING."""
+        seg_id = "adv_retired_recovery_16"
         part_file = INCOMING_DIR / f"{seg_id}.part"
         final_proc = PROCESSING_DIR / f"{seg_id}.mp4"
         self.created_files.extend([part_file, final_proc])
+        part_file.unlink(missing_ok=True)
+        final_proc.unlink(missing_ok=True)
 
-        genuine_data = b"CLEAN_RECOVERED_MEDIA_STREAM_DATA" * 50
-        genuine_hash = hashlib.sha256(genuine_data).hexdigest()
-        genuine_size = len(genuine_data)
+        genuine_hash = hashlib.sha256(b"CLEAN_RECOVERED_MEDIA_STREAM_DATA" * 50).hexdigest()
 
-        # Step 1: Corrupted attempt
-        corrupt_data = b"CORRUPTED_STREAM_BYTE_DRIFT_01234" * 50
+        # Step 1: Corrupted attempt on the retired receiver
         res_fail = client.patch(
             "/api/sync/upload/chunk",
-            content=corrupt_data,
+            content=b"CORRUPTED_STREAM_BYTE_DRIFT_01234" * 50,
             headers={
                 "x-segment-id": seg_id,
                 "x-upload-offset": "0",
-                "x-file-size": str(genuine_size),
+                "x-file-size": "1650",
                 "x-sha256": genuine_hash,
                 "x-session-id": "sess_recovery",
                 "x-auth-token": AUTH_TOKEN,
                 "content-type": "application/octet-stream",
             }
         )
-        self.assertEqual(res_fail.status_code, 422)
+        self.assertEqual(res_fail.status_code, 410)
         self.assertFalse(part_file.exists())
 
-        # Step 2: Fresh init
+        # Step 2: Fresh init on the retired route
         res_init = client.post("/api/sync/upload/init", json={
             "session_id": "sess_recovery",
             "segment_id": seg_id,
             "filename": f"{seg_id}.mp4",
-            "file_size_bytes": genuine_size,
+            "file_size_bytes": 1650,
             "sha256_hash": genuine_hash,
             "auth_token": AUTH_TOKEN
         })
-        self.assertEqual(res_init.status_code, 200)
-        self.assertEqual(res_init.json()["remote_offset"], 0)
+        self.assertEqual(res_init.status_code, 410)
+        self.assertIn("retired", res_init.json().get("detail", ""))
 
-        # Step 3: Clean upload
+        # Step 3: No recovery upload is possible either
         res_clean = client.patch(
             "/api/sync/upload/chunk",
-            content=genuine_data,
+            content=b"CLEAN_RECOVERED_MEDIA_STREAM_DATA" * 50,
             headers={
                 "x-segment-id": seg_id,
                 "x-upload-offset": "0",
-                "x-file-size": str(genuine_size),
+                "x-file-size": "1650",
                 "x-sha256": genuine_hash,
                 "x-session-id": "sess_recovery",
                 "x-auth-token": AUTH_TOKEN,
                 "content-type": "application/octet-stream",
             }
         )
-        self.assertEqual(res_clean.status_code, 200)
-        self.assertTrue(res_clean.json()["verified"])
-        self.assertEqual(res_clean.json()["status"], "completed")
+        self.assertEqual(res_clean.status_code, 410)
 
-        # Step 4: Cryptographic verification check
+        # Step 4: The proof endpoint truthfully reports the absence of bytes
         res_proof = client.get(
-            f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_hash}&file_size={genuine_size}",
+            f"/api/sync/verify-chunk?segment_id={seg_id}&sha256={genuine_hash}&file_size=1650",
             headers={"x-auth-token": AUTH_TOKEN}
         )
         self.assertEqual(res_proof.status_code, 200)
-        self.assertTrue(res_proof.json()["verified"])
-        self.assertEqual(res_proof.json()["status"], "VERIFIED")
+        self.assertFalse(res_proof.json()["verified"])
+        self.assertEqual(res_proof.json()["status"], "MISSING")
 
 
 if __name__ == "__main__":

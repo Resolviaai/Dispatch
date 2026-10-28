@@ -4,20 +4,20 @@ import math
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from dispatch.transcription.subprocess_utils import run_checked
+
 
 def _probe_audio_duration(audio_path: Path) -> float:
-    probe = subprocess.run(
+    probe = run_checked(
         [
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path),
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
+        timeout_seconds=60,
+        label="ffprobe audio duration probe",
     )
     if probe.returncode != 0:
-        raise RuntimeError(f"Could not inspect transcription audio: {probe.stderr.strip()}")
+        raise RuntimeError(f"Could not inspect transcription audio: {probe.stderr.strip() if isinstance(probe.stderr, str) else ''}")
     try:
         duration = float(probe.stdout.strip())
     except ValueError as exc:
@@ -54,9 +54,13 @@ def extract_audio(video_path: Path, output_wav_path: Optional[Path] = None) -> P
         str(output_wav_path)
     ]
 
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    result = run_checked(
+        cmd,
+        timeout_seconds=600,
+        label="ffmpeg WAV audio extraction",
+    )
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg audio extraction failed: {result.stderr.strip()}")
+        raise RuntimeError(f"FFmpeg audio extraction failed: {result.stderr.strip() if isinstance(result.stderr, str) else ''}")
 
     return output_wav_path
 
@@ -95,9 +99,13 @@ def extract_compressed_audio(
         str(output_mp3_path)
     ]
 
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    result = run_checked(
+        cmd,
+        timeout_seconds=600,
+        label="ffmpeg MP3 audio extraction",
+    )
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg MP3 audio extraction failed: {result.stderr.strip()}")
+        raise RuntimeError(f"FFmpeg MP3 audio extraction failed: {result.stderr.strip() if isinstance(result.stderr, str) else ''}")
 
     if not output_mp3_path.exists() or output_mp3_path.stat().st_size == 0:
         raise RuntimeError("Extracted MP3 file is missing or empty")
@@ -140,7 +148,7 @@ def split_audio_for_transcription(
     while source_offset < duration:
         window_duration = min(float(chunk_seconds), duration - source_offset)
         part_path = output_dir / f"audio_part_{part_index:03d}.mp3"
-        split = subprocess.run(
+        split = run_checked(
             [
                 "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
                 "-i", str(audio_path), "-ss", f"{source_offset:.3f}",
@@ -148,13 +156,11 @@ def split_audio_for_transcription(
                 "-c:a", "libmp3lame", "-b:a", "96k", "-ar", "44100",
                 str(part_path),
             ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
+            timeout_seconds=600,
+            label=f"ffmpeg transcription window split {part_index + 1}",
         )
         if split.returncode != 0:
-            raise RuntimeError(f"Could not extract transcription window {part_index + 1}: {split.stderr.strip()}")
+            raise RuntimeError(f"Could not extract transcription window {part_index + 1}: {split.stderr.strip() if isinstance(split.stderr, str) else ''}")
         if not part_path.is_file() or part_path.stat().st_size == 0:
             raise RuntimeError(f"Transcription window {part_index + 1} is missing or empty")
         part_duration = _probe_audio_duration(part_path)

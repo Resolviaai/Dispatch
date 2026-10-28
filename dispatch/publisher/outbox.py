@@ -296,6 +296,19 @@ def _process_outbox_queue_internal() -> int:
                 logger.debug("Job %s already claimed by another worker; skipping", job_id)
                 continue
 
+        # Ground-truth re-check AFTER claiming: the queue JOIN may have been minutes
+        # old, and the user could have rejected the clip or moved its status since.
+        # Publishing a rejected clip from a stale queue row must fail closed.
+        claimed_clip = db.get_clip_by_id(clip_id)
+        if not claimed_clip or claimed_clip.get("status") != "approved":
+            with db.get_db_connection() as conn:
+                conn.execute(
+                    "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
+                    (f"Clip no longer approved (status: {claimed_clip.get('status') if claimed_clip else 'missing'})", job_id)
+                )
+            logger.warning("Job %s abandoned: clip %s is not approved", job_id, clip_id)
+            continue
+
         try:
             logger.info("Publishing clip %s to %s (Mode: %s, Attempt: %d)", clip_id, platform, publish_mode, attempt_count + 1)
 
@@ -478,10 +491,17 @@ def check_and_finalize_clip(clip_id: str, video_path: Path):
             cursor.execute("""
                 UPDATE clips 
                 SET status = 'published', published_at = CURRENT_TIMESTAMP 
-                WHERE id = ?
+                WHERE id = ? AND status = 'approved'
             """, (clip_id,))
-            conn.commit()
-            logger.info("All platform uploads confirmed for clip %s. Clip marked published (media preserved).", clip_id)
+            if cursor.rowcount == 1:
+                conn.commit()
+                logger.info("All platform uploads confirmed for clip %s. Clip marked published (media preserved).", clip_id)
+            else:
+                conn.commit()
+                logger.info(
+                    "All platform uploads confirmed for clip %s, but clip is no longer approved "
+                    "(rejected or finalized already); status left untouched.", clip_id
+                )
 
 
 class PublishingOutboxWorker:

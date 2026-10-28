@@ -310,6 +310,13 @@ class TestPillar3Highlights(unittest.TestCase):
         self.assertIn("HTTP 429", row["last_ai_error"])
 
     # Test I: Missing GEMINI_API_KEY transitions to permanent failure
+    # NOTE: The desktop Settings endpoint (dispatch/web/app.py "save Gemini key")
+    # persists the key into a repo-root .env file which dispatch.config loads via
+    # load_dotenv() at import time. worker.py line ~746 resolves
+    # os.getenv("GEMINI_API_KEY") FIRST, so the env var must be neutralized here —
+    # patching only the two module constants leaks a real key on any machine that
+    # ever saved one (observed as a live 45s network call from this test).
+    @patch.dict(os.environ, {"GEMINI_API_KEY": ""})
     @patch("dispatch.ai_clips.worker.GEMINI_API_KEY", "")
     @patch("dispatch.ai_clips.highlight_finder.GEMINI_API_KEY", "")
     def test_i_missing_gemini_api_key_fails(self):
