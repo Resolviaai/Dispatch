@@ -10,7 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [SessionEntity::class, SegmentEntity::class, OutboxEntity::class],
     version = 6,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun recordingDao(): RecordingDao
@@ -81,11 +81,82 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private fun rebuildTable(
+            db: SupportSQLiteDatabase,
+            table: String,
+            tempTable: String,
+            createTempSql: String,
+            insertSelectSql: String,
+            indices: Array<String>,
+        ) {
+            db.execSQL("DROP TABLE IF EXISTS `$tempTable`")
+            db.execSQL(createTempSql)
+            db.execSQL(insertSelectSql)
+            db.execSQL("DROP TABLE IF EXISTS `$table`")
+            db.execSQL("ALTER TABLE `$tempTable` RENAME TO `$table`")
+            indices.forEach { db.execSQL(it) }
+        }
+
         val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // Upload lease: lets a fresh worker run reclaim segments stranded
-                // in UPLOADING by a hard kill instead of leaving them stuck forever.
-                ensureColumnExists(db, "segments", "uploadLeaseAt", "INTEGER DEFAULT NULL")
+                // Room validates the post-migration schema against the COMPILED entity
+                // (TableInfo.hasEqualColumnsAndConstraints). The hand-written
+                // `ALTER TABLE … ADD COLUMN … DEFAULT …` statements in migrations 1..5
+                // produce columns whose notNull/default differ from what the entities
+                // declare: `uploadOrigin TEXT DEFAULT ''` (nullable, default '') where
+                // Room expects `uploadOrigin TEXT NOT NULL` with no default, and
+                // `uploadLeaseAt INTEGER DEFAULT NULL` where Room expects a plain
+                // nullable INTEGER. Any mismatch throws
+                // "Migration didn't properly handle: segments", Room rolls the whole
+                // upgrade back, and the database then fails to open on EVERY launch —
+                // which bricks recording and the recordings list.
+                //
+                // Rebuild to the compiled schema so drifted (upgraded) and fresh
+                // databases converge. Rows are preserved; NOT NULL columns are
+                // backfilled with COALESCE.
+                rebuildTable(
+                    db = db,
+                    table = "segments",
+                    tempTable = "segments_v6_rebuild",
+                    createTempSql = "CREATE TABLE `segments_v6_rebuild` (" +
+                        "`segmentId` TEXT NOT NULL, `sessionId` TEXT NOT NULL, " +
+                        "`sequenceNumber` INTEGER NOT NULL, `filename` TEXT NOT NULL, " +
+                        "`filepath` TEXT NOT NULL, `fileSizeBytes` INTEGER NOT NULL, " +
+                        "`sha256Hash` TEXT NOT NULL, `status` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `finalizedAt` INTEGER, " +
+                        "`youtubeVideoId` TEXT, `userId` TEXT, `uploadOrigin` TEXT NOT NULL, " +
+                        "`youtubeCheckAttempts` INTEGER NOT NULL, `youtubeCheckAt` INTEGER NOT NULL, " +
+                        "`uploadLeaseAt` INTEGER, PRIMARY KEY(`segmentId`))",
+                    insertSelectSql = "INSERT INTO `segments_v6_rebuild` (`segmentId`, `sessionId`, " +
+                        "`sequenceNumber`, `filename`, `filepath`, `fileSizeBytes`, `sha256Hash`, `status`, " +
+                        "`createdAt`, `finalizedAt`, `youtubeVideoId`, `userId`, `uploadOrigin`, " +
+                        "`youtubeCheckAttempts`, `youtubeCheckAt`, `uploadLeaseAt`) " +
+                        "SELECT `segmentId`, `sessionId`, COALESCE(`sequenceNumber`, 0), " +
+                        "COALESCE(`filename`, ''), COALESCE(`filepath`, ''), COALESCE(`fileSizeBytes`, 0), " +
+                        "COALESCE(`sha256Hash`, ''), COALESCE(`status`, 'RECORDING'), COALESCE(`createdAt`, 0), " +
+                        "`finalizedAt`, `youtubeVideoId`, `userId`, COALESCE(`uploadOrigin`, ''), " +
+                        "COALESCE(`youtubeCheckAttempts`, 0), COALESCE(`youtubeCheckAt`, 0), NULL " +
+                        "FROM `segments`",
+                    indices = arrayOf(
+                        "CREATE INDEX IF NOT EXISTS `index_segments_userId` ON `segments` (`userId`)"
+                    )
+                )
+                rebuildTable(
+                    db = db,
+                    table = "sessions",
+                    tempTable = "sessions_v6_rebuild",
+                    createTempSql = "CREATE TABLE `sessions_v6_rebuild` (" +
+                        "`sessionId` TEXT NOT NULL, `startedAt` INTEGER NOT NULL, " +
+                        "`totalSegments` INTEGER NOT NULL, `status` TEXT NOT NULL, " +
+                        "`notes` TEXT NOT NULL, `userId` TEXT, PRIMARY KEY(`sessionId`))",
+                    insertSelectSql = "INSERT INTO `sessions_v6_rebuild` (`sessionId`, `startedAt`, " +
+                        "`totalSegments`, `status`, `notes`, `userId`) " +
+                        "SELECT `sessionId`, COALESCE(`startedAt`, 0), COALESCE(`totalSegments`, 0), " +
+                        "COALESCE(`status`, 'RECORDING'), COALESCE(`notes`, ''), `userId` FROM `sessions`",
+                    indices = arrayOf(
+                        "CREATE INDEX IF NOT EXISTS `index_sessions_userId` ON `sessions` (`userId`)"
+                    )
+                )
             }
         }
 
