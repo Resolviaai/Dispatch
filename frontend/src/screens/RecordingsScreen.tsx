@@ -98,10 +98,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<UnifiedSession | null>(null);
-  const [videoPlaybackError, setVideoPlaybackError] = useState(false);
+  const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
 
   useEffect(() => {
-    setVideoPlaybackError(false);
+    setVideoPlaybackError(null);
   }, [selectedSessionId]);
 
   // Connection status (LAN vs Cloud Relay)
@@ -523,6 +523,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     const ytId = s.youtubeVideoId;
     const isReady = s.status === 'ready';
     const isProcessing = s.status === 'processing';
+    const isFailed = s.status === 'failed';
 
     return (
       <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
@@ -571,12 +572,41 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             {s.videoUrl && !videoPlaybackError ? (
               <video
                 src={s.videoUrl.startsWith('http') ? s.videoUrl : apiUrl(s.videoUrl, pcHost)}
+                // Without a poster the stage stays blank until the user presses play,
+                // because a <video> will not paint a frame from the local interceptor.
+                poster={s.thumbnailUrl
+                  ? (s.thumbnailUrl.startsWith('http')
+                    ? s.thumbnailUrl
+                    : apiUrl(s.thumbnailUrl, pcHost))
+                  : undefined}
                 controls
                 playsInline
-                onError={() => setVideoPlaybackError(true)}
+                onError={(e) => {
+                  const code = (e.currentTarget as HTMLVideoElement).error?.code;
+                  setVideoPlaybackError(
+                    code
+                      ? `The stored file played back as media error ${code}. The recording itself is intact on disk.`
+                      : 'The stored file could not be opened by the player.'
+                  );
+                }}
                 className="w-full h-full object-contain"
                 preload="metadata"
               />
+            ) : videoPlaybackError ? (
+              // Previously a playback error fell through to the "Waiting for PC"
+              // placeholder, which blamed the PC for a local player failure.
+              <div className="text-center p-6 text-text-muted space-y-2">
+                <AlertCircle size={28} className="mx-auto text-danger" />
+                <p className="text-xs font-semibold text-danger">Playback failed</p>
+                <p className="text-[11px] leading-relaxed">{videoPlaybackError}</p>
+                <button
+                  type="button"
+                  onClick={() => setVideoPlaybackError(null)}
+                  className="min-h-[34px] px-3 rounded-lg bg-surface-2 border border-border text-text-main text-xs font-semibold active:scale-[0.98] transition-all"
+                >
+                  Try again
+                </button>
+              </div>
             ) : ytId ? (
               <div className="w-full h-full relative group">
                 <img
@@ -635,7 +665,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <p className="text-[11px] text-text-secondary leading-relaxed">
                 {s.errorMessage || (s.failureStatus === 'FAILED_YOUTUBE_PROCESSING'
                   ? 'The upload reached your channel, but YouTube could not post-process the media (unsupported codec or corrupt file). Retrying re-sends it from the phone.'
-                  : 'This video could not be processed. Tap below to retry.')}
+                  : `This video could not be processed${s.failureStatus ? ` (${s.failureStatus})` : ''}. Tap below to retry.`)}
               </p>
               <button
                 type="button"
@@ -678,9 +708,23 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <div className="space-y-0.5 text-right">
               <span className="text-[10px] uppercase font-semibold text-text-muted block">Status</span>
               <span className={`text-xs font-semibold tabular-nums ${
-                isReady ? 'text-status-success' : isProcessing ? 'text-status-warning' : 'text-text-secondary'
+                isReady ? 'text-status-success'
+                  : isProcessing ? 'text-status-warning'
+                  : isFailed ? 'text-danger'
+                  : 'text-text-secondary'
               }`}>
-                {isReady ? `Ready (${s.clipCount} clips)` : isProcessing ? 'Processing' : 'Queued'}
+                {/* The old ternary had no failed branch, so a failed upload still
+                    read "Queued" while the banner above said it had failed. The raw
+                    FAILED_* code is shown because the app carries no other reason. */}
+                {isReady
+                  ? `Ready (${s.clipCount} clips)`
+                  : isProcessing
+                    ? 'Processing'
+                    : isFailed
+                      ? `Failed${s.failureStatus ? ` · ${s.failureStatus}` : ''}`
+                      : s.status === 'uploading'
+                        ? 'Uploading'
+                        : 'Queued'}
               </span>
             </div>
           </div>
