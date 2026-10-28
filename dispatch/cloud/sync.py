@@ -143,13 +143,47 @@ def _normalize_words(raw_words: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _clip_source_window(clip: Dict[str, Any]) -> tuple:
+    """(start, end) of this clip inside its source video, in seconds.
+
+    Returns (None, None) when the clip carries no usable range, which is the
+    caller's signal to leave words unfiltered rather than drop them all.
+    """
+    lo = clip.get("caption_range_start")
+    if lo is None:
+        lo = clip.get("start_time")
+    hi = clip.get("caption_range_end")
+    if hi is None:
+        hi = clip.get("end_time")
+    try:
+        lo_f, hi_f = float(lo), float(hi)
+    except (TypeError, ValueError):
+        return None, None
+    if not (hi_f > lo_f):
+        return None, None
+    return lo_f, hi_f
+
+
+def _words_in_window(words: List[Dict[str, Any]], lo: Optional[float], hi: Optional[float]) -> List[Dict[str, Any]]:
+    """Keep words that overlap [lo, hi]; a word straddling the cut is still on screen."""
+    if lo is None or hi is None:
+        return words
+    return [w for w in words if float(w["end"]) >= lo and float(w["start"]) <= hi]
+
+
 def extract_source_words(clip: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Best available SOURCE-relative word timings for a clip.
+    """SOURCE-relative word timings for THIS CLIP ONLY.
 
     Order: edited caption_data.words, then persisted transcript segments. Never
     invents words. An empty result means transcription readiness is genuinely
     missing and the window must not claim otherwise.
+
+    The transcript table stores the whole chunk/session, so every path is
+    clipped to the clip's source window: an 8-second window must not receive the
+    424-second source transcript, and `only_if_missing` re-registration would
+    otherwise preserve that mistake permanently.
     """
+    lo, hi = _clip_source_window(clip)
     raw = clip.get("caption_data")
     if raw:
         try:
@@ -176,11 +210,11 @@ def extract_source_words(clip: Dict[str, Any]) -> List[Dict[str, Any]]:
                         except (TypeError, ValueError):
                             continue
                         grouped.append({**word, "start": start, "end": end})
-            grouped_words = _normalize_words(grouped)
+            grouped_words = _words_in_window(_normalize_words(grouped), lo, hi)
             if grouped_words:
                 return grouped_words
             # Legacy top-level words are treated as SOURCE-relative.
-            words = _normalize_words(data.get("words"))
+            words = _words_in_window(_normalize_words(data.get("words")), lo, hi)
             if words:
                 return words
 
@@ -210,7 +244,7 @@ def extract_source_words(clip: Dict[str, Any]) -> List[Dict[str, Any]]:
         logger.debug("transcript word lookup failed for clip %s: %s", clip.get("id"), e)
 
     words.sort(key=lambda w: w["start"])
-    return words
+    return _words_in_window(words, lo, hi)
 
 
 def _render_fingerprint(clip: Dict[str, Any], video_path: Path) -> str:

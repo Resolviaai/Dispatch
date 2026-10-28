@@ -143,7 +143,8 @@ class TestCloudCaptionReconciliation(unittest.TestCase):
                 "range_revision": 3,
             }]})
 
-        with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
+        with patch.object(cloud_sync.requests, "get", side_effect=fake_get), \
+             patch.object(cloud_sync, "get_worker_token", return_value="ci-worker-token"):
             applied = cloud_sync.import_cloud_captions_for_clips([USER_A])
         self.assertEqual(applied, 1)
         url, headers = seen[0]
@@ -154,7 +155,8 @@ class TestCloudCaptionReconciliation(unittest.TestCase):
         self.assertIn("hi there", str(row["caption_data"]))
 
         # A repeat pass is a no-op (monotonic guard at the wrapper level too).
-        with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
+        with patch.object(cloud_sync.requests, "get", side_effect=fake_get), \
+             patch.object(cloud_sync, "get_worker_token", return_value="ci-worker-token"):
             self.assertEqual(cloud_sync.import_cloud_captions_for_clips([USER_A]), 0)
 
     def test_sync_wrapper_tolerates_bare_list_body(self):
@@ -182,9 +184,11 @@ class TestCloudCaptionReconciliation(unittest.TestCase):
                 "range_revision": 3,
             }])
 
-        with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
+        with patch.object(cloud_sync.requests, "get", side_effect=fake_get), \
+             patch.object(cloud_sync, "get_worker_token", return_value="ci-worker-token"):
             self.assertEqual(cloud_sync.import_cloud_captions_for_clips([USER_A]), 1)
         self.assertIn("hi", str(_fetch(clip_id)["caption_data"]))
+
 
     def test_sync_wrapper_wraps_track_objects_before_import(self):
         """The worker hands caption_data back as an OBJECT (jsonb); the
@@ -210,7 +214,8 @@ class TestCloudCaptionReconciliation(unittest.TestCase):
                 "range_revision": 3,
             }]})
 
-        with patch.object(cloud_sync.requests, "get", side_effect=fake_get):
+        with patch.object(cloud_sync.requests, "get", side_effect=fake_get), \
+             patch.object(cloud_sync, "get_worker_token", return_value="ci-worker-token"):
             self.assertEqual(cloud_sync.import_cloud_captions_for_clips([USER_A]), 1)
         self.assertIn("hi", str(_fetch(clip_id)["caption_data"]))
 

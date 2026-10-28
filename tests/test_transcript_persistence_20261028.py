@@ -84,6 +84,57 @@ class TestCanonicalWords(unittest.TestCase):
         clip_id = _clip()
         self.assertEqual(extract_source_words(db.get_clip_by_id(clip_id)), [])
 
+    def test_transcript_fallback_is_clipped_to_the_clip_window(self):
+        """Regression (2026-10-28 production): the transcripts table stores the
+        whole chunk/session, so an 8-second window was being handed the entire
+        424-second source transcript (1539 words, 0.7s-424s). only_if_missing
+        registration then preserved that payload permanently."""
+        chunk_id = f"chunk_{uuid.uuid4().hex[:8]}"
+        with db.get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO chunks (id, filename, filepath) VALUES (?, ?, ?)",
+                (chunk_id, f"{chunk_id}.mp4", f"storage/incoming/{chunk_id}.mp4"),
+            )
+            conn.commit()
+        clip_id = db.save_clip(
+            session_id=None, chunk_id=chunk_id, start_time=415.45, end_time=423.42,
+            title="Windowed Clip", hook="hook", description="", hashtags="",
+            virality_score=50, layout_mode="fit_blur",
+        )
+        segments = [{"start": s, "end": s + 0.4, "text": f"w{s}", "words": [
+            {"w": f"word_{int(s)}", "start": s, "end": s + 0.4},
+        ]} for s in (0.719, 200.0, 415.9, 420.5, 423.0, 424.08)]
+        with db.get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO transcripts (id, chunk_id, full_text, segments_json) VALUES (?, ?, ?, ?)",
+                (f"tx_{uuid.uuid4().hex[:8]}", chunk_id, "x" * 10, json.dumps(segments)),
+            )
+            conn.commit()
+
+        words = extract_source_words(db.get_clip_by_id(clip_id))
+        self.assertEqual([w["word"] for w in words], ["word_415", "word_420", "word_423"])
+        self.assertTrue(all(w["end"] >= 415.45 and w["start"] <= 423.42 for w in words),
+                        "no word outside the edit window may reach the cloud transcript")
+
+    def test_legacy_top_level_words_are_clipped_to_the_window(self):
+        clip_id = db.save_clip(
+            session_id=None, chunk_id=None, start_time=34.54, end_time=62.75,
+            title="Legacy Words Clip", hook="hook", description="", hashtags="",
+            virality_score=50, layout_mode="fit_blur",
+        )
+        with db.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE clips SET caption_data = ? WHERE id = ?",
+                (json.dumps({"words": [
+                    {"word": "before", "start": 1.0, "end": 1.5},
+                    {"word": "inside", "start": 40.0, "end": 40.5},
+                    {"word": "after", "start": 300.0, "end": 300.5},
+                ]}), clip_id),
+            )
+            conn.commit()
+        words = extract_source_words(db.get_clip_by_id(clip_id))
+        self.assertEqual([w["word"] for w in words], ["inside"])
+
 
 class TestCaptionRevisionFencing(unittest.TestCase):
     def test_stale_caption_save_is_refused(self):
