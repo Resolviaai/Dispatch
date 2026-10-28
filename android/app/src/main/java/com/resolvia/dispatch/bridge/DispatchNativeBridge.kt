@@ -20,8 +20,9 @@ import androidx.room.withTransaction
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import com.resolvia.dispatch.data.AppDatabase
-import com.resolvia.dispatch.data.PairingManager
+import com.resolvia.dispatch.data.AppDatabase
+import com.resolvia.dispatch.data.PairingManager
+import com.resolvia.dispatch.data.SegmentEntity
 import com.resolvia.dispatch.data.durationSeconds
 import com.resolvia.dispatch.recorder.CameraCaptureManager
 import com.resolvia.dispatch.recorder.SegmenterEngine
@@ -51,11 +52,17 @@ class DispatchNativeBridge(
     init {
         segmenterEngine.currentUserId = pairingManager.currentUserId
     }
-    private val gson = Gson()
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
+    private val gson = Gson()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    private companion object {
+        /** Mirrors YouTubeDirectUploadWorker's staleUploadLeaseMs: an UPLOADING
+         *  lease older than this belongs to a dead worker run and is requeueable. */
+        private const val STALE_UPLOAD_LEASE_MS = 10L * 60_000L
+    }
 
     @JavascriptInterface
     fun isNativeAndroid(): Boolean = true
@@ -85,12 +92,16 @@ class DispatchNativeBridge(
                 addProperty("versionCode", vCode)
             }
             obj.toString()
-        } catch (e: Exception) {
-            JsonObject().apply {
-                addProperty("packageName", activity.packageName)
-                addProperty("versionName", "1.2.14")
-                addProperty("versionCode", 42)
-            }.toString()
+        } catch (e: Exception) {
+            // Honest fallback: never report a stale baked-in version. This build
+            // does not generate BuildConfig (no versionName/code symbols), so
+            // unknown placeholders are returned and the update gate defers to
+            // the release manifest's versionCode instead.
+            JsonObject().apply {
+                addProperty("packageName", activity.packageName)
+                addProperty("versionName", "unknown")
+                addProperty("versionCode", -1)
+            }.toString()
         }
     }
 
@@ -139,21 +150,46 @@ class DispatchNativeBridge(
         }
     }
 
-    @JavascriptInterface
-    fun getPcHost(): String {
-        val host = pairingManager.pcHost
-        return if (host.isNotBlank()) host else ""
-    }
-
-    @JavascriptInterface
-    fun setPcHost(host: String): Boolean {
-        val cleanHost = host.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
-        if (cleanHost.isNotBlank()) {
-            pairingManager.pcHost = cleanHost
-            android.util.Log.i("DispatchBridge", "Native PC host updated to $cleanHost")
-            return true
-        }
-        return false
+    @JavascriptInterface
+    fun getPcHost(): String {
+        val host = pairingManager.pcHost
+        return if (host.isNotBlank()) host else ""
+    }
+
+    /**
+     * Splits a user-supplied PC address into resolved scheme and bare host.
+     * An explicit "https://" prefix is preserved (never stripped or downgraded
+     * to plaintext); bare and "http://" addresses resolve to the legacy LAN
+     * plaintext transport, with an explicit http:// input flagged in the log.
+     */
+    private fun splitPcHostAddress(input: String): Pair<String, String> {
+        val trimmed = input.trim().trimEnd('/')
+        return when {
+            trimmed.startsWith("https://", ignoreCase = true) ->
+                "https" to trimmed.substring("https://".length)
+            trimmed.startsWith("http://", ignoreCase = true) -> {
+                android.util.Log.w(
+                    "DispatchBridge",
+                    "PC address given as plaintext http:// (downgrade); prefer an https base URL"
+                )
+                "http" to trimmed.substring("http://".length)
+            }
+            else -> "http" to trimmed
+        }
+    }
+
+    @JavascriptInterface
+    fun setPcHost(host: String): Boolean {
+        val (scheme, bareHost) = splitPcHostAddress(host)
+        if (bareHost.isNotBlank()) {
+            // An explicit https:// base URL is stored verbatim (never stripped or
+            // downgraded); bare hosts keep the legacy bare-address storage shape.
+            val stored = if (scheme == "https") "https://$bareHost" else bareHost
+            pairingManager.pcHost = stored
+            android.util.Log.i("DispatchBridge", "Native PC host updated to $stored")
+            return true
+        }
+        return false
     }
 
     /** Opens an https URL from the trusted Dispatch Worker in a Custom Tab.
@@ -727,8 +763,21 @@ class DispatchNativeBridge(
                     return@runBlocking false
                 }
 
-                // Query ALL segments for this session without the 50-item limit
-                val segments = database.recordingDao().getSegmentsBySessionId(sessionId)
+                // Query ALL segments for this session without the 50-item limit
+                val segments = database.recordingDao().getSegmentsBySessionId(sessionId)
+
+                // Data-loss guard: refuse deletion while any segment is queued,
+                // in flight, or waiting for credentials — deleting would orphan
+                // an upload the worker is about to run (files + DB rows gone).
+                val pendingUploadStatuses = setOf("QUEUED_FOR_UPLOAD", "UPLOADING", "WAITING_FOR_YOUTUBE")
+                if (segments.any { it.status in pendingUploadStatuses }) {
+                    android.util.Log.w(
+                        "DispatchBridge",
+                        "Refused to delete session $sessionId: one or more segments have an upload pending"
+                    )
+                    return@runBlocking false
+                }
+
                 var allFilesDeleted = true
 
                 for (s in segments) {
@@ -829,34 +878,48 @@ class DispatchNativeBridge(
         }
     }
 
-    @JavascriptInterface
-    fun getYouTubeStatus(): String {
-        val configured = pairingManager.isYouTubeConfigured
-        if (!configured) {
-            return JsonObject().apply {
-                addProperty("connected", false)
-                addProperty("verified", false)
-            }.toString()
-        }
-
-        // Return verified channel info if cached, or verify asynchronously
-        val cachedTitle = pairingManager.youtubeChannelTitle
-        val cachedId = pairingManager.youtubeChannelId
-        val isVerified = cachedTitle.isNotBlank() && cachedId.isNotBlank()
-
-        val obj = JsonObject().apply {
-            addProperty("connected", isVerified)
-            addProperty("verified", isVerified)
-            if (isVerified) {
-                addProperty("channelTitle", cachedTitle)
-                addProperty("channelId", cachedId)
-                addProperty("account", cachedTitle)
-            } else {
-                addProperty("channelTitle", "Unverified Channel")
-                addProperty("message", "Credentials present but channel unverified. Reconnect to refresh.")
-            }
-        }
-        return obj.toString()
+    @JavascriptInterface
+    fun getYouTubeStatus(): String {
+        val directConfigured = pairingManager.isYouTubeConfigured
+        val cloudSessionActive = pairingManager.cloudAccessToken.isNotBlank() &&
+            pairingManager.rawVaultAccountId.isNotBlank()
+        val connected = directConfigured || cloudSessionActive
+        if (!connected) {
+            return JsonObject().apply {
+                addProperty("connected", false)
+                addProperty("verified", false)
+                addProperty("route", "none")
+            }.toString()
+        }
+
+        // Report the route brand-new uploads actually take (UploadModePolicy
+        // prefers the cloud vault session when it is active).
+        val route = if (cloudSessionActive) "cloud" else "direct"
+
+        // Cached channel identity comes from the legacy pairing's own
+        // verification pass; the cloud route never verifies a channel locally.
+        val cachedTitle = pairingManager.youtubeChannelTitle
+        val cachedId = pairingManager.youtubeChannelId
+        val isVerified = directConfigured && cachedTitle.isNotBlank() && cachedId.isNotBlank()
+
+        val obj = JsonObject().apply {
+            addProperty("connected", true)
+            addProperty("verified", isVerified)
+            addProperty("route", route)
+            if (isVerified) {
+                addProperty("channelTitle", cachedTitle)
+                addProperty("channelId", cachedId)
+                addProperty("account", cachedTitle)
+            } else {
+                addProperty("channelTitle", "Unverified Channel")
+                addProperty(
+                    "message",
+                    if (route == "cloud") "Cloud vault route active; channel identity is not verified on this device."
+                    else "Credentials present but channel unverified. Reconnect to refresh."
+                )
+            }
+        }
+        return obj.toString()
     }
 
     private fun verifyYouTubeChannelRemote(accessToken: String): Pair<String, String>? {
@@ -916,17 +979,30 @@ class DispatchNativeBridge(
         }
     }
 
-    @JavascriptInterface
-    fun connectYouTube(pcHost: String, pairingCode: String): String {
-        return try {
-            if (pairingCode.isBlank()) {
-                return JsonObject().apply {
-                    addProperty("success", false)
-                    addProperty("message", "Enter the one-time pairing code shown in PC Settings.")
-                }.toString()
-            }
-            val cleanHost = pcHost.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
-            val url = "http://$cleanHost/api/youtube/credentials"
+    @JavascriptInterface
+    fun connectYouTube(pcHost: String, pairingCode: String): String {
+        return try {
+            // Fail-closed: refuse to pair when credentials cannot be stored
+            // confidentially, rather than pairing on ambiguous device state.
+            if (!pairingManager.canStoreCredentials) {
+                return JsonObject().apply {
+                    addProperty("success", false)
+                    addProperty("connected", false)
+                    addProperty("error", "secure storage unavailable")
+                    addProperty("message", "Secure storage is unavailable on this device. YouTube pairing is disabled until the device keystore works again.")
+                }.toString()
+            }
+            if (pairingCode.isBlank()) {
+                return JsonObject().apply {
+                    addProperty("success", false)
+                    addProperty("message", "Enter the one-time pairing code shown in PC Settings.")
+                }.toString()
+            }
+            val (scheme, bareHost) = splitPcHostAddress(pcHost)
+            // An explicit https base URL is preserved end-to-end; bare / http
+            // input keeps the legacy plaintext LAN transport (warned in split).
+            val storedHost = if (scheme == "https") "$scheme://$bareHost" else bareHost
+            val url = "$scheme://$bareHost/api/youtube/credentials"
             val payload = JsonObject().apply { addProperty("pairing_code", pairingCode.trim()) }
             val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
             val req = Request.Builder().url(url).post(body).build()
@@ -959,19 +1035,19 @@ class DispatchNativeBridge(
                 if (response.get("configured")?.asBoolean == true &&
                     refreshToken.isNotBlank() && clientId.isNotBlank() && clientSecret.isNotBlank()
                 ) {
-                    pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
-                    if (authToken.isNotBlank()) {
-                        pairingManager.pcAuthToken = authToken
-                    }
-                    pairingManager.pcHost = cleanHost
+                    pairingManager.saveYouTubeCredentials(refreshToken, clientId, clientSecret)
+                    if (authToken.isNotBlank()) {
+                        pairingManager.pcAuthToken = authToken
+                    }
+                    pairingManager.pcHost = storedHost
 
                     // Verify account against YouTube API directly
                     val freshToken = refreshAccessToken()
                     val channelInfo = if (freshToken != null) verifyYouTubeChannelRemote(freshToken) else null
-                    if (channelInfo != null) {
-                        pairingManager.youtubeChannelTitle = channelInfo.first
-                        pairingManager.youtubeChannelId = channelInfo.second
-                        pairingManager.pcHost = cleanHost
+                    if (channelInfo != null) {
+                        pairingManager.youtubeChannelTitle = channelInfo.first
+                        pairingManager.youtubeChannelId = channelInfo.second
+                        pairingManager.pcHost = storedHost
 
                         // Resume any waiting segments in Room DB
                         activity.lifecycleScope.launch(Dispatchers.IO) {
@@ -1067,12 +1143,22 @@ class DispatchNativeBridge(
 
             val uuidLike = Regex("^[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(accountId)
 
-            if (!jwtLike || !uuidLike) {
-
-                android.util.Log.w("DispatchBridge", "Ignoring malformed cloud session push")
-
-                return false
-
+            if (!jwtLike || !uuidLike) {
+
+                android.util.Log.w("DispatchBridge", "Ignoring malformed cloud session push")
+
+                return false
+
+            }
+
+            // Fail closed: a push that cannot be persisted confidentially must
+            // not report success and leave the worker on ambiguous state.
+            if (!pairingManager.canStoreCloudSession) {
+
+                android.util.Log.e("DispatchBridge", "Cloud session push rejected: secure cloud storage unavailable")
+
+                return false
+
             }
 
             pairingManager.cloudAccessToken = token
@@ -1130,49 +1216,70 @@ class DispatchNativeBridge(
     }
 
     
-@JavascriptInterface
-    fun retryUpload(idOrSessionId: String) {
-        activity.lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                // Accepts either a segment id or a session id: the Library passes
-                // session ids for phone recordings, so requeue every retryable
-                // segment of the session when the direct segment lookup misses.
-                val requeueable = setOf(
-                    "FAILED_RETRY",
-                    "FAILED_YOUTUBE_PROCESSING",
-                    "WAITING_FOR_YOUTUBE",
-                    "QUEUED_FOR_UPLOAD"
-                )
-                val direct = database.recordingDao().getSegmentById(idOrSessionId)
-                if (direct != null) {
-                    database.recordingDao().deleteOutboxItem(direct.segmentId)
-                    database.recordingDao().updateSegmentStatus(direct.segmentId, "QUEUED_FOR_UPLOAD")
-                    database.recordingDao().insertOutbox(com.resolvia.dispatch.data.OutboxEntity(
-                        segmentId = direct.segmentId,
-                        sessionId = direct.sessionId,
-                        status = "QUEUED_FOR_UPLOAD",
-                        updatedAt = System.currentTimeMillis()
-                    ))
-                } else {
-                    val segments = database.recordingDao().getSegmentsBySessionId(idOrSessionId)
-                    for (seg in segments) {
-                        if (seg.status in requeueable) {
-                            database.recordingDao().deleteOutboxItem(seg.segmentId)
-                            database.recordingDao().updateSegmentStatus(seg.segmentId, "QUEUED_FOR_UPLOAD")
-                            database.recordingDao().insertOutbox(com.resolvia.dispatch.data.OutboxEntity(
-                                segmentId = seg.segmentId,
-                                sessionId = seg.sessionId,
-                                status = "QUEUED_FOR_UPLOAD",
-                                updatedAt = System.currentTimeMillis()
-                            ))
-                        }
-                    }
-                }
-                segmenterEngine.triggerYouTubeUpload()
-            } catch (e: Exception) {
-                android.util.Log.e("DispatchBridge", "retryUpload failed: ${e.message}")
-            }
-        }
+@JavascriptInterface
+    fun retryUpload(idOrSessionId: String) {
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Accepts either a segment id or a session id: the Library passes
+                // session ids for phone recordings, so requeue every retryable
+                // segment of the session when the direct segment lookup misses.
+                val requeueable = setOf(
+                    "UPLOADING",
+                    "FAILED_RETRY",
+                    "FAILED_YOUTUBE_PROCESSING",
+                    "WAITING_FOR_YOUTUBE",
+                    "QUEUED_FOR_UPLOAD"
+                )
+                val staleLeaseBeforeMs = System.currentTimeMillis() - STALE_UPLOAD_LEASE_MS
+                val direct = database.recordingDao().getSegmentById(idOrSessionId)
+                if (direct != null) {
+                    if (direct.status in requeueable) {
+                        requeueSegmentForRetry(direct, staleLeaseBeforeMs)
+                    }
+                } else {
+                    val segments = database.recordingDao().getSegmentsBySessionId(idOrSessionId)
+                    for (seg in segments) {
+                        if (seg.status in requeueable) {
+                            requeueSegmentForRetry(seg, staleLeaseBeforeMs)
+                        }
+                    }
+                }
+                segmenterEngine.triggerYouTubeUpload()
+            } catch (e: Exception) {
+                android.util.Log.e("DispatchBridge", "retryUpload failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Requeues one segment for a fresh upload attempt: status →
+     * QUEUED_FOR_UPLOAD, stale youtubeVideoId cleared (a retry must never
+     * launder a finished/partial upload into a second video row) and any
+     * saved resumable session URL dropped so the next run starts a clean
+     * session. Rows still claimed by a live worker run (fresh UPLOADING
+     * lease) are skipped so this cannot race that run into a duplicate
+     * upload of the same recording.
+     */
+    private suspend fun requeueSegmentForRetry(seg: SegmentEntity, staleLeaseBeforeMs: Long) {
+        if (seg.status == "UPLOADING" &&
+            seg.uploadLeaseAt != null && seg.uploadLeaseAt >= staleLeaseBeforeMs
+        ) {
+            android.util.Log.w(
+                "DispatchBridge",
+                "Segment ${seg.segmentId} is actively uploading (fresh claim); retry skipped"
+            )
+            return
+        }
+        database.recordingDao().deleteOutboxItem(seg.segmentId)
+        database.recordingDao().updateSegmentStatusAndVideoId(seg.segmentId, "QUEUED_FOR_UPLOAD", null)
+        pairingManager.clearUploadSessionUrl(seg.segmentId)
+        database.recordingDao().updateOutboxOffset(seg.segmentId, 0L)
+        database.recordingDao().insertOutbox(com.resolvia.dispatch.data.OutboxEntity(
+            segmentId = seg.segmentId,
+            sessionId = seg.sessionId,
+            status = "QUEUED_FOR_UPLOAD",
+            updatedAt = System.currentTimeMillis()
+        ))
     }
 
     @JavascriptInterface
@@ -1211,30 +1318,33 @@ class DispatchNativeBridge(
         }
     }
 
-    @JavascriptInterface
-    fun pingPc(pcHost: String): String {
-        return try {
-            val cleanHost = pcHost.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
-            val url = "http://$cleanHost/api/status"
-            val req = Request.Builder().url(url).build()
-            val resp = httpClient.newCall(req).execute()
-            if (resp.isSuccessful) {
-                pairingManager.pcHost = cleanHost
-                JsonObject().apply {
-                    addProperty("success", true)
-                    addProperty("message", "PC Server reachable (${resp.code})")
-                }.toString()
-            } else {
-                JsonObject().apply {
-                    addProperty("success", false)
-                    addProperty("message", "PC returned HTTP ${resp.code}")
-                }.toString()
-            }
-        } catch (e: Exception) {
-            JsonObject().apply {
-                addProperty("success", false)
-                addProperty("message", "Unreachable: ${e.message}")
-            }.toString()
-        }
+    @JavascriptInterface
+    fun pingPc(pcHost: String): String {
+        return try {
+            val (scheme, bareHost) = splitPcHostAddress(pcHost)
+            val url = "$scheme://$bareHost/api/status"
+            val req = Request.Builder().url(url).build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    // Remember the resolved address; an explicit https base URL is
+                    // preserved for the worker's PC-ack calls (same contract).
+                    pairingManager.pcHost = if (scheme == "https") "$scheme://$bareHost" else bareHost
+                    JsonObject().apply {
+                        addProperty("success", true)
+                        addProperty("message", "PC Server reachable (${resp.code})")
+                    }.toString()
+                } else {
+                    JsonObject().apply {
+                        addProperty("success", false)
+                        addProperty("message", "PC returned HTTP ${resp.code}")
+                    }.toString()
+                }
+            }
+        } catch (e: Exception) {
+            JsonObject().apply {
+                addProperty("success", false)
+                addProperty("message", "Unreachable: ${e.message}")
+            }.toString()
+        }
     }
 }

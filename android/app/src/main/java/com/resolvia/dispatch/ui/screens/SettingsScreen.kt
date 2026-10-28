@@ -155,8 +155,14 @@ fun SettingsScreen(
                                     isSyncing = false
                                     return@launch
                                 }
+                                // Preserve an explicit https:// base URL (matches the
+                                // bridge and worker address handling): bare hosts keep
+                                // legacy plaintext LAN http.
+                                val trimmedHost = host.trim().trimEnd('/')
+                                val scheme = if (trimmedHost.startsWith("https://", ignoreCase = true)) "https" else "http"
+                                val cleanHost = trimmedHost.removePrefix("http://").removePrefix("https://")
                                 val req = Request.Builder()
-                                    .url("http://$host/api/youtube/credentials")
+                                    .url("$scheme://$cleanHost/api/youtube/credentials")
                                     .build()
                                 val (ok, msg) = withContext(Dispatchers.IO) {
                                     try {

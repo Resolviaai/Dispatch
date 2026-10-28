@@ -6,9 +6,16 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** Stores YouTube credentials for direct phone-to-YouTube cloud uploads. Starts empty on fresh install. */
+/**
+ * Stores YouTube credentials for direct phone-to-YouTube cloud uploads. Starts empty on fresh install.
+ *
+ * Fail-closed: credentials are held ONLY while EncryptedSharedPreferences initializes. If secure
+ * storage is broken or unavailable, [canStoreCredentials] is false, nothing is stored or reported,
+ * and callers must refuse pairing rather than degrade to on-disk plaintext or ambiguous state.
+ * Healthy devices still migrate legacy plaintext into secure storage.
+ */
 class PairingManager(context: Context) {
-    private val prefs: SharedPreferences = createEncryptedOrFallbackPrefs(context)
+    private val prefs: SharedPreferences? = createEncryptedOrFallbackPrefs(context)
     private val cloudPrefs: SharedPreferences? = createSecureCloudPrefs(context)
 
     companion object {
@@ -16,7 +23,7 @@ class PairingManager(context: Context) {
         private const val SECURE_PREFS_NAME = "dispatch_youtube_secure"
         private const val LEGACY_PREFS_NAME = "dispatch_youtube"
 
-        private fun createEncryptedOrFallbackPrefs(context: Context): SharedPreferences {
+        private fun createEncryptedOrFallbackPrefs(context: Context): SharedPreferences? {
             val legacyPrefs = context.getSharedPreferences(LEGACY_PREFS_NAME, Context.MODE_PRIVATE)
             return try {
                 val masterKey = MasterKey.Builder(context)
@@ -50,8 +57,9 @@ class PairingManager(context: Context) {
                 }
                 securePrefs
             } catch (e: Throwable) {
-                Log.w(TAG, "EncryptedSharedPreferences initialization failed (${e.message}). Falling back to standard SharedPreferences.")
-                legacyPrefs
+                // Fail closed: do NOT fall back to plaintext storage.
+                Log.e(TAG, "EncryptedSharedPreferences initialization failed (${e.message}); YouTube credential storage disabled", e)
+                null
             }
         }
 
@@ -74,37 +82,50 @@ class PairingManager(context: Context) {
         }
     }
 
+    /** True when secure credential storage initialized; false = fail-closed, accept no credentials. */
+    val canStoreCredentials: Boolean get() = prefs != null
+
+    private fun secureEdit(mutate: (SharedPreferences.Editor) -> Unit) {
+        val editor = prefs?.edit()
+        if (editor == null) {
+            Log.e(TAG, "Secure storage unavailable; credential change discarded")
+            return
+        }
+        mutate(editor)
+        editor.apply()
+    }
+
     var youtubeAccessToken: String
-        get() = prefs.getString("access_token", "") ?: ""
-        set(value) = prefs.edit().putString("access_token", value).apply()
+        get() = prefs?.getString("access_token", "") ?: ""
+        set(value) = secureEdit { it.putString("access_token", value) }
 
     var youtubeRefreshToken: String
-        get() = prefs.getString("refresh_token", "") ?: ""
-        set(value) = prefs.edit().putString("refresh_token", value).apply()
+        get() = prefs?.getString("refresh_token", "") ?: ""
+        set(value) = secureEdit { it.putString("refresh_token", value) }
 
     var youtubeClientId: String
-        get() = prefs.getString("client_id", "") ?: ""
-        set(value) = prefs.edit().putString("client_id", value).apply()
+        get() = prefs?.getString("client_id", "") ?: ""
+        set(value) = secureEdit { it.putString("client_id", value) }
 
     var youtubeClientSecret: String
-        get() = prefs.getString("client_secret", "") ?: ""
-        set(value) = prefs.edit().putString("client_secret", value).apply()
+        get() = prefs?.getString("client_secret", "") ?: ""
+        set(value) = secureEdit { it.putString("client_secret", value) }
 
     var youtubeChannelTitle: String
-        get() = prefs.getString("channel_title", "") ?: ""
-        set(value) = prefs.edit().putString("channel_title", value).apply()
+        get() = prefs?.getString("channel_title", "") ?: ""
+        set(value) = secureEdit { it.putString("channel_title", value) }
 
     var youtubeChannelId: String
-        get() = prefs.getString("channel_id", "") ?: ""
-        set(value) = prefs.edit().putString("channel_id", value).apply()
+        get() = prefs?.getString("channel_id", "") ?: ""
+        set(value) = secureEdit { it.putString("channel_id", value) }
 
     var pcHost: String
-        get() = prefs.getString("pc_host", "") ?: ""
-        set(value) = prefs.edit().putString("pc_host", value.trim()).apply()
+        get() = prefs?.getString("pc_host", "") ?: ""
+        set(value) = secureEdit { it.putString("pc_host", value.trim()) }
 
     var pcAuthToken: String
-        get() = prefs.getString("pc_auth_token", "") ?: ""
-        set(value) = prefs.edit().putString("pc_auth_token", value.trim()).apply()
+        get() = prefs?.getString("pc_auth_token", "") ?: ""
+        set(value) = secureEdit { it.putString("pc_auth_token", value.trim()) }
 
     /** Short-lived Supabase JWT used only to request a scoped YouTube upload session. */
     var cloudAccessToken: String
@@ -124,59 +145,64 @@ class PairingManager(context: Context) {
     }
 
     var rawVaultAccountId: String
-        get() = prefs.getString("raw_vault_account_id", "") ?: ""
-        set(value) = prefs.edit().putString("raw_vault_account_id", value.trim()).apply()
+        get() = prefs?.getString("raw_vault_account_id", "") ?: ""
+        set(value) = secureEdit { it.putString("raw_vault_account_id", value.trim()) }
 
     val isYouTubeConfigured: Boolean
-        get() = youtubeRefreshToken.isNotBlank() &&
+        get() = canStoreCredentials &&
+            youtubeRefreshToken.isNotBlank() &&
             youtubeClientId.isNotBlank() && youtubeClientSecret.isNotBlank()
 
     var isWifiOnlyEnabled: Boolean
-        get() = prefs.getBoolean("wifi_only", true)
-        set(value) = prefs.edit().putBoolean("wifi_only", value).apply()
+        get() = prefs?.getBoolean("wifi_only", true) ?: true
+        set(value) = secureEdit { it.putBoolean("wifi_only", value) }
 
     fun saveYouTubeCredentials(refreshToken: String, clientId: String, clientSecret: String) {
-        prefs.edit()
-            .putString("refresh_token", refreshToken.trim())
-            .putString("client_id", clientId.trim())
-            .putString("client_secret", clientSecret.trim())
-            .putString("access_token", "")
-            .remove("channel_title")
-            .remove("channel_id")
-            .apply()
+        secureEdit {
+            it.putString("refresh_token", refreshToken.trim())
+                .putString("client_id", clientId.trim())
+                .putString("client_secret", clientSecret.trim())
+                .putString("access_token", "")
+                .remove("channel_title")
+                .remove("channel_id")
+        }
     }
 
     fun getUploadSessionUrl(segmentId: String): String =
-        prefs.getString("session_url_$segmentId", "") ?: ""
+        prefs?.getString("session_url_$segmentId", "") ?: ""
 
     fun saveUploadSessionUrl(segmentId: String, url: String) {
-        prefs.edit().putString("session_url_$segmentId", url).apply()
+        secureEdit { it.putString("session_url_$segmentId", url) }
     }
 
     fun clearUploadSessionUrl(segmentId: String) {
-        prefs.edit().remove("session_url_$segmentId").apply()
-        prefs.edit().remove("cloud_upload_session_$segmentId").apply()
+        secureEdit {
+            it.remove("session_url_$segmentId")
+            it.remove("cloud_upload_session_$segmentId")
+        }
     }
 
     fun isCloudUploadSession(segmentId: String): Boolean =
-        prefs.getBoolean("cloud_upload_session_$segmentId", false)
+        prefs?.getBoolean("cloud_upload_session_$segmentId", false) ?: false
 
     fun markCloudUploadSession(segmentId: String, enabled: Boolean) {
-        prefs.edit().putBoolean("cloud_upload_session_$segmentId", enabled).apply()
+        secureEdit { it.putBoolean("cloud_upload_session_$segmentId", enabled) }
     }
 
     var currentUserId: String?
-        get() = prefs.getString("current_user_id", null)?.takeIf { it.isNotBlank() }
+        get() = prefs?.getString("current_user_id", null)?.takeIf { it.isNotBlank() }
         set(value) {
             val clean = value?.trim()?.takeIf { it.isNotBlank() }
-            if (clean != null) {
-                prefs.edit().putString("current_user_id", clean).apply()
-            } else {
-                prefs.edit().remove("current_user_id").apply()
+            secureEdit {
+                if (clean != null) {
+                    it.putString("current_user_id", clean)
+                } else {
+                    it.remove("current_user_id")
+                }
             }
         }
 
     fun clearCredentials() {
-        prefs.edit().clear().apply()
+        secureEdit { it.clear() }
     }
 }

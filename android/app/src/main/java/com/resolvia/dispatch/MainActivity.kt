@@ -4,6 +4,7 @@ import android.Manifest
 import java.io.File
 import java.io.FileInputStream
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
@@ -266,7 +267,12 @@ class MainActivity : ComponentActivity() {
                 allowContentAccess = false
                 allowFileAccessFromFileURLs = false
                 allowUniversalAccessFromFileURLs = false
-                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                // Fail-closed mixed content: an https document must never pull
+                // script or media over plaintext http. The in-app shell origin
+                // is http://appassets.androidplatform.net (no https page, so no
+                // mixed content is possible and LAN http media still plays);
+                // externally-served https pages are the protected surface here.
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 mediaPlaybackRequiresUserGesture = false
                 loadWithOverviewMode = true
                 useWideViewPort = true
@@ -274,6 +280,40 @@ class MainActivity : ComponentActivity() {
             }
 
             webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): Boolean {
+                    val url = request.url
+                    val scheme = url.scheme?.lowercase() ?: ""
+                    val host = url.host?.lowercase() ?: ""
+                    // Only web schemes can be allowlisted or externalized;
+                    // blob:/about:/content: keep the WebView's default handling.
+                    if (scheme != "http" && scheme != "https") return false
+                    val allowlisted = host == "appassets.androidplatform.net" ||
+                        (scheme == "https" && host == "dispatch-cloud.resolviaai.workers.dev")
+                    if (allowlisted) return false
+                    android.util.Log.w(
+                        "DispatchWebView",
+                        "Blocked in-app navigation to $url; opening externally"
+                    )
+                    val external = Intent(Intent.ACTION_VIEW, url).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    return try {
+                        startActivity(external)
+                        true
+                    } catch (e: Exception) {
+                        // Fail closed: without an external handler the foreign
+                        // URL must not silently load inside the app WebView.
+                        android.util.Log.e(
+                            "DispatchWebView",
+                            "External intent failed for $url (${e.message}); navigation suppressed"
+                        )
+                        true
+                    }
+                }
+
                 override fun shouldInterceptRequest(
                     view: WebView,
                     request: WebResourceRequest
@@ -301,7 +341,43 @@ class MainActivity : ComponentActivity() {
 
             webChromeClient = object : WebChromeClient() {
                 override fun onPermissionRequest(request: PermissionRequest) {
-                    request.grant(request.resources)
+                    // 1) Origin gate: the local app shell owns the camera and
+                    // microphone; any foreign origin gets no device grants.
+                    val originHost = request.origin?.host
+                    val originAllowed = originHost == "appassets.androidplatform.net"
+                    // 2) Resource gate: only camera / microphone capture may be
+                    // granted; geolocation or any other sensitive resource is
+                    // refused outright.
+                    val wanted = request.resources.filter { resource ->
+                        resource == PermissionRequest.RESOURCE_VIDEO_CAPTURE ||
+                            resource == PermissionRequest.RESOURCE_AUDIO_CAPTURE
+                    }
+                    if (!originAllowed || wanted.isEmpty()) {
+                        request.deny()
+                        return
+                    }
+                    // 3) Permission gate: the WebView surface can only hand out
+                    // what the host app itself holds at the OS level.
+                    val camGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity, Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                    val micGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity, Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    val grantable = mutableListOf<String>()
+                    for (resource in wanted) {
+                        if (resource == PermissionRequest.RESOURCE_VIDEO_CAPTURE && camGranted) {
+                            grantable.add(resource)
+                        }
+                        if (resource == PermissionRequest.RESOURCE_AUDIO_CAPTURE && micGranted) {
+                            grantable.add(resource)
+                        }
+                    }
+                    if (grantable.isEmpty()) {
+                        request.deny()
+                    } else {
+                        request.grant(grantable.toTypedArray())
+                    }
                 }
 
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
