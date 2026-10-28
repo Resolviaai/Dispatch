@@ -323,11 +323,10 @@ def ensure_clip_thumbnail(clip_or_id: Any, force: bool = False) -> Optional[Path
         if success and target_thumb_path.exists():
             if clip.get("thumbnail_path") != str(target_thumb_path):
                 try:
-                    db.update_clip_media(
-                        clip_id=clip_id,
-                        video_path=clip.get("video_path") or str(active_video),
-                        thumbnail_path=str(target_thumb_path)
-                    )
+                    # Never write the raw source into video_path: that made the
+                    # renderer believe the clip was already rendered and let the
+                    # reject path delete a shared source recording.
+                    db.update_clip_thumbnail(clip_id, str(target_thumb_path))
                 except Exception as e:
                     logger.warning("Could not update thumbnail_path in DB for %s: %s", clip_id, e)
             return target_thumb_path

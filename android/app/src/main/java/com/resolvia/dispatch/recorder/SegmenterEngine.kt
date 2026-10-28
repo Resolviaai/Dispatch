@@ -57,6 +57,9 @@ class SegmenterEngine(
         cameraManager: CameraCaptureManager,
         notes: String = ""
     ): String = withContext(Dispatchers.IO) {
+        if (isSessionActive || cameraManager.isRecording || activeFinalizeDeferred != null) {
+            throw IllegalStateException("A recording session is already active")
+        }
         requireRecordingStorage()
         val sessionId = "sess_${System.currentTimeMillis()}"
         val session = SessionEntity(sessionId = sessionId, notes = notes, userId = currentUserId)
@@ -75,7 +78,7 @@ class SegmenterEngine(
 
         // Bind CameraX directly to Foreground Service lifecycle so recording survives screen lock
         val bound = withTimeoutOrNull(10000L) {
-            RecordingForegroundService.startAndAwaitBind(context, cameraManager)
+            runCatching { RecordingForegroundService.startAndAwaitBind(context, cameraManager) }.getOrDefault(false)
         } ?: false
 
         if (!bound) {
@@ -87,7 +90,7 @@ class SegmenterEngine(
 
         try {
             withContext(Dispatchers.Main) {
-                startNextSegment(cameraManager)
+                startNextSegment(cameraManager, awaitStart = true)
                 startStorageMonitor(cameraManager)
             }
         } catch (e: Exception) {
@@ -103,7 +106,7 @@ class SegmenterEngine(
         sessionId
     }
 
-    suspend fun startNextSegment(cameraManager: CameraCaptureManager) {
+    suspend fun startNextSegment(cameraManager: CameraCaptureManager, awaitStart: Boolean = false) {
         if (!isSessionActive) return
         requireRecordingStorage()
         val sessionId = currentSessionId ?: return
@@ -112,6 +115,7 @@ class SegmenterEngine(
         val sequenceNumber = currentSequenceNumber
         val segId = String.format("%s_seg_%04d", sessionId, sequenceNumber)
         val tmpFile = File(recordingsDir, "$segId.tmp")
+        val startDeferred = if (awaitStart) CompletableDeferred<Boolean>() else null
 
         currentSegmentId = segId
         currentTmpFile = tmpFile
@@ -135,6 +139,7 @@ class SegmenterEngine(
         cameraManager.startSegmentRecording(
             targetTmpFile = tmpFile,
             onError = { errorCode, cause ->
+                startDeferred?.complete(false)
                 android.util.Log.e("SegmenterEngine", "Hardware recording error on $segId: code $errorCode", cause)
                 segmentRollJob?.cancel()
                 activeFinalizeDeferred?.complete(Unit)
@@ -159,6 +164,7 @@ class SegmenterEngine(
                     }
                 }
             },
+            onStarted = { startDeferred?.complete(true) },
             onFinalized = { finalizedFile, durationMs ->
                 scope.launch(Dispatchers.IO) {
                     var committed = false
@@ -218,6 +224,14 @@ class SegmenterEngine(
                 }
             }
         )
+
+        if (startDeferred != null) {
+            val started = withTimeoutOrNull(10_000L) { startDeferred.await() } ?: false
+            if (!started) {
+                withContext(Dispatchers.IO) { dao.updateSegmentStatus(segId, "ERROR_START_TIMEOUT") }
+                throw IllegalStateException("Camera capture did not confirm start")
+            }
+        }
 
         // Pause-aware roll ticker: elapsed time only accumulates while the hardware
         // recording is actually running, so a pause never shortens the segment.
@@ -347,11 +361,15 @@ class SegmenterEngine(
         storageMonitorJob?.cancel()
         storageMonitorJob = null
 
-        // Await active recording finalization to ensure tail segment is committed
-        if (cameraManager.isRecording) {
+        // Await active recording finalization to ensure tail segment is committed.
+        // A pending finalize (stop already requested, Finalize not yet delivered) must
+        // be awaited too, otherwise the service is torn down mid-mux.
+        if (cameraManager.isRecording || cameraManager.isFinalizePending) {
             val deferred = CompletableDeferred<Unit>()
             activeFinalizeDeferred = deferred
-            cameraManager.stopActiveRecording()
+            if (cameraManager.isRecording) {
+                cameraManager.stopActiveRecording()
+            }
             val finalized = withTimeoutOrNull(6000L) {
                 deferred.await()
             }

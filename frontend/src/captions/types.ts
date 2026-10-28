@@ -82,7 +82,7 @@ export interface LayoutConfig {
 }
 
 export interface AnimationConfig {
-  type: 'pop' | 'karaoke' | 'bounce' | 'fade' | 'none';
+  type: 'pop' | 'karaoke' | 'bounce' | 'slide' | 'fade' | 'none';
   duration_ms: number;
   active_scale: number;
   easing: 'ease_out' | 'linear' | 'bounce';
@@ -93,7 +93,7 @@ export interface AnimationConfig {
     duration_ms: number;
   };
   active_word?: {
-    type: 'pop' | 'karaoke' | 'bounce' | 'highlight' | 'none';
+    type: 'pop' | 'karaoke' | 'bounce' | 'slide' | 'highlight' | 'none';
     active_scale: number;
     duration_ms: number;
   };

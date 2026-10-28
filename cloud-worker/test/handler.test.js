@@ -36,7 +36,11 @@ beforeEach(async () => {
 function env() {
   return {
     SUPABASE_URL: "https://sb.test", SUPABASE_SERVICE_ROLE_KEY: "svc", SUPABASE_ANON_KEY: "anon",
-    DISPATCH_WORKER_TOKEN: "pc-token", BUCKET: {
+    DISPATCH_WORKER_TOKEN: "pc-token",
+    // Both fixture users are explicitly authorized owners so cross-user tests
+    // exercise resource-level authorization rather than failing at authn.
+    PC_OWNER_USER_IDS: `${USER_A},${USER_B}`,
+    BUCKET: {
       head: async (k) => bucket.objects.get(k) ?? null,
       delete: async (k) => { bucket.deleted.push(k); bucket.objects.delete(k); },
     },
@@ -458,6 +462,59 @@ test("/clips attaches window-relative caption seed words from window_transcripts
   assert.ok(Math.abs(cap.words[0].start - 2.0) < 1e-6, `window-relative start (${cap.words[0].start})`);
   assert.ok(Math.abs(cap.words[1].end - 3.1) < 1e-6, `window-relative end (${cap.words[1].end})`);
   assert.ok(Math.abs(cap.span_duration - 30) < 1e-6);
+  assert.equal(body.ready[0].captions_ready, true);
+});
+
+test("/clips accepts the canonical `word` transcript field and reports readiness", async () => {
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { id: "c1", local_clip_id: "clip_01", title: "Canonical Words", status: "ready_review", start_time: 10, end_time: 40 },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/edit_windows", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "w1", local_clip_id: "clip_01", window_start: 10, window_end: 40, media_object_id: MEDIA, transcript_status: "ready" }] })
+  });
+  supabase.set("/rest/v1/window_transcripts", {
+    method: "GET",
+    fn: () => ({ body: [{ window_id: "w1", words: [
+      { word: "hello", start: 12.0, end: 12.5 },
+      { word: "world", start: 12.6, end: 13.1 },
+    ] }] })
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: pcHeaders(),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ready[0].captions_ready, true);
+  assert.equal(body.ready[0].captions.words[0].w, "hello");
+});
+
+test("/clips marks captions_ready false when a ready window has no transcript", async () => {
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "c1", local_clip_id: "clip_01", title: "No Transcript", status: "ready_review", start_time: 10, end_time: 40 }] })
+  });
+  supabase.set("/rest/v1/edit_windows", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "w1", local_clip_id: "clip_01", window_start: 10, window_end: 40, media_object_id: MEDIA, transcript_status: "missing" }] })
+  });
+  supabase.set("/rest/v1/window_transcripts", { method: "GET", fn: () => ({ body: [] }) });
+
+  const res = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: pcHeaders(),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ready[0].captions_ready, false);
+  assert.equal(body.ready[0].captions, undefined);
 });
 
 test("/clips prefers an edited cloud caption track over the transcript seed", async () => {
@@ -1154,6 +1211,102 @@ test("/sync/clips/:id purge enforces the server-side deadline (before grace -> 4
   const body = await res.json();
   assert.ok(String(body.error).includes("not elapsed"));
   assert.ok(!bucket.deleted.length, "nothing was deleted before the deadline");
+});
+
+test("/clips returns rejected rows only inside the retention window", async () => {
+  const future = new Date(Date.now() + 3600_000).toISOString();
+  const past = new Date(Date.now() - 3600_000).toISOString();
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({ body: [
+      { id: "c1", local_clip_id: "clip_keep", title: "Keep", status: "rejected", reject_requested_at: past, reject_purge_after: future, reject_reason: "bad pacing" },
+      { id: "c2", local_clip_id: "clip_expired", title: "Expired", status: "rejected", reject_requested_at: past, reject_purge_after: past },
+    ] })
+  });
+  supabase.set("/rest/v1/processing_jobs", { method: "GET", fn: () => ({ body: [] }) });
+  supabase.set("/rest/v1/media_objects", { method: "GET", fn: () => ({ body: [] }) });
+  supabase.set("/rest/v1/edit_windows", { method: "GET", fn: () => ({ body: [] }) });
+
+  const res = await worker.fetch(new Request("https://w.test/clips", { method: "GET", headers: pcHeaders() }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.rejected.length, 1);
+  assert.equal(body.rejected[0].id, "clip_keep");
+  assert.equal(body.rejected[0].video_url, undefined, "rejected rows never expose media");
+  assert.ok(body.rejected[0].purge_after);
+});
+
+test("backfill transcript registration never overwrites an existing transcript", async () => {
+  supabase.set("/rest/v1/clips_cloud?user_id=eq.", { method: "GET", fn: () => ({ body: [{ id: "cloud-1" }] }) });
+  supabase.set("/rest/v1/media_objects?id=eq.", {
+    fn: (_url, init) => init?.method === "PATCH"
+      ? { body: [] }
+      : { body: [{ user_id: USER_A, status: "active" }] },
+  });
+  supabase.set("/rest/v1/edit_windows?user_id=eq.", { method: "GET", fn: () => ({ body: [{ id: "w1" }] }) });
+  supabase.set("/rest/v1/window_transcripts?window_id=eq.", { method: "GET", fn: () => ({ body: [{ words: [{ word: "existing" }] }] }) });
+
+  const res = await worker.fetch(new Request("https://w.test/sync/pc/windows", {
+    method: "POST",
+    headers: pcHeaders(USER_A),
+    body: JSON.stringify({
+      local_clip_id: "clip-1", media_object_id: MEDIA,
+      window_start: 0, window_end: 10,
+      words: [{ word: "new", start: 0, end: 1 }],
+      only_if_missing: true,
+    }),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.transcript_skipped, "existing");
+  assert.equal(body.transcripts_stored, true);
+});
+
+test("consistency report is authenticated and owner-scoped", async () => {
+  supabase.set("/rpc/cloud_consistency_report", {
+    method: "POST",
+    fn: () => ({ body: { user_id: USER_A, ready_windows_without_transcript: 3, pending_commands_without_attempts: 1 } }),
+  });
+  const res = await worker.fetch(
+    new Request("https://w.test/sync/pc/consistency", { method: "GET", headers: pcHeaders(USER_A) }),
+    env(),
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.report.ready_windows_without_transcript, 3);
+
+  const denied = await worker.fetch(
+    new Request("https://w.test/sync/pc/consistency", { method: "GET" }),
+    env(),
+  );
+  assert.equal(denied.status, 401);
+});
+
+test("worker token fails closed when PC_OWNER_USER_IDS is missing", async () => {
+  const e = { ...env(), PC_OWNER_USER_IDS: undefined };
+  const res = await worker.fetch(
+    new Request("https://w.test/reserve", { method: "POST", headers: pcHeaders(USER_A), body: "{}" }),
+    e,
+  );
+  assert.equal(res.status, 401, "no allowlist must never mean 'any user'");
+});
+
+test("worker token fails closed when PC_OWNER_USER_IDS is malformed", async () => {
+  const e = { ...env(), PC_OWNER_USER_IDS: "not-a-uuid" };
+  const res = await worker.fetch(
+    new Request("https://w.test/reserve", { method: "POST", headers: pcHeaders(USER_A), body: "{}" }),
+    e,
+  );
+  assert.equal(res.status, 401);
+});
+
+test("worker token cannot act for an unauthorized user", async () => {
+  const e = { ...env(), PC_OWNER_USER_IDS: USER_A };
+  const res = await worker.fetch(
+    new Request("https://w.test/reserve", { method: "POST", headers: pcHeaders(USER_B), body: "{}" }),
+    e,
+  );
+  assert.equal(res.status, 401, "a token must not impersonate a non-owner");
 });
 
 

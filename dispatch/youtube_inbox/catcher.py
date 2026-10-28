@@ -695,7 +695,8 @@ class YouTubeInboxCatcher:
             session_id=session_id,
             segments=segments,
             total_duration=total_duration,
-            publish_mode=publish_mode
+            publish_mode=publish_mode,
+            user_id=user_id,
         )
 
         logger.info("Identified %d candidate clips for YouTube video %s", len(clip_ids), video_id)

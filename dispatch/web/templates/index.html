@@ -373,6 +373,10 @@
   </main>
 
   <script>
+    // Remote titles (YouTube/AI) are untrusted: escape every text/attribute sink.
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch]));
     const STAGES = ["INGESTION", "TRANSCRIPTION", "HIGHLIGHT_EXTRACTION", "RENDERING", "COMPLETED"];
     let currentPublishMode = "private";
     let activeTab = "ready";
@@ -812,12 +816,12 @@
             <div class="space-y-2.5">
               <div>
                 <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-semibold block mb-1">Title (Roman Hinglish / English)</label>
-                <input type="text" id="title-${clip.id}" value="${(clip.title || '').replace(/"/g, '&quot;')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-white focus:outline-none focus:border-indigo-500">
+                <input type="text" id="title-${esc(clip.id)}" value="${esc(clip.title || '')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-white focus:outline-none focus:border-indigo-500">
               </div>
 
               <div>
                 <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-semibold block mb-1">Hashtags</label>
-                <input type="text" id="tags-${clip.id}" value="${(clip.hashtags || '').replace(/"/g, '&quot;')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-indigo-300 focus:outline-none focus:border-indigo-500">
+                <input type="text" id="tags-${esc(clip.id)}" value="${esc(clip.hashtags || '')}" class="w-full text-xs font-mono px-3 py-2 rounded-lg surface-input text-indigo-300 focus:outline-none focus:border-indigo-500">
               </div>
 
               <!-- Active-word Karaoke Subtitle Indicator -->
@@ -905,19 +909,19 @@
           <div class="p-4 space-y-3 flex-1 flex flex-col justify-between">
             <div class="space-y-2">
               <div>
-                <h4 class="text-xs font-semibold text-white leading-snug line-clamp-2">${clip.title || 'Untitled Clip'}</h4>
-                <p class="text-[11px] font-mono text-indigo-400 mt-1">${clip.hashtags || ''}</p>
+                <h4 class="text-xs font-semibold text-white leading-snug line-clamp-2">${esc(clip.title || 'Untitled Clip')}</h4>
+                <p class="text-[11px] font-mono text-indigo-400 mt-1">${esc(clip.hashtags || '')}</p>
               </div>
 
               <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-2 border-t border-white/5">
                 <span>Virality: ${clip.virality_score || 0}/100</span>
-                <span>${clip.platforms || 'youtube,instagram'}</span>
+                <span>${esc(clip.platforms || 'youtube,instagram')}</span>
               </div>
             </div>
 
             <div class="pt-2 flex items-center justify-between text-[10px] font-mono text-slate-500">
               <span>ID: ${clip.id}</span>
-              <a href="${videoSrc}" download="${clip.title || clip.id}.mp4" class="text-indigo-400 hover:underline">Download MP4</a>
+              <a href="${esc(videoSrc)}" download="${esc(clip.title || clip.id)}.mp4" class="text-indigo-400 hover:underline">Download MP4</a>
             </div>
           </div>
         `;
@@ -1013,7 +1017,7 @@
           }
 
           const srcBadge = item.transcript_source 
-            ? `<span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-black/50 text-slate-400 uppercase">${item.transcript_source}</span>`
+            ? `<span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-black/50 text-slate-400 uppercase">${esc(item.transcript_source)}</span>`
             : "";
 
           row.innerHTML = `
@@ -1021,10 +1025,10 @@
               <span class="w-1.5 h-1.5 rounded-full ${item.status === 'CLIPS_CREATED' ? 'bg-emerald-400' : 'bg-indigo-400'}"></span>
               <div class="truncate">
                 <div class="flex items-center space-x-2">
-                  <span class="text-white font-medium truncate font-mono text-xs">${item.title || item.video_id}</span>
+                  <span class="text-white font-medium truncate font-mono text-xs">${esc(item.title || item.video_id)}</span>
                   ${srcBadge}
                 </div>
-                <div class="text-[10px] font-mono text-slate-500">ID: ${item.video_id} • ${item.discovered_at ? item.discovered_at.slice(0, 16) : ''}</div>
+                <div class="text-[10px] font-mono text-slate-500">ID: ${esc(item.video_id)} • ${esc(item.discovered_at ? item.discovered_at.slice(0, 16) : '')}</div>
               </div>
             </div>
             <div class="flex items-center space-x-2 shrink-0">

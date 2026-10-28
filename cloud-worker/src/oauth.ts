@@ -46,34 +46,41 @@ export function fromB64url(b64urlStr: string): Uint8Array {
 
 async function aesKey(vaultKey: string): Promise<CryptoKey> {
   const trimmed = (vaultKey || "").trim();
+  if (!trimmed) {
+    throw new Error("TOKEN_VAULT_KEY is not configured");
+  }
   let raw: Uint8Array | null = null;
 
-  // 1. Try Base64
+  // 1. Base64 (AES-256 only: exactly 32 bytes)
   try {
     const pad = trimmed.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (trimmed.length % 4)) % 4);
     const bin = atob(pad);
-    if (bin.length === 16 || bin.length === 24 || bin.length === 32) {
+    if (bin.length === 32) {
       raw = Uint8Array.from(bin, c => c.charCodeAt(0));
     }
   } catch {
     // not valid base64
   }
 
-  // 2. Try Hex (32, 48, or 64 hex characters)
-  if (!raw && /^[0-9a-fA-F]{32,64}$/.test(trimmed) && trimmed.length % 2 === 0) {
-    const bytes = new Uint8Array(trimmed.length / 2);
-    for (let i = 0; i < trimmed.length; i += 2) {
+  // 2. Hex (AES-256 only: exactly 64 hex characters)
+  if (!raw && /^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    const bytes = new Uint8Array(32);
+    for (let i = 0; i < 64; i += 2) {
       bytes[i / 2] = parseInt(trimmed.substring(i, i + 2), 16);
     }
-    if (bytes.length === 16 || bytes.length === 24 || bytes.length === 32) {
-      raw = bytes;
-    }
+    raw = bytes;
   }
 
-  // 3. Fallback: derive 256-bit key using SHA-256 of the vault key string
-  if (!raw) {
-    const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(trimmed || "dispatch-fallback-vault-key"));
+  // 3. Configured passphrase: derive a 256-bit key from the operator's chosen
+  // secret. (The old PUBLIC constant fallback is what was removed; deriving
+  // from an explicitly configured value preserves existing deployments.)
+  if (!raw && trimmed) {
+    const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(trimmed));
     raw = new Uint8Array(hash);
+  }
+
+  if (!raw) {
+    throw new Error("TOKEN_VAULT_KEY must be a configured secret (32-byte base64, 64-hex, or passphrase)");
   }
 
   return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
@@ -179,6 +186,16 @@ export function buildTwitterAuthorizeUrl(clientId: string, redirectUri: string, 
   return `https://twitter.com/i/oauth2/authorize?${q.toString()}`;
 }
 
+export function escapeHtml(value: string): string {
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[ch] as string));
+}
+
 export function renderOAuthResultHtml(title: string, message: string, isError = false): Response {
   const accentColor = isError ? "#EF4444" : "#22C55E";
   const iconSvg = isError
@@ -190,7 +207,7 @@ export function renderOAuthResultHtml(title: string, message: string, isError = 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title} - Dispatch</title>
+  <title>${escapeHtml(title)} - Dispatch</title>
   <style>
     body {
       margin: 0;
@@ -249,8 +266,8 @@ export function renderOAuthResultHtml(title: string, message: string, isError = 
 <body>
   <div class="card">
     <div class="icon">${iconSvg}</div>
-    <h2>${title}</h2>
-    <p>${message}</p>
+    <h2>${escapeHtml(title)}</h2>
+    <p>${escapeHtml(message)}</p>
     <a href="#" class="btn" onclick="window.close(); return false;">Return to Dispatch</a>
   </div>
 </body>
@@ -258,6 +275,10 @@ export function renderOAuthResultHtml(title: string, message: string, isError = 
 
   return new Response(html, {
     status: isError ? 400 : 200,
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    },
   });
 }

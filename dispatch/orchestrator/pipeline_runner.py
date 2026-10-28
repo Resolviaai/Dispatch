@@ -186,7 +186,8 @@ class PipelineStageRunner:
             session_id=chunk.get("session_id"),
             segments=segments,
             total_duration=duration,
-            publish_mode=publish_mode
+            publish_mode=publish_mode,
+            user_id=chunk.get("user_id"),
         )
 
         logger.info("Analyze completed for job %s: Identified %d clips", job["job_id"], len(clip_ids))

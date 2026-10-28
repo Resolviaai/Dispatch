@@ -264,7 +264,7 @@ class TestSyncEngine(unittest.TestCase):
         tampered_bytes = b"tampered evil audio content!"  # exactly same length: 28 bytes
         self.assertEqual(len(b"original clean audio content"), len(tampered_bytes))
 
-        tampered_file = Path("storage/processing") / f"{seg_id}.mp4"
+        tampered_file = PROCESSING_DIR / f"{seg_id}.mp4"
         tampered_file.parent.mkdir(parents=True, exist_ok=True)
         tampered_file.write_bytes(tampered_bytes)
 

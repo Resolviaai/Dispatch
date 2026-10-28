@@ -207,6 +207,9 @@ export const App: React.FC = () => {
         try {
           const vUrl = item.videoUrl.startsWith('http') ? item.videoUrl : apiUrl(item.videoUrl, pcHost);
           const resp = await fetch(vUrl);
+          if (!resp.ok) {
+            throw new Error(`Media fetch failed (HTTP ${resp.status})`);
+          }
           const blob = await resp.blob();
           const formData = new FormData();
           formData.append('file', blob, 'web_recording.webm');
@@ -233,6 +236,10 @@ export const App: React.FC = () => {
             errorMessage: e?.message || 'Retry failed'
           });
         }
+      } else {
+        handleRecordingStatusUpdate(segmentId, 'FAILED_RECORDING', {
+          errorMessage: 'Recording media URL is unavailable'
+        });
       }
     }
   };
@@ -348,18 +355,21 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentTab === 'clips' && (
-            <ScreenErrorBoundary title="Clip editor could not render" resetKey={`${currentTab}:${pcHost}`}>
+          {/* Kept mounted across tab switches: cache, editor state and in-flight
+              reconciliation survive without a refetch-on-return. */}
+          <div className={currentTab === 'clips' ? 'h-full' : 'hidden'} aria-hidden={currentTab !== 'clips'}>
+            <ScreenErrorBoundary title="Clip editor could not render" resetKey={`clips:${pcHost}`}>
               <ClipsScreen
                 pcHost={pcHost}
                 isMobileFrame={isMobileFrame}
+                isActive={currentTab === 'clips'}
                 onEditorOpenChange={setIsEditorOpen}
                 isPcOnline={isPcOnline}
                 sessionFilter={sessionFilter}
                 onClearSessionFilter={() => setSessionFilter(null)}
               />
             </ScreenErrorBoundary>
-          )}
+          </div>
 
           {currentTab === 'settings' && (
             <SettingsScreen pcHost={pcHost} onEditorOpenChange={setIsEditorOpen} />

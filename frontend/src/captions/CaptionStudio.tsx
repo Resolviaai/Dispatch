@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef } from 'react';
+import { apiUrl, getAuthHeaders } from '../bridge';
 import {
   Ban,
   Scissors,
@@ -1538,8 +1539,12 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     try {
       const formData = new FormData();
       formData.append('file', file, filename);
-      const res = await fetch('/api/media/upload', {
+      const headers = getAuthHeaders();
+      // FormData must set its own multipart boundary.
+      delete (headers as Record<string, string>)['Content-Type'];
+      const res = await fetch(apiUrl('/api/media/upload'), {
         method: 'POST',
+        headers,
         body: formData,
       });
       if (res.ok) {

@@ -697,9 +697,9 @@ def call_gemini_generate_content(
     raise RuntimeError(full_err)
 
 
-def extract_clips_gemini(transcript_text: str, segments: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+def extract_clips_gemini(transcript_text: str, segments: List[Dict[str, Any]], user_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Compatibility wrapper for extract_clips_gemini."""
-    negative_context = get_negative_feedback_prompt()
+    negative_context = get_negative_feedback_prompt(user_id)
     user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
     try:
         raw_clips, _ = call_gemini_generate_content(user_prompt)
@@ -839,7 +839,7 @@ def identify_and_save_highlights(
         transcript_lines.append(f"[{int(start_m):02d}:{start_s:05.2f} -> {int(end_m):02d}:{end_s:05.2f}] {s.get('text', '')}")
     transcript_text = "\n".join(transcript_lines)
 
-    negative_context = get_negative_feedback_prompt()
+    negative_context = get_negative_feedback_prompt(user_id)
     user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
 
     # Gemini API call with local heuristic fallback when offline / rate-limited

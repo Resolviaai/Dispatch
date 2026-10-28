@@ -242,17 +242,37 @@ class DispatchNativeBridge(
     @JavascriptInterface
     fun startRecording() {
         activity.runOnUiThread {
+            if (segmenterEngine.isSessionActive || cameraCaptureManager.isRecording) {
+                sendCameraEvent("recording_start_failed", JsonObject().apply {
+                    addProperty("code", "already_recording")
+                    addProperty("message", "A recording session is already active")
+                })
+                return@runOnUiThread
+            }
+            sendCameraEvent("recording_starting", JsonObject())
             activity.lifecycleScope.launch {
                 try {
-                    segmenterEngine.startSession(
+                    val sessionId = segmenterEngine.startSession(
                         cameraManager = cameraCaptureManager,
                         notes = "Dispatch Studio Android Capture"
                     )
                     (activity as? com.resolvia.dispatch.MainActivity)
-                        ?.setRecordingScreenDimmingEnabled(segmenterEngine.isSessionActive || cameraCaptureManager.isRecording)
+                        ?.setRecordingScreenDimmingEnabled(cameraCaptureManager.isRecording)
+                    sendCameraEvent("recording_started", JsonObject().apply {
+                        addProperty("sessionId", sessionId)
+                    })
                 } catch (e: Exception) {
                     (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(false)
                     android.util.Log.e("DispatchBridge", "startRecording failed: ${e.message}", e)
+                    val code = when (e) {
+                        is com.resolvia.dispatch.recorder.RecordingStorageException -> "storage_unavailable"
+                        is SecurityException -> "permission_denied"
+                        else -> "capture_start_failed"
+                    }
+                    sendCameraEvent("recording_start_failed", JsonObject().apply {
+                        addProperty("code", code)
+                        addProperty("message", e.message ?: "Recording could not start")
+                    })
                     android.widget.Toast.makeText(activity, "Recording failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                 }
             }
@@ -264,6 +284,7 @@ class DispatchNativeBridge(
         activity.runOnUiThread {
             activity.lifecycleScope.launch {
                 try {
+                    sendCameraEvent("recording_stopping", JsonObject())
                     segmenterEngine.stopSession(cameraManager = cameraCaptureManager)
                     (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(false)
                     segmenterEngine.triggerYouTubeUpload()
@@ -285,9 +306,18 @@ class DispatchNativeBridge(
 
     @JavascriptInterface
     fun isRecording(): Boolean {
-        val recording = segmenterEngine.isSessionActive || cameraCaptureManager.isRecording
+        val recording = cameraCaptureManager.isRecording
         (activity as? com.resolvia.dispatch.MainActivity)?.setRecordingScreenDimmingEnabled(recording)
         return recording
+    }
+
+    @JavascriptInterface
+    fun getRecordingState(): String {
+        if (cameraCaptureManager.isRecording) {
+            return if (cameraCaptureManager.isRecordingPaused) "paused" else "recording"
+        }
+        if (segmenterEngine.isSessionActive) return "starting"
+        return "idle"
     }
 
     @JavascriptInterface
@@ -769,7 +799,7 @@ class DispatchNativeBridge(
                 // Data-loss guard: refuse deletion while any segment is queued,
                 // in flight, or waiting for credentials — deleting would orphan
                 // an upload the worker is about to run (files + DB rows gone).
-                val pendingUploadStatuses = setOf("QUEUED_FOR_UPLOAD", "UPLOADING", "WAITING_FOR_YOUTUBE")
+                val pendingUploadStatuses = setOf("QUEUED_FOR_UPLOAD", "UPLOADING", "WAITING_FOR_YOUTUBE", "FAILED_RETRY", "FAILED_YOUTUBE_PROCESSING")
                 if (segments.any { it.status in pendingUploadStatuses }) {
                     android.util.Log.w(
                         "DispatchBridge",

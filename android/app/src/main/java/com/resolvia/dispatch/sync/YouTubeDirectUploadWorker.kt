@@ -10,7 +10,10 @@ import com.resolvia.dispatch.data.AppDatabase
 import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.recorder.RecordingForegroundService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -78,6 +81,9 @@ class YouTubeDirectUploadWorker(
 
     /** A UPLOADING lease older than this is stale (owner died); requeue for retry. */
     private val staleUploadLeaseMs = 10L * 60_000L
+
+    /** Renew the UPLOADING lease while a long upload is still making progress. */
+    private val uploadLeaseRenewMs = 2L * 60_000L
 
     /** Outcome of asking the cloud control plane for a scoped resumable upload session. */
     private sealed class CloudSessionRequest {
@@ -303,7 +309,19 @@ class YouTubeDirectUploadWorker(
                     // dispatch-id lookup below still guards genuine duplicates.
                     dao.updateSegmentStatusAndVideoId(seg.segmentId, "UPLOADING", null)
                 }
-                val result = uploadToYouTubeDirect(accessToken, file, dispatchId, seg, useCloud)
+                val result = coroutineScope {
+                    val leaseHeartbeat = launch {
+                        while (isActive) {
+                            delay(uploadLeaseRenewMs)
+                            dao.renewUploadLease(seg.segmentId, System.currentTimeMillis())
+                        }
+                    }
+                    try {
+                        uploadToYouTubeDirect(accessToken, file, dispatchId, seg, useCloud)
+                    } finally {
+                        leaseHeartbeat.cancel()
+                    }
+                }
 
                 if (result.failureReason == "WAITING_FOR_CREDENTIALS") {
                     hasFailures = true

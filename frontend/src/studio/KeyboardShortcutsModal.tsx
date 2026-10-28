@@ -29,19 +29,25 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
-      <div className="w-full max-w-md rounded-2xl bg-[#16181C] border border-[#2E3239] shadow-2xl overflow-hidden select-none">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcuts-title"
+        className="w-full max-w-md rounded-2xl bg-[#16181C] border border-[#2E3239] shadow-2xl overflow-hidden select-none"
+      >
         {/* Header */}
         <div className="px-4 py-3 bg-[#1C1F24] border-b border-[#2E3239] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Keyboard size={16} className="text-[#2563EB]" />
-            <h3 className="text-xs font-bold uppercase tracking-wider text-[#F3F4F6]">
+            <h3 id="shortcuts-title" className="text-xs font-bold uppercase tracking-wider text-[#F3F4F6]">
               Workstation Shortcuts
             </h3>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded text-[#747D8A] hover:text-[#F3F4F6] hover:bg-[#23262C]"
+            aria-label="Close keyboard shortcuts"
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded text-[#747D8A] hover:text-[#F3F4F6] hover:bg-[#23262C]"
           >
             <X size={15} />
           </button>

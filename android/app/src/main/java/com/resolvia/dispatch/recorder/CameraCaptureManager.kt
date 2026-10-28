@@ -80,6 +80,14 @@ class CameraCaptureManager(private val context: Context) {
     var isRecording: Boolean = false
         private set
 
+    /**
+     * True once stop() has been requested but CameraX has not yet delivered
+     * VideoRecordEvent.Finalize. Consumers must wait for finalization before
+     * tearing down the muxer or the foreground service.
+     */
+    @Volatile var isFinalizePending: Boolean = false
+        private set
+
     @Volatile var isRecordingPaused: Boolean = false
         private set
 
@@ -1138,6 +1146,7 @@ class CameraCaptureManager(private val context: Context) {
     fun startSegmentRecording(
         targetTmpFile: File,
         onError: ((errorCode: Int, cause: Throwable?) -> Unit)? = null,
+        onStarted: (() -> Unit)? = null,
         onFinalized: (file: File, durationMs: Long) -> Unit
     ) {
         val vc = videoCapture ?: run {
@@ -1160,13 +1169,14 @@ class CameraCaptureManager(private val context: Context) {
             pendingRecording.withAudioEnabled()
         }
 
-        isRecording = true
         isRecordingPaused = false
+        isFinalizePending = false
         activeRecording = pendingRecording.start(recordingExecutor) { recordEvent ->
             when (recordEvent) {
                 is VideoRecordEvent.Start -> {
                     isRecording = true
                     isRecordingPaused = false
+                    onStarted?.invoke()
                     mainHandler.post {
                         onRecordingPauseStateChanged?.invoke(false)
                         RecordingForegroundService.instance?.updateNotification()
@@ -1192,6 +1202,7 @@ class CameraCaptureManager(private val context: Context) {
                 is VideoRecordEvent.Finalize -> {
                     isRecording = false
                     isRecordingPaused = false
+                    isFinalizePending = false
                     mainHandler.post {
                         onRecordingPauseStateChanged?.invoke(false)
                         RecordingForegroundService.instance?.updateNotification()
@@ -1228,6 +1239,9 @@ class CameraCaptureManager(private val context: Context) {
      */
     fun stopActiveRecording() {
         if (activeRecording != null) {
+            // CameraX finalizes asynchronously; flag the wait so callers do not
+            // stop the recorder/service before the tail segment is flushed.
+            isFinalizePending = true
             activeRecording?.stop()
             activeRecording = null
             isRecording = false

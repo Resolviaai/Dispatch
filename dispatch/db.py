@@ -175,6 +175,8 @@ def init_db():
                 ai_suggested_end_time REAL,
                 duration REAL NOT NULL,
                 range_revision INTEGER NOT NULL DEFAULT 0,
+                captions_revision INTEGER NOT NULL DEFAULT 0,
+                caption_coordinate_system TEXT,
                 caption_range_revision INTEGER,
                 caption_range_start REAL,
                 caption_range_end REAL,
@@ -212,6 +214,7 @@ def init_db():
                 title TEXT,
                 transcript_snippet TEXT,
                 reason TEXT,
+                user_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -235,6 +238,8 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 attempt_started_at TIMESTAMP,
                 next_retry_at TIMESTAMP,
+                processing_started_at TIMESTAMP,
+                processing_attempts INTEGER DEFAULT 0,
                 published_at TIMESTAMP,
                 FOREIGN KEY (clip_id) REFERENCES clips (id) ON DELETE CASCADE
             );
@@ -366,6 +371,10 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_end_time REAL;")
         if "range_revision" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN range_revision INTEGER NOT NULL DEFAULT 0;")
+        if "captions_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN captions_revision INTEGER NOT NULL DEFAULT 0;")
+        if "caption_coordinate_system" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN caption_coordinate_system TEXT;")
         if "caption_range_revision" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_revision INTEGER;")
         if "caption_range_start" not in clip_cols:
@@ -419,11 +428,23 @@ def init_db():
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN attempt_started_at TIMESTAMP;")
         if "next_retry_at" not in outbox_cols:
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN next_retry_at TIMESTAMP;")
+        if "processing_started_at" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN processing_started_at TIMESTAMP;")
+        if "processing_attempts" not in outbox_cols:
+            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN processing_attempts INTEGER DEFAULT 0;")
         if "account_id" not in outbox_cols:
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN account_id TEXT;")
         if "user_id" not in outbox_cols:
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN user_id TEXT;");
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_user_id ON publishing_outbox (user_id);")
+
+        # Migration: rejection learning must be owner-scoped (audit 2026-10-28).
+        # Legacy rows keep user_id NULL and are excluded from any owner-scoped prompt.
+        cursor.execute("PRAGMA table_info(rejections);")
+        rejection_cols = [col[1] for col in cursor.fetchall()]
+        if "user_id" not in rejection_cols:
+            cursor.execute("ALTER TABLE rejections ADD COLUMN user_id TEXT;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rejections_user_id ON rejections (user_id);")
 
         # Migration: Ensure user_id column exists on sessions
         cursor.execute("PRAGMA table_info(sessions);")
@@ -862,7 +883,15 @@ def save_clip_caption_data(
     source_range_start: Optional[float] = None,
     source_range_end: Optional[float] = None,
     timing_warning: Optional[str] = None,
+    expected_captions_revision: Optional[int] = None,
 ) -> bool:
+    """Persist a caption track with compare-and-swap fencing.
+
+    `expected_captions_revision` fences the COMPLETE editable document (text and
+    styles), not just the trim range. A stale editor therefore gets a conflict
+    instead of silently overwriting a newer save. Passing None keeps legacy
+    behavior but still increments the revision.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if expected_range_revision is None or source_range_start is None or source_range_end is None:
@@ -878,15 +907,21 @@ def save_clip_caption_data(
                 source_range_start = float(clip["start_time"] or 0.0)
             if source_range_end is None:
                 source_range_end = float(clip["end_time"] or 0.0)
-        cursor.execute("""
+        sql = """
             UPDATE clips
             SET caption_data = ?, caption_range_revision = ?, caption_range_start = ?, caption_range_end = ?,
-                caption_timing_warning = ?
+                caption_timing_warning = ?, captions_revision = captions_revision + 1,
+                caption_coordinate_system = COALESCE(caption_coordinate_system, 'clip_relative')
             WHERE id = ? AND range_revision = ?
-        """, (
+        """
+        params: list[Any] = [
             caption_json, expected_range_revision, source_range_start, source_range_end,
             timing_warning, clip_id, expected_range_revision,
-        ))
+        ]
+        if expected_captions_revision is not None:
+            sql += " AND captions_revision = ?"
+            params.append(int(expected_captions_revision))
+        cursor.execute(sql, tuple(params))
         conn.commit()
         return cursor.rowcount == 1
 
@@ -915,6 +950,10 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
         # inserting duplicate preference-learning records.
         if clip["status"] == "rejected":
             return True
+        # Published media must never be deleted through the review rejection path.
+        if clip["status"] not in ("ready_review", "approved"):
+            logger.warning("Refusing to reject clip %s in status %s", clip_id, clip["status"])
+            return False
 
         # 1. Immediately delete physical rendered media files (MP4 & thumbnail) from disk
         for file_key in ("video_path", "thumbnail_path"):
@@ -930,9 +969,9 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
 
         # 2. Record in rejections table for negative preference learning
         cursor.execute("""
-            INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason)
-            VALUES (?, ?, ?, ?, ?)
-        """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason))
+            INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason, clip["user_id"]))
 
         # 2.5 Cancel any queued publish jobs in the same transaction so approve->reject
         # races cannot resurrect the rejection into an outbox upload after commit.
@@ -1000,12 +1039,15 @@ def soft_reject_clip(
             return "applied"  # duplicate delivery; already tombstoned
         _adopt_owner(cursor, clip_id, expected_user_id)
         cursor.execute("""
-            INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason)
-            SELECT ?, ?, ?, ?, ?
+            INSERT INTO rejections (id, clip_id, title, transcript_snippet, reason, user_id)
+            SELECT ?, ?, ?, ?, ?, ?
             WHERE NOT EXISTS (
                 SELECT 1 FROM rejections WHERE clip_id = ?
             )
-        """, (f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason, clip_id))
+        """, (
+            f"rej_{uuid.uuid4().hex[:8]}", clip_id, clip["title"], clip["hook"], reason,
+            expected_user_id or clip.get("user_id"), clip_id,
+        ))
         cursor.execute("""
             UPDATE clips
             SET status = 'rejected',
@@ -1235,6 +1277,7 @@ def import_cloud_caption_data(
                 cloud_caption_revision = ?,
                 caption_range_revision = ?,
                 caption_timing_warning = ?,
+                caption_coordinate_system = 'window_relative',
                 render_stale = 1
             WHERE id = ?
         """, (
@@ -1297,10 +1340,25 @@ def cleanup_expired_published_clips(retention_days: int = 7) -> int:
     return purged_count
 
 
-def get_all_rejections(limit: int = 20) -> List[Dict[str, Any]]:
+def get_all_rejections(limit: int = 20, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Owner-scoped rejection history.
+
+    A caller with an owner identity only ever sees that owner's rows. Callers
+    without an identity get legacy rows (user_id IS NULL) only — never another
+    user's private excerpts (audit 2026-10-28, F12).
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM rejections ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM rejections WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (user_id, limit),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM rejections WHERE user_id IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (limit,),
+            )
         return [dict(row) for row in cursor.fetchall()]
 
 

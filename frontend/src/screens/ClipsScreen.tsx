@@ -59,13 +59,13 @@ const CAPTION_LOAD_TIMEOUT_MS = 10_000;
  * PC-side transcription: ~10 words / 6 s per caption, breaking on punctuation.
  */
 function buildCloudCaptionGroups(
-  words: Array<{ w?: string; text?: string; start: number; end: number }>,
+  words: Array<{ w?: string; text?: string; word?: string; start: number; end: number }>,
   duration: number
 ): Array<{ id: string; start: number; end: number; words: Array<{ id: string; text: string; start: number; end: number }> }> {
   const clean = words
     .map((w, i) => ({
       id: `cw_${i}`,
-      text: String(w.w || w.text || '').trim(),
+      text: String(w.word || w.w || w.text || '').trim(),
       start: Number(w.start),
       end: Number(w.end),
     }))
@@ -151,7 +151,16 @@ async function loadClipCaptionTrack(
 
 export type LayoutMode = 'fit_black' | 'fit_blur' | 'native_916' | 'crop_916' | 'crop_follow' | 'native_169' | 'landscape';
 export type ViewMode = 'library' | 'detail' | 'studio' | 'publish';
-export type FilterStatus = 'all' | 'ready' | 'approved';
+export type FilterStatus = 'all' | 'ready' | 'approved' | 'rejected';
+
+type RejectedCloudClip = {
+  id: string;
+  cloud_id?: string;
+  title?: string;
+  rejected_at?: string | null;
+  purge_after?: string | null;
+  reason?: string | null;
+};
 
 export interface AvailableLayoutMode {
   id: LayoutMode;
@@ -182,6 +191,7 @@ export interface ClipItem {  id: string;
   padded_end?: number;
   source_duration?: number | null;
   range_revision?: number;
+  captions_revision?: number;
   ai_suggested_start_time?: number;
   ai_suggested_end_time?: number;
   duration: number;
@@ -201,6 +211,7 @@ export interface ClipItem {  id: string;
   thumbnail_url?: string;
   thumbnail_version?: number;
   created_at: string;
+  approved_at?: string;
   published_at?: string;
   remote_url?: string;
   remote_id?: string;
@@ -211,13 +222,11 @@ export interface ClipItem {  id: string;
   target_aspect?: '16:9' | '9:16';
   /** Cloud caption payload: an edited track (groups) or a transcript seed (words). */
   captions?: {
-    words?: Array<{ w: string; text?: string; start: number; end: number }>;
+    words?: Array<{ w?: string; text?: string; word?: string; start: number; end: number }>;
     groups?: unknown[];
     span_duration?: number;
     [key: string]: unknown;
   };
-  /** Monotonic caption revision (optimistic-concurrency for cloud saves). */
-  captions_revision?: number;
   /** How the captions payload was sourced (worker: track | window). */
   captions_source?: string;
   /** Presigned edit-window proxy URL (worker fallback player source). */
@@ -239,6 +248,7 @@ interface ClipsScreenProps {
   isMobileFrame?: boolean;
   onEditorOpenChange?: (open: boolean) => void;
   isPcOnline?: boolean;
+  isActive?: boolean;
   sessionFilter?: string | null;
   onClearSessionFilter?: () => void;
 }
@@ -1329,6 +1339,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   isMobileFrame = true,
   onEditorOpenChange,
   isPcOnline,
+  isActive = true,
   sessionFilter,
   onClearSessionFilter,
 }) => {
@@ -1358,6 +1369,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // Clips State
   const [readyClips, setReadyClips] = useState<ClipItem[]>([]);
   const [approvedClips, setApprovedClips] = useState<ClipItem[]>([]);
+  const [rejectedClips, setRejectedClips] = useState<RejectedCloudClip[]>([]);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const mountedOnceRef = useRef(false);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -1541,6 +1555,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // Seeded when a cloud track loads; every save carries it as base_revision so
   // a phone edit made while this editor was open is refused (409), not clobbered.
   const cloudCaptionsRevisionRef = useRef<Map<string, number>>(new Map());
+  // PC-mode caption revision per clip; seeded from the server and advanced only
+  // by a successful save, so a stale editor conflicts instead of overwriting.
+  const localCaptionsRevisionRef = useRef<Map<string, number>>(new Map());
 
   // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
@@ -1560,7 +1577,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (pcHost && pcHost.trim()) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        // A PC already known to be offline gets a short probe, not the full
+        // 8 s timeout before cloud fallback.
+        const timeoutId = setTimeout(() => controller.abort(), isPcOnline === false ? 2500 : 8000);
         const res = await fetch(apiUrl('/api/clips', pcHost), { headers: getAuthHeaders(), signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
@@ -1571,6 +1590,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           if (clipFetchGenerationRef.current === generation) {
             setReadyClips(rList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
             setApprovedClips(aList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+            setRejectedClips([]);
             if (data.queue_stats) {
               setQueueStats(data.queue_stats);
             }
@@ -1598,18 +1618,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           const jobsController = new AbortController();
           const clipsTimeout = window.setTimeout(() => clipsController.abort(), 8000);
           const jobsTimeout = window.setTimeout(() => jobsController.abort(), 5000);
-          const [clipsRes, jobsRes] = await Promise.all([
-            fetch(`${WORKER_BASE}/clips`, {
-              headers: { 'Authorization': `Bearer ${token}` },
-              signal: clipsController.signal,
-            }).catch(() => null),
-            fetch(`${WORKER_BASE}/jobs/status`, {
-              headers: { 'Authorization': `Bearer ${token}` },
-              signal: jobsController.signal,
-            }).catch(() => null),
-          ]);
+          // The clip list must render independently of optional job status.
+          // Jobs are fetched after the list response has been applied.
+          const clipsRes = await fetch(`${WORKER_BASE}/clips?limit=100&offset=0`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+            signal: clipsController.signal,
+          }).catch(() => null);
           window.clearTimeout(clipsTimeout);
-          window.clearTimeout(jobsTimeout);
 
           if (clipsRes && clipsRes.ok) {
             const data = await clipsRes.json();
@@ -1619,12 +1634,19 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             if (clipFetchGenerationRef.current === generation) {
               setReadyClips(rList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
               setApprovedClips(aList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
+              const rj = Array.isArray(data.rejected) ? data.rejected : [];
+              setRejectedClips(rj.filter((clip: RejectedCloudClip) => !(clip as any).retention_expired));
               if (data.queue_stats) {
                 setQueueStats(data.queue_stats);
               }
             }
             cloudOk = true;
           }
+          const jobsRes = await fetch(`${WORKER_BASE}/jobs/status`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+            signal: jobsController.signal,
+          }).catch(() => null);
+          window.clearTimeout(jobsTimeout);
           if (jobsRes && jobsRes.ok) {
             const jData = await jobsRes.json();
             if (Array.isArray(jData.jobs)) {
@@ -1703,7 +1725,29 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   useEffect(() => {
-    fetchClips();
+    if (!currentClip) return;
+    localCaptionsRevisionRef.current.set(currentClip.id, Number(currentClip.captions_revision ?? 0));
+  }, [currentClip?.id, currentClip?.captions_revision]);
+
+  // Initial load (also warms the cache while the tab is not visible).
+  useEffect(() => {
+    void fetchClips();
+  }, [pcHost]);
+
+  useEffect(() => {
+    if (!isActive) {
+      // Hidden tabs must not keep decoding video or polling.
+      videoRef.current?.pause();
+      bgVideoRef.current?.pause();
+      setIsPlaying(false);
+      return;
+    }
+    if (mountedOnceRef.current) {
+      // Returning to the tab refreshes once instead of refetching every mount.
+      void fetchClips();
+    } else {
+      mountedOnceRef.current = true;
+    }
     if (viewMode !== 'library' && viewMode !== 'detail') return;
     // 10s poll cadence; background tabs skip polling entirely (battery + no
     // presigned media churn) and an immediate refresh runs on tab return.
@@ -1719,7 +1763,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [pcHost, viewMode]);
+  }, [pcHost, viewMode, isActive]);
 
   // 2. Synchronize Selected Clip State & Defensively Clear Stale Captions
   useEffect(() => {
@@ -2345,12 +2389,24 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         }
         throw new Error(`Cloud returned HTTP ${res.status}`);
       }
+      const baseRevision = localCaptionsRevisionRef.current.get(currentClip.id)
+        ?? Number(currentClip.captions_revision ?? 0);
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/captions`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify(captionTrack),
+        body: JSON.stringify({ ...captionTrack, base_revision: baseRevision }),
       });
+      if (res.status === 409) {
+        setSaveStatus('error');
+        setFeedback('Captions changed on another device. Reopen this clip to load the latest track.');
+        return false;
+      }
       if (res.ok) {
+        const data = await res.json().catch(() => ({} as { captions_revision?: unknown }));
+        const nextRevision = Number((data as { captions_revision?: unknown })?.captions_revision);
+        if (Number.isFinite(nextRevision)) {
+          localCaptionsRevisionRef.current.set(currentClip.id, Math.floor(nextRevision));
+        }
         setSaveStatus('saved');
         setFeedback('Captions saved successfully.');
         setTimeout(() => setFeedback(null), 2500);
@@ -2500,6 +2556,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       setFeedback('Clip title cannot be empty.');
       return;
     }
+    if (isCloudMode) {
+      // Approval requires the processing PC (render + outbox). Never pretend
+      // the clip was approved when the PC is unreachable.
+      setFeedback('Approval needs the processing PC. Reconnect Dispatch on your PC, then approve again.');
+      return;
+    }
 
     const clipToApprove = currentClip;
     const optimisticTitle = titleDraft.trim();
@@ -2554,10 +2616,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             restoreToReady('Caption track mismatch: approval cancelled, clip kept in Ready.');
             return;
           }
+          const capBaseRevision = localCaptionsRevisionRef.current.get(clipToApprove.id)
+            ?? Number(clipToApprove.captions_revision ?? 0);
           const capRes = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
             method: 'POST',
             headers: getAuthHeaders(),
-            body: JSON.stringify(trackSnapshot),
+            body: JSON.stringify({ ...trackSnapshot, base_revision: capBaseRevision }),
           });
           if (!capRes.ok) {
             console.error('Caption save failed before approval:', capRes.status);
@@ -2591,6 +2655,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         }
       } catch (err) {
         console.error('Background publish error:', err);
+        // Network errors/timeouts never produced an HTTP response. Restore the
+        // reviewable clip instead of leaving a false "approved" state.
+        restoreToReady('Approval request failed (connection lost) — clip kept in Ready review. Retry when the PC is reachable.');
       }
     })();
   };
@@ -2727,6 +2794,41 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } finally {
       window.clearTimeout(timeoutId);
       setRejectUndoWorking(false);
+    }
+  };
+
+  /** Restore a rejected cloud clip from the Rejected retention list. */
+  const handleCloudRestore = async (clipId: string) => {
+    if (restoringId) return;
+    setRestoringId(clipId);
+    try {
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (!token) {
+        setFeedback('Sign in to restore cloud clips.');
+        return;
+      }
+      const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(clipId)}/restore`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        setFeedback(`Restore failed (HTTP ${res.status}).`);
+        return;
+      }
+      const data = await res.json().catch(() => ({} as { state?: unknown }));
+      const state = typeof data?.state === 'string' ? data.state : 'unknown';
+      setFeedback(state === 'expired'
+        ? 'The 24h restore window expired; media may have been purged.'
+        : state === 'not_rejected'
+          ? 'Clip was already restored.'
+          : 'Restore requested.');
+      await fetchClips();
+    } catch {
+      setFeedback('Restore failed — check the connection and retry.');
+    } finally {
+      setRestoringId(null);
     }
   };
 
@@ -2895,6 +2997,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             { id: 'all' as FilterStatus, label: 'All', count: allClips.length },
             { id: 'ready' as FilterStatus, label: 'Ready', count: readyClips.length },
             { id: 'approved' as FilterStatus, label: 'Published', count: approvedClips.length },
+            { id: 'rejected' as FilterStatus, label: 'Rejected', count: rejectedClips.length },
           ].map((chip) => {
             const isSelected = filterStatus === chip.id;
             return (
@@ -2999,6 +3102,37 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 </div>
               </div>
             ))}
+          </div>
+        ) : filterStatus === 'rejected' ? (
+          <div className="px-4 py-4">
+            {rejectedClips.length === 0 ? (
+              <div className="py-12 text-center text-sm text-text-secondary">
+                No rejected clips within the 24-hour retention window.
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {rejectedClips.map((clip) => (
+                  <div key={clip.id} className="py-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-text-main truncate">{clip.title || 'Rejected clip'}</p>
+                      <p className="text-xs text-text-muted mt-1">
+                        {clip.rejected_at ? `Rejected ${new Date(clip.rejected_at).toLocaleString()}` : 'Rejected'}
+                        {clip.purge_after ? ` · media purge ${new Date(clip.purge_after).toLocaleString()}` : ''}
+                      </p>
+                      {clip.reason && <p className="text-xs text-text-secondary mt-1 truncate">{clip.reason}</p>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { void handleCloudRestore(clip.id); }}
+                      disabled={restoringId === clip.id}
+                      className="shrink-0 min-h-[44px] px-4 rounded-xl bg-surface-2 text-sm font-medium text-text-main hover:bg-surface-3 active:scale-[0.98] transition-all disabled:opacity-50"
+                    >
+                      {restoringId === clip.id ? 'Restoring…' : 'Restore'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ) : filteredClips.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">

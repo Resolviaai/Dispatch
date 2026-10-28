@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 from dispatch import db
 
 
-def get_negative_feedback_prompt() -> str:
+def get_negative_feedback_prompt(user_id: str | None = None) -> str:
     """Retrieve recent rejections from SQLite and construct nuanced negative conditioning prompt.
 
     Invariants:
@@ -15,7 +15,7 @@ def get_negative_feedback_prompt() -> str:
       2. Strictly instructs the model NOT to blacklist entire subject matters or topics.
       3. Preserves compatibility with existing database schema and tests.
     """
-    rejections = db.get_all_rejections(limit=15)
+    rejections = db.get_all_rejections(limit=15, user_id=user_id)
     if not rejections:
         return ""
 

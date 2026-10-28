@@ -290,8 +290,13 @@ class MainActivity : ComponentActivity() {
                     // Only web schemes can be allowlisted or externalized;
                     // blob:/about:/content: keep the WebView's default handling.
                     if (scheme != "http" && scheme != "https") return false
-                    val allowlisted = host == "appassets.androidplatform.net" ||
-                        (scheme == "https" && host == "dispatch-cloud.resolviaai.workers.dev")
+                    val allowlisted = host == "appassets.androidplatform.net"
+                    // The JS bridge is attached to this WebView process-wide. A remote
+                    // origin (including the cloud worker) must never inherit it.
+                    if (!request.isForMainFrame && !allowlisted) {
+                        android.util.Log.w("DispatchWebView", "Blocked remote subframe $url")
+                        return true
+                    }
                     if (allowlisted) return false
                     android.util.Log.w(
                         "DispatchWebView",

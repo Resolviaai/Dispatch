@@ -11,6 +11,7 @@ from dispatch.ai_clips.highlight_finder import (
 )
 from dispatch.captions.model import CaptionTrack, CaptionGroup, Word, StyleConfig
 from dispatch.captions.exporter import export_to_ass
+from dispatch.config import PROCESSING_DIR
 
 
 class TestPhase3HighlightsAndCaptions(unittest.TestCase):
@@ -61,7 +62,7 @@ class TestPhase3HighlightsAndCaptions(unittest.TestCase):
                 )
             ]
         )
-        test_ass = Path("storage/processing/test_track.ass")
+        test_ass = PROCESSING_DIR / "test_track.ass"
         test_ass.parent.mkdir(parents=True, exist_ok=True)
         try:
             out_path = export_to_ass(track, test_ass)

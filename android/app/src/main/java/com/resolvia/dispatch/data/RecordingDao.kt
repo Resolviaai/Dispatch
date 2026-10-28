@@ -101,6 +101,10 @@ interface RecordingDao {
     @Query("UPDATE segments SET status = 'UPLOADING', uploadLeaseAt = :nowMs WHERE segmentId = :segmentId AND status IN ('QUEUED_FOR_UPLOAD', 'FAILED_RETRY', 'WAITING_FOR_YOUTUBE')")
     suspend fun claimForUpload(segmentId: String, nowMs: Long): Int
 
+    /** Renew the lease while a long upload is still in progress. */
+    @Query("UPDATE segments SET uploadLeaseAt = :nowMs WHERE segmentId = :segmentId AND status = 'UPLOADING'")
+    suspend fun renewUploadLease(segmentId: String, nowMs: Long): Int
+
     @Query("UPDATE segments SET youtubeCheckAttempts = :attempts, youtubeCheckAt = :checkedAt WHERE segmentId = :segmentId")
     suspend fun updateProcessingCheck(segmentId: String, attempts: Int, checkedAt: Long)
 

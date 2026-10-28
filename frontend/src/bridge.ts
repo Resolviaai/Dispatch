@@ -98,6 +98,7 @@ declare global {
       startRecording: () => void;
       stopRecording: () => void;
       isRecording: () => boolean;
+      getRecordingState?: () => string;
       isRecordingPaused?: () => boolean;
       pauseRecording?: () => void;
       resumeRecording?: () => void;
@@ -219,6 +220,17 @@ export const Bridge = {
       !!(window as any).DispatchBridge ||
       window.location.hostname === 'appassets.androidplatform.net'
     );
+  },
+
+  getRecordingState(): string {
+    if (window.DispatchBridge?.getRecordingState) {
+      try {
+        return String(window.DispatchBridge.getRecordingState());
+      } catch {
+        // fall through to the boolean view
+      }
+    }
+    return this.isRecording() ? 'recording' : 'idle';
   },
 
   isRecording(): boolean {
@@ -495,6 +507,7 @@ export const Bridge = {
   },
 
   async pingPc(pcHost: string): Promise<{ success: boolean; message: string }> {
+    const explicitHttps = /^https:\/\//i.test(pcHost.trim());
     const cleanHost = pcHost.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
     if (window.DispatchBridge?.pingPc) {
       try {
@@ -507,7 +520,7 @@ export const Bridge = {
     try {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`http://${cleanHost}/api/status`, { mode: 'cors', signal: controller.signal });
+      const res = await fetch(`${explicitHttps ? 'https' : 'http'}://${cleanHost}/api/status`, { mode: 'cors', signal: controller.signal });
       clearTimeout(t);
       if (res.ok) {
         return { success: true, message: `PC reachable (HTTP ${res.status})` };

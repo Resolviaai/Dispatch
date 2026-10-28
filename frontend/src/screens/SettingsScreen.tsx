@@ -473,7 +473,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         )}
 
         {/* ACCOUNT PROFILE ROW (borderless; separated by a hairline) */}
-        <section className="pb-1 border-b border-border/60 flex items-center justify-between gap-3">
+        <section className="pb-1 border-b border-border flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <span className="w-9 h-9 rounded-full bg-primary-soft border border-primary/30 flex items-center justify-center text-primary shrink-0">
               <UserRound size={17} />
@@ -496,30 +496,27 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         {/* 1. APPEARANCE — compact grouped selector, no outer card */}
         <section className="space-y-2.5">
           <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Appearance</h2>
-          <div className="space-y-2" role="radiogroup" aria-label="Theme">
+          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Theme">
             {themeOptions.map((opt) => {
               const isSelected = themePref === opt.id;
+              const shortLabel = opt.id === 'device' ? 'Device' : opt.label;
               return (
                 <button
                   key={opt.id}
                   type="button"
                   role="radio"
                   aria-checked={isSelected}
+                  aria-label={opt.label}
+                  title={opt.desc}
                   onClick={() => handleThemeChange(opt.id)}
-                  className={`w-full min-h-[44px] flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-left transition-all active:scale-[0.98] ${
+                  className={`min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-0.5 px-2 text-xs font-medium transition-all active:scale-[0.98] ${
                     isSelected
-                      ? 'bg-primary-soft border-primary/50 text-text-main'
-                      : 'bg-surface-2 border-border text-text-secondary hover:text-text-main hover:border-border-strong'
+                      ? 'bg-surface border border-border-strong text-text-main shadow-sm'
+                      : 'text-text-secondary hover:text-text-main'
                   }`}
                 >
-                  <span className="flex items-center gap-3 min-w-0">
-                    <span className={isSelected ? 'text-primary' : 'text-text-muted'}>{opt.icon}</span>
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium">{opt.label}</span>
-                      <span className="block text-xs text-text-muted">{opt.desc}</span>
-                    </span>
-                  </span>
-                  {isSelected && <Check size={16} className="text-primary shrink-0" strokeWidth={2.5} />}
+                  <span className={isSelected ? 'text-primary' : 'text-text-muted'}>{opt.icon}</span>
+                  <span>{shortLabel}</span>
                 </button>
               );
             })}
@@ -954,7 +951,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
 
           {/* Recessed Subtle Divider */}
-          <div className="h-px bg-border/60" />
+          <div className="h-px bg-border" />
 
           {/* Cloud Storage (Per-Account Quota) */}
           <div className="space-y-1.5">

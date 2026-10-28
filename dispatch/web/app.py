@@ -223,6 +223,12 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
             try:
                 user = get_authenticated_user(request)
                 return user.get("user_id") or None
+            except HTTPException as e:
+                # A credential was presented but is invalid/expired: never
+                # downgrade it to system scope (which can read/mutate all jobs).
+                if e.status_code == 401:
+                    raise
+                return None
             except Exception:
                 return None
         return None
@@ -929,7 +935,7 @@ async def get_clip_detail(clip_id: str, request: Request):
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
     populate_clip_media_urls(clip)
     chunk = db.get_chunk_by_id(clip.get("chunk_id")) if clip.get("chunk_id") else None
@@ -1067,7 +1073,7 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can change layout")
@@ -1114,7 +1120,7 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can be rendered")
@@ -1211,7 +1217,7 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can be trimmed")
@@ -1270,7 +1276,7 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") in ("approved", "published"):
         return {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}
@@ -1348,6 +1354,32 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
             status_code=400,
             detail="Cannot approve this clip: original source video is unavailable for final rendering."
         )
+
+    # Never treat the rendered output as the "original source". Re-rendering from
+    # a previously rendered clip would silently degrade quality and could pick
+    # the wrong coordinate domain.
+    if clip.get("video_path"):
+        try:
+            if Path(clip["video_path"]).resolve() == source_path.resolve():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot approve this clip: the original source recording is missing; only a rendered copy exists.",
+                )
+        except OSError:
+            pass
+
+    # Honest failure for multi-segment coordinates. Session-global times must
+    # not be applied to a single chunk file; until a stitched source is built,
+    # refuse rather than render the wrong content.
+    if clip.get("chunk_id"):
+        with db.get_db_connection() as conn:
+            chunk_row = conn.execute("SELECT duration FROM chunks WHERE id = ?", (clip["chunk_id"],)).fetchone()
+        chunk_duration = float(chunk_row["duration"] or 0.0) if chunk_row else 0.0
+        if chunk_duration > 0 and float(clip["end_time"]) > chunk_duration + 1.0:
+            raise HTTPException(
+                status_code=409,
+                detail="This clip spans multiple recording segments. Approve it only after a stitched source is available; rendering a single chunk would use the wrong content.",
+            )
 
     segments = None
     if caption_snapshot:
@@ -1429,17 +1461,25 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
 
 
 @app.post("/api/clips/{clip_id}/reject")
+@_serialize_clip_mutation
 async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Request):
-    """Reject a clip and record negative preference learning data."""
+    """Reject a clip and record owner-scoped negative preference data."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+    if clip.get("status") == "rejected":
+        return {"status": "success", "message": f"Clip {clip_id} already rejected"}
+    if clip.get("status") not in ("ready_review", "approved"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Clip cannot be rejected from status '{clip.get('status')}'",
+        )
     if not db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected"):
-        raise HTTPException(status_code=404, detail="Clip not found")
+        raise HTTPException(status_code=409, detail="Clip could not be rejected in its current state")
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
 
 
@@ -1457,7 +1497,7 @@ async def handle_update_clip_metadata(clip_id: str, payload: ClipMetadataRequest
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
     updated = db.update_clip_metadata(
@@ -1489,24 +1529,44 @@ async def handle_update_clip_metadata(clip_id: str, payload: ClipMetadataRequest
 
 
 @app.get("/api/publisher/outbox")
-async def get_publisher_outbox(status: Optional[str] = None):
-    """List publishing outbox jobs, optionally filtered by status."""
+async def get_publisher_outbox(request: Request, status: Optional[str] = None):
+    """List publishing outbox jobs, optionally filtered by status.
+
+    Owner-scoped: a non-system caller only sees its own jobs. The local owner
+    (trusted loopback, no user header) retains full administrative visibility.
+    """
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if caller_user_id:
+        clauses.append("user_id = ?")
+        params.append(caller_user_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        if status:
-            cursor.execute("SELECT * FROM publishing_outbox WHERE status = ? ORDER BY created_at DESC", (status,))
-        else:
-            cursor.execute("SELECT * FROM publishing_outbox ORDER BY created_at DESC")
+        cursor.execute(f"SELECT * FROM publishing_outbox{where} ORDER BY created_at DESC", tuple(params))
         jobs = [dict(row) for row in cursor.fetchall()]
     return {"jobs": jobs, "count": len(jobs)}
 
 
 @app.get("/api/publisher/reconcile")
-async def get_reconcile_jobs():
+async def get_reconcile_jobs(request: Request):
     """List outbox jobs that require manual or automated reconciliation before retry."""
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM publishing_outbox WHERE status = 'reconciliation_required' ORDER BY updated_at DESC")
+        if caller_user_id:
+            cursor.execute(
+                "SELECT * FROM publishing_outbox WHERE status = 'reconciliation_required' AND user_id = ? ORDER BY updated_at DESC",
+                (caller_user_id,),
+            )
+        else:
+            cursor.execute("SELECT * FROM publishing_outbox WHERE status = 'reconciliation_required' ORDER BY updated_at DESC")
         jobs = [dict(row) for row in cursor.fetchall()]
     return {"jobs": jobs, "count": len(jobs)}
 
@@ -1515,6 +1575,7 @@ async def get_reconcile_jobs():
 async def resolve_reconciliation_job(job_id: str, payload: ResolveReconciliationRequest, request: Request):
     """Manually resolve a reconciliation_required outbox job."""
     verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     action = payload.action.lower()
     if action not in ("mark_published", "retry", "mark_failed"):
         raise HTTPException(status_code=400, detail="Action must be one of: 'mark_published', 'retry', 'mark_failed'")
@@ -1527,6 +1588,8 @@ async def resolve_reconciliation_job(job_id: str, payload: ResolveReconciliation
             raise HTTPException(status_code=404, detail="Outbox job not found")
 
         job_dict = dict(job)
+        if caller_user_id and (job_dict.get("user_id") or "") != caller_user_id:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job")
         if action == "mark_published":
             remote_id = payload.remote_id or job_dict.get("remote_id") or "manual_resolution"
             remote_url = payload.remote_url or job_dict.get("remote_url") or ""
@@ -1540,6 +1603,9 @@ async def resolve_reconciliation_job(job_id: str, payload: ResolveReconciliation
                     last_error = ?
                 WHERE id = ?
             """, (remote_id, remote_url, f"Resolved manually: {payload.note or 'Confirmed published'}", job_id))
+            # Commit before the aggregator opens its own connection; otherwise the
+            # second writer blocks on this transaction and the resolution rolls back.
+            conn.commit()
             from dispatch.publisher.outbox import check_and_finalize_clip
             vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
             check_and_finalize_clip(job_dict["clip_id"], vpath)
@@ -1574,6 +1640,7 @@ async def resolve_reconciliation_job(job_id: str, payload: ResolveReconciliation
 async def auto_reconcile_job(job_id: str, request: Request):
     """Automatically reconcile an outbox job against platform API."""
     verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM publishing_outbox WHERE id = ?", (job_id,))
@@ -1581,6 +1648,8 @@ async def auto_reconcile_job(job_id: str, request: Request):
         if not job:
             raise HTTPException(status_code=404, detail="Outbox job not found")
         job_dict = dict(job)
+    if caller_user_id and (job_dict.get("user_id") or "") != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job")
 
     platform = job_dict.get("platform", "").lower()
     if platform not in ("youtube", "youtube_shorts"):
@@ -1615,6 +1684,9 @@ async def auto_reconcile_job(job_id: str, request: Request):
                     last_error = 'Auto-reconciled: found confirmed upload on YouTube'
                 WHERE id = ?
             """, (vid, vurl, job_id))
+            # Commit the job transition before the clip aggregator reads from a
+            # second connection (avoids the SQLite write-lock deadlock).
+            conn.commit()
             vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
             check_and_finalize_clip(job_dict["clip_id"], vpath)
             return {
@@ -1667,7 +1739,7 @@ async def get_clip_filmstrip(clip_id: str, request: Request):
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
     active_video = resolve_active_clip_video(clip)
@@ -1792,7 +1864,7 @@ async def get_clip_captions(clip_id: str, request: Request):
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
     cached_json = db.get_clip_caption_data(clip_id)
@@ -1992,7 +2064,7 @@ async def save_clip_captions(clip_id: str, request: Request):
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can change captions")
@@ -2004,6 +2076,18 @@ async def save_clip_captions(clip_id: str, request: Request):
     expected_revision = data.get("range_revision", int(clip.get("range_revision") or 0))
     if expected_revision != int(clip.get("range_revision") or 0):
         raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before saving.")
+    current_captions_revision = int(clip.get("captions_revision") or 0)
+    expected_captions_revision: Optional[int] = None
+    if data.get("base_revision") is not None:
+        try:
+            expected_captions_revision = int(data.get("base_revision"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="base_revision must be an integer")
+        if expected_captions_revision != current_captions_revision:
+            raise HTTPException(
+                status_code=409,
+                detail="Captions changed on another device. Reload the clip before saving.",
+            )
     track_dict = track.to_dict()
     timing_warning = data.get("timing_warning")
     if any(not group.has_word_timing or group.timing_mode != "word" for group in track.groups if group.type in ("caption", "")):
@@ -2012,14 +2096,23 @@ async def save_clip_captions(clip_id: str, request: Request):
         clip_id, json.dumps(track_dict), expected_range_revision=expected_revision,
         source_range_start=float(clip["start_time"]), source_range_end=float(clip["end_time"]),
         timing_warning=timing_warning,
+        expected_captions_revision=expected_captions_revision,
     ):
-        raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before saving.")
+        raise HTTPException(
+            status_code=409,
+            detail="Captions or the selected range changed while editing. Reload the clip before saving.",
+        )
 
     # Export ASS file with exact parity
     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
     export_to_ass(track, ass_path)
 
-    return {"status": "success", "message": "Captions saved and exported to ASS", "range_revision": expected_revision}
+    return {
+        "status": "success",
+        "message": "Captions saved and exported to ASS",
+        "range_revision": expected_revision,
+        "captions_revision": current_captions_revision + 1,
+    }
 
 
 @app.post("/api/media/upload")

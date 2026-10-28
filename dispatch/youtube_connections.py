@@ -33,35 +33,46 @@ def _env(name: str) -> str:
 
 
 def get_candidate_vault_keys() -> List[bytes]:
-    """Return all plausible 256-bit vault keys matching Cloudflare Worker aesKey derivation."""
+    """Return plausible 256-bit vault keys matching Cloudflare Worker aesKey derivation.
+
+    Fails closed: no key is returned when DISPATCH_TOKEN_VAULT_KEY is missing or
+    does not encode exactly 32 bytes. The old publicly-known fallback key was
+    removed (audit 2026-10-28, F04) because it made stored credentials
+    decryptable from source.
+    """
     raw_key = _env("DISPATCH_TOKEN_VAULT_KEY")
     keys: List[bytes] = []
+    if not raw_key:
+        return keys
 
-    # 1. Base64
-    if raw_key:
-        try:
-            b = base64.b64decode(raw_key)
-            if len(b) in (16, 24, 32):
-                keys.append(b)
-        except Exception:
-            pass
+    # 1. Base64/base64url (AES-256 only), with padding (Worker accepts both)
+    try:
+        normalized = raw_key.replace("-", "+").replace("_", "/")
+        b = base64.b64decode(normalized + "=" * (-len(normalized) % 4))
+        if len(b) == 32:
+            keys.append(b)
+    except Exception:
+        pass
 
-    # 2. Hex
-    if raw_key and len(raw_key) in (32, 48, 64) and all(c in "0123456789abcdefABCDEF" for c in raw_key):
+    # 2. Hex (AES-256 only: 64 hex characters)
+    if len(raw_key) == 64 and all(c in "0123456789abcdefABCDEF" for c in raw_key):
         try:
             keys.append(bytes.fromhex(raw_key))
         except Exception:
             pass
 
-    # 3. SHA-256 derivation of vault key string if set
+    # 3. SHA-256 derivation of the configured passphrase (never a constant fallback)
     import hashlib
-    if raw_key:
-        keys.append(hashlib.sha256(raw_key.strip().encode("utf-8")).digest())
+    keys.append(hashlib.sha256(raw_key.encode("utf-8")).digest())
 
-    # 4. Fallback vault key (matches Worker aesKey fallback)
-    keys.append(hashlib.sha256(b"dispatch-fallback-vault-key").digest())
-
-    return keys
+    # De-duplicate while preserving order.
+    seen = set()
+    unique: List[bytes] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return unique
 
 
 def vault_key() -> bytes:
@@ -84,6 +95,8 @@ def decrypt_refresh_token(encrypted_b64url: str) -> str:
     iv, ct = data[:12], data[12:]
 
     candidates = get_candidate_vault_keys()
+    if not candidates:
+        raise VaultUnavailable("DISPATCH_TOKEN_VAULT_KEY not configured")
     last_err = None
     for k in candidates:
         try:

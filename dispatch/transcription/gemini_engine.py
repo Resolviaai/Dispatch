@@ -437,9 +437,6 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
     drained = 0
     for clip in queued_clips:
         clip_id = clip["id"]
-        if not check_and_increment_daily_transcribe_quota(max_daily_requests=25):
-            logger.info("Drain halted: daily transcribe quota exhausted (25/25 requests reached).")
-            break
 
         chunk_id = clip.get("chunk_id")
         chunk = db.get_chunk_by_id(chunk_id) if chunk_id else None
@@ -475,6 +472,12 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             with tempfile.TemporaryDirectory(prefix=f"dispatch_stage2_{clip_id}_", dir=str(PROCESSING_DIR)) as temp_dir:
                 slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
                 extract_stage2_clip_audio(source_path, p_start, p_end, slice_mp3)
+                # Charge the daily quota only after the source and bounded
+                # audio slice are known-good; missing sources must never burn
+                # the 25 request/day budget.
+                if not check_and_increment_daily_transcribe_quota(max_daily_requests=25):
+                    logger.info("Drain halted: daily transcribe quota exhausted (25/25 requests reached).")
+                    break
                 stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=active_key)
 
             words = stage2_res.get("words", [])

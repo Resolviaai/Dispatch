@@ -19,7 +19,9 @@ export function AuthGate({ children }: { children: (session: Session) => React.R
 
   useEffect(() => {
     currentSession().then(s => {
-      if (!s && typeof window !== 'undefined' && ((window as any).DispatchBridge || window.location.protocol === 'file:' || window.location.hostname === 'appassets.androidplatform.net')) {
+      const env = ((import.meta as any).env || {}) as Record<string, unknown>
+      const allowDevAuth = Boolean(env.DEV) && env.VITE_ALLOW_DEV_AUTH === '1'
+      if (!s && allowDevAuth) {
         const devSession = {
           user: { id: 'dev-creator-user', email: 'creator@dispatch.app' },
           access_token: 'dev-token',

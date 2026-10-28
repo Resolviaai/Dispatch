@@ -722,7 +722,7 @@ class HighlightWorker:
 
         transcript_text = "\n".join(transcript_lines)
 
-        negative_context = get_negative_feedback_prompt()
+        negative_context = get_negative_feedback_prompt((item.get("user_id") or "").strip() or None)
         user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
 
         attempt_count = int(item.get("ai_attempt_count") or 0) + 1

@@ -9,6 +9,7 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+from dispatch.config import PROCESSING_DIR
 from dispatch.transcription.gemini_engine import (
     _parse_offset_to_seconds,
     check_and_increment_daily_transcribe_quota,
@@ -66,7 +67,7 @@ class TestGeminiTwoStage(unittest.TestCase):
         mock_client.models.generate_content.return_value = mock_resp
 
         # Create dummy audio file
-        test_file = Path("storage/test_dummy.mp3")
+        test_file = PROCESSING_DIR / "test_dummy.mp3"
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_bytes(b"dummy")
 
@@ -116,7 +117,7 @@ class TestGeminiTwoStage(unittest.TestCase):
         mock_resp.candidates = [cand]
         mock_client.models.generate_content.return_value = mock_resp
 
-        test_file = Path("storage/test_dummy_clip.mp3")
+        test_file = PROCESSING_DIR / "test_dummy_clip.mp3"
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_bytes(b"dummy")
 

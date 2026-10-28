@@ -148,6 +148,56 @@ def process_outbox_queue() -> int:
         _processing_lock.release()
 
 
+PROCESSING_DEADLINE_HOURS = 2.0
+
+
+def _processing_deadline_exceeded(job: Dict[str, Any]) -> bool:
+    """Start the processing clock once, then fail honestly after the deadline."""
+    with db.get_db_connection() as conn:
+        conn.execute(
+            """UPDATE publishing_outbox
+               SET processing_started_at = COALESCE(processing_started_at, CURRENT_TIMESTAMP)
+               WHERE id = ? AND status = 'processing'""",
+            (job["id"],),
+        )
+        row = conn.execute(
+            """SELECT (julianday('now') - julianday(processing_started_at)) * 24.0 AS age_hours
+               FROM publishing_outbox WHERE id = ?""",
+            (job["id"],),
+        ).fetchone()
+        conn.commit()
+    if row and row["age_hours"] is not None and float(row["age_hours"]) >= PROCESSING_DEADLINE_HOURS:
+        with db.get_db_connection() as conn:
+            conn.execute(
+                """UPDATE publishing_outbox
+                   SET status = 'reconciliation_required',
+                       last_error = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND status = 'processing'""",
+                (f"Provider processing exceeded the {PROCESSING_DEADLINE_HOURS:.0f}h deadline; manual reconciliation required", job["id"]),
+            )
+            conn.commit()
+        logger.warning("Processing job %s exceeded the deadline; moved to reconciliation", job["id"])
+        return True
+    return False
+
+
+def _schedule_processing_check(job_id: str, attempts: int) -> None:
+    """Bounded exponential backoff for provider status checks (30s..30min)."""
+    next_attempts = int(attempts or 0) + 1
+    delay = min(1800, 30 * (2 ** min(next_attempts - 1, 6)))
+    with db.get_db_connection() as conn:
+        conn.execute(
+            """UPDATE publishing_outbox
+               SET processing_attempts = ?,
+                   next_retry_at = datetime('now', ?),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND status = 'processing'""",
+            (next_attempts, f"+{delay} seconds", job_id),
+        )
+        conn.commit()
+
+
 def _process_outbox_queue_internal() -> int:
     # 1. Recover stale uploading jobs orphaned by unexpected process restarts (> 10 min)
     # If job has been uploading for > 10 min, do NOT blindly republish: mark 'reconciliation_required'
@@ -168,9 +218,15 @@ def _process_outbox_queue_internal() -> int:
     try:
         with db.get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM publishing_outbox WHERE status = 'processing'")
+            cursor.execute(
+                """SELECT * FROM publishing_outbox
+                   WHERE status = 'processing'
+                     AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP)"""
+            )
             processing_jobs = [dict(r) for r in cursor.fetchall()]
         for pjob in processing_jobs:
+            if _processing_deadline_exceeded(pjob):
+                continue
             if pjob.get("platform") in ("youtube", "youtube_shorts") and pjob.get("remote_id"):
                 svc = None
                 p_creds = {}
@@ -218,6 +274,9 @@ def _process_outbox_queue_internal() -> int:
                             """, (f"Status query error: {q_err}", pjob["id"]))
                 else:
                     logger.warning("No credentials available to check status of processing job %s", pjob["id"])
+            # Always schedule the next check with backoff. The UPDATE is a no-op
+            # if this pass already moved the job to published/failed.
+            _schedule_processing_check(pjob["id"], int(pjob.get("processing_attempts") or 0))
     except Exception as e:
         logger.debug("Processing status check note: %s", e)
 

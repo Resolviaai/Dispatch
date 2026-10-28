@@ -225,12 +225,16 @@ def probe_video(
         "-f", "null",
         "-"
     ]
+    decode_verified = True
     try:
         decode_res = subprocess.run(decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
         if decode_res.returncode != 0:
             return False, {}, f"FFmpeg decode verification failed: {decode_res.stderr.strip()[:200]}"
     except subprocess.TimeoutExpired:
-        return False, {}, "FFmpeg decode verification timed out"
+        # A long 1080p source cannot always be fully decoded in 60 s. ffprobe
+        # already validated duration/dimensions; treat the decode check as
+        # inconclusive instead of deleting a good download and re-fetching it.
+        decode_verified = False
 
     # 4. Detect canonical aspect ratio
     ratio_val = effective_width / effective_height
@@ -251,7 +255,8 @@ def probe_video(
         "has_audio": info["has_audio"],
         "video_codec": info["video_codec"],
         "audio_codec": info["audio_codec"],
-        "size_bytes": filepath.stat().st_size
+        "size_bytes": filepath.stat().st_size,
+        "decode_verified": decode_verified,
     }
 
     return True, metadata, None

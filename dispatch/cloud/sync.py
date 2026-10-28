@@ -124,6 +124,164 @@ def resolve_single_profile_owner() -> Optional[str]:
     return None
 
 
+def _normalize_words(raw_words: Any) -> List[Dict[str, Any]]:
+    """Canonical word shape: {word, start, end} in SOURCE-relative seconds."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(raw_words, list):
+        return out
+    for entry in raw_words:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("word") or entry.get("w") or entry.get("text") or "").strip()
+        try:
+            start = float(entry.get("start"))
+            end = float(entry.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if text and end > start:
+            out.append({"word": text, "start": round(start, 3), "end": round(end, 3)})
+    return out
+
+
+def extract_source_words(clip: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Best available SOURCE-relative word timings for a clip.
+
+    Order: edited caption_data.words, then persisted transcript segments. Never
+    invents words. An empty result means transcription readiness is genuinely
+    missing and the window must not claim otherwise.
+    """
+    raw = clip.get("caption_data")
+    if raw:
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            # Local CaptionTrack groups store CLIP-relative times. Convert them
+            # to SOURCE-relative before they cross into the cloud transcript
+            # contract (the Worker subtracts window_start downstream).
+            base = float(clip.get("caption_range_start") or 0.0)
+            grouped: List[Dict[str, Any]] = []
+            groups = data.get("groups")
+            if isinstance(groups, list) and clip.get("caption_coordinate_system") == "clip_relative":
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    for word in group.get("words", []) if isinstance(group.get("words"), list) else []:
+                        if not isinstance(word, dict):
+                            continue
+                        try:
+                            start = base + float(word.get("start"))
+                            end = base + float(word.get("end"))
+                        except (TypeError, ValueError):
+                            continue
+                        grouped.append({**word, "start": start, "end": end})
+            grouped_words = _normalize_words(grouped)
+            if grouped_words:
+                return grouped_words
+            # Legacy top-level words are treated as SOURCE-relative.
+            words = _normalize_words(data.get("words"))
+            if words:
+                return words
+
+    words: List[Dict[str, Any]] = []
+    try:
+        with db.get_db_connection() as conn:
+            rows = []
+            if clip.get("chunk_id"):
+                rows = conn.execute(
+                    "SELECT segments_json FROM transcripts WHERE chunk_id = ?",
+                    (clip["chunk_id"],),
+                ).fetchall()
+            if not rows and clip.get("session_id"):
+                rows = conn.execute(
+                    "SELECT segments_json FROM transcripts WHERE session_id = ?",
+                    (clip["session_id"],),
+                ).fetchall()
+            for row in rows:
+                try:
+                    segments = json.loads(row["segments_json"] or "[]")
+                except Exception:
+                    continue
+                for segment in segments if isinstance(segments, list) else []:
+                    if isinstance(segment, dict):
+                        words.extend(_normalize_words(segment.get("words")))
+    except Exception as e:
+        logger.debug("transcript word lookup failed for clip %s: %s", clip.get("id"), e)
+
+    words.sort(key=lambda w: w["start"])
+    return words
+
+
+def _render_fingerprint(clip: Dict[str, Any], video_path: Path) -> str:
+    """Cheap identity for the exact rendered bytes (size + mtime + range rev)."""
+    stat = video_path.stat()
+    return f"{stat.st_size}:{stat.st_mtime_ns}:{int(clip.get('range_revision') or 0)}"
+
+
+def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, only_if_missing: bool = True) -> str:
+    """Persist words for an ALREADY-STAGED window without re-uploading media.
+
+    Returns: pushed | skipped_existing | no_words | not_staged | failed |
+    no_credentials. Backfill uses `only_if_missing=True` so it can never
+    overwrite a newer cloud transcript.
+    """
+    if not get_worker_token():
+        return "no_credentials"
+    if not clip:
+        clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        return "failed"
+
+    user_id = str(clip.get("user_id") or "").strip() or resolve_single_profile_owner()
+    if not user_id or not _UUID_RE.match(user_id):
+        return "failed"
+    try:
+        r_state = requests.get(
+            f"{_worker_base()}/sync/pc/clips/{urlquote(clip_id, safe='')}",
+            headers=_cloud_headers(get_worker_token(), user_id),
+            timeout=15,
+        )
+        state = r_state.json() if (r_state.ok and r_state.text) else None
+    except Exception:
+        state = None
+    if not isinstance(state, dict) or not state.get("already_staged"):
+        return "not_staged"
+    media_id = str(state.get("media_object_id") or "").strip()
+    if not media_id:
+        return "failed"
+    words = extract_source_words(clip)
+    if not words:
+        return "no_words"
+    try:
+        res = requests.post(
+            f"{_worker_base()}/sync/pc/windows",
+            headers=_cloud_headers(get_worker_token(), user_id),
+            json={
+                "local_clip_id": clip_id,
+                "media_object_id": media_id,
+                "window_start": float(state.get("window_start") or clip.get("start_time") or 0.0),
+                "window_end": float(state.get("window_end") or clip.get("end_time") or 0.0),
+                "words": words,
+                "render_fingerprint": state.get("render_fingerprint"),
+                "only_if_missing": bool(only_if_missing),
+            },
+            timeout=20,
+        )
+        if not res.ok:
+            logger.error("Transcript backfill failed for %s: %d %s", clip_id, res.status_code, res.text[:200])
+            return "failed"
+        body = res.json() if res.text else {}
+        if body.get("transcript_skipped") == "existing":
+            return "skipped_existing"
+        if body.get("transcripts_stored") is False:
+            return "failed"
+        return "pushed"
+    except Exception as e:
+        logger.error("Transcript backfill errored for %s: %s", clip_id, e)
+        return "failed"
+
+
 def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> bool:
     """Sync a single clip and its video proxy / edit window to Supabase and R2."""
     if not get_worker_token():
@@ -231,21 +389,89 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
         logger.error("Network error upserting clips_cloud for %s: %s", clip_id, e)
         return False
 
-    # 2. Mode 2: Check if local media exists and stage to Cloudflare R2
+    caption_words = extract_source_words(clip)
+
+    # Fingerprint the exact local render. A ready cloud window is only fresh
+    # when its stored fingerprint matches these bytes; existence is not version
+    # equality (audit F10).
     video_path = clip.get("video_path")
-    if not video_path or not Path(video_path).exists():
+    local_video = Path(video_path) if video_path and Path(video_path).exists() else None
+    if local_video is not None and local_video.stat().st_size <= 0:
+        local_video = None
+    current_fingerprint = _render_fingerprint(clip, local_video) if local_video is not None else None
+    staged_fingerprint = state_dict.get("render_fingerprint") if state_dict else None
+    staged_covers_range = False
+    if state_dict and state_dict.get("window_start") is not None and state_dict.get("window_end") is not None:
+        try:
+            staged_covers_range = (
+                float(state_dict["window_start"]) <= s_time + 1e-6
+                and float(state_dict["window_end"]) >= e_time - 1e-6
+            )
+        except (TypeError, ValueError):
+            staged_covers_range = False
+    staged_is_fresh = bool(
+        state_dict
+        and state_dict.get("already_staged")
+        and current_fingerprint is not None
+        and staged_fingerprint == current_fingerprint
+        and staged_covers_range
+    )
+
+    # Already staged in edit_windows (server-side check from the state call).
+    # Media readiness is not transcript readiness: re-register the window with
+    # words when we now have them, without re-uploading the proxy. This runs
+    # BEFORE the local-file check so a staged cloud window can be repaired even
+    # if the PC-side rendered file was cleaned up. A fingerprint mismatch falls
+    # through to a fresh proxy upload instead.
+    if state_dict and state_dict.get("already_staged") and (staged_is_fresh or current_fingerprint is None):
+        staged_media_id = str(state_dict.get("media_object_id") or "").strip()
+        if not caption_words:
+            logger.warning(
+                "Clip %s edit window is staged but has no transcript words; "
+                "leaving transcript_status=missing (run the transcript backfill).",
+                clip_id,
+            )
+            return True
+        if not staged_media_id:
+            logger.error("Clip %s is staged but the Worker returned no media_object_id; cannot persist transcript.", clip_id)
+            return False
+        try:
+            r_tr = requests.post(
+                f"{_worker_base()}/sync/pc/windows",
+                headers=_cloud_headers(get_worker_token(), user_id),
+                json={
+                    "local_clip_id": clip_id,
+                    "media_object_id": staged_media_id,
+                    # Reuse the EXACT staged bounds so the Worker's idempotent
+                    # window lookup cannot create a second window.
+                    "window_start": float(state_dict.get("window_start") or s_time),
+                    "window_end": float(state_dict.get("window_end") or e_time),
+                    "words": caption_words,
+                    # Preserve the existing fingerprint; this path uploads no bytes.
+                    "render_fingerprint": staged_fingerprint,
+                },
+                timeout=20,
+            )
+            if not r_tr.ok:
+                logger.error("Transcript re-registration failed for %s: %d %s", clip_id, r_tr.status_code, r_tr.text[:200])
+                return False
+            body = r_tr.json() if r_tr.text else {}
+            if body.get("transcripts_stored") is False:
+                logger.error("Worker did not persist transcript words for %s (status=%s)", clip_id, body.get("transcript_status"))
+                return False
+            logger.info("Transcript words persisted for already-staged clip %s (%d words).", clip_id, len(caption_words))
+            return True
+        except Exception as e:
+            logger.error("Transcript re-registration errored for %s: %s", clip_id, e)
+            return False
+
+    # 2. Mode 2: Check if local media exists and stage to Cloudflare R2
+    if local_video is None:
         logger.info("Clip %s has no local video file on disk; metadata synced to cloud.", clip_id)
         return True
 
-    vp = Path(video_path)
+    vp = local_video
     file_size = vp.stat().st_size
-    if file_size <= 0:
-        return True
-
-    # Already staged in edit_windows (server-side check from the state call).
-    if state_dict and state_dict.get("already_staged"):
-        logger.debug("Clip %s already staged in R2.", clip_id)
-        return True
 
     # Reserve upload via Worker
     try:
@@ -293,15 +519,7 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
         # media object to the cloud clip, and stores window transcript words.
         # (The PC no longer writes edit_windows/media_objects/window_transcripts
         # directly with a service-role key — audit 2026-10-27.)
-        window_words: Optional[list] = None
-        caption_json = clip.get("caption_data")
-        if caption_json:
-            try:
-                cap_data = json.loads(caption_json) if isinstance(caption_json, str) else caption_json
-                words = cap_data.get("words", [])
-                window_words = words if words else None
-            except Exception as e:
-                logger.debug("Could not parse caption words for %s: %s", clip_id, e)
+        window_words: Optional[list] = caption_words or None
 
         try:
             r_window = requests.post(
@@ -313,6 +531,7 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
                     "window_start": s_time,
                     "window_end": e_time,
                     "words": window_words,
+                    "render_fingerprint": current_fingerprint,
                 },
                 timeout=20,
             )
@@ -321,9 +540,18 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
                 return False
             window_body = r_window.json() if r_window.text else {}
             if window_body.get("transcripts_stored") is False and window_words:
+                # The media is staged, but claiming success here is exactly the
+                # silent-empty-captions failure. Retry; the next pass takes the
+                # already_staged branch and persists words without re-uploading.
+                logger.error(
+                    "Window registered for %s but transcript words were not stored (status=%s); "
+                    "returning failure so the next sync retries the transcript only.",
+                    clip_id, window_body.get("transcript_status"),
+                )
+                return False
+            if not window_words:
                 logger.warning(
-                    "Window registered for %s but transcript words were not stored; "
-                    "offline caption seeding will use the next registration pass.",
+                    "Window registered for %s with no transcript words; transcript_status=missing.",
                     clip_id,
                 )
         except Exception as e:
@@ -533,6 +761,8 @@ def _drain_for_user(worker_url: str, worker_token: str, user_id: str, limit: int
             )
             return 0
         commands = res.json().get("commands") or []
+        if commands:
+            logger.info("Claimed %d clip command(s) for %s", len(commands), user_id)
         for command in commands:
             command_id = command.get("id")
             if not command_id:
@@ -687,16 +917,24 @@ def import_cloud_captions_for_clip(clip_id: str) -> int:
         return 0
 
 
-def drain_clip_commands(limit: int = 25) -> int:
+def drain_clip_commands(limit: int = 25, user_ids: Optional[List[str]] = None) -> int:
     """Claim queued phone commands from Dispatch Cloud, apply them locally, and
-    acknowledge. Runs every sync cycle; safe to run repeatedly."""
+    acknowledge. Runs every sync cycle and immediately at daemon startup; safe
+    to run repeatedly. `user_ids` lets an operator drain one explicit account."""
     worker_url = _worker_base()
     worker_token = get_worker_token()
     if not worker_token:
         return 0
 
+    targets = user_ids if user_ids is not None else _resolve_drain_user_ids()
+    if not targets:
+        logger.warning(
+            "Clip command drain has no authorized owner. Set DISPATCH_PC_OWNER_USER_IDS "
+            "or ensure this PC owns at least one clip; queued phone commands cannot be claimed."
+        )
+
     applied = 0
-    for user_id in _resolve_drain_user_ids():
+    for user_id in targets:
         applied += _drain_for_user(worker_url, worker_token, user_id, limit)
         # Reconcile phone caption edits saved offline before any dependent
         # render can start (monotonic guard is inside db.import_cloud_caption_data).
@@ -723,6 +961,9 @@ def start_cloud_sync_worker():
 
     def _run():
         sync_all_clips_to_cloud()
+        # Drain immediately: a command queued while the PC was off must not wait
+        # an extra five minutes (or be stranded by frequent restarts).
+        drain_clip_commands()
         while True:
             time.sleep(300)
             sync_all_clips_to_cloud()

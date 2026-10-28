@@ -206,6 +206,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   onNativeRecordingStopped
 }) => {
   const [isRecording, setIsRecording] = useState(false);
+  const [isStartingNative, setIsStartingNative] = useState(false);
   const [isFinalizingNativeRecording, setIsFinalizingNativeRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -252,6 +253,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const timerRef = useRef<any>(null);
+  const startTimeoutRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedBlobsRef = useRef<Blob[]>([]);
@@ -294,6 +296,13 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       const syncRecordingState = () => {
         const recording = Bridge.isRecording();
         setIsRecording(recording);
+        if (recording) {
+          setIsStartingNative(false);
+          if (startTimeoutRef.current) {
+            clearTimeout(startTimeoutRef.current);
+            startTimeoutRef.current = null;
+          }
+        }
         const paused = recording && Bridge.isRecordingPaused();
         if (paused !== isPausedRef.current) {
           isPausedRef.current = paused;
@@ -306,10 +315,61 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
   }, []);
 
+  useEffect(() => () => {
+    if (startTimeoutRef.current) {
+      clearTimeout(startTimeoutRef.current);
+      startTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Single timer owner: it only runs once recording is actually confirmed.
+  useEffect(() => {
+    if (!isRecording) {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
+    }
+    if (timerRef.current) return;
+    timerRef.current = setInterval(() => {
+      if (!isPausedRef.current) setRecordingSeconds(prev => prev + 1);
+    }, 1000);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [isRecording]);
+
   // Subscribe to native camera lifecycle and focus events
   useEffect(() => {
     const unsub = Bridge.onCameraEvent((event) => {
-      if (event.type === 'recording_stopped') {
+      if (event.type === 'recording_starting') {
+        setIsStartingNative(true);
+      } else if (event.type === 'recording_started') {
+        if (startTimeoutRef.current) {
+          clearTimeout(startTimeoutRef.current);
+          startTimeoutRef.current = null;
+        }
+        setIsStartingNative(false);
+        setIsRecording(true);
+        setRecordingSeconds(0);
+        setRecentSavedSegment(null);
+      } else if (event.type === 'recording_start_failed') {
+        if (startTimeoutRef.current) {
+          clearTimeout(startTimeoutRef.current);
+          startTimeoutRef.current = null;
+        }
+        setIsStartingNative(false);
+        setIsRecording(false);
+        const code = event.data?.code ? ` (${event.data.code})` : '';
+        setRecentSavedSegment(`Recording could not start${code}: ${event.data?.message || 'Check camera and permissions.'}`);
+      } else if (event.type === 'recording_stopping') {
+        setIsFinalizingNativeRecording(true);
+      } else if (event.type === 'recording_stopped') {
+        setIsRecording(false);
         setIsFinalizingNativeRecording(false);
         onNativeRecordingStoppedRef.current?.();
       } else if (event.type === 'recording_stop_failed') {
@@ -912,12 +972,29 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
   const handleStartRecording = () => {
     triggerHaptic('recording_start');
-    setIsRecording(true);
     setRecordingSeconds(0);
     setRecentSavedSegment(null);
-    Bridge.startRecording();
-
     recordedBlobsRef.current = [];
+
+    if (Bridge.isAvailable()) {
+      // Native is authoritative. Do not show REC or start the timer until the
+      // native bridge emits recording_started after CameraX confirms Start.
+      setIsStartingNative(true);
+      if (startTimeoutRef.current) clearTimeout(startTimeoutRef.current);
+      startTimeoutRef.current = setTimeout(() => {
+        startTimeoutRef.current = null;
+        setIsStartingNative(false);
+        const recording = Bridge.isRecording();
+        setIsRecording(recording);
+        if (!recording) {
+          setRecentSavedSegment('Recording did not start. Check camera permissions and try again.');
+        }
+      }, 12000);
+      Bridge.startRecording();
+      return;
+    }
+
+    setIsRecording(true);
     if (streamRef.current) {
       try {
         const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
@@ -940,13 +1017,15 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
     isPausedRef.current = false;
     setIsPaused(false);
-    timerRef.current = setInterval(() => {
-      if (!isPausedRef.current) setRecordingSeconds(prev => prev + 1);
-    }, 1000);
   };
 
   const handleStopRecording = () => {
     triggerHaptic('recording_stop');
+    setIsStartingNative(false);
+    if (startTimeoutRef.current) {
+      clearTimeout(startTimeoutRef.current);
+      startTimeoutRef.current = null;
+    }
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -1373,7 +1452,14 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
         <div className="flex items-center justify-between">
           {/* Left: Quality & Recording Status & Audio VU */}
           <div className="flex items-center gap-2">
-            {isRecording ? (
+            {isStartingNative && !isRecording ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border bg-surface-100/85 border-border backdrop-blur">
+                <Loader2 size={12} className="text-primary animate-spin" />
+                <span className="text-xs font-mono tabular-nums font-bold tracking-wider text-text-main">
+                  STARTING…
+                </span>
+              </div>
+            ) : isRecording ? (
               <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur ${
                 isPaused
                   ? 'bg-amber-500/20 border-amber-400/40 shadow-[0_0_14px_rgba(245,158,11,0.3)]'
@@ -1518,11 +1604,15 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
             <button
               type="button"
               onClick={handleStartRecording}
-              disabled={isFinalizingNativeRecording}
-              aria-label={isFinalizingNativeRecording ? 'Finishing recording' : 'Start Recording'}
+              disabled={isStartingNative || isFinalizingNativeRecording}
+              aria-label={isStartingNative ? 'Starting recording' : isFinalizingNativeRecording ? 'Finishing recording' : 'Start Recording'}
               className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-white/80 bg-white/10 backdrop-blur transition-all active:scale-95 hover:border-white shadow-xl disabled:opacity-50 disabled:cursor-wait"
             >
-              <span className="w-14 h-14 rounded-full bg-danger transition-all hover:bg-rose-500 shadow-md" />
+              {isStartingNative ? (
+                <Loader2 size={30} className="text-white animate-spin" />
+              ) : (
+                <span className="w-14 h-14 rounded-full bg-danger transition-all hover:bg-rose-500 shadow-md" />
+              )}
             </button>
           )}
         </div>

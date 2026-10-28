@@ -282,7 +282,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         clipCount: 0,
         approvedClipCount: 0,
         status: sessionStatus,
-        youtubeVideoId: ytId
+        youtubeVideoId: ytId ?? undefined
       });
     });
 
@@ -378,9 +378,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         status,
         failureStatus: failureStatus ?? undefined,
         clipCount,
-        youtubeVideoId: ytId,
+        youtubeVideoId: ytId ?? undefined,
         videoUrl: ns.segments[0]?.videoUrl,
-        thumbnailUrl: sessClips[0]?.thumbnail_url,
+        thumbnailUrl: sessClips[0]?.thumbnail_url ?? undefined,
         segmentsCount: ns.segments.length,
         rawNative: ns
       });
@@ -484,7 +484,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       } else {
         res = await fetch(apiUrl('/api/youtube/ingest', pcHost), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(),
           body: JSON.stringify({ url: value })
         });
       }
@@ -778,9 +778,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         try {
           const res = await fetch(apiUrl(`/api/youtube/inbox/${target.id}`, pcHost), {
             method: 'DELETE',
-            headers: {
-              ...(Bridge.getAuthToken ? { 'x-auth-token': Bridge.getAuthToken() } : {})
-            }
+            headers: getAuthHeaders()
           });
           if (!res.ok && target.origin === 'youtube') {
             showToast('Could not delete session from PC.', 'error');
