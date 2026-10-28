@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.work.*
 import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.sync.YouTubeDirectUploadWorker
+import java.util.concurrent.TimeUnit
 
 /**
  * Lightweight BroadcastReceiver for BOOT_COMPLETED.
@@ -22,6 +23,7 @@ class BootReceiver : BroadcastReceiver() {
 
             val uploadReq = OneTimeWorkRequestBuilder<YouTubeDirectUploadWorker>()
                 .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
 
             WorkManager.getInstance(context).enqueueUniqueWork(

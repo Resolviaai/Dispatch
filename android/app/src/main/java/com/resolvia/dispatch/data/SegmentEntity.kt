@@ -26,7 +26,10 @@ data class SegmentEntity(
     // or "legacy" (locally stored OAuth). Drives status reconciliation.
     val uploadOrigin: String = "",
     val youtubeCheckAttempts: Int = 0,
-    val youtubeCheckAt: Long = 0
+    val youtubeCheckAt: Long = 0,
+    // Lease timestamp set when a worker claims the segment for upload; a fresh
+    // worker run requeues rows whose lease expired (worker died mid-upload).
+    val uploadLeaseAt: Long? = null
 )
 
 val SegmentEntity.durationSeconds: Long

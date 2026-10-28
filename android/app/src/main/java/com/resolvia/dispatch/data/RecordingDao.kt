@@ -90,8 +90,16 @@ interface RecordingDao {
     suspend fun getSegmentsAwaitingPcAck(): List<SegmentEntity>
 
     /** Segments uploaded and waiting for YouTube processing to reach a verdict. */
-    @Query("SELECT * FROM segments WHERE status = 'UPLOADED_AWAITING_PROCESSING' AND youtubeVideoId IS NOT NULL AND youtubeVideoId != '' ORDER BY youtubeCheckAttempts ASC")
+    @Query("SELECT * FROM segments WHERE (status = 'UPLOADED_AWAITING_PROCESSING' AND youtubeVideoId IS NOT NULL AND youtubeVideoId != '') OR status = 'UPLOADED_TO_YOUTUBE' ORDER BY youtubeCheckAttempts ASC")
     suspend fun getSegmentsUploadedAwaitingProcessing(): List<SegmentEntity>
+
+    /** Requeues segments whose UPLOADING lease expired (the owning worker died mid-upload). */
+    @Query("UPDATE segments SET status = 'FAILED_RETRY', uploadLeaseAt = NULL WHERE status = 'UPLOADING' AND uploadLeaseAt IS NOT NULL AND uploadLeaseAt < :staleBeforeMs")
+    suspend fun requeueStaleUploading(staleBeforeMs: Long): Int
+
+    /** Atomic claim: succeeds only while the segment is still in a pending state. */
+    @Query("UPDATE segments SET status = 'UPLOADING', uploadLeaseAt = :nowMs WHERE segmentId = :segmentId AND status IN ('QUEUED_FOR_UPLOAD', 'FAILED_RETRY', 'WAITING_FOR_YOUTUBE')")
+    suspend fun claimForUpload(segmentId: String, nowMs: Long): Int
 
     @Query("UPDATE segments SET youtubeCheckAttempts = :attempts, youtubeCheckAt = :checkedAt WHERE segmentId = :segmentId")
     suspend fun updateProcessingCheck(segmentId: String, attempts: Int, checkedAt: Long)

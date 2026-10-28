@@ -23,6 +23,7 @@ class RecordingForegroundService : LifecycleService() {
     companion object {
         private const val CHANNEL_ID = "dispatch_recording_channel"
         private const val NOTIFICATION_ID = 1001
+        private const val WAKE_LOCK_WINDOW_MS = 6 * 60 * 60 * 1000L
 
         @Volatile
         var instance: RecordingForegroundService? = null
@@ -45,6 +46,22 @@ class RecordingForegroundService : LifecycleService() {
         }
 
         fun isSessionActive(sessionId: String): Boolean = activeSessionId == sessionId
+
+        /**
+         * Extends the wake lock window. Called after each committed segment —
+         * proof the session is still progressing — so a legitimate long session
+         * keeps its CPU guarantee while a leaked service still expires on time.
+         */
+        fun renewWakeLock() {
+            instance?.let { svc ->
+                try {
+                    if (svc.wakeLock?.isHeld == true) {
+                        svc.wakeLock?.release()
+                    }
+                    svc.wakeLock?.acquire(WAKE_LOCK_WINDOW_MS)
+                } catch (_: Exception) {}
+            }
+        }
 
         @Volatile
         private var onBoundCallback: ((Boolean) -> Unit)? = null
@@ -95,7 +112,7 @@ class RecordingForegroundService : LifecycleService() {
             android.os.PowerManager.PARTIAL_WAKE_LOCK,
             "Dispatch:RecordingWakeLock"
         )
-        wakeLock?.acquire(6 * 60 * 60 * 1000L)
+        wakeLock?.acquire(WAKE_LOCK_WINDOW_MS)
 
         // Bind CameraX VideoCapture to this service's lifecycle if manager available
         cameraManager?.let { mgr ->
@@ -111,6 +128,9 @@ class RecordingForegroundService : LifecycleService() {
 
     override fun onDestroy() {
         instance = null
+        // A destroyed service cannot own a live session; clear the recovery
+        // guard so worker recovery can reclaim the session while the process lives.
+        activeSessionId = null
         onBoundCallback?.invoke(false)
         onBoundCallback = null
         try {

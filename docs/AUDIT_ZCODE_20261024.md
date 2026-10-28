@@ -10,9 +10,9 @@ Auditor: ZCode. Method: every external finding (Muse audit of `4c1aa8a`, Claude 
 ## P0 — CONFIRMED, with production impact on THIS PC
 ### 1. Real `.env` GEMINI_API_KEY overwritten by the test suite — CONFIRMED WITH LIVE IMPACT
 - `POST /api/integrations/gemini` (`dispatch/web/app.py:2225`) writes `GEMINI_API_KEY=…` into the **real** `ROOT_DIR/.env`.
-- `tests/test_phase1_security.py::test_gemini_key_injection_prevention` posts a valid-format key (`AIzaSyDas-UU7agAjyQeHDag1yOMU6qyXuxIWBE`) which the handler **accepts and writes**; the test never redirects the env path.
+- `tests/test_phase1_security.py::test_gemini_key_injection_prevention` posts a valid-format key (`[REDACTED-GOOGLE-KEY — see git history if forensically required; revoke any matching key in Cloud Console]`) which the handler **accepts and writes**; the test never redirects the env path.
 - **Verified impact:** hash comparison proves the current `.env` GEMINI_API_KEY **equals the committed test key** — the owner's real key has been overwritten by past suite runs (mine included).
-- Owner actions: (1) create a fresh key at aistudio.google.com and paste into `.env` (the old one is unrecoverable from here); (2) revoke `AIzaSyDas-UU7agAjyQeHDag1yOMU6qyXuxIWBE` in Cloud Console if it is a real key — it sits in a PUBLIC repo's history; (3) then fix root cause (configurable env path or test-scoped ROOT_DIR).
+- Owner actions: (1) create a fresh key at aistudio.google.com and paste into `.env` (the old one is unrecoverable from here); (2) revoke the committed key in Cloud Console if it is a real key — it sat in a PUBLIC repo's history until this doc was scrubbed (2026-10-28); (3) then fix root cause (configurable env path or test-scoped ROOT_DIR).
 
 ### 2. Committed Google API key in a public repo — CONFIRMED
 - Exactly one occurrence: `tests/test_phase1_security.py:45`, in tree and history (since Oct 20, `4c1aa8a`). Repo is public (anonymous clone works). Validity unprobed deliberately — treat as live until revoked. History purge = force-push, owner-authorized only.

@@ -45,6 +45,18 @@ class YouTubeDirectUploadWorker(
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
+    companion object {
+        /** Single-flight guard: overlapping drain runs race the same outbox rows. */
+        private val drainLock = java.util.concurrent.atomic.AtomicBoolean(false)
+    }
+
+    /**
+     * Framework-owned stop flag: true when WorkManager stops this worker (F,
+     * OS cancellation, new APPEND work, etc.). Upload loops check this between
+     * chunks so a cancelled worker stops generating bytes and work.
+     */
+    private val stoppedBySystem: Boolean get() = isStopped
+
     private val db = AppDatabase.getDatabase(appContext)
     private val dao = db.recordingDao()
     private val pairingManager = PairingManager(appContext)
@@ -63,6 +75,9 @@ class YouTubeDirectUploadWorker(
 
     /** Upper bound of YouTube processing checks before an explicit verdict. */
     private val maxProcessingChecks = 96
+
+    /** A UPLOADING lease older than this is stale (owner died); requeue for retry. */
+    private val staleUploadLeaseMs = 10L * 60_000L
 
     /** Outcome of asking the cloud control plane for a scoped resumable upload session. */
     private sealed class CloudSessionRequest {
@@ -188,11 +203,24 @@ class YouTubeDirectUploadWorker(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        if (!drainLock.compareAndSet(false, true)) {
+            android.util.Log.i("YouTubeUploader", "Another drain run is active; deferring")
+            return@withContext Result.retry()
+        }
+        val claimedInThisRun = mutableSetOf<String>()
+        try {
         var hasFailures = false
         val failedInThisRun = mutableSetOf<String>()
 
         // 0. Recover any interrupted sessions from prior crashes before draining
         recoverInterruptedSessions(applicationContext)
+
+        // Requeue segments stranded in UPLOADING by a hard kill: a lease older
+        // than the stale window cannot belong to a live run.
+        val requeuedUploads = dao.requeueStaleUploading(System.currentTimeMillis() - staleUploadLeaseMs)
+        if (requeuedUploads > 0) {
+            android.util.Log.w("YouTubeUploader", "Requeued $requeuedUploads stale UPLOADING segment(s) after interrupted run")
+        }
 
         // Advance segments already uploaded but still awaiting YouTube's verdict
         reconcileYouTubeProcessingStatuses()
@@ -217,13 +245,18 @@ class YouTubeDirectUploadWorker(
                 for (seg in pendingSegments) {
                     dao.updateSegmentStatus(seg.segmentId, "WAITING_FOR_YOUTUBE")
                 }
-                return@withContext Result.failure()
+                // Segments are parked in WAITING_FOR_YOUTUBE; retry with backoff
+                // rather than failing until the next external trigger.
+                return@withContext Result.retry()
             }
 
             // 2. Iterate and upload recordings directly to YouTube (Non-blocking batch)
             for (seg in pendingSegments) {
-                // If already uploaded or already has YouTube ID, check for durable PC acknowledgement before deleting
-                if (seg.status == "UPLOADED_TO_YOUTUBE" || seg.status == "PROCESSED_ON_YOUTUBE" || !seg.youtubeVideoId.isNullOrBlank()) {
+                // Status-gated only: a pending segment that still carries a video id
+                // (e.g. FAILED_YOUTUBE_PROCESSING after retry) must go through the
+                // upload path again — never be laundered into PROCESSED_ON_YOUTUBE
+                // by mere id presence.
+                if (seg.status == "UPLOADED_TO_YOUTUBE" || seg.status == "PROCESSED_ON_YOUTUBE") {
                     val videoId = seg.youtubeVideoId
                     val dispatchId = "dsp_${seg.finalizedAt ?: seg.createdAt}_${seg.segmentId.takeLast(6)}"
                     val f = File(seg.filepath)
@@ -256,10 +289,20 @@ class YouTubeDirectUploadWorker(
                     continue
                 }
 
-                val dispatchId = "dsp_${seg.finalizedAt ?: System.currentTimeMillis()}_${seg.segmentId.takeLast(6)}"
-                dao.updateSegmentStatus(seg.segmentId, "UPLOADING")
+                val dispatchId = "dsp_${seg.finalizedAt ?: seg.createdAt}_${seg.segmentId.takeLast(6)}"
                 val useCloud = decideUploadMode(seg)
+                // Atomic claim: exactly one worker run may move a pending segment
+                // into UPLOADING; the loser skips to avoid duplicate uploads.
+                if (dao.claimForUpload(seg.segmentId, System.currentTimeMillis()) != 1) {
+                    continue
+                }
+                claimedInThisRun.add(seg.segmentId)
                 dao.updateSegmentUploadOrigin(seg.segmentId, if (useCloud) "cloud" else "legacy")
+                if (!seg.youtubeVideoId.isNullOrBlank()) {
+                    // Clear stale upload evidence from a failed prior attempt; the
+                    // dispatch-id lookup below still guards genuine duplicates.
+                    dao.updateSegmentStatusAndVideoId(seg.segmentId, "UPLOADING", null)
+                }
                 val result = uploadToYouTubeDirect(accessToken, file, dispatchId, seg, useCloud)
 
                 if (result.failureReason == "WAITING_FOR_CREDENTIALS") {
@@ -357,6 +400,23 @@ class YouTubeDirectUploadWorker(
         } else {
             Result.success()
         }
+        } finally {
+            drainLock.set(false)
+            if (claimedInThisRun.isNotEmpty()) {
+                // Cancellation/kill mid-upload: release segments this run still
+                // holds in UPLOADING so the next run resumes them, not strands them.
+                withContext(kotlinx.coroutines.NonCancellable) {
+                    for (segId in claimedInThisRun) {
+                        try {
+                            if (dao.getSegmentById(segId)?.status == "UPLOADING") {
+                                dao.updateSegmentStatus(segId, "QUEUED_FOR_UPLOAD")
+                                android.util.Log.w("YouTubeUploader", "Run interrupted; requeued segment $segId from UPLOADING")
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun uploadToYouTubeDirect(
@@ -365,7 +425,8 @@ class YouTubeDirectUploadWorker(
         dispatchId: String,
         seg: com.resolvia.dispatch.data.SegmentEntity,
         useCloud: Boolean,
-        sessionRestarted: Boolean = false
+        sessionRestarted: Boolean = false,
+        initTokenRefreshed: Boolean = false
     ): DirectUploadResult {
         var currentAccessToken = accessToken.takeIf { !useCloud } ?: ""
         val segId = seg.segmentId
@@ -443,8 +504,8 @@ class YouTubeDirectUploadWorker(
                     client.newCall(initReq).execute().use { resp ->
                         if (resp.code == 401) {
                             val freshToken = refreshYouTubeToken()
-                            if (freshToken != null) {
-                                return uploadToYouTubeDirect(freshToken, file, dispatchId, seg, useCloud)
+                            if (freshToken != null && !initTokenRefreshed) {
+                                return uploadToYouTubeDirect(freshToken, file, dispatchId, seg, useCloud, initTokenRefreshed = true)
                             }
                             return DirectUploadResult(false)
                         }
@@ -508,6 +569,9 @@ class YouTubeDirectUploadWorker(
         try {
             raf = RandomAccessFile(file, "r")
             while (currentOffset < totalBytes) {
+                if (stoppedBySystem) {
+                    return DirectUploadResult(false, failureReason = "worker stopped mid-upload")
+                }
                 val start = currentOffset
                 val end = minOf(start + chunkSize - 1L, totalBytes - 1L)
                 val chunkLen = (end - start + 1L).toInt()
@@ -643,6 +707,8 @@ class YouTubeDirectUploadWorker(
                     return DirectUploadResult(false, failureReason = "Upload made no confirmed progress after ${progress.consecutiveNoProgress} responses")
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.e("YouTubeUploader", "Exception during chunked upload: ${e.message}", e)
             return DirectUploadResult(false)
@@ -718,6 +784,7 @@ class YouTubeDirectUploadWorker(
                 .get()
                 .build()
             client.newCall(req).execute().use { resp ->
+                if (resp.code == 401) return "auth_error"
                 if (!resp.isSuccessful) return "unknown"
                 val bodyStr = resp.body?.string() ?: return "unknown"
                 val json = gson.fromJson(bodyStr, JsonObject::class.java)
@@ -823,7 +890,13 @@ class YouTubeDirectUploadWorker(
                             val size = recoveryFile.length()
                             val sha = calculateSha256(recoveryFile)
                             if (recoveryFile != finalMp4 && !recoveryFile.renameTo(finalMp4)) {
+                                val expectedLength = recoveryFile.length()
                                 recoveryFile.copyTo(finalMp4, overwrite = true)
+                                if (finalMp4.length() != expectedLength) {
+                                    android.util.Log.e("YouTubeUploader", "Recovery copy truncated for ${seg.segmentId}: ${finalMp4.length()}/$expectedLength bytes; keeping source")
+                                    dao.updateSegmentStatus(seg.segmentId, "FAILED_CORRUPT")
+                                    continue
+                                }
                                 recoveryFile.delete()
                             }
                             val accurateFinalizedAt = if (extractedDurationMs > 0L) {
@@ -864,6 +937,18 @@ class YouTubeDirectUploadWorker(
                 }
                 dao.updateSession(sess.copy(status = "CRASH_RECOVERED"))
             }
+
+            // Report-only orphan scan: recording files with no DB row (e.g. after
+            // a downgrade wipe) would otherwise be invisible forever.
+            val orphanFiles = recordingsDir.listFiles { f ->
+                f.isFile && (f.name.endsWith(".mp4") || f.name.endsWith(".tmp"))
+            }?.filter { f ->
+                val derivedId = f.name.removeSuffix(".mp4").removeSuffix(".tmp")
+                dao.getSegmentById(derivedId) == null
+            }.orEmpty()
+            if (orphanFiles.isNotEmpty()) {
+                android.util.Log.w("YouTubeUploader", "Orphan recording files with no DB row (manual review): ${orphanFiles.joinToString { it.name }}")
+            }
         } catch (e: Exception) {
             android.util.Log.e("YouTubeUploader", "Session recovery error: ${e.message}", e)
         }
@@ -881,17 +966,31 @@ class YouTubeDirectUploadWorker(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun verifyHmacReceipt(
-        secret: String,
+    /**
+     * Domain-separated ack key: the PC derives the receipt HMAC key from the
+     * pairing token so a sniffed bearer header alone cannot forge receipts.
+     * Must match dispatch/sync/receiver.py: HMAC-SHA256(token, "dispatch-ack-receipt-v1").
+     */
+    private fun deriveAckReceiptKey(token: String): ByteArray? = try {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(token.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        mac.doFinal("dispatch-ack-receipt-v1".toByteArray(Charsets.UTF_8))
+    } catch (e: Exception) {
+        android.util.Log.e("YouTubeUploader", "Ack key derivation failed: ${e.message}")
+        null
+    }
+
+    private fun verifyHmacReceiptWithKey(
+        key: ByteArray,
         canonicalId: String,
         sha256: String,
         status: String,
         receivedReceipt: String
     ): Boolean {
-        if (secret.isBlank() || receivedReceipt.isBlank() || sha256.isBlank()) return false
+        if (receivedReceipt.isBlank() || sha256.isBlank()) return false
         return try {
             val mac = Mac.getInstance("HmacSHA256")
-            val keySpec = SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256")
+            val keySpec = SecretKeySpec(key, "HmacSHA256")
             mac.init(keySpec)
             val msg = "$canonicalId:${sha256.lowercase()}:$status:VERIFIED".toByteArray(Charsets.UTF_8)
             val expectedBytes = mac.doFinal(msg)
@@ -904,6 +1003,17 @@ class YouTubeDirectUploadWorker(
             android.util.Log.e("YouTubeUploader", "HMAC verification exception: ${e.message}")
             false
         }
+    }
+
+    private fun verifyHmacReceipt(
+        secret: String,
+        canonicalId: String,
+        sha256: String,
+        status: String,
+        receivedReceipt: String
+    ): Boolean {
+        if (secret.isBlank()) return false
+        return verifyHmacReceiptWithKey(secret.toByteArray(Charsets.UTF_8), canonicalId, sha256, status, receivedReceipt)
     }
 
     private suspend fun checkPcAcknowledgement(
@@ -921,7 +1031,10 @@ class YouTubeDirectUploadWorker(
             return@withContext false
         }
         try {
-            val cleanHost = pcHost.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
+            val trimmedHost = pcHost.trim().trimEnd('/')
+            val cleanHost = trimmedHost.removePrefix("http://").removePrefix("https://")
+            // Preserve an explicit https scheme; plain hosts keep legacy http.
+            val scheme = if (trimmedHost.startsWith("https://", ignoreCase = true)) "https" else "http"
             val queryParams = mutableListOf<String>()
             if (!videoId.isNullOrBlank()) queryParams.add("video_id=$videoId")
             if (!dispatchId.isNullOrBlank()) queryParams.add("dispatch_id=$dispatchId")
@@ -929,7 +1042,7 @@ class YouTubeDirectUploadWorker(
             if (sha256Hash.isNotBlank()) queryParams.add("sha256=$sha256Hash")
             if (fileSizeBytes > 0L) queryParams.add("file_size=$fileSizeBytes")
 
-            val url = "http://$cleanHost/api/sync/youtube-ack?${queryParams.joinToString("&")}"
+            val url = "$scheme://$cleanHost/api/sync/youtube-ack?${queryParams.joinToString("&")}"
 
             val reqBuilder = Request.Builder().url(url).get()
             reqBuilder.header("x-auth-token", token)
@@ -962,7 +1075,12 @@ class YouTubeDirectUploadWorker(
                     ?: segmentId
                 val status = json.get("status")?.asString ?: "DOWNLOADED"
 
-                val isReceiptValid = verifyHmacReceipt(token, canonicalId, returnedSha.ifBlank { sha256Hash }, status, receipt)
+                // Accept the domain-separated key first, then the legacy token-keyed
+                // receipt, so the PC-side rollout cannot strand existing pairings.
+                val derivedKey = deriveAckReceiptKey(token)
+                val isReceiptValid = (derivedKey != null && verifyHmacReceiptWithKey(
+                    derivedKey, canonicalId, returnedSha.ifBlank { sha256Hash }, status, receipt
+                )) || verifyHmacReceipt(token, canonicalId, returnedSha.ifBlank { sha256Hash }, status, receipt)
                 if (!isReceiptValid) {
                     android.util.Log.e("YouTubeUploader", "PC ack signature verification FAILED for $segmentId! Refusing to acknowledge.")
                     return@withContext false
@@ -1032,6 +1150,28 @@ class YouTubeDirectUploadWorker(
             // the recheck window, no matter how often the worker is triggered.
             if (seg.youtubeCheckAt != 0L && now - seg.youtubeCheckAt < processingRecheckIntervalMs) continue
 
+            if (seg.status == "UPLOADED_TO_YOUTUBE" && seg.youtubeVideoId.isNullOrBlank()) {
+                // Ambiguous completion never captured a video id; recover it via
+                // the dispatch-id lookup so processing verdicts can resume.
+                dao.updateProcessingCheck(seg.segmentId, seg.youtubeCheckAttempts, now)
+                val lookupCloud = useCloud && cloudSessionActive()
+                val lookupToken = if (lookupCloud) "" else pairingManager.youtubeAccessToken.ifBlank { refreshYouTubeToken() ?: "" }
+                if (lookupCloud || lookupToken.isNotBlank()) {
+                    val dispatchId = "dsp_${seg.finalizedAt ?: seg.createdAt}_${seg.segmentId.takeLast(6)}"
+                    val found = findExistingUploadByDispatchId(lookupToken, dispatchId, lookupCloud)
+                    if (!found.isNullOrBlank()) {
+                        dao.updateSegmentStatusAndVideoId(seg.segmentId, seg.status, found)
+                        android.util.Log.i("YouTubeUploader", "Recovered video id $found for ambiguous segment ${seg.segmentId}")
+                    }
+                }
+                continue
+            }
+
+            // Legacy-origin verdicts need a live token; a credential outage must
+            // not consume the bounded check budget.
+            val legacyToken = if (useCloud) "" else pairingManager.youtubeAccessToken.ifBlank { refreshYouTubeToken() ?: "" }
+            if (!useCloud && legacyToken.isBlank()) continue
+
             val attempts = seg.youtubeCheckAttempts + 1
             if (attempts > maxProcessingChecks) {
                 android.util.Log.e(
@@ -1043,11 +1183,17 @@ class YouTubeDirectUploadWorker(
             }
             dao.updateProcessingCheck(seg.segmentId, attempts, now)
 
-            when (val verdict = checkYouTubeProcessingStatus("", seg.youtubeVideoId ?: "", useCloud)) {
+            when (val verdict = checkYouTubeProcessingStatus(legacyToken, seg.youtubeVideoId ?: "", useCloud)) {
                 "succeeded" -> dao.updateSegmentStatus(seg.segmentId, "PROCESSED_ON_YOUTUBE")
                 "failed" -> {
                     android.util.Log.e("YouTubeUploader", "Segment ${seg.segmentId} video ${seg.youtubeVideoId} failed processing on YouTube.")
                     dao.updateSegmentStatus(seg.segmentId, "FAILED_YOUTUBE_PROCESSING")
+                }
+                "auth_error" -> {
+                    // Restore the pre-increment counter so an auth outage never
+                    // burns the budget; retried next run after token refresh.
+                    dao.updateProcessingCheck(seg.segmentId, seg.youtubeCheckAttempts, seg.youtubeCheckAt)
+                    android.util.Log.w("YouTubeUploader", "Segment ${seg.segmentId} processing check auth failed; will retry with a fresh token")
                 }
                 else -> {
                     // Not a definitive verdict; this segment stays in
