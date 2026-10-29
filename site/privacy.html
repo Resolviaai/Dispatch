@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — Dispatch</title>
+<meta name="description" content="Privacy Policy for Dispatch mobile recording and video clipping application.">
+<meta name="theme-color" content="#161616">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root{color-scheme:dark;--bg:#161616;--surface:#1C1C1C;--border:#2E2E2E;--well:#232323;--primary:#2563EB;--primary-h:#1D4ED8;--text:#F5F5F5;--muted:#A3A3A3}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.7;-webkit-font-smoothing:antialiased}
+.wrap{max-width:820px;margin:0 auto;padding:0 24px}
+header{border-bottom:1px solid var(--border);padding:20px 0}
+.nav{display:flex;align-items:center;justify-content:space-between}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px;text-decoration:none;color:var(--text)}
+.logo{width:32px;height:32px;border-radius:8px;background:var(--primary);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700}
+main{padding:48px 0 80px}
+h1{font-size:32px;font-weight:700;margin-bottom:8px}
+.effective{font-size:13px;color:var(--muted);margin-bottom:32px}
+h2{font-size:20px;font-weight:600;margin-top:36px;margin-bottom:12px;color:var(--text)}
+p{font-size:15px;color:var(--muted);margin-bottom:16px}
+ul{margin-left:24px;margin-bottom:16px;color:var(--muted);font-size:15px}
+li{margin-bottom:8px}
+a{color:var(--primary);text-decoration:none}
+a:hover{text-decoration:underline}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin:24px 0}
+footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a href="index.html" class="brand">
+      <div class="logo">D</div>
+      <span>Dispatch</span>
+    </a>
+    <a href="index.html" style="font-size:14px;color:var(--muted)">Back to Home</a>
+  </div>
+</header>
+<main>
+  <div class="wrap">
+    <h1>Privacy Policy</h1>
+    <p class="effective">Last updated: October 29, 2026</p>
+
+    <p>Dispatch ("we", "our", or "us") provides a mobile recording and AI-assisted vertical clip generation platform. This Privacy Policy describes how we collect, use, and protect your information when you use our Android application, web studio, and associated cloud services.</p>
+
+    <h2>1. Information We Collect</h2>
+    <p>We only collect information necessary to deliver video recording, processing, and publishing features:</p>
+    <ul>
+      <li><strong>Account Information:</strong> Your email address and account ID when you authenticate via Supabase.</li>
+      <li><strong>Video and Audio Content:</strong> Videos recorded through the Dispatch camera or submitted for processing. Video chunks are uploaded to your authorized cloud storage (e.g. Cloudflare R2) and/or your connected YouTube account.</li>
+      <li><strong>Third-Party Platform Tokens:</strong> When you connect YouTube, Google OAuth tokens (access tokens and refresh tokens) are securely encrypted and stored in our cloud token vault to enable direct video uploads and publishing on your behalf.</li>
+    </ul>
+
+    <h2>2. Google API Services & YouTube Data</h2>
+    <p>Dispatch uses YouTube API Services to allow you to upload raw recorded sessions and publish vertical shorts directly to your YouTube channel.</p>
+    <div class="card">
+      <p style="color:var(--text);font-weight:600;margin-bottom:8px">Google API Services User Data Policy Compliance</p>
+      <p>Dispatch's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+      <p style="margin-bottom:0">We do <strong>not</strong> use your YouTube data to train generalized AI models, and we do <strong>not</strong> sell, transfer, or disclose your personal data or Google credentials to any third parties.</p>
+    </div>
+    <p>By using Dispatch with YouTube, you also agree to be bound by the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms of Service</a> and the <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy Policy</a>.</p>
+
+    <h2>3. Revoking Access to Your Google Data</h2>
+    <p>You can view, disconnect, or revoke Dispatch's access to your YouTube and Google account at any time via your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Security Settings — Third-party apps with account access</a>.</p>
+
+    <h2>4. How We Process Videos</h2>
+    <p>Videos and audio tracks are transcribed using speech-to-text models and evaluated with Google Gemini AI strictly to identify highlight moments, generate captions, and render vertical clips. We do not retain your raw videos longer than necessary to complete processing and export.</p>
+
+    <h2>5. Data Security</h2>
+    <p>All authentication credentials and API tokens are encrypted at rest using AES-256-GCM. All communication between the mobile application, cloud workers, and third-party APIs uses TLS/HTTPS encryption.</p>
+
+    <h2>6. Contact Us</h2>
+    <p>If you have any questions about this Privacy Policy or your personal data, contact us at <a href="mailto:resolviaai@gmail.com">resolviaai@gmail.com</a> or open an issue on our <a href="https://github.com/Resolviaai/Dispatch" target="_blank" rel="noopener">GitHub repository</a>.</p>
+  </div>
+</main>
+<footer>
+  <div class="wrap">&copy; 2026 Resolviaai &middot; Dispatch</div>
+</footer>
+</body>
+</html>
