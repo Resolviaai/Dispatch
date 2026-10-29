@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test --experimental-strip-types",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "r2:cors": "wrangler r2 bucket cors set dispatch-clips --file ./r2-cors.json"
   },
   "dependencies": {
     "aws4fetch": "^1.0.20"

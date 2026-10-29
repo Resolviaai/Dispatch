@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": [
+          "http://appassets.androidplatform.net",
+          "https://appassets.androidplatform.net",
+          "https://resolviaai.github.io"
+        ],
+        "methods": ["GET", "HEAD"],
+        "headers": ["*"]
+      },
+      "exposeHeaders": ["ETag", "Content-Type", "Content-Length", "Content-Range"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
