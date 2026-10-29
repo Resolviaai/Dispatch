@@ -155,6 +155,11 @@ $updateJson = [ordered]@{
 }
 $jsonPath = Join-Path $outDir "update.json"
 Write-Utf8NoBom -Path $jsonPath -Text ($updateJson | ConvertTo-Json -Depth 5)
+$writtenManifest = Get-Content -Path $jsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ([int]$writtenManifest.versionCode -ne [int]$versionCode -or
+    "$($writtenManifest.apkSha256)" -ne $hash) {
+    throw "FATAL: written update.json does not match the built APK; refusing to hand off a corrupt manifest."
+}
 
 Write-Host "== 4. candidate artifacts in release-out/ =="
 Get-ChildItem $outDir | Format-Table Name, Length
