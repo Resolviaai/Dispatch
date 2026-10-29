@@ -1,12 +1,12 @@
 {
     "schemaVersion":  1,
     "packageName":  "com.resolvia.dispatch",
-    "versionCode":  63,
-    "versionName":  "1.6.6",
-    "releaseTag":  "v1.6.6-alpha",
-    "generatedAt":  "2026-10-29T10:43:06Z",
-    "releaseNotes":  "Uploads now pin a progress notification and keep running with the app closed. Adds Instagram/Facebook connection fixes. Full notes on the release page.",
+    "versionCode":  65,
+    "versionName":  "1.6.8",
+    "releaseTag":  "v1.6.8-alpha",
+    "generatedAt":  "2026-10-29T14:22:19Z",
+    "releaseNotes":  "Dispatch 1.6.8 alpha build.",
     "apkAsset":  "Dispatch.apk",
-    "apkSizeBytes":  21216607,
-    "apkSha256":  "66d26475c03ab22c8c658ed6a2e663349273b6cff802e42dbaa1a8c1e3836225"
+    "apkSizeBytes":  21216922,
+    "apkSha256":  "35ce42806e23cf4fc01306cfc8aacf5903941fdb9f180917537d7d65adb914e3"
 }
