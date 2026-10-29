@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from dispatch.cloud.sync import _publication_sync_payload
 from dispatch.publisher.stats import (
+    _youtube_service,
     parse_youtube_statistics_item,
     public_publication,
     refresh_publication_stats,
@@ -91,6 +92,30 @@ class TestPublicationStats(unittest.TestCase):
         record.assert_called_once()
         self.assertTrue(record.call_args.kwargs["succeeded"])
         self.assertIsNone(record.call_args.kwargs["like_count"])
+
+    def test_refresh_with_no_usable_counters_does_not_erase_previous_values(self):
+        old = publication(
+            view_count=100,
+            like_count=5,
+            comment_count=3,
+            stats_updated_at="2026-10-28T08:00:00+00:00",
+            stats_checked_at="2026-10-28T08:00:00+00:00",
+        )
+        service = FakeYouTube({"items": [{"statistics": {}}]})
+        with patch("dispatch.publisher.stats._youtube_service", return_value=service), \
+             patch("dispatch.publisher.stats.db.record_publication_stats") as record:
+            refreshed = refresh_publication_stats(old)
+        self.assertEqual(refreshed["view_count"], 100)
+        self.assertEqual(refreshed["like_count"], 5)
+        self.assertEqual(refreshed["comment_count"], 3)
+        record.assert_called_once()
+        self.assertFalse(record.call_args.kwargs["succeeded"])
+
+    def test_account_credentials_require_owner(self):
+        with patch("dispatch.youtube_connections.get_account_credentials") as lookup:
+            service = _youtube_service(publication(account_id="creator@example.com", user_id=""))
+        self.assertIsNone(service)
+        lookup.assert_not_called()
 
     def test_refresh_failure_keeps_old_stats_and_advances_retry_clock(self):
         old = publication(

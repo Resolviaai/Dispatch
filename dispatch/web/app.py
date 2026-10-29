@@ -966,23 +966,26 @@ async def get_clip_detail(clip_id: str, request: Request):
 async def get_clip_publications(clip_id: str, request: Request):
     """Published destinations with cached metrics refreshed at most once per TTL."""
     verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
     if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
 
-    rows = db.get_publications_for_clips([clip_id]).get(clip_id, [])
-    publications = []
-    for publication in rows:
+    async def refresh(publication: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            refreshed = await asyncio.to_thread(refresh_publication_stats, publication)
+            return await asyncio.wait_for(
+                asyncio.to_thread(refresh_publication_stats, publication),
+                timeout=15,
+            )
         except Exception as exc:
             logger.info("Stats refresh skipped for publication %s: %s", publication.get("id"), exc)
-            refreshed = publication
-        publications.append(public_publication(refreshed))
-    return {"publications": publications}
+            return publication
+
+    rows = db.get_publications_for_clips([clip_id]).get(clip_id, [])
+    refreshed_rows = await asyncio.gather(*(refresh(publication) for publication in rows))
+    return {"publications": [public_publication(row) for row in refreshed_rows]}
 
 
 @app.api_route("/api/clips/{clip_id}/source", methods=["GET", "HEAD"])

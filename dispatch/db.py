@@ -1438,12 +1438,23 @@ def record_publication_stats(
     """Persist a stats check; failed checks still advance the retry clock."""
     with get_db_connection() as conn:
         if succeeded:
-            conn.execute("""
+            # A hidden/absent counter must not erase a value we already know.
+            assignments = ["stats_updated_at = ?", "stats_checked_at = ?"]
+            params: List[Any] = [checked_at, checked_at]
+            for column, value in (
+                ("view_count", view_count),
+                ("like_count", like_count),
+                ("comment_count", comment_count),
+            ):
+                if value is not None:
+                    assignments.append(f"{column} = ?")
+                    params.append(value)
+            params.append(publication_id)
+            conn.execute(f"""
                 UPDATE publishing_outbox
-                SET view_count = ?, like_count = ?, comment_count = ?,
-                    stats_updated_at = ?, stats_checked_at = ?
+                SET {", ".join(assignments)}
                 WHERE id = ?
-            """, (view_count, like_count, comment_count, checked_at, checked_at, publication_id))
+            """, params)
         else:
             conn.execute("""
                 UPDATE publishing_outbox

@@ -109,7 +109,7 @@ def decrypt_refresh_token(encrypted_b64url: str) -> str:
     raise ValueError("No vault keys available")
 
 
-def _supabase_rpc(action: str, params: Dict[str, Any]) -> Any:
+def _supabase_rpc(action: str, params: Dict[str, Any], timeout_seconds: float = 20.0) -> Any:
     """Service-role RPC against the linked Supabase project. Never logs params."""
     import httpx
 
@@ -118,7 +118,7 @@ def _supabase_rpc(action: str, params: Dict[str, Any]) -> Any:
         raise VaultUnavailable("Supabase not configured on the PC")
     resp = httpx.post(f"{url}/rest/v1/rpc/{action}", json=params,
                       headers={"apikey": key, "Authorization": f"Bearer {key}",
-                               "Content-Type": "application/json"}, timeout=20.0)
+                               "Content-Type": "application/json"}, timeout=timeout_seconds)
     if resp.status_code not in (200, 204):
         raise VaultUnavailable(f"Supabase RPC {action} failed: {resp.status_code}")
     if resp.status_code == 204 or not resp.content:
@@ -155,7 +155,11 @@ def get_user_gemini_key(user_id: Optional[str] = None) -> str:
         return ""
 
 
-def get_account_credentials(account_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+def get_account_credentials(
+    account_id: str,
+    user_id: Optional[str] = None,
+    timeout_seconds: float = 20.0,
+) -> Dict[str, Any]:
     """Retrieve and decrypt credentials for a connected account.
     Returns parsed credentials dict or empty dict if not found."""
     if not account_id:
@@ -164,7 +168,7 @@ def get_account_credentials(account_id: str, user_id: Optional[str] = None) -> D
         rows = _supabase_rpc("cloud_get_credentials_by_account_id", {
             "p_account_id": str(account_id),
             "p_user_id": user_id
-        })
+        }, timeout_seconds=timeout_seconds)
         enc = rows[0]["cloud_get_credentials_by_account_id"] if isinstance(rows, list) and rows else rows
         if not enc or not isinstance(enc, str):
             return {}

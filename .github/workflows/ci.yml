@@ -68,6 +68,7 @@ jobs:
             tests.test_caption_approval_contract \
             tests.test_gemini_two_stage \
             tests.test_phase3_highlights \
+            tests.test_publication_stats \
             tests.test_sync_engine
 
   cloud-worker:

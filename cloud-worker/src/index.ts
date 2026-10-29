@@ -148,6 +148,7 @@ async function getUserYouTubeAccessToken(
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
     },
+    signal: AbortSignal.timeout(8000),
   });
   if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
   let rows = await accountRes.json() as Array<{
@@ -166,6 +167,7 @@ async function getUserYouTubeAccessToken(
         apikey: env.SUPABASE_SERVICE_ROLE_KEY,
         Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
+      signal: AbortSignal.timeout(8000),
     });
     if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
     rows = await accountRes.json() as typeof rows;
@@ -192,6 +194,7 @@ async function getUserYouTubeAccessToken(
       refresh_token: refreshToken,
       grant_type: "refresh_token",
     }),
+    signal: AbortSignal.timeout(8000),
   });
   if (!tokenRes.ok) return null;
   const tokenBody = await tokenRes.json() as { access_token?: unknown };
@@ -1802,7 +1805,7 @@ export default {
       };
       const response = await fetch(
         `${env.SUPABASE_URL}/rest/v1/publications?user_id=eq.${user.userId}&clip_id=eq.${cloudClipId}&status=eq.published&select=id,clip_id,platform,account_id,remote_id,remote_url,published_at,publish_mode,view_count,like_count,comment_count,stats_updated_at,stats_checked_at&order=published_at.asc`,
-        { headers: svcHeaders }
+        { headers: svcHeaders, signal: AbortSignal.timeout(8000) }
       );
       if (!response.ok) {
         const text = await response.text().catch(() => "");
@@ -1815,11 +1818,7 @@ export default {
         if (!publication.platform?.startsWith("youtube") || publicationStatsAreFresh(publication)) continue;
         const checkedAt = new Date().toISOString();
         const remoteId = String(publication.remote_id ?? "").trim();
-        let updated = false;
-        let views: number | null = null;
-        let likes: number | null = null;
-        let comments: number | null = null;
-
+        const metricPatch: Record<string, number> = {};
         if (remoteId) {
           try {
             let accessToken = accessTokens.get(publication.account_id);
@@ -1840,10 +1839,13 @@ export default {
                 };
                 const statistics = statsBody.items?.[0]?.statistics;
                 if (statistics) {
-                  views = parseMetric(statistics.viewCount);
-                  likes = parseMetric(statistics.likeCount);
-                  comments = parseMetric(statistics.commentCount);
-                  updated = true;
+                  const views = parseMetric(statistics.viewCount);
+                  const likes = parseMetric(statistics.likeCount);
+                  const comments = parseMetric(statistics.commentCount);
+                  // Missing/hidden counters must not erase values we already know.
+                  if (views !== null) metricPatch.view_count = views;
+                  if (likes !== null) metricPatch.like_count = likes;
+                  if (comments !== null) metricPatch.comment_count = comments;
                 }
               }
             }
@@ -1852,11 +1854,10 @@ export default {
           }
         }
 
+        const updated = Object.keys(metricPatch).length > 0;
         const patchBody = updated
           ? {
-              view_count: views,
-              like_count: likes,
-              comment_count: comments,
+              ...metricPatch,
               stats_updated_at: checkedAt,
               stats_checked_at: checkedAt,
             }
@@ -1868,13 +1869,14 @@ export default {
               method: "PATCH",
               headers: { ...svcHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
               body: JSON.stringify(patchBody),
+              signal: AbortSignal.timeout(5000),
             }
           );
           if (patch.ok) {
             if (updated) {
-              publication.view_count = views;
-              publication.like_count = likes;
-              publication.comment_count = comments;
+              if ("view_count" in metricPatch) publication.view_count = metricPatch.view_count;
+              if ("like_count" in metricPatch) publication.like_count = metricPatch.like_count;
+              if ("comment_count" in metricPatch) publication.comment_count = metricPatch.comment_count;
               publication.stats_updated_at = checkedAt;
             }
             publication.stats_checked_at = checkedAt;
@@ -2241,8 +2243,10 @@ export default {
           if (cloudClipId && Array.isArray(body?.publications)) {
             const unique = new Map<string, NonNullable<typeof body.publications>[number]>();
             for (const publication of body.publications) {
-              const platform = String(publication?.platform ?? "").toLowerCase();
-              if (!platform.startsWith("youtube")) continue;
+              const rawPlatform = String(publication?.platform ?? "").toLowerCase();
+              if (!rawPlatform.startsWith("youtube")) continue;
+              // The cloud CHECK constraint stores the provider, not the format.
+              const platform = "youtube";
               const accountRef = String(publication?.account_id ?? "").trim().slice(0, 200);
               const remoteId = String(publication?.remote_id ?? "").trim().slice(0, 128);
               if (!accountRef || !remoteId) continue;

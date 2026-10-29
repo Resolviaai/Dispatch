@@ -1571,7 +1571,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     let cancelled = false;
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
+    const timeoutId = window.setTimeout(() => controller.abort(), 20_000);
     setPublicationLoad({
       clipId: currentClip.id,
       items: cachedItems,

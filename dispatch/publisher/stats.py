@@ -74,7 +74,7 @@ def _youtube_service(publication: Dict[str, Any]):
             return None
         try:
             from dispatch.youtube_connections import get_account_credentials
-            credentials = get_account_credentials(account_id, user_id=user_id)
+            credentials = get_account_credentials(account_id, user_id=user_id, timeout_seconds=5.0)
         except Exception as exc:
             logger.debug("Stats credential lookup failed for publication %s: %s", publication.get("id"), exc)
         if not credentials:
@@ -114,8 +114,8 @@ def refresh_publication_stats(
         response = service.videos().list(part="statistics", id=remote_id).execute()
         items = response.get("items") if isinstance(response, dict) else None
         stats = parse_youtube_statistics_item(items[0] if isinstance(items, list) and items else None)
-        if stats is None:
-            raise RuntimeError("YouTube returned no statistics for this publication")
+        if stats is None or not any(value is not None for value in stats.values()):
+            raise RuntimeError("YouTube returned no usable statistics for this publication")
     except Exception as exc:
         logger.info("Publication stats unavailable for %s: %s", current.get("id"), exc)
         db.record_publication_stats(str(current.get("id") or ""), checked_at, succeeded=False)
