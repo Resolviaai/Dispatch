@@ -792,7 +792,7 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
     fun deleteSession(sessionId: String): Boolean {
         return try {
             runBlocking(Dispatchers.IO) {
-                // Reject deletion while session is actively recording or finalizing
+                // Never delete while capture/finalization for THIS session is active.
                 if ((segmenterEngine.isSessionActive && segmenterEngine.currentSessionId == sessionId) ||
                     (cameraCaptureManager.isRecording && segmenterEngine.currentSessionId == sessionId) ||
                     (com.resolvia.dispatch.recorder.RecordingForegroundService.activeSessionId == sessionId)
@@ -801,23 +801,29 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
                     return@runBlocking false
                 }
 
-                // Query ALL segments for this session without the 50-item limit
-                val segments = database.recordingDao().getSegmentsBySessionId(sessionId)
-
-                // Data-loss guard: refuse deletion while any segment is queued,
-                // in flight, or waiting for credentials — deleting would orphan
-                // an upload the worker is about to run (files + DB rows gone).
-                val pendingUploadStatuses = setOf("QUEUED_FOR_UPLOAD", "UPLOADING", "WAITING_FOR_YOUTUBE", "FAILED_RETRY", "FAILED_YOUTUBE_PROCESSING")
-                if (segments.any { it.status in pendingUploadStatuses }) {
-                    android.util.Log.w(
-                        "DispatchBridge",
-                        "Refused to delete session $sessionId: one or more segments have an upload pending"
-                    )
-                    return@runBlocking false
-                }
-
-                var allFilesDeleted = true
+                // Query ALL segments for this session without the 50-item limit
+                val segments = database.recordingDao().getSegmentsBySessionId(sessionId)
+                val staleLeaseBeforeMs = System.currentTimeMillis() - STALE_UPLOAD_LEASE_MS
 
+                // Freeze queued/failed uploads first so the worker cannot claim them
+                // after we start deleting files. A live UPLOADING lease still blocks
+                // deletion; the transaction rolls back if any such segment exists.
+                if (segments.isNotEmpty()) {
+                    try {
+                        database.withTransaction {
+                            val marked = database.recordingDao()
+                                .markSessionSegmentsDeleting(sessionId, staleLeaseBeforeMs)
+                            if (marked != segments.size) {
+                                throw IllegalStateException("an upload is still active")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("DispatchBridge", "Refused to delete session $sessionId: ${e.message}")
+                        return@runBlocking false
+                    }
+                }
+
+                var allFilesDeleted = true
                 for (s in segments) {
                     try {
                         val f = java.io.File(s.filepath)
@@ -838,20 +844,26 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
                     }
                 }
 
-                if (allFilesDeleted) {
+                if (!allFilesDeleted) {
+                    // Put the original upload states back rather than leaving rows frozen.
                     database.withTransaction {
                         for (s in segments) {
-                            database.recordingDao().deleteSegment(s.segmentId)
-                            database.recordingDao().deleteOutboxItem(s.segmentId)
+                            database.recordingDao().updateSegmentStatus(s.segmentId, s.status)
                         }
-                        database.recordingDao().deleteSegmentsBySessionId(sessionId)
-                        database.recordingDao().deleteSession(sessionId)
                     }
-                    true
-                } else {
                     android.util.Log.w("DispatchBridge", "Session $sessionId deletion incomplete: some files could not be removed")
-                    false
+                    return@runBlocking false
                 }
+
+                database.withTransaction {
+                    for (s in segments) {
+                        database.recordingDao().deleteSegment(s.segmentId)
+                        database.recordingDao().deleteOutboxItem(s.segmentId)
+                    }
+                    database.recordingDao().deleteSegmentsBySessionId(sessionId)
+                    database.recordingDao().deleteSession(sessionId)
+                }
+                true
             }
         } catch (e: Exception) {
             android.util.Log.e("DispatchBridge", "deleteSession failed: ${e.message}")
@@ -859,7 +871,7 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
         }
     }
 
-    @JavascriptInterface
+@JavascriptInterface
     fun openNativePreview(idOrSessionId: String): Boolean {
         return try {
             val file = runBlocking(Dispatchers.IO) {

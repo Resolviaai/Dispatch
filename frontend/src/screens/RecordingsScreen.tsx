@@ -514,6 +514,32 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     showToast(`${label} copied`);
   };
 
+  const handleReprocessSession = (session: UnifiedSession) => {
+    if (session.origin === 'phone' && !session.youtubeVideoId) {
+      // Nothing exists on YouTube yet, so "reprocess" must retry the recording upload.
+      onRetryUpload(session.id);
+      showToast('Upload retry queued. Processing follows automatically.');
+      return;
+    }
+    if (session.youtubeVideoId) {
+      handleImportSubmit(`https://youtu.be/${session.youtubeVideoId}`);
+      return;
+    }
+    showToast('This session has no uploaded source to re-process.', 'error');
+  };
+
+  const countPendingUploads = (session: UnifiedSession): number => {
+    if (session.origin !== 'phone') return 0;
+    const pending = new Set([
+      'QUEUED_FOR_UPLOAD',
+      'UPLOADING',
+      'WAITING_FOR_YOUTUBE',
+      'FAILED_RETRY',
+      'FAILED_YOUTUBE_PROCESSING',
+    ]);
+    return session.rawNative?.segments.filter(segment => pending.has(segment.status)).length ?? 0;
+  };
+
   // =========================================================================
   // VIEW: SESSION DETAILS PAGE (Full Screen workstation)
   // =========================================================================
@@ -791,17 +817,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
               <button
                 type="button"
-                onClick={() => {
-                  if (s.youtubeVideoId) {
-                    handleImportSubmit(`https://youtu.be/${s.youtubeVideoId}`);
-                  } else {
-                    showToast('Re-processing on PC…');
-                  }
-                }}
+                onClick={() => handleReprocessSession(s)}
                 className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
               >
                 <RotateCw size={13} />
-                <span>Re-process</span>
+                <span>{s.origin === 'phone' && !s.youtubeVideoId ? 'Retry Upload' : 'Re-process'}</span>
               </button>
 
               <button
@@ -829,7 +849,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       if (target.origin === 'phone') {
         const ok = Bridge.deleteSession(target.id);
         if (!ok) {
-          showToast('Could not delete session from device.', 'error');
+          showToast(
+            target.status === 'uploading'
+              ? 'This recording is uploading right now. Try deleting it again after the upload stops.'
+              : 'Could not delete the local recording. Retry in a moment.',
+            'error'
+          );
           return;
         }
       }
@@ -1213,17 +1238,17 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <button
               type="button"
               onClick={() => {
-                if (currentSessionDetail.youtubeVideoId) {
-                  handleImportSubmit(`https://youtu.be/${currentSessionDetail.youtubeVideoId}`);
-                } else {
-                  showToast('Re-processing session…');
-                }
+                handleReprocessSession(currentSessionDetail);
                 setIsOptionsModalOpen(false);
               }}
               className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
             >
               <RotateCw size={14} />
-              <span>Re-process</span>
+              <span>
+                {currentSessionDetail.origin === 'phone' && !currentSessionDetail.youtubeVideoId
+                  ? 'Retry Upload'
+                  : 'Re-process'}
+              </span>
             </button>
 
             <button
@@ -1252,6 +1277,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <p className="text-xs text-text-secondary leading-relaxed">
               Delete <strong className="text-text-main">{showConfirmDelete.title}</strong> from Sessions? Your existing clips will stay saved in the Clips tab.
             </p>
+            {countPendingUploads(showConfirmDelete) > 0 && (
+              <p className="text-xs leading-relaxed rounded-xl chip-warning border px-3 py-2">
+                {showConfirmDelete.status === 'uploading'
+                  ? 'This recording is currently uploading. Deleting will be refused until the upload stops.'
+                  : 'This recording has not finished uploading. Deleting it will permanently remove the local recording and cancel the pending upload.'}
+              </p>
+            )}
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -1263,9 +1295,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <button
                 type="button"
                 onClick={() => handleDeleteSession(showConfirmDelete)}
-                className="min-h-[44px] px-4 rounded-xl bg-danger hover:bg-red-600 text-white text-xs font-semibold active:scale-[0.98] shadow-sm transition-colors"
+                disabled={showConfirmDelete.status === 'uploading'}
+                className="min-h-[44px] px-4 rounded-xl bg-danger hover:bg-red-600 text-white text-xs font-semibold active:scale-[0.98] shadow-sm transition-colors disabled:opacity-40"
               >
-                Delete
+                {countPendingUploads(showConfirmDelete) > 0 ? 'Delete Anyway' : 'Delete'}
               </button>
             </div>
           </div>

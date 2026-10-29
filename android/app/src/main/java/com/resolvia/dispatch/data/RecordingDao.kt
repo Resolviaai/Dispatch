@@ -83,6 +83,17 @@ interface RecordingDao {
     @Query("DELETE FROM segments WHERE sessionId = :sessionId")
     suspend fun deleteSegmentsBySessionId(sessionId: String)
 
+    /**
+     * Freeze queued/failed segments before local deletion so the upload worker
+     * cannot claim them. A fresh UPLOADING lease is left untouched.
+     */
+    @Query("""
+        UPDATE segments SET status = 'DELETING', uploadLeaseAt = NULL
+        WHERE sessionId = :sessionId
+          AND (status != 'UPLOADING' OR uploadLeaseAt IS NULL OR uploadLeaseAt < :staleBeforeMs)
+    """)
+    suspend fun markSessionSegmentsDeleting(sessionId: String, staleBeforeMs: Long): Int
+
     @Query("DELETE FROM sessions WHERE sessionId = :sessionId")
     suspend fun deleteSession(sessionId: String)
 
