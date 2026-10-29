@@ -4,9 +4,9 @@
     "versionCode":  61,
     "versionName":  "1.6.4",
     "releaseTag":  "v1.6.4-alpha",
-    "generatedAt":  "2026-10-29T08:18:58Z",
+    "generatedAt":  "2026-10-29T08:54:05Z",
     "releaseNotes":  "Dispatch 1.6.4 alpha build.",
     "apkAsset":  "Dispatch.apk",
-    "apkSizeBytes":  21215797,
-    "apkSha256":  "e45eb7d1a8de44c06f796dbd6f340a8e2e9761439775ec4b7662bc6958e06c17"
+    "apkSizeBytes":  21216272,
+    "apkSha256":  "0fe92af62441e5cacfbb181adadd9c32e5cd285888ca2b7016a2494d4cdbfbeb"
 }
