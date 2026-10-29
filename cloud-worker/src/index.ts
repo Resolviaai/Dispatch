@@ -172,6 +172,28 @@ async function getUserYouTubeAccessToken(
     if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
     rows = await accountRes.json() as typeof rows;
   }
+  // A reconnect replaces the connected-account row (and its UUID). Devices can
+  // still hold the previous id until the next session push. Recover only when
+  // the account is unambiguous; multiple channels must fail closed.
+  if (rows.length === 0) {
+    const fallbackUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+    fallbackUrl.searchParams.set("user_id", `eq.${userId}`);
+    fallbackUrl.searchParams.set("provider", "eq.youtube");
+    fallbackUrl.searchParams.set("select", "credentials_encrypted,metadata,account_email,account_id");
+    fallbackUrl.searchParams.set("limit", "2");
+    const fallbackRes = await fetch(fallbackUrl, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!fallbackRes.ok) throw new Error(`YouTube account lookup failed: ${fallbackRes.status}`);
+    const candidates = await fallbackRes.json() as typeof rows;
+    if (Array.isArray(candidates) && candidates.length === 1) {
+      rows = candidates;
+    }
+  }
   const account = rows[0];
   const requireSourceVault = options.requireSourceVault !== false;
   if (!account?.credentials_encrypted || (requireSourceVault && account.metadata?.is_source_vault === false)) return null;
