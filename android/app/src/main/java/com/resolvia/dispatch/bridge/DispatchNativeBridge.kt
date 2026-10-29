@@ -760,10 +760,37 @@ class DispatchNativeBridge(
                     database.recordingDao().getAllSegmentsList()
                 }
 com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
+                val outboxProgress = database.recordingDao().getAllOutboxProgress().associateBy { it.segmentId }
+                val wifiOnly = pairingManager.isWifiOnlyEnabled
+                val networkCaps = (activity.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)
+                    ?.let { cm -> cm.getNetworkCapabilities(cm.activeNetwork) }
+                val onWifi = networkCaps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+                val cloudReady = pairingManager.cloudAccessToken.isNotBlank() && pairingManager.rawVaultAccountId.isNotBlank()
+                fun uploadReason(status: String): String = when {
+                    status == "UPLOADING" -> "Uploading to YouTube"
+                    status == "QUEUED_FOR_UPLOAD" && wifiOnly && !onWifi -> "Waiting for Wi-Fi"
+                    status == "QUEUED_FOR_UPLOAD" && !cloudReady -> "Waiting for YouTube connection"
+                    status == "QUEUED_FOR_UPLOAD" -> "Waiting to start upload"
+                    status == "WAITING_FOR_YOUTUBE" && wifiOnly && !onWifi -> "Waiting for Wi-Fi"
+                    status == "WAITING_FOR_YOUTUBE" -> "Waiting for YouTube connection"
+                    status == "FAILED_RETRY" && wifiOnly && !onWifi -> "Waiting for Wi-Fi"
+                    status == "FAILED_RETRY" -> "Retrying upload"
+                    status == "FAILED_YOUTUBE_PROCESSING" -> "YouTube processing failed"
+                    status == "UPLOADED_TO_YOUTUBE" || status == "UPLOADED_AWAITING_PROCESSING" || status == "PROCESSED_ON_YOUTUBE" -> "YouTube processing"
+                    status.startsWith("FAILED_") || status.startsWith("ERROR_") -> "Recording upload failed"
+                    else -> ""
+                }
                 val jsonArr = JsonArray()
                 for (s in segments) {
                     val localFile = java.io.File(s.filepath)
                     val fileExists = localFile.exists() && localFile.length() > 0L
+                    val progress = outboxProgress[s.segmentId]
+                    val totalUploadBytes = if (s.fileSizeBytes > 0L) s.fileSizeBytes else localFile.length().coerceAtLeast(0L)
+                    val uploadedBytes = when (s.status) {
+                        "UPLOADED_TO_YOUTUBE", "UPLOADED_AWAITING_PROCESSING", "PROCESSED_ON_YOUTUBE" -> totalUploadBytes
+                        else -> (progress?.remoteOffset ?: 0L).coerceIn(0L, totalUploadBytes)
+                    }
+                    val reason = uploadReason(s.status)
                     val obj = JsonObject().apply {
                         addProperty("segmentId", s.segmentId)
                         addProperty("sessionId", s.sessionId)
@@ -778,6 +805,9 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
                         addProperty("durationSeconds", s.durationSeconds)
                         addProperty("youtubeVideoId", s.youtubeVideoId)
                         addProperty("userId", s.userId)
+                        addProperty("uploadedBytes", uploadedBytes)
+                        addProperty("uploadTotalBytes", totalUploadBytes)
+                        addProperty("uploadReason", reason)
                         addProperty("fileExists", fileExists)
                         addProperty("videoUrl", if (fileExists) com.resolvia.dispatch.media.RecordingHttpServer.mediaUrl(s.filename).orEmpty() else "")
                         // Generated on demand so segments recorded before posters

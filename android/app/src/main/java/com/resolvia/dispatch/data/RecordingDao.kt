@@ -74,6 +74,9 @@ interface RecordingDao {
     @Query("SELECT remoteOffset FROM outbox WHERE segmentId = :segmentId")
     suspend fun getOutboxOffset(segmentId: String): Long?
 
+    @Query("SELECT segmentId, remoteOffset, status, lastError FROM outbox")
+    suspend fun getAllOutboxProgress(): List<OutboxProgress>
+
     @Query("DELETE FROM outbox WHERE segmentId = :segmentId")
     suspend fun deleteOutboxItem(segmentId: String)
 

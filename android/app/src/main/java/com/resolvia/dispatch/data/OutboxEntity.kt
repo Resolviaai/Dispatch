@@ -14,3 +14,11 @@ data class OutboxEntity(
     val lastError: String? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )
+
+/** Read-only projection for the Sessions upload progress display. */
+data class OutboxProgress(
+    val segmentId: String,
+    val remoteOffset: Long,
+    val status: String,
+    val lastError: String?
+)

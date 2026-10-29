@@ -12,6 +12,12 @@ export interface RecordingItem {
   createdAt: number;
   finalizedAt?: number | null;
   durationSeconds?: number;
+  /** Confirmed bytes persisted by the native upload worker. */
+  uploadedBytes?: number;
+  /** File size the uploader is targeting, when known. */
+  uploadTotalBytes?: number;
+  /** Honest queued/uploading reason, e.g. Waiting for Wi-Fi. */
+  uploadReason?: string;
   videoUrl?: string;
   /** Poster JPEG served from /recordings/; empty when none has been generated yet. */
   thumbnailUrl?: string;

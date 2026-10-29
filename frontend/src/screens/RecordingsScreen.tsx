@@ -64,6 +64,9 @@ export interface UnifiedSession {
   thumbnailUrl?: string;
   errorMessage?: string | null;
   segmentsCount?: number;
+  uploadedBytes?: number;
+  uploadTotalBytes?: number;
+  uploadReason?: string;
   rawNative?: SessionGroup;
   rawInbox?: YouTubeInboxItem;
 }
@@ -341,6 +344,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       });
 
       const ytId = ns.youtubeVideoId || ns.segments.find(s => s.youtubeVideoId)?.youtubeVideoId;
+      const uploadedBytes = ns.segments.reduce((sum, segment) => sum + Math.max(0, segment.uploadedBytes ?? 0), 0);
+      const uploadTotalBytes = ns.segments.reduce(
+        (sum, segment) => sum + Math.max(0, segment.uploadTotalBytes ?? segment.fileSizeBytes ?? 0),
+        0
+      );
+      const uploadReason =
+        ns.segments.find(segment => segment.status === 'UPLOADING')?.uploadReason
+        ?? ns.segments.find(segment => segment.status === 'FAILED_RETRY')?.uploadReason
+        ?? ns.segments.find(segment => segment.status === 'WAITING_FOR_YOUTUBE')?.uploadReason
+        ?? ns.segments.find(segment => segment.status === 'QUEUED_FOR_UPLOAD')?.uploadReason
+        ?? ns.segments.find(segment => segment.uploadReason)?.uploadReason
+        ?? '';
 
       const sessClips = clips.filter(c =>
         c.session_id === ns.sessionId ||
@@ -385,6 +400,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         // for recordings that have not been processed yet.
         thumbnailUrl: ns.segments[0]?.thumbnailUrl || sessClips[0]?.thumbnail_url || undefined,
         segmentsCount: ns.segments.length,
+        uploadedBytes,
+        uploadTotalBytes,
+        uploadReason,
         rawNative: ns
       });
     });
@@ -455,6 +473,25 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const processingCount = unifiedSessions.filter(s => s.status === 'processing').length;
   const queuedCount = unifiedSessions.filter(s => s.status === 'queued' || s.status === 'uploading').length;
   const failedCount = unifiedSessions.filter(s => s.status === 'failed').length;
+
+  const showUploadProgress = (session: UnifiedSession): boolean =>
+    session.origin === 'phone'
+    && (session.status === 'queued' || session.status === 'uploading' || session.status === 'failed')
+    && (session.uploadTotalBytes ?? 0) > 0;
+
+  const uploadProgressPct = (session: UnifiedSession): number => {
+    const total = session.uploadTotalBytes ?? 0;
+    if (total <= 0) return 0;
+    return Math.min(100, Math.max(0, Math.round(((session.uploadedBytes ?? 0) / total) * 100)));
+  };
+
+  const uploadReasonLabel = (session: UnifiedSession): string =>
+    session.uploadReason
+    || (session.status === 'uploading'
+      ? 'Uploading to YouTube'
+      : session.status === 'failed'
+        ? 'Upload failed'
+        : 'Waiting to start upload');
 
   // YouTube Link Extraction & Submission
   const extractVideoId = (raw: string): string | null => {
@@ -768,6 +805,30 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               </span>
             </div>
           </div>
+
+          {showUploadProgress(s) && (
+            <div className="p-3 rounded-xl bg-surface-2 border border-border space-y-2">
+              <div className="flex items-center justify-between gap-3 text-xs">
+                <span className="text-text-secondary truncate">{uploadReasonLabel(s)}</span>
+                <span className="font-mono font-semibold tabular-nums text-text-main shrink-0">
+                  {uploadProgressPct(s)}%
+                </span>
+              </div>
+              <div
+                className="h-1.5 rounded-full bg-surface-3 overflow-hidden"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={uploadProgressPct(s)}
+                aria-valuetext={`${formatBytes(s.uploadedBytes ?? 0)} of ${formatBytes(s.uploadTotalBytes ?? 0)} confirmed`}
+              >
+                <div
+                  className="h-full bg-primary transition-[width] duration-300"
+                  style={{ width: `${uploadProgressPct(s)}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           {/* PRIMARY HERO CTA & WORKSTATION ACTIONS */}
           <div className="space-y-2.5 pt-1">
@@ -1155,10 +1216,34 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                       <span className="text-status-warning font-medium">Processing</span>
                     ) : session.status === 'failed' ? (
                       <span className="text-danger font-medium">Failed</span>
+                    ) : session.status === 'uploading' ? (
+                      <span className="text-primary font-medium">Uploading</span>
                     ) : (
                       <span>Queued</span>
                     )}
                   </div>
+
+                  {showUploadProgress(session) && (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-center justify-between gap-2 text-[10px] text-text-secondary">
+                        <span className="truncate">{uploadReasonLabel(session)}</span>
+                        <span className="font-mono tabular-nums shrink-0">{uploadProgressPct(session)}%</span>
+                      </div>
+                      <div
+                        className="h-1 rounded-full bg-surface-2 overflow-hidden"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={uploadProgressPct(session)}
+                        aria-valuetext={`${formatBytes(session.uploadedBytes ?? 0)} of ${formatBytes(session.uploadTotalBytes ?? 0)}`}
+                      >
+                        <div
+                          className="h-full bg-primary transition-[width] duration-300"
+                          style={{ width: `${uploadProgressPct(session)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Kebab — circular ghost button */}
