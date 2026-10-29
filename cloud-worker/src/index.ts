@@ -223,6 +223,99 @@ async function getUserYouTubeAccessToken(
   return typeof tokenBody.access_token === "string" ? tokenBody.access_token : null;
 }
 
+/**
+ * Load a connected Meta account's page/user graph token for publication stats.
+ * Ownership is enforced by the p_user_id filter (same anti-laundering rule the
+ * credential RPCs carry): a PC may only ever resolve its own owner's accounts.
+ */
+async function loadMetaGraphToken(
+  env: Env,
+  userId: string,
+  accountId: string,
+): Promise<{ token: string; payload: Record<string, unknown> } | null> {
+  const enc = await rpcRaw(env, "cloud_get_credentials_by_account_id", {
+    p_account_id: accountId,
+    p_user_id: userId,
+  });
+  if (typeof enc !== "string" || !enc) return null;
+  const plaintext = await decryptToken(env.TOKEN_VAULT_KEY, enc);
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = JSON.parse(plaintext) as Record<string, unknown>;
+  } catch { /* bare-token payloads degrade to an empty object. */ }
+  const token = typeof payload.access_token === "string" && payload.access_token
+    ? payload.access_token
+    : typeof payload.user_access_token === "string"
+      ? payload.user_access_token
+      : "";
+  if (!token) return null;
+  return { token, payload };
+}
+
+/**
+ * Fetch engagement stats for a published meta post/target. Like the YouTube
+ * videos().list path, this never needs the raw credential on the PC: the worker
+ * resolves the encrypted token and performs the graph read on trusted infra.
+ */
+async function fetchMetaPublicationStats(
+  env: Env,
+  userId: string,
+  accountId: string,
+  remoteId: string,
+  provider: "instagram" | "facebook",
+): Promise<{ views: number | null; likes: number | null; comments: number | null }> {
+  const cred = await loadMetaGraphToken(env, userId, accountId);
+  if (!cred) throw new Error("no usable Meta credential for this publication");
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+  if (provider === "instagram") {
+    // like_count/comments_count are safely readable for owned media of every
+    // type; play_count only exists for VIDEO/REELS so it is a separate read.
+    const mRes = await fetch(
+      `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=media_type,like_count,comments_count&access_token=${encodeURIComponent(cred.token)}`,
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (!mRes.ok) throw new Error(`Instagram media lookup failed: ${mRes.status}`);
+    const media = await mRes.json() as Record<string, unknown>;
+    let views: number | null = null;
+    if (media.media_type === "VIDEO" || media.media_type === "REELS") {
+      const pRes = await fetch(
+        `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=play_count&access_token=${encodeURIComponent(cred.token)}`,
+        { signal: AbortSignal.timeout(8000) },
+      );
+      if (pRes.ok) {
+        const playJson = await pRes.json() as Record<string, unknown>;
+        views = num(playJson.play_count);
+      }
+    }
+    return { views, likes: num(media.like_count), comments: num(media.comments_count) };
+  }
+
+  // Facebook Page post: engagement via summary fields; views best-effort via
+  // insights (read_insights) — absent permission or non-video posts degrade to
+  // null views instead of failing the whole refresh.
+  const pRes = await fetch(
+    `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=likes.summary(total_count).limit(0),comments.summary(total_count).limit(0)&access_token=${encodeURIComponent(cred.token)}`,
+    { signal: AbortSignal.timeout(8000) },
+  );
+  if (!pRes.ok) throw new Error(`Facebook post lookup failed: ${pRes.status}`);
+  const post = await pRes.json() as Record<string, unknown>;
+  const summaryCount = (obj: unknown): unknown =>
+    (obj as { summary?: { total_count?: unknown } } | null)?.summary?.total_count;
+  let views: number | null = null;
+  const iRes = await fetch(
+    `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}/insights?metric=post_video_views&access_token=${encodeURIComponent(cred.token)}`,
+    { signal: AbortSignal.timeout(8000) },
+  );
+  if (iRes.ok) {
+    const insights = await iRes.json() as { data?: Array<{ values?: Array<{ value?: unknown }> }> };
+    const first = Array.isArray(insights.data) ? insights.data[0] : null;
+    const value = first && Array.isArray(first.values) ? first.values[0]?.value : null;
+    if (typeof value === "number" && Number.isFinite(value)) views = value;
+  }
+  return { views, likes: num(summaryCount(post.likes)), comments: num(summaryCount(post.comments)) };
+}
+
 const PUBLICATION_STATS_TTL_MS = 15 * 60 * 1000;
 
 interface CloudPublicationRow {
@@ -2208,6 +2301,31 @@ export default {
           return json(200, { report: report ?? null });
         } catch (e) {
           return json(502, { error: `consistency report failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Publication-stats proxy for Meta destinations: the PC has no Meta token
+      // (it never leaves Cloudflare), so the PC asks the worker to read the
+      // graph on its behalf. Ownership: cloud_get_credentials_by_account_id is
+      // bound to the token's X-Dispatch-User-Id.
+      if (request.method === "POST" && url.pathname === "/sync/pc/publication-stats") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const body = await readJson<{ provider?: unknown; account_id?: unknown; remote_id?: unknown }>(request);
+        if (!body) return json(400, { error: "invalid JSON body" });
+        const provider = body.provider;
+        if (provider !== "instagram" && provider !== "facebook") {
+          return json(400, { error: "provider must be instagram or facebook" });
+        }
+        const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
+        const remoteId = typeof body.remote_id === "string" ? body.remote_id.trim() : "";
+        if (!accountId || !remoteId) return json(400, { error: "account_id and remote_id are required" });
+        try {
+          const stats = await fetchMetaPublicationStats(env, userId, accountId, remoteId, provider);
+          return json(200, { found: true, stats });
+        } catch (e) {
+          return json(502, { error: `meta stats failed: ${e instanceof Error ? e.message : e}` });
         }
       }
 

@@ -6,6 +6,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+import requests
+
 from dispatch import db
 
 logger = logging.getLogger("dispatch.publisher.stats")
@@ -88,6 +90,51 @@ def _youtube_service(publication: Dict[str, Any]):
     return get_youtube_service()
 
 
+def _meta_publication_stats_via_worker(publication: Dict[str, Any], provider: str) -> Dict[str, Optional[int]]:
+    """Resolve Meta engagement stats through the cloud worker.
+
+    The PC never holds Meta access tokens (they stay encrypted in the worker's
+    vault), so the read proxies through POST /sync/pc/publication-stats —
+    authenticated with the PC worker token and bound to this publication's
+    owner via X-Dispatch-User-Id.
+    """
+    from dispatch.cloud import sync as cloud_sync
+    from dispatch.cloud.config import load_cloud_config
+
+    if not load_cloud_config().worker_ready():
+        raise RuntimeError("cloud worker not configured (Meta stats unavailable)")
+
+    user_id = str(publication.get("user_id") or "").strip()
+    response = requests.post(
+        f"{cloud_sync._worker_base()}/sync/pc/publication-stats",
+        headers=cloud_sync._worker_headers(user_id),
+        json={
+            "provider": provider,
+            "account_id": str(publication.get("account_id") or "").strip(),
+            "remote_id": str(publication.get("remote_id") or "").strip(),
+        },
+        timeout=10,
+    )
+    if response.status_code != 200:
+        detail = ""
+        try:
+            detail = str((response.json() or {}).get("error") or "")[:200]
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"worker stats endpoint returned {response.status_code}" + (f": {detail}" if detail else "")
+        )
+    payload = response.json()
+    if not payload.get("found"):
+        raise RuntimeError("worker could not resolve stats for this publication")
+    raw = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+    return {
+        "views": _count(raw.get("views")),
+        "likes": _count(raw.get("likes")),
+        "comments": _count(raw.get("comments")),
+    }
+
+
 def refresh_publication_stats(
     publication: Dict[str, Any],
     now: Optional[datetime] = None,
@@ -95,7 +142,8 @@ def refresh_publication_stats(
     """Return this publication with refreshed cached stats when the TTL allows it."""
     current = dict(publication)
     platform = str(current.get("platform") or "").lower()
-    if platform not in ("youtube", "youtube_shorts"):
+    meta_provider = {"instagram": "instagram", "facebook": "facebook"}.get(platform)
+    if platform not in ("youtube", "youtube_shorts") and meta_provider is None:
         return current
     if stats_check_is_fresh(current, now):
         return current
@@ -108,14 +156,19 @@ def refresh_publication_stats(
         return current
 
     try:
-        service = _youtube_service(current)
-        if service is None:
-            raise RuntimeError("no usable YouTube credential for this publication")
-        response = service.videos().list(part="statistics", id=remote_id).execute()
-        items = response.get("items") if isinstance(response, dict) else None
-        stats = parse_youtube_statistics_item(items[0] if isinstance(items, list) and items else None)
-        if stats is None or not any(value is not None for value in stats.values()):
-            raise RuntimeError("YouTube returned no usable statistics for this publication")
+        if meta_provider is not None:
+            stats = _meta_publication_stats_via_worker(current, meta_provider)
+            if not any(value is not None for value in stats.values()):
+                raise RuntimeError(f"{meta_provider.title()} returned no usable statistics for this publication")
+        else:
+            service = _youtube_service(current)
+            if service is None:
+                raise RuntimeError("no usable YouTube credential for this publication")
+            response = service.videos().list(part="statistics", id=remote_id).execute()
+            items = response.get("items") if isinstance(response, dict) else None
+            stats = parse_youtube_statistics_item(items[0] if isinstance(items, list) and items else None)
+            if stats is None or not any(value is not None for value in stats.values()):
+                raise RuntimeError("YouTube returned no usable statistics for this publication")
     except Exception as exc:
         logger.info("Publication stats unavailable for %s: %s", current.get("id"), exc)
         db.record_publication_stats(str(current.get("id") or ""), checked_at, succeeded=False)

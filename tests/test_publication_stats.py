@@ -1,3 +1,4 @@
+import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -167,6 +168,115 @@ class TestPublicationStats(unittest.TestCase):
         self.assertEqual(payload["stats"]["views"], 1240)
         self.assertNotIn("user_id", payload)
         self.assertNotIn("account_id", payload)
+
+
+class FakeMetaResponse:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {}
+
+    def json(self):
+        return self._payload
+
+
+class TestMetaPublicationStats(unittest.TestCase):
+    def _ready_config(self):
+        return types.SimpleNamespace(worker_ready=lambda: True)
+
+    def test_refresh_instagram_success_via_worker(self):
+        old = publication(
+            platform="instagram",
+            account_id="ig_acct",
+            remote_id="1790001",
+            remote_url=None,
+        )
+        sent = {}
+
+        def fake_post(url, **kwargs):
+            sent["url"] = url
+            sent["headers"] = kwargs.get("headers") or {}
+            sent["json"] = kwargs.get("json")
+            return FakeMetaResponse(200, {"found": True, "stats": {"views": 555, "likes": 44, "comments": 6}})
+
+        with patch("dispatch.publisher.stats.requests.post", side_effect=fake_post), \
+             patch("dispatch.cloud.config.load_cloud_config", return_value=self._ready_config()), \
+             patch("dispatch.publisher.stats.db.record_publication_stats") as record:
+            refreshed = refresh_publication_stats(old)
+
+        self.assertTrue(sent["url"].endswith("/sync/pc/publication-stats"))
+        self.assertEqual(sent["headers"].get("X-Dispatch-User-Id"), "user_1")
+        self.assertEqual(sent["json"], {"provider": "instagram", "account_id": "ig_acct", "remote_id": "1790001"})
+        self.assertEqual(
+            [refreshed["view_count"], refreshed["like_count"], refreshed["comment_count"]],
+            [555, 44, 6],
+        )
+        record.assert_called_once()
+        self.assertTrue(record.call_args.kwargs["succeeded"])
+
+    def test_refresh_instagram_failure_keeps_old_stats_and_advances_retry_clock(self):
+        old = publication(
+            platform="instagram",
+            account_id="ig_acct",
+            remote_id="1790001",
+            remote_url=None,
+            view_count=100,
+            like_count=5,
+            comment_count=3,
+            stats_updated_at="2026-10-28T08:00:00+00:00",
+            stats_checked_at="2026-10-28T08:00:00+00:00",
+        )
+        with patch(
+            "dispatch.publisher.stats.requests.post",
+            side_effect=RuntimeError("worker stats endpoint returned 502: meta stats failed: graph down"),
+        ), \
+             patch("dispatch.cloud.config.load_cloud_config", return_value=self._ready_config()), \
+             patch("dispatch.publisher.stats.db.record_publication_stats") as record:
+            refreshed = refresh_publication_stats(old)
+
+        self.assertEqual(refreshed["view_count"], 100)
+        self.assertEqual(refreshed["like_count"], 5)
+        self.assertEqual(refreshed["comment_count"], 3)
+        self.assertIsNotNone(refreshed["stats_checked_at"])
+        record.assert_called_once()
+        self.assertFalse(record.call_args.kwargs["succeeded"])
+
+    def test_refresh_facebook_success_without_views(self):
+        old = publication(platform="facebook", account_id="page_1", remote_id="fb_video_1", remote_url=None)
+        with patch(
+            "dispatch.publisher.stats.requests.post",
+            return_value=FakeMetaResponse(200, {"found": True, "stats": {"views": None, "likes": 12, "comments": 3}}),
+        ), \
+             patch("dispatch.cloud.config.load_cloud_config", return_value=self._ready_config()), \
+             patch("dispatch.publisher.stats.db.record_publication_stats") as record:
+            refreshed = refresh_publication_stats(old)
+
+        self.assertEqual(refreshed["like_count"], 12)
+        self.assertEqual(refreshed["comment_count"], 3)
+        self.assertIsNone(refreshed["view_count"])
+        record.assert_called_once()
+        self.assertTrue(record.call_args.kwargs["succeeded"])
+
+    def test_refresh_meta_worker_not_ready_marks_failure(self):
+        old = publication(platform="instagram", account_id="ig_acct", remote_id="1790001", remote_url=None)
+        with patch("dispatch.cloud.config.load_cloud_config",
+                   return_value=types.SimpleNamespace(worker_ready=lambda: False)), \
+             patch("dispatch.publisher.stats.requests.post") as post, \
+             patch("dispatch.publisher.stats.db.record_publication_stats") as record:
+            refreshed = refresh_publication_stats(old)
+
+        post.assert_not_called()
+        record.assert_called_once()
+        self.assertFalse(record.call_args.kwargs["succeeded"])
+
+    def test_refresh_skips_unsupported_platform_without_worker_call(self):
+        old = publication(platform="linkedin")
+        with patch("dispatch.publisher.stats.requests.post") as post, \
+             patch("dispatch.publisher.stats.db.record_publication_stats") as record:
+            refreshed = refresh_publication_stats(old)
+
+        post.assert_not_called()
+        record.assert_not_called()
+        self.assertIsNone(refreshed["view_count"])
 
 
 if __name__ == "__main__":
