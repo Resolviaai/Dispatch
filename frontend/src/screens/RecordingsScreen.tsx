@@ -98,6 +98,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<UnifiedSession | null>(null);
+  const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -845,8 +846,16 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       setShowConfirmDelete(null);
       return;
     }
+
+    // Dismiss the confirmation before touching the device so the user gets
+    // immediate feedback while the native delete runs.
+    setShowConfirmDelete(null);
+
     try {
       if (target.origin === 'phone') {
+        setDeletingSession({ id: target.id, title: target.title });
+        // Let React paint the progress state before the synchronous bridge call.
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
         const ok = Bridge.deleteSession(target.id);
         if (!ok) {
           showToast(
@@ -857,24 +866,25 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
           );
           return;
         }
-      }
-      if (pcHost) {
+        // Phone sessions have no PC inbox row; do not block their deletion on
+        // an unreachable PC request.
+      } else if (pcHost) {
         try {
           const res = await fetch(apiUrl(`/api/youtube/inbox/${target.id}`, pcHost), {
             method: 'DELETE',
-            headers: getAuthHeaders()
+            headers: getAuthHeaders(),
+            signal: AbortSignal.timeout(8000),
           });
-          if (!res.ok && target.origin === 'youtube') {
+          if (!res.ok) {
             showToast('Could not delete session from PC.', 'error');
             return;
           }
-        } catch (e) {
-          if (target.origin === 'youtube') {
-            showToast('Could not reach PC to delete session.', 'error');
-            return;
-          }
+        } catch {
+          showToast('Could not reach PC to delete session.', 'error');
+          return;
         }
       }
+
       setInboxItems(prev => prev.filter(i => i.video_id !== target.id && (target.rawInbox ? i.video_id !== target.rawInbox.video_id : true)));
       if (onDeleteSession) {
         onDeleteSession(target.id);
@@ -884,6 +894,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       console.error('Delete session error:', err);
       showToast('Could not delete session.', 'error');
     } finally {
+      setDeletingSession(null);
       setShowConfirmDelete(null);
       if (selectedSessionId === target.id) {
         setViewMode('library');
@@ -1300,6 +1311,22 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               >
                 {countPendingUploads(showConfirmDelete) > 0 ? 'Delete Anyway' : 'Delete'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deletingSession && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="w-full max-w-xs rounded-2xl bg-surface border border-border p-4 flex items-center gap-3 shadow-2xl">
+            <span className="w-5 h-5 rounded-full border-2 border-border border-t-primary animate-spin shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-text-main">Deleting session…</p>
+              <p className="text-xs text-text-muted truncate">{deletingSession.title}</p>
             </div>
           </div>
         </div>
