@@ -1489,6 +1489,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       currentSession().then(sess => {
         if (sess?.access_token) {
           listConnectedAccounts(sess.access_token).then(accs => {
+            if (accs === null) return; // transient fetch failure: skip preselect this render
             setConnectedAccounts(accs);
             const initialPlatforms: string[] = [];
             const initialMap: Record<string, string> = {};

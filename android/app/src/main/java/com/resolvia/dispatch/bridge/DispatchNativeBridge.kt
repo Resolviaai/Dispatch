@@ -1207,24 +1207,41 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
 
     @JavascriptInterface
 
-    fun pushCloudSession(payload: String?): Boolean {
-
-        val raw = payload?.trim() ?: ""
-
-        if (raw.isEmpty() || raw == "{}") {
-
-            pairingManager.clearCloudAccessToken()
-
-            pairingManager.rawVaultAccountId = ""
-
-            return true
-
+    fun pushCloudSession(payload: String?): Boolean {
+
+        val raw = payload?.trim() ?: ""
+
+        if (raw.isEmpty() || raw == "{}") {
+
+            // 2026-10-29: an empty or {} payload means "the WebView has no session
+            // yet" (e.g. the initial push racing the Supabase session restore).
+            // Wiping the stored pairing here destroyed valid sessions for the
+            // rest of that run — uploads parked forever with no visibility. A
+            // real sign-out now sends the explicit {"cleared":true} marker; an
+            // empty push is a deliberate no-op.
+
+            return true
+
         }
 
-        return try {
-
-            val obj = gson.fromJson(raw, JsonObject::class.java)
-
+        return try {
+
+            val obj = gson.fromJson(raw, JsonObject::class.java)
+
+            // Explicit sign-out handoff: the ONLY sanctioned wipe path.
+            val cleared = obj.has("cleared") && obj.get("cleared").isJsonPrimitive && obj.get("cleared").asBoolean
+            if (cleared) {
+
+                pairingManager.clearCloudAccessToken()
+
+                pairingManager.rawVaultAccountId = ""
+
+                android.util.Log.i("DispatchBridge", "Cloud upload session cleared by explicit sign-out push")
+
+                return true
+
+            }
+
             val token = obj.get("access_token")?.asString?.trim() ?: ""
 
             val accountId = obj.get("account_id")?.asString?.trim() ?: ""
@@ -1250,6 +1267,10 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
             if (!pairingManager.canStoreCloudSession) {
 
                 android.util.Log.e("DispatchBridge", "Cloud session push rejected: secure cloud storage unavailable")
+
+                // Fail closed but never silently again: exactly one visible signal
+                // (throttled — visibility-change pushes could otherwise spam).
+                showStorageUnavailableToast()
 
                 return false
 
@@ -1309,7 +1330,32 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
 
     }
 
-    
+    /** Throttled single-honest-signal: the phone could not accept the cloud
+     *  session. Recovery runs on the next app launch (secure-store init), so
+     *  the guidance is simply to reopen the app. */
+    private var lastStorageToastAt = 0L
+
+    private fun showStorageUnavailableToast() {
+
+        val now = System.currentTimeMillis()
+
+        if (now - lastStorageToastAt < 15_000L) return
+
+        lastStorageToastAt = now
+
+        activity.runOnUiThread {
+
+            try {
+
+                Toast.makeText(activity, "Couldn't save your Dispatch sign-in on this phone. Reopen Dispatch once to retry after automatic repair.", Toast.LENGTH_LONG).show()
+
+            } catch (_: Exception) { /* a toast must never break pairing */ }
+
+        }
+
+    }
+
+    
 @JavascriptInterface
     fun retryUpload(idOrSessionId: String) {
         activity.lifecycleScope.launch(Dispatchers.IO) {

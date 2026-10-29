@@ -25,7 +25,7 @@ export interface GeminiKeyStatus {
   updated_at?: string;
 }
 
-export async function listConnectedAccounts(jwtToken: string): Promise<ConnectedAccount[]> {
+export async function listConnectedAccounts(jwtToken: string): Promise<ConnectedAccount[] | null> {
   try {
     const res = await fetch(`${WORKER_BASE}/accounts`, {
       method: 'GET',
@@ -34,11 +34,11 @@ export async function listConnectedAccounts(jwtToken: string): Promise<Connected
         'Content-Type': 'application/json',
       },
     });
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = await res.json() as { accounts?: ConnectedAccount[] };
     return Array.isArray(data.accounts) ? data.accounts : [];
   } catch {
-    return [];
+    return null;
   }
 }
 

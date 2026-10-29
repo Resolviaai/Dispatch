@@ -76,8 +76,31 @@ class PairingManager(context: Context) {
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
                 )
             } catch (e: Throwable) {
-                Log.e(TAG, "Secure cloud session storage unavailable; cloud uploads disabled", e)
-                null
+                // AndroidX security can leave the encrypted-prefs store unreadable after
+                // OS updates or keystore resets (keyset corruption). Recover ONLY this
+                // store: its contents are a re-pushable WebView session (JWT + vault
+                // account id) — nothing here is unrecoverable. The YouTube credential
+                // store (dispatch_youtube_secure) is deliberately never touched.
+                Log.e(TAG, "Secure cloud session storage unreadable; attempting one-time recovery", e)
+                try {
+                    context.deleteSharedPreferences("dispatch_cloud_secure")
+                    context.deleteSharedPreferences("dispatch_cloud_secure_preferences")
+                    val recoveredKey = MasterKey.Builder(context)
+                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                        .build()
+                    EncryptedSharedPreferences.create(
+                        context,
+                        "dispatch_cloud_secure",
+                        recoveredKey,
+                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                    ).also {
+                        Log.e(TAG, "Cloud session store recovered (contents reset; re-push pending)")
+                    }
+                } catch (e2: Throwable) {
+                    Log.e(TAG, "Cloud session recovery failed; cloud uploads disabled", e2)
+                    null
+                }
             }
         }
     }

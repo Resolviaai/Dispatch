@@ -236,7 +236,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     setIsLoadingAccounts(true);
     try {
       const list = await listConnectedAccounts(jwtToken);
-      setAccounts(list);
+      // null = transient fetch/auth failure; keep the last known list (the
+      // poll retries anyway). Only a successful fetch may change the list,
+      // otherwise a failed request silently blanked every connected account.
+      if (list !== null) setAccounts(list);
       const gemini = await getGeminiKeyStatus(jwtToken);
       setGeminiStatus(gemini);
     } finally {

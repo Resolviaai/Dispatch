@@ -24,12 +24,16 @@ export async function pushCloudSessionToNative(reason: string): Promise<void> {
   try {
     const session = await currentSession();
     if (!session) {
-      bridge.pushCloudSession(JSON.stringify({}));
+      // No session does NOT mean "signed out": it also occurs transiently
+      // while Supabase restores the persisted session at WebView startup. The
+      // 2026-10-29 race (an initial null push wiping a valid pairing mid-
+      // restore) killed working sessions; clearing happens ONLY through the
+      // explicit SIGNED_OUT event below, which now sends {"cleared": true}.
       pushedAt = Date.now();
       return;
     }
     const accounts = await listConnectedAccounts(session.access_token);
-    const youtube = accounts.find((account) => account.provider === 'youtube');
+    const youtube = accounts?.find((account) => account.provider === 'youtube');
     bridge.pushCloudSession(JSON.stringify({
       access_token: session.access_token,
       account_id: youtube?.id || '',
@@ -51,7 +55,7 @@ export function startCloudSessionBootstrap(): void {
     }
     if (event === 'SIGNED_OUT') {
       try {
-        nativeBridge()?.pushCloudSession(JSON.stringify({}));
+        nativeBridge()?.pushCloudSession(JSON.stringify({ cleared: true }));
       } catch {
         // Bridge may be gone during teardown
       }

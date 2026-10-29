@@ -841,10 +841,22 @@ class YouTubeDirectUploadWorker(
         if (useCloud && cloudSessionActive()) {
             // Route A: the worker resolves the vault account and searches YouTube
             // for the dispatch_id tag; the phone holds no OAuth here.
-            val json = cloudYouTubeApi("youtube/uploads/lookup", JsonObject().apply {
-                addProperty("dispatch_id", dispatchId)
-            })
-            val videoId = json?.get("video_id")?.asString
+            // 2026-10-29: the lookup responds {"video_id": null} for every clip
+            // not yet uploaded (the normal first-attempt case). Gson's
+            // JsonNull.asString() throws, and that exception escaped and killed
+            // the whole drain — uploads parked forever with retries crashing
+            // identically (findExistingUploadByDispatchId:847). Any failure to
+            // resolve an existing upload must mean "not uploaded yet", never a
+            // worker crash.
+            val json = try {
+                cloudYouTubeApi("youtube/uploads/lookup", JsonObject().apply {
+                    addProperty("dispatch_id", dispatchId)
+                })
+            } catch (e: Exception) {
+                android.util.Log.w("YouTubeUploader", "Upload lookup trashed: ${e.message}")
+                null
+            }
+            val videoId = json?.get("video_id")?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
             if (!videoId.isNullOrBlank()) {
                 android.util.Log.i("YouTubeUploader", "Recovered existing YouTube upload for $dispatchId: $videoId")
             }
