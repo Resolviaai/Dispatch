@@ -398,7 +398,7 @@ class SegmenterEngine(
         }
     }
 
-    fun triggerYouTubeUpload() {
+    fun triggerYouTubeUpload(forceReplace: Boolean = false) {
         val pairing = PairingManager(context)
         val networkType = if (pairing.isWifiOnlyEnabled) NetworkType.UNMETERED else NetworkType.CONNECTED
         val constraints = Constraints.Builder()
@@ -413,7 +413,7 @@ class SegmenterEngine(
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             "dispatch_youtube_uploads",
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            if (forceReplace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.APPEND_OR_REPLACE,
             ytSyncWork
         )
 

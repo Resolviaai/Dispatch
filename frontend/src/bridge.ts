@@ -136,6 +136,7 @@ declare global {
       setPcHost?: (pcHost: string) => boolean;
       getAuthToken?: () => string;
       openCustomTab?: (url: string) => boolean;
+      ensureUploadScheduler?: () => boolean;
       deleteSession?: (sessionId: string) => boolean;
       openNativePreview?: (idOrSessionId: string) => boolean;
       performHaptic?: (type: string) => boolean;
@@ -474,6 +475,17 @@ export const Bridge = {
     if (window.DispatchBridge?.retryUpload) {
       window.DispatchBridge.retryUpload(segmentId);
     }
+  },
+
+  ensureUploadScheduler(): boolean {
+    if (window.DispatchBridge?.ensureUploadScheduler) {
+      try {
+        return window.DispatchBridge.ensureUploadScheduler();
+      } catch (e) {
+        console.warn('Failed to ensure upload scheduler', e);
+      }
+    }
+    return false;
   },
 
   deleteSession(sessionId: string): boolean {

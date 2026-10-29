@@ -765,15 +765,19 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
                 val networkCaps = (activity.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)
                     ?.let { cm -> cm.getNetworkCapabilities(cm.activeNetwork) }
                 val onWifi = networkCaps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+                val onUnmetered = networkCaps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
                 val cloudReady = pairingManager.cloudAccessToken.isNotBlank() && pairingManager.rawVaultAccountId.isNotBlank()
                 fun uploadReason(status: String): String = when {
                     status == "UPLOADING" -> "Uploading to YouTube"
                     status == "QUEUED_FOR_UPLOAD" && wifiOnly && !onWifi -> "Waiting for Wi-Fi"
+                    status == "QUEUED_FOR_UPLOAD" && wifiOnly && !onUnmetered -> "Waiting for unmetered network"
                     status == "QUEUED_FOR_UPLOAD" && !cloudReady -> "Waiting for YouTube connection"
                     status == "QUEUED_FOR_UPLOAD" -> "Waiting to start upload"
                     status == "WAITING_FOR_YOUTUBE" && wifiOnly && !onWifi -> "Waiting for Wi-Fi"
+                    status == "WAITING_FOR_YOUTUBE" && wifiOnly && !onUnmetered -> "Waiting for unmetered network"
                     status == "WAITING_FOR_YOUTUBE" -> "Waiting for YouTube connection"
                     status == "FAILED_RETRY" && wifiOnly && !onWifi -> "Waiting for Wi-Fi"
+                    status == "FAILED_RETRY" && wifiOnly && !onUnmetered -> "Waiting for unmetered network"
                     status == "FAILED_RETRY" -> "Retrying upload"
                     status == "FAILED_YOUTUBE_PROCESSING" -> "YouTube processing failed"
                     status == "UPLOADED_TO_YOUTUBE" || status == "UPLOADED_AWAITING_PROCESSING" || status == "PROCESSED_ON_YOUTUBE" -> "YouTube processing"
@@ -1334,12 +1338,41 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
                         }
                     }
                 }
-                segmenterEngine.triggerYouTubeUpload()
+                segmenterEngine.triggerYouTubeUpload(forceReplace = true)
             } catch (e: Exception) {
                 android.util.Log.e("DispatchBridge", "retryUpload failed: ${e.message}")
             }
         }
     }
+
+    /**
+     * Ensure a runnable upload job exists without resetting one that is
+     * already running or legitimately queued for its network constraint.
+     */
+    @JavascriptInterface
+    fun ensureUploadScheduler(): Boolean {
+        return try {
+            runBlocking(Dispatchers.IO) {
+                val pending = database.recordingDao().getPendingUploadSegments()
+                if (pending.isEmpty()) return@runBlocking true
+                val infos = androidx.work.WorkManager.getInstance(activity)
+                    .getWorkInfosForUniqueWork("dispatch_youtube_uploads")
+                    .get(5, TimeUnit.SECONDS)
+                val hasRunnable = infos.any {
+                    it.state == androidx.work.WorkInfo.State.RUNNING ||
+                        it.state == androidx.work.WorkInfo.State.ENQUEUED
+                }
+                if (!hasRunnable) {
+                    segmenterEngine.triggerYouTubeUpload(forceReplace = true)
+                }
+                true
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("DispatchBridge", "ensureUploadScheduler failed: ${e.message}")
+            false
+        }
+    }
+
 
     /**
      * Requeues one segment for a fresh upload attempt: status →

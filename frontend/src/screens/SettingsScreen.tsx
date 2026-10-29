@@ -110,6 +110,34 @@ const FacebookIcon = () => (
   </svg>
 );
 
+/** Profile image with the provider's own icon as a failure/unconnected fallback. */
+const AccountAvatar: React.FC<{
+  src?: string | null;
+  fallback: React.ReactNode;
+}> = ({ src, fallback }) => {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  return (
+    <div className="w-8 h-8 rounded-full bg-surface-3 border border-border flex items-center justify-center overflow-hidden shrink-0">
+      {src && !failed ? (
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className="w-full h-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : fallback}
+    </div>
+  );
+};
+
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localhost:8000', onEditorOpenChange }) => {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
@@ -438,6 +466,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const facebookAccounts = accounts.filter(a => a.provider === 'facebook');
   const linkedinAccount = accounts.find(a => a.provider === 'linkedin');
   const twitterAccount = accounts.find(a => a.provider === 'twitter');
+  const instagramAccount = instagramAccounts[0] ?? null;
+  const facebookAccount = facebookAccounts[0] ?? null;
 
   if (isTemplateEditorOpen) {
     return (
@@ -604,13 +634,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                     <div key={acc.id} className="py-3 first:pt-0 space-y-2.5 text-sm">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          {acc.avatar_url ? (
-                            <img src={acc.avatar_url} alt="" className="w-8 h-8 rounded-full border border-border shrink-0 object-cover" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center text-text-muted shrink-0">
-                              <Youtube size={15} />
-                            </div>
-                          )}
+                          <AccountAvatar
+                            src={acc.avatar_url}
+                            fallback={<Youtube size={15} className="text-text-muted" />}
+                          />
                           <div className="min-w-0">
                             <p className="font-medium text-text-main truncate text-sm">{acc.account_name}</p>
                             {acc.account_id && acc.account_id !== acc.account_name && acc.account_email !== acc.account_name && (
@@ -620,7 +647,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                         </div>
                         <button
                           onClick={() => handleDisconnectAccount(acc)}
-                          className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
+                          className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
                         >
                           Disconnect
                         </button>
@@ -683,27 +710,28 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               {/* Instagram */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
-                    <InstagramIcon />
-                  </div>
+                  <AccountAvatar
+                    src={instagramAccount?.avatar_url}
+                    fallback={<InstagramIcon />}
+                  />
                   <div className="min-w-0">
                     <p className="font-medium text-text-main truncate">Instagram Reels</p>
                     <p className="text-xs text-text-muted truncate">
-                      {instagramAccounts.length > 0 ? instagramAccounts.map(a => a.account_name).join(', ') : 'Not connected'}
+                      {instagramAccount ? instagramAccount.account_name : 'Not connected'}
                     </p>
                   </div>
                 </div>
-                {instagramAccounts.length > 0 ? (
+                {instagramAccount ? (
                   <button
-                    onClick={() => handleDisconnectAccount(instagramAccounts[0])}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
+                    onClick={() => handleDisconnectAccount(instagramAccount)}
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('instagram')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
                   >
                     Connect
                   </button>
@@ -713,27 +741,28 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               {/* Facebook */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
-                    <FacebookIcon />
-                  </div>
+                  <AccountAvatar
+                    src={facebookAccount?.avatar_url}
+                    fallback={<FacebookIcon />}
+                  />
                   <div className="min-w-0">
                     <p className="font-medium text-text-main truncate">Facebook Pages</p>
                     <p className="text-xs text-text-muted truncate">
-                      {facebookAccounts.length > 0 ? facebookAccounts.map(a => a.account_name).join(', ') : 'Not connected'}
+                      {facebookAccount ? facebookAccount.account_name : 'Not connected'}
                     </p>
                   </div>
                 </div>
-                {facebookAccounts.length > 0 ? (
+                {facebookAccount ? (
                   <button
-                    onClick={() => handleDisconnectAccount(facebookAccounts[0])}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
+                    onClick={() => handleDisconnectAccount(facebookAccount)}
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('facebook')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
                   >
                     Connect
                   </button>
@@ -743,9 +772,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               {/* LinkedIn */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
-                    <LinkedInIcon />
-                  </div>
+                  <AccountAvatar
+                    src={linkedinAccount?.avatar_url}
+                    fallback={<LinkedInIcon />}
+                  />
                   <div className="min-w-0">
                     <p className="font-medium text-text-main truncate">LinkedIn</p>
                     <p className="text-xs text-text-muted truncate">
@@ -756,14 +786,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {linkedinAccount ? (
                   <button
                     onClick={() => handleDisconnectAccount(linkedinAccount)}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('linkedin')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
                   >
                     Connect
                   </button>
@@ -773,9 +803,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               {/* X (Twitter) */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
-                    <XIcon />
-                  </div>
+                  <AccountAvatar
+                    src={twitterAccount?.avatar_url}
+                    fallback={<XIcon />}
+                  />
                   <div className="min-w-0">
                     <p className="font-medium text-text-main truncate">X (Twitter)</p>
                     <p className="text-xs text-text-muted truncate">
@@ -786,14 +817,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {twitterAccount ? (
                   <button
                     onClick={() => handleDisconnectAccount(twitterAccount)}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('twitter')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center"
+                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
                   >
                     Connect
                   </button>

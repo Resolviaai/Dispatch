@@ -1288,14 +1288,23 @@ export default {
       let pageId = "me";
       let pageTitle = "Facebook Page";
       let pageAccessToken: string | null = null;
+      let pageAvatar: string | null = null;
       try {
-        const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token&access_token=${longToken}`);
+        const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,picture{url}&access_token=${longToken}`);
         if (pagesRes.ok) {
-          const pagesData = await pagesRes.json() as { data?: Array<{ id: string; name: string; access_token?: string }> };
+          const pagesData = await pagesRes.json() as {
+            data?: Array<{
+              id: string;
+              name: string;
+              access_token?: string;
+              picture?: { data?: { url?: string } };
+            }>;
+          };
           if (pagesData.data && pagesData.data.length > 0) {
             pageId = pagesData.data[0].id;
             pageTitle = pagesData.data[0].name;
             pageAccessToken = pagesData.data[0].access_token || null;
+            pageAvatar = pagesData.data[0].picture?.data?.url || null;
           }
         }
       } catch { /* fallback */ }
@@ -1313,7 +1322,7 @@ export default {
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
           p_user_id: uid, p_provider: "facebook", p_account_id: pageId, p_account_name: pageTitle,
-          p_account_email: null, p_avatar_url: null, p_credentials_encrypted: enc,
+          p_account_email: null, p_avatar_url: pageAvatar, p_credentials_encrypted: enc,
           p_metadata: { page_id: pageId, title: pageTitle },
         }),
       });

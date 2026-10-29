@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Film,
   RotateCw,
@@ -103,6 +103,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [showConfirmDelete, setShowConfirmDelete] = useState<UnifiedSession | null>(null);
   const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
+  const lastSchedulerNudgeRef = useRef(0);
 
   useEffect(() => {
     setVideoPlaybackError(null);
@@ -492,6 +493,21 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       : session.status === 'failed'
         ? 'Upload failed'
         : 'Waiting to start upload');
+
+  // Self-heal a missing/cancelled WorkManager upload request while the user is
+  // looking at Sessions. Existing ENQUEUED/RUNNING work is left untouched.
+  useEffect(() => {
+    if (!Bridge.isAvailable()) return;
+    const hasPending = unifiedSessions.some(
+      session => session.origin === 'phone'
+        && (session.status === 'queued' || session.status === 'uploading' || session.status === 'failed')
+    );
+    if (!hasPending) return;
+    const now = Date.now();
+    if (now - lastSchedulerNudgeRef.current < 30_000) return;
+    lastSchedulerNudgeRef.current = now;
+    Bridge.ensureUploadScheduler();
+  }, [unifiedSessions]);
 
   // YouTube Link Extraction & Submission
   const extractVideoId = (raw: string): string | null => {
