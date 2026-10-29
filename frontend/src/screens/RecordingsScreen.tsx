@@ -95,7 +95,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   // Navigation & View state
   const [viewMode, setViewMode] = useState<ViewMode>('library');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterStatus>('all');
+  const [filter, setFilter] = useState<FilterStatus>('ready');
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<UnifiedSession | null>(null);
   const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
