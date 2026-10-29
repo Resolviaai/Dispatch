@@ -268,7 +268,8 @@ export function renderOAuthResultHtml(title: string, message: string, isError = 
     <div class="icon">${iconSvg}</div>
     <h2>${escapeHtml(title)}</h2>
     <p>${escapeHtml(message)}</p>
-    <a href="#" class="btn" onclick="window.close(); return false;">Return to Dispatch</a>
+    <a href="intent://oauth/return#Intent;scheme=dispatch;package=com.resolvia.dispatch;end" class="btn">Return to Dispatch</a>
+    <p style="margin:14px 0 0 0;font-size:12px;">If the app does not open, switch back using your recent apps.</p>
   </div>
 </body>
 </html>`;

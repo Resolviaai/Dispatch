@@ -202,6 +202,16 @@ class DispatchNativeBridge(
             val builder = androidx.browser.customtabs.CustomTabsIntent.Builder()
                 .setShowTitle(true)
             val customTabsIntent = builder.build()
+            // Facebook OAuth can hand off to the Facebook app and dismiss a Custom Tab
+            // on some devices. Use a normal browser tab for that provider; the
+            // completion page returns through dispatch://oauth/return.
+            if (url.contains("/oauth/instagram/start")) {
+                activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                return true
+            }
+
 
             // Prefer Chrome so Google Accounts on the device are available in the OAuth account picker
             val pm = activity.packageManager
