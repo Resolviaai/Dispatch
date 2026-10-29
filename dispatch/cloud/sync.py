@@ -253,6 +253,35 @@ def _render_fingerprint(clip: Dict[str, Any], video_path: Path) -> str:
     return f"{stat.st_size}:{stat.st_mtime_ns}:{int(clip.get('range_revision') or 0)}"
 
 
+def _publication_sync_payload(clip_id: str) -> List[Dict[str, Any]]:
+    """Published destination metadata for the cloud; stats stay cloud-owned."""
+    payload: List[Dict[str, Any]] = []
+    for row in db.get_publications_for_clips([clip_id]).get(clip_id, []):
+        account_ref = str(row.get("account_id") or "").strip()
+        remote_id = str(row.get("remote_id") or "").strip()
+        if not account_ref or not remote_id:
+            continue
+        published_at = row.get("published_at")
+        if not published_at:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(published_at).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            published_at = parsed.astimezone(timezone.utc).isoformat()
+        except (TypeError, ValueError):
+            continue
+        payload.append({
+            "platform": str(row.get("platform") or "").lower(),
+            "account_id": account_ref,
+            "remote_id": remote_id,
+            "remote_url": row.get("remote_url"),
+            "published_at": published_at,
+            "publish_mode": row.get("publish_mode"),
+        })
+    return payload
+
+
 def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, only_if_missing: bool = True,
                            owner_user_id: Optional[str] = None) -> str:
     """Persist words for an ALREADY-STAGED window without re-uploading media.
@@ -419,6 +448,7 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
                 "ai_suggested_start_time": ai_s,
                 "ai_suggested_end_time": ai_e,
                 "range_revision": int(clip.get("range_revision") or 0),
+                "publications": _publication_sync_payload(clip_id),
             },
             timeout=20,
         )
@@ -426,6 +456,8 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
             logger.error("Failed to upsert clips_cloud for %s: %d %s", clip_id, r_clip.status_code, r_clip.text[:200])
             return False
         upsert_body = r_clip.json() if r_clip.text else {}
+        if upsert_body.get("publications_error"):
+            logger.warning("Cloud publication metadata incomplete for %s: %s", clip_id, upsert_body.get("publications_error"))
         if upsert_body.get("skipped_tombstoned"):
             logger.info(
                 "Cloud accepted clip %s as tombstoned-skipped; metadata not refreshed.",

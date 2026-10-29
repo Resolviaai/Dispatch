@@ -679,7 +679,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               <span className="flex items-center gap-1.5"><Share2 size={13} className="text-primary" /> Social Destinations</span>
             </div>
 
-            <div className="divide-y divide-border/60">
+            <div>
               {/* Instagram */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2.5 min-w-0">

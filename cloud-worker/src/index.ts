@@ -126,22 +126,53 @@ async function selectOne<T>(env: Env, table: string, id: string, columns: string
   return ((await res.json()) as T[])[0] ?? null;
 }
 
-async function getUserYouTubeAccessToken(env: Env, accountId: string, userId: string): Promise<string | null> {
+async function getUserYouTubeAccessToken(
+  env: Env,
+  accountId: string,
+  userId: string,
+  options: { requireSourceVault?: boolean } = {},
+): Promise<string | null> {
+  const accountRef = accountId.trim();
+  if (!accountRef) return null;
   const accountUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
-  accountUrl.searchParams.set("id", `eq.${accountId}`);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(accountRef)) {
+    accountUrl.searchParams.set("id", `eq.${accountRef}`);
+  } else {
+    accountUrl.searchParams.set("account_id", `eq.${accountRef}`);
+  }
   accountUrl.searchParams.set("user_id", `eq.${userId}`);
   accountUrl.searchParams.set("provider", "eq.youtube");
-  accountUrl.searchParams.set("select", "credentials_encrypted,metadata");
-  const accountRes = await fetch(accountUrl, {
+  accountUrl.searchParams.set("select", "credentials_encrypted,metadata,account_email,account_id");
+  let accountRes = await fetch(accountUrl, {
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
     },
   });
   if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
-  const rows = await accountRes.json() as Array<{ credentials_encrypted?: string; metadata?: Record<string, unknown> }>;
+  let rows = await accountRes.json() as Array<{
+    credentials_encrypted?: string;
+    metadata?: Record<string, unknown>;
+    account_email?: string | null;
+    account_id?: string;
+  }>;
+  // The PC outbox historically stores the account email as its publisher
+  // binding, so resolve that reference too without trusting it beyond this user.
+  if (rows.length === 0 && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(accountRef)) {
+    accountUrl.searchParams.delete("account_id");
+    accountUrl.searchParams.set("account_email", `eq.${accountRef}`);
+    accountRes = await fetch(accountUrl, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+    });
+    if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
+    rows = await accountRes.json() as typeof rows;
+  }
   const account = rows[0];
-  if (!account?.credentials_encrypted || account.metadata?.is_source_vault === false) return null;
+  const requireSourceVault = options.requireSourceVault !== false;
+  if (!account?.credentials_encrypted || (requireSourceVault && account.metadata?.is_source_vault === false)) return null;
 
   const stored = await decryptToken(env.TOKEN_VAULT_KEY, account.credentials_encrypted);
   let refreshToken = stored.trim();
@@ -165,6 +196,55 @@ async function getUserYouTubeAccessToken(env: Env, accountId: string, userId: st
   if (!tokenRes.ok) return null;
   const tokenBody = await tokenRes.json() as { access_token?: unknown };
   return typeof tokenBody.access_token === "string" ? tokenBody.access_token : null;
+}
+
+const PUBLICATION_STATS_TTL_MS = 15 * 60 * 1000;
+
+interface CloudPublicationRow {
+  id: string;
+  clip_id?: string;
+  platform: string;
+  account_id: string;
+  remote_id: string | null;
+  remote_url: string | null;
+  published_at: string | null;
+  publish_mode: string | null;
+  view_count: number | null;
+  like_count: number | null;
+  comment_count: number | null;
+  stats_updated_at: string | null;
+  stats_checked_at: string | null;
+}
+
+function parseMetric(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
+}
+
+function publicationPayload(row: CloudPublicationRow): Record<string, unknown> {
+  const updated = Date.parse(row.stats_updated_at ?? "");
+  const checked = Date.parse(row.stats_checked_at ?? "");
+  const statsStale = !Number.isFinite(updated) || (Number.isFinite(checked) && checked > updated);
+  return {
+    id: row.id,
+    platform: row.platform,
+    remote_id: row.remote_id,
+    remote_url: row.remote_url,
+    published_at: row.published_at,
+    publish_mode: row.publish_mode,
+    stats: {
+      views: row.view_count,
+      likes: row.like_count,
+      comments: row.comment_count,
+    },
+    stats_updated_at: row.stats_updated_at,
+    stats_stale: statsStale,
+  };
+}
+
+function publicationStatsAreFresh(row: CloudPublicationRow): boolean {
+  const checked = Date.parse(row.stats_checked_at ?? "");
+  return Number.isFinite(checked) && Date.now() - checked < PUBLICATION_STATS_TTL_MS;
 }
 
 // ---------- auth ----------
@@ -1474,9 +1554,10 @@ export default {
       let jobsRes: Response | null = null;
       let mediaRes: Response | null = null;
       let editWindowsRes: Response | null = null;
+      let publicationsRes: Response | null = null;
       if (rawClips.length > 0) {
         const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
-        [jobsRes, mediaRes, editWindowsRes] = await Promise.all([
+        [jobsRes, mediaRes, editWindowsRes, publicationsRes] = await Promise.all([
           fetch(
             `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&select=id`,
             { headers: svc }
@@ -1489,14 +1570,28 @@ export default {
             `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${user.userId}&status=eq.ready&local_clip_id=in.(${localClipIds})&select=id,local_clip_id,window_start,window_end,media_object_id,transcript_status&order=created_at.desc`,
             { headers: svc }
           ).catch(() => null),
+          fetch(
+            `${env.SUPABASE_URL}/rest/v1/publications?user_id=eq.${user.userId}&clip_id=in.(${cloudClipIds})&status=eq.published&select=id,clip_id,platform,account_id,remote_id,remote_url,published_at,publish_mode,view_count,like_count,comment_count,stats_updated_at,stats_checked_at&order=published_at.asc`,
+            { headers: svc }
+          ).catch(() => null),
         ]);
       }
       const mediaDegraded = !mediaRes || !mediaRes.ok;
       const windowsDegraded = !editWindowsRes || !editWindowsRes.ok;
+      const publicationsDegraded = !publicationsRes || !publicationsRes.ok;
       const rawMedia = mediaRes && mediaRes.ok ? await mediaRes.json() : [];
       const activeMedia = Array.isArray(rawMedia) ? (rawMedia as Array<Record<string, unknown>>) : [];
       const rawEw = editWindowsRes && editWindowsRes.ok ? await editWindowsRes.json() : [];
       const readyWindows = Array.isArray(rawEw) ? (rawEw as Array<Record<string, unknown>>) : [];
+      const rawPublications = publicationsRes && publicationsRes.ok ? await publicationsRes.json() : [];
+      const publicationsByClip = new Map<string, CloudPublicationRow[]>();
+      for (const publication of (Array.isArray(rawPublications) ? rawPublications as CloudPublicationRow[] : [])) {
+        const clipId = String(publication.clip_id ?? "");
+        if (!clipId) continue;
+        const rows = publicationsByClip.get(clipId) ?? [];
+        rows.push(publication);
+        publicationsByClip.set(clipId, rows);
+      }
 
       // Cloud caption contract: window transcripts sit in window_transcripts
       // (words SOURCE-relative seconds). Fetch the batch for this user's ready
@@ -1618,6 +1713,7 @@ export default {
           edit_window_url: editWindowUrl,
           edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
           edit_window_end: clipEw ? Number(clipEw.window_end) : undefined,
+          publications: (publicationsByClip.get(cloudClipId) ?? []).map(publicationPayload),
           captions,
           captions_source: source,
           captions_ready: captionsReady,
@@ -1689,7 +1785,106 @@ export default {
         media_degraded: mediaDegraded ? true : undefined,
         windows_degraded: windowsDegraded ? true : undefined,
         jobs_degraded: !jobsRes || !jobsRes.ok ? true : undefined,
+        publications_degraded: publicationsDegraded ? true : undefined,
       });
+    }
+
+    const cloudPublicationsMatch = url.pathname.match(/^\/clips\/([^/]+)\/publications$/);
+    if (request.method === "GET" && cloudPublicationsMatch) {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const cloudClipId = decodeURIComponent(cloudPublicationsMatch[1]);
+      if (!UUID_RE.test(cloudClipId)) return json(400, { error: "invalid clip id" });
+
+      const svcHeaders = {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      };
+      const response = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/publications?user_id=eq.${user.userId}&clip_id=eq.${cloudClipId}&status=eq.published&select=id,clip_id,platform,account_id,remote_id,remote_url,published_at,publish_mode,view_count,like_count,comment_count,stats_updated_at,stats_checked_at&order=published_at.asc`,
+        { headers: svcHeaders }
+      );
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        return json(502, { error: `publication lookup failed: ${response.status}`, detail: text.slice(0, 200) });
+      }
+      const rows = await response.json() as CloudPublicationRow[];
+      const accessTokens = new Map<string, string | null>();
+
+      for (const publication of rows) {
+        if (!publication.platform?.startsWith("youtube") || publicationStatsAreFresh(publication)) continue;
+        const checkedAt = new Date().toISOString();
+        const remoteId = String(publication.remote_id ?? "").trim();
+        let updated = false;
+        let views: number | null = null;
+        let likes: number | null = null;
+        let comments: number | null = null;
+
+        if (remoteId) {
+          try {
+            let accessToken = accessTokens.get(publication.account_id);
+            if (accessToken === undefined) {
+              accessToken = await getUserYouTubeAccessToken(
+                env, publication.account_id, user.userId, { requireSourceVault: false }
+              );
+              accessTokens.set(publication.account_id, accessToken);
+            }
+            if (accessToken) {
+              const statsResponse = await fetch(
+                `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${encodeURIComponent(remoteId)}`,
+                { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(8000) }
+              );
+              if (statsResponse.ok) {
+                const statsBody = await statsResponse.json() as {
+                  items?: Array<{ statistics?: Record<string, unknown> }>;
+                };
+                const statistics = statsBody.items?.[0]?.statistics;
+                if (statistics) {
+                  views = parseMetric(statistics.viewCount);
+                  likes = parseMetric(statistics.likeCount);
+                  comments = parseMetric(statistics.commentCount);
+                  updated = true;
+                }
+              }
+            }
+          } catch (error) {
+            console.warn("Publication stats fetch failed", publication.id, error instanceof Error ? error.message : "unknown");
+          }
+        }
+
+        const patchBody = updated
+          ? {
+              view_count: views,
+              like_count: likes,
+              comment_count: comments,
+              stats_updated_at: checkedAt,
+              stats_checked_at: checkedAt,
+            }
+          : { stats_checked_at: checkedAt };
+        try {
+          const patch = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/publications?id=eq.${encodeURIComponent(publication.id)}&user_id=eq.${user.userId}`,
+            {
+              method: "PATCH",
+              headers: { ...svcHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
+              body: JSON.stringify(patchBody),
+            }
+          );
+          if (patch.ok) {
+            if (updated) {
+              publication.view_count = views;
+              publication.like_count = likes;
+              publication.comment_count = comments;
+              publication.stats_updated_at = checkedAt;
+            }
+            publication.stats_checked_at = checkedAt;
+          }
+        } catch {
+          // Cached values remain valid when the cache write fails.
+        }
+      }
+
+      return json(200, { publications: rows.map(publicationPayload) });
     }
 
     const actor = await authenticate(env, request);
@@ -1989,6 +2184,14 @@ export default {
           local_clip_id: string; title: string; status: string;
           start_time: number; end_time: number;
           ai_suggested_start_time?: number; ai_suggested_end_time?: number; range_revision?: number;
+          publications?: Array<{
+            platform?: string;
+            account_id?: string;
+            remote_id?: string;
+            remote_url?: string;
+            published_at?: string;
+            publish_mode?: string;
+          }>;
         }>(request);
         const localClipId = String(body?.local_clip_id ?? "");
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
@@ -2029,7 +2232,71 @@ export default {
             return json(502, { error: `clips_cloud upsert failed: ${upsertRes.status} ${text.slice(0, 200)}` });
           }
           const upsertRows = await upsertRes.json() as Array<{ id: string }>;
-          return json(200, { cloud_clip_id: upsertRows[0]?.id ?? null });
+          const cloudClipId = upsertRows[0]?.id ?? null;
+
+          // Published destinations ride along with the clip sync. Metrics are
+          // deliberately not overwritten here; the stats endpoint owns them.
+          let publicationsSynced = 0;
+          let publicationsError: string | null = null;
+          if (cloudClipId && Array.isArray(body?.publications)) {
+            const unique = new Map<string, NonNullable<typeof body.publications>[number]>();
+            for (const publication of body.publications) {
+              const platform = String(publication?.platform ?? "").toLowerCase();
+              if (!platform.startsWith("youtube")) continue;
+              const accountRef = String(publication?.account_id ?? "").trim().slice(0, 200);
+              const remoteId = String(publication?.remote_id ?? "").trim().slice(0, 128);
+              if (!accountRef || !remoteId) continue;
+              unique.set(`${platform}:${accountRef}`, { ...publication, platform, account_id: accountRef, remote_id: remoteId });
+            }
+            for (const publication of unique.values()) {
+              const remoteUrl = String(publication?.remote_url ?? "").slice(0, 2048);
+              const publishedAtRaw = String(publication?.published_at ?? "");
+              const publishedAtMs = Date.parse(publishedAtRaw);
+              if (!Number.isFinite(publishedAtMs)) {
+                publicationsError = publicationsError ?? "publication skipped: invalid published_at";
+                continue;
+              }
+              const publishedAt = new Date(publishedAtMs).toISOString();
+              const publishMode = ["private", "unlisted", "public"].includes(String(publication?.publish_mode))
+                ? String(publication?.publish_mode)
+                : null;
+              const pubRes = await fetch(
+                `${env.SUPABASE_URL}/rest/v1/publications?on_conflict=clip_id,platform,account_id`,
+                {
+                  method: "POST",
+                  headers: {
+                    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+                    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    "Content-Type": "application/json",
+                    Prefer: "resolution=merge-duplicates,return=minimal",
+                  },
+                  body: JSON.stringify({
+                    clip_id: cloudClipId,
+                    user_id: userId,
+                    platform: String(publication.platform),
+                    account_id: String(publication.account_id),
+                    remote_id: String(publication.remote_id),
+                    remote_url: remoteUrl.startsWith("https://") || remoteUrl.startsWith("http://") ? remoteUrl : null,
+                    published_at: publishedAt,
+                    publish_mode: publishMode,
+                    status: "published",
+                  }),
+                }
+              );
+              if (pubRes.ok) {
+                publicationsSynced++;
+              } else if (!publicationsError) {
+                const text = await pubRes.text().catch(() => "");
+                publicationsError = `publication upsert failed: ${pubRes.status} ${text.slice(0, 160)}`;
+              }
+            }
+          }
+
+          return json(200, {
+            cloud_clip_id: cloudClipId,
+            publications_synced: publicationsSynced,
+            publications_error: publicationsError ?? undefined,
+          });
         } catch (e) {
           return json(502, { error: `clip upsert failed: ${e instanceof Error ? e.message : e}` });
         }

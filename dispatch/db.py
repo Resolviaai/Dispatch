@@ -241,6 +241,11 @@ def init_db():
                 processing_started_at TIMESTAMP,
                 processing_attempts INTEGER DEFAULT 0,
                 published_at TIMESTAMP,
+                view_count INTEGER,
+                like_count INTEGER,
+                comment_count INTEGER,
+                stats_updated_at TIMESTAMP,
+                stats_checked_at TIMESTAMP,
                 FOREIGN KEY (clip_id) REFERENCES clips (id) ON DELETE CASCADE
             );
         """)
@@ -436,6 +441,16 @@ def init_db():
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN account_id TEXT;")
         if "user_id" not in outbox_cols:
             cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN user_id TEXT;");
+        outbox_stats_cols = {
+            "view_count": "INTEGER",
+            "like_count": "INTEGER",
+            "comment_count": "INTEGER",
+            "stats_updated_at": "TIMESTAMP",
+            "stats_checked_at": "TIMESTAMP",
+        }
+        for col, col_type in outbox_stats_cols.items():
+            if col not in outbox_cols:
+                cursor.execute(f"ALTER TABLE publishing_outbox ADD COLUMN {col} {col_type};")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_user_id ON publishing_outbox (user_id);")
 
         # Migration: rejection learning must be owner-scoped (audit 2026-10-28).
@@ -1385,6 +1400,57 @@ def get_outbox_queue() -> List[Dict[str, Any]]:
             ORDER BY po.created_at ASC
         """)
         return [dict(row) for row in cursor.fetchall()]
+
+
+def get_publications_for_clips(clip_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """Published destinations keyed by local clip id, including cached stats."""
+    unique_ids = [clip_id for clip_id in dict.fromkeys(clip_ids) if clip_id]
+    if not unique_ids:
+        return {}
+    placeholders = ",".join("?" for _ in unique_ids)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT id, clip_id, platform, account_id, user_id, publish_mode, remote_id, remote_url,
+                   published_at, view_count, like_count, comment_count,
+                   stats_updated_at, stats_checked_at
+            FROM publishing_outbox
+            WHERE clip_id IN ({placeholders})
+              AND status = 'published'
+            ORDER BY COALESCE(published_at, created_at) ASC
+        """, unique_ids)
+        rows = [dict(row) for row in cursor.fetchall()]
+
+    publications: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        publications.setdefault(str(row["clip_id"]), []).append(row)
+    return publications
+
+
+def record_publication_stats(
+    publication_id: str,
+    checked_at: str,
+    succeeded: bool,
+    view_count: Optional[int] = None,
+    like_count: Optional[int] = None,
+    comment_count: Optional[int] = None,
+) -> None:
+    """Persist a stats check; failed checks still advance the retry clock."""
+    with get_db_connection() as conn:
+        if succeeded:
+            conn.execute("""
+                UPDATE publishing_outbox
+                SET view_count = ?, like_count = ?, comment_count = ?,
+                    stats_updated_at = ?, stats_checked_at = ?
+                WHERE id = ?
+            """, (view_count, like_count, comment_count, checked_at, checked_at, publication_id))
+        else:
+            conn.execute("""
+                UPDATE publishing_outbox
+                SET stats_checked_at = ?
+                WHERE id = ?
+            """, (checked_at, publication_id))
+        conn.commit()
 
 
 def get_active_pipeline_jobs() -> List[Dict[str, Any]]:

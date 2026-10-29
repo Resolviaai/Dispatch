@@ -1,4 +1,5 @@
 import { createClient, type Session } from '@supabase/supabase-js'
+import { clearClipsCache } from '../offline/clipsCache'
 
 // Public anon key (safe for clients, protected by RLS). Loaded at BUILD time from
 // frontend/.env (git-ignored). The service-role key NEVER lives in the bundle.
@@ -26,7 +27,15 @@ export async function signUp(email: string, password: string) {
 }
 
 export async function signOut() {
+  let userId: string | null = null
+  try {
+    const { data } = await supabase.auth.getSession()
+    userId = data.session?.user?.id ?? null
+  } catch {}
   await supabase.auth.signOut()
+  if (userId) {
+    await clearClipsCache(userId)
+  }
   try {
     if (typeof window !== 'undefined' && (window as any).DispatchBridge?.setCurrentUserId) {
       (window as any).DispatchBridge.setCurrentUserId(null)

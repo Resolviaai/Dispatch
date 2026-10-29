@@ -421,6 +421,130 @@ test("cloud clips endpoint returns ready and approved clips", async () => {
   assert.equal(body.cloud_mode, true);
 });
 
+test("/clips attaches per-platform publication stats and never exposes account credentials", async () => {
+  supabase.set("/rest/v1/clips_cloud", {
+    method: "GET",
+    fn: () => ({
+      body: [
+        { id: "c2", local_clip_id: "clip_02", title: "Published Clip", status: "published", start_time: 5, end_time: 35 },
+      ]
+    })
+  });
+  supabase.set("/rest/v1/publications", {
+    method: "GET",
+    fn: () => ({
+      body: [{
+        id: "pub_1",
+        clip_id: "c2",
+        platform: "youtube",
+        account_id: "creator@example.com",
+        remote_id: "video_1",
+        remote_url: "https://youtube.com/shorts/video_1",
+        published_at: "2026-10-28T08:00:00Z",
+        publish_mode: "public",
+        view_count: 1240,
+        like_count: 86,
+        comment_count: 12,
+        stats_updated_at: "2026-10-29T08:00:00Z",
+        stats_checked_at: "2026-10-29T08:00:00Z",
+      }]
+    })
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/clips", {
+    method: "GET",
+    headers: pcHeaders(),
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const publication = body.recent_approved[0].publications[0];
+  assert.equal(publication.platform, "youtube");
+  assert.deepEqual(publication.stats, { views: 1240, likes: 86, comments: 12 });
+  assert.equal(publication.stats_stale, false);
+  assert.equal(publication.account_id, undefined);
+  assert.equal(publication.remote_url, "https://youtube.com/shorts/video_1");
+});
+
+test("/clips/:id/publications serves fresh cached stats without calling YouTube", async () => {
+  supabase.set("/rest/v1/publications", {
+    method: "GET",
+    fn: () => ({
+      body: [{
+        id: "pub_1",
+        clip_id: "33333333-3333-3333-3333-333333333333",
+        platform: "youtube",
+        account_id: "creator@example.com",
+        remote_id: "video_1",
+        remote_url: "https://youtube.com/shorts/video_1",
+        published_at: "2026-10-28T08:00:00Z",
+        publish_mode: "public",
+        view_count: 9,
+        like_count: null,
+        comment_count: 2,
+        stats_updated_at: new Date().toISOString(),
+        stats_checked_at: new Date().toISOString(),
+      }]
+    })
+  });
+  const res = await worker.fetch(new Request(
+    `https://w.test/clips/${RES}/publications`,
+    { method: "GET", headers: pcHeaders() }
+  ), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.publications[0].stats, { views: 9, likes: null, comments: 2 });
+  assert.equal(body.publications[0].account_id, undefined);
+});
+
+test("/clips/:id/publications requires authentication", async () => {
+  const res = await worker.fetch(new Request(
+    `https://w.test/clips/${RES}/publications`,
+    { method: "GET" }
+  ), env());
+  assert.equal(res.status, 401);
+});
+
+test("PC clip sync upserts publication metadata without writing stats", async () => {
+  supabase.set("/rest/v1/clips_cloud?user_id", {
+    method: "GET",
+    fn: () => ({ body: [] })
+  });
+  supabase.set("/rest/v1/clips_cloud?on_conflict", {
+    method: "POST",
+    fn: () => ({ body: [{ id: RES }] })
+  });
+  let publicationBody = null;
+  supabase.set("/rest/v1/publications?on_conflict", {
+    method: "POST",
+    fn: (_url, init) => {
+      publicationBody = JSON.parse(init.body);
+      return { body: null };
+    }
+  });
+  const res = await post("/sync/pc/clips", {
+    local_clip_id: "clip_02",
+    title: "Published Clip",
+    status: "published",
+    start_time: 5,
+    end_time: 35,
+    publications: [{
+      platform: "youtube",
+      account_id: "creator@example.com",
+      remote_id: "video_1",
+      remote_url: "https://youtube.com/shorts/video_1",
+      published_at: "2026-10-28T08:00:00Z",
+      publish_mode: "public",
+    }],
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.publications_synced, 1);
+  assert.equal(publicationBody.clip_id, RES);
+  assert.equal(publicationBody.account_id, "creator@example.com");
+  assert.equal(publicationBody.status, "published");
+  assert.equal(Object.prototype.hasOwnProperty.call(publicationBody, "view_count"), false);
+});
+
 test("/clips attaches window-relative caption seed words from window_transcripts", async () => {
   supabase.set("/rest/v1/clips_cloud", {
     method: "GET",

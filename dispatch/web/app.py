@@ -68,6 +68,7 @@ from dispatch.sync.receiver import router as sync_router
 
 from dispatch.sync.receiver import is_trusted_localhost
 from dispatch.cloud.sync import import_cloud_captions_for_clip, authorized_pc_owner_ids
+from dispatch.publisher.stats import public_publication, refresh_publication_stats
 
 logger = logging.getLogger("dispatch.web")
 _BODY_CAP_EXEMPT_PATHS = frozenset({
@@ -906,9 +907,20 @@ async def list_clips(request: Request):
                 LIMIT 50
             """)
         published_clips = [dict(r) for r in cursor.fetchall()]
+        publication_map = db.get_publications_for_clips([str(c.get("id")) for c in published_clips])
         for c in published_clips:
             populate_clip_media_urls(c)
             c["published_at"] = str(c.get("published_at") or c.get("approved_at") or c.get("created_at") or "")
+            publications = [
+                public_publication(row)
+                for row in publication_map.get(str(c.get("id")), [])
+            ]
+            c["publications"] = publications
+            primary = next((p for p in publications if p["platform"] in ("youtube", "youtube_shorts")), None) \
+                or (publications[0] if publications else None)
+            if primary:
+                c["remote_id"] = c.get("remote_id") or primary.get("remote_id")
+                c["remote_url"] = c.get("remote_url") or primary.get("remote_url")
             ctx = get_clip_framing_context(c)
             c["source_orientation"] = ctx["source_orientation"]
             c["source_aspect_ratio"] = ctx["source_aspect_ratio"]
@@ -948,6 +960,29 @@ async def get_clip_detail(clip_id: str, request: Request):
     clip["target_aspect"] = ctx["target_aspect"]
     clip["is_render_stale"] = clip_render_is_stale(clip)
     return clip
+
+
+@app.get("/api/clips/{clip_id}/publications")
+async def get_clip_publications(clip_id: str, request: Request):
+    """Published destinations with cached metrics refreshed at most once per TTL."""
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+        raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
+
+    rows = db.get_publications_for_clips([clip_id]).get(clip_id, [])
+    publications = []
+    for publication in rows:
+        try:
+            refreshed = await asyncio.to_thread(refresh_publication_stats, publication)
+        except Exception as exc:
+            logger.info("Stats refresh skipped for publication %s: %s", publication.get("id"), exc)
+            refreshed = publication
+        publications.append(public_publication(refreshed))
+    return {"publications": publications}
 
 
 @app.api_route("/api/clips/{clip_id}/source", methods=["GET", "HEAD"])

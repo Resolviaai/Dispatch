@@ -1086,10 +1086,15 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                     />
                   ) : null}
 
-                  {/* Origin Badge */}
-                  <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 text-white text-[9px] font-medium flex items-center gap-0.5">
-                    {session.origin === 'phone' ? <Camera size={8} /> : <Youtube size={8} className="text-danger" />}
-                    <span>{session.origin === 'phone' ? 'Camera' : 'YouTube'}</span>
+                  {/* Origin badge: icon-only so repeated source labels don't clutter every row. */}
+                  <span
+                    className="absolute top-1 left-1 w-4 h-4 rounded bg-black/85 text-white flex items-center justify-center"
+                    title={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                    aria-label={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                  >
+                    {session.origin === 'phone'
+                      ? <Camera size={10} />
+                      : <Youtube size={10} className="text-danger" />}
                   </span>
 
                   {/* Duration badge */}

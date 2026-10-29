@@ -7,7 +7,10 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger("dispatch.publisher.youtube")
 
 
-def build_youtube_service_from_credentials(credentials_data: Dict[str, Any]):
+def build_youtube_service_from_credentials(
+    credentials_data: Dict[str, Any],
+    timeout_seconds: Optional[float] = None,
+):
     """Build a Google YouTube v3 Resource object from credentials_data dict."""
     from googleapiclient.discovery import build
     from google.oauth2.credentials import Credentials
@@ -27,6 +30,11 @@ def build_youtube_service_from_credentials(credentials_data: Dict[str, Any]):
             creds.refresh(GoogleAuthRequest())
         except Exception as refresh_err:
             logger.warning("Failed to refresh account-specific YouTube OAuth token: %s", refresh_err)
+    if timeout_seconds is not None:
+        import httplib2
+        from google_auth_httplib2 import AuthorizedHttp
+        authorized_http = AuthorizedHttp(creds, http=httplib2.Http(timeout=timeout_seconds))
+        return build("youtube", "v3", http=authorized_http)
     return build("youtube", "v3", credentials=creds)
 
 

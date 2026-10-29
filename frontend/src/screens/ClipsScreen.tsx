@@ -23,6 +23,8 @@ import {
   Trash2,
   AlertCircle,
   Eye,
+  Heart,
+  MessageCircle,
   CheckCircle2,
   Share2,
   Pencil,
@@ -46,10 +48,16 @@ import { useCaptionHistory } from '../captions/useCaptionHistory';
 import { preserveWordTimingsOnEdit } from '../captions/timingPreservation';
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
-import { apiUrl, getAuthHeaders } from '../bridge';
+import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
 import { ConnectedAccount, listConnectedAccounts, WORKER_BASE } from '../accounts/accountsService';
 import { currentSession } from '../auth/supabase';
+import {
+  cacheClipThumbnails,
+  cachedThumbnailUrls,
+  readClipsCache,
+  writeClipsCache,
+} from '../offline/clipsCache';
 
 const CAPTION_LOAD_TIMEOUT_MS = 10_000;
 
@@ -183,6 +191,7 @@ export const DEFAULT_LANDSCAPE_MODES: AvailableLayoutMode[] = [
 ];
 
 export interface ClipItem {  id: string;
+  cloud_id?: string;
   session_id?: string | null;
   chunk_id?: string | null;
   start_time: number;
@@ -233,6 +242,46 @@ export interface ClipItem {  id: string;
   edit_window_url?: string;
   /** True when the worker could not resolve ANY playable/presentable media. */
   media_missing?: boolean;
+  /** One row per platform destination, with the latest cached stats. */
+  publications?: PublicationItem[];
+}
+
+export interface PublicationItem {
+  id: string;
+  platform: string;
+  remote_id?: string | null;
+  remote_url?: string | null;
+  published_at?: string | null;
+  publish_mode?: string | null;
+  stats?: {
+    views: number | null;
+    likes: number | null;
+    comments: number | null;
+  };
+  stats_updated_at?: string | null;
+  stats_stale?: boolean;
+}
+
+function formatMetric(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  if (value < 10_000) return value.toLocaleString();
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function platformLabel(platform: string): string {
+  const labels: Record<string, string> = {
+    youtube: 'YouTube',
+    youtube_shorts: 'YouTube Shorts',
+    instagram: 'Instagram',
+    linkedin: 'LinkedIn',
+    facebook: 'Facebook',
+    twitter: 'X',
+    x: 'X',
+  };
+  return labels[platform.toLowerCase()] || platform;
 }
 
 export interface QueueStats {
@@ -1382,6 +1431,24 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
   const [submitUrlInput, setSubmitUrlInput] = useState<string>('');
   const [isSubmittingJob, setIsSubmittingJob] = useState<boolean>(false);
+  const [showingCachedClips, setShowingCachedClips] = useState<boolean>(false);
+  const [clipRefreshFailed, setClipRefreshFailed] = useState<boolean>(false);
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const [publicationLoad, setPublicationLoad] = useState<{
+    clipId: string;
+    items: PublicationItem[];
+    loading: boolean;
+    error: boolean;
+  } | null>(null);
+  const cacheUserIdRef = useRef<string | null>(null);
+  const componentMountedRef = useRef<boolean>(true);
+  const cacheHydrationRef = useRef<Promise<void> | null>(null);
+  const cacheWriteGenerationRef = useRef<number>(0);
+  const hasNetworkSnapshotRef = useRef<boolean>(false);
+  const cachedThumbnailUrlsRef = useRef<string[]>([]);
+  const thumbnailCacheBusyRef = useRef<boolean>(false);
+  const thumbnailCacheAttemptedRef = useRef<Map<string, number>>(new Map());
+  const offlineReadOnly = clipRefreshFailed;
 
   // Playback & Video Sync
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1475,6 +1542,99 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     [allClips, selectedClipId]
   );
 
+  useEffect(() => {
+    if (!currentClip) {
+      setPublicationLoad(null);
+      return;
+    }
+    const isPublished = Boolean(
+      currentClip.status === 'published' ||
+      currentClip.remote_id ||
+      currentClip.remote_url ||
+      (currentClip.publications && currentClip.publications.length > 0)
+    );
+    if (!isPublished) {
+      setPublicationLoad(null);
+      return;
+    }
+
+    const cachedItems = currentClip.publications ?? [];
+    if (offlineReadOnly || (!isCloudMode && !pcHost.trim()) || (isCloudMode && !currentClip.cloud_id)) {
+      setPublicationLoad({
+        clipId: currentClip.id,
+        items: cachedItems,
+        loading: false,
+        error: false,
+      });
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
+    setPublicationLoad({
+      clipId: currentClip.id,
+      items: cachedItems,
+      loading: true,
+      error: false,
+    });
+
+    const loadPublications = async () => {
+      if (isCloudMode) {
+        const session = await currentSession();
+        const token = session?.access_token
+          || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+        if (!token) throw new Error('Sign in to load publication stats');
+        const response = await fetch(
+          `${WORKER_BASE}/clips/${encodeURIComponent(String(currentClip.cloud_id))}/publications`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+            cache: 'no-store',
+          }
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        return Array.isArray(data?.publications) ? data.publications as PublicationItem[] : [];
+      }
+      const response = await fetch(apiUrl(`/api/clips/${currentClip.id}/publications`, pcHost), {
+        headers: getAuthHeaders(),
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      return Array.isArray(data?.publications) ? data.publications as PublicationItem[] : [];
+    };
+
+    void loadPublications()
+      .then((items) => {
+        if (cancelled) return;
+        setPublicationLoad({
+          clipId: currentClip.id,
+          items,
+          loading: false,
+          error: false,
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPublicationLoad({
+          clipId: currentClip.id,
+          items: cachedItems,
+          loading: false,
+          error: true,
+        });
+      })
+      .finally(() => window.clearTimeout(timeoutId));
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [currentClip?.id, currentClip?.cloud_id, currentClip?.status, isCloudMode, offlineReadOnly, pcHost]);
+
   const visibleCaptionTrack = useMemo(
     () => (currentClip && captionClipId === currentClip.id ? captionTrack : null),
     [currentClip, captionClipId, captionTrack]
@@ -1559,8 +1719,154 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // by a successful save, so a stale editor conflicts instead of overwriting.
   const localCaptionsRevisionRef = useRef<Map<string, number>>(new Map());
 
+  const revokeCachedThumbnailUrls = useCallback(() => {
+    cachedThumbnailUrlsRef.current.forEach((url) => {
+      try { URL.revokeObjectURL(url); } catch {}
+    });
+    cachedThumbnailUrlsRef.current = [];
+  }, []);
+
+  useEffect(() => {
+    componentMountedRef.current = true;
+    return () => {
+      componentMountedRef.current = false;
+      revokeCachedThumbnailUrls();
+    };
+  }, [revokeCachedThumbnailUrls]);
+
+  const resolveActiveCacheUserId = async (): Promise<string | null> => {
+    const bridged = Bridge.getCurrentUserId?.();
+    if (bridged) return bridged;
+    try {
+      const session = await currentSession();
+      return session?.user?.id ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const resolveCacheUserId = async (): Promise<string | null> => {
+    if (cacheUserIdRef.current) return cacheUserIdRef.current;
+    const userId = await resolveActiveCacheUserId();
+    cacheUserIdRef.current = userId;
+    return userId;
+  };
+
+  const cachePostersFromSnapshot = async (userId: string, clips: ClipItem[]) => {
+    if (thumbnailCacheBusyRef.current || clips.length === 0) return;
+    const absoluteClips = clips.map((clip) => ({
+      ...clip,
+      thumbnail_url: clip.thumbnail_url
+        ? (clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost))
+        : undefined,
+    }));
+    thumbnailCacheBusyRef.current = true;
+    try {
+      await cacheClipThumbnails(userId, absoluteClips, (clip) => {
+        const key = `${clip.id}:${clip.thumbnail_version ?? clip.range_revision ?? 0}`;
+        const now = Date.now();
+        const attemptedAt = thumbnailCacheAttemptedRef.current.get(key);
+        // Failed poster fetches retry later, but not on every 10s poll.
+        if (attemptedAt && now - attemptedAt < 5 * 60_000) return false;
+        thumbnailCacheAttemptedRef.current.set(key, now);
+        return true;
+      });
+    } catch {
+      // Offline thumbnails are best-effort; the clip list is not affected.
+    } finally {
+      thumbnailCacheBusyRef.current = false;
+    }
+  };
+
+  const persistClipsSnapshot = (
+    source: 'pc' | 'cloud',
+    ready: ClipItem[],
+    approved: ClipItem[],
+    rejected: unknown[],
+    stats: QueueStats | null
+  ) => {
+    const generation = ++cacheWriteGenerationRef.current;
+    void (async () => {
+      const activeUserId = await resolveActiveCacheUserId();
+      if (!activeUserId || generation !== cacheWriteGenerationRef.current) return;
+      if (cacheUserIdRef.current && cacheUserIdRef.current !== activeUserId) {
+        thumbnailCacheAttemptedRef.current.clear();
+        revokeCachedThumbnailUrls();
+      }
+      cacheUserIdRef.current = activeUserId;
+      await writeClipsCache(activeUserId, source, {
+        ready,
+        recent_approved: approved,
+        rejected,
+        queue_stats: stats,
+      }).catch(() => {});
+      if (generation !== cacheWriteGenerationRef.current) return;
+      await cachePostersFromSnapshot(activeUserId, [...ready, ...approved]);
+    })();
+  };
+
+  const ensureClipsCacheHydrated = (): Promise<void> => {
+    if (cacheHydrationRef.current) return cacheHydrationRef.current;
+    cacheHydrationRef.current = (async () => {
+      const userId = await resolveCacheUserId();
+      if (!userId) return;
+      const snapshot = await readClipsCache(userId);
+      if (!snapshot || snapshot.userId !== userId || hasNetworkSnapshotRef.current) return;
+
+      const sanitize = (clip: ClipItem): ClipItem => ({
+        ...clip,
+        // Presigned media URLs expire. Keeping them in a durable cache creates a
+        // dead player; offline detail shows metadata and asks for connectivity.
+        video_url: undefined,
+        source_video_url: undefined,
+        edit_window_url: undefined,
+        thumbnail_url: undefined,
+      });
+      const ready = snapshot.payload.ready.map(sanitize);
+      const approved = snapshot.payload.recent_approved.map(sanitize);
+      setReadyClips(ready);
+      setApprovedClips(approved);
+      setRejectedClips(
+        Array.isArray(snapshot.payload.rejected)
+          ? snapshot.payload.rejected.filter((clip): clip is RejectedCloudClip => Boolean(
+              clip && typeof clip === 'object' && typeof (clip as RejectedCloudClip).id === 'string'
+            ))
+          : []
+      );
+      setQueueStats(
+        snapshot.payload.queue_stats && typeof snapshot.payload.queue_stats === 'object'
+          ? snapshot.payload.queue_stats as QueueStats
+          : null
+      );
+      setCachedAt(snapshot.savedAt);
+      setShowingCachedClips(true);
+      setIsLoading(false);
+
+      void cachedThumbnailUrls(userId, [...ready, ...approved]).then((urls) => {
+        if (urls.size === 0) return;
+        if (hasNetworkSnapshotRef.current || !componentMountedRef.current) {
+          urls.forEach((url) => {
+            try { URL.revokeObjectURL(url); } catch {}
+          });
+          return;
+        }
+        cachedThumbnailUrlsRef.current.push(...urls.values());
+        const attach = (clips: ClipItem[]) => clips.map((clip) => {
+          const url = urls.get(clip.id);
+          return url ? { ...clip, thumbnail_url: url } : clip;
+        });
+        setReadyClips((previous) => attach(previous));
+        setApprovedClips((previous) => attach(previous));
+      }).catch(() => {});
+    })().catch(() => {
+      // IndexedDB failure must never prevent the normal online path.
+    });
+    return cacheHydrationRef.current;
+  };
+
   // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
+    await ensureClipsCacheHydrated();
     // In-flight lock: overlapping poll ticks / handler refreshes coalesce, with
     // one trailing refresh so the latest caller's intent is not dropped.
     if (clipsFetchBusyRef.current) {
@@ -1572,6 +1878,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     clipFetchGenerationRef.current += 1;
 
     let loadedFromPc = false;
+    let refreshSucceeded = false;
     const generation = clipFetchGenerationRef.current;
 
     if (pcHost && pcHost.trim()) {
@@ -1580,7 +1887,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         // A PC already known to be offline gets a short probe, not the full
         // 8 s timeout before cloud fallback.
         const timeoutId = setTimeout(() => controller.abort(), isPcOnline === false ? 2500 : 8000);
-        const res = await fetch(apiUrl('/api/clips', pcHost), { headers: getAuthHeaders(), signal: controller.signal });
+        const res = await fetch(apiUrl('/api/clips', pcHost), {
+          headers: getAuthHeaders(),
+          signal: controller.signal,
+          cache: 'no-store',
+        });
         clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
@@ -1596,6 +1907,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             }
             cloudFailStreakRef.current = 0;
             setConnectionError(null);
+            hasNetworkSnapshotRef.current = true;
+            setShowingCachedClips(false);
+            setClipRefreshFailed(false);
+            revokeCachedThumbnailUrls();
+            persistClipsSnapshot('pc', rList, aList, [], data.queue_stats ?? null);
+            refreshSucceeded = true;
           }
           setIsCloudMode(false);
           loadedFromPc = true;
@@ -1623,6 +1940,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           const clipsRes = await fetch(`${WORKER_BASE}/clips?limit=100&offset=0`, {
             headers: { 'Authorization': `Bearer ${token}` },
             signal: clipsController.signal,
+            cache: 'no-store',
           }).catch(() => null);
           window.clearTimeout(clipsTimeout);
 
@@ -1630,15 +1948,21 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             const data = await clipsRes.json();
             const rList = Array.isArray(data.ready) ? data.ready : [];
             const aList = Array.isArray(data.recent_approved) ? data.recent_approved : [];
+            const rj = Array.isArray(data.rejected) ? data.rejected : [];
             const hiddenIds = optimisticRejectIdsRef.current;
             if (clipFetchGenerationRef.current === generation) {
               setReadyClips(rList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
               setApprovedClips(aList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
-              const rj = Array.isArray(data.rejected) ? data.rejected : [];
               setRejectedClips(rj.filter((clip: RejectedCloudClip) => !(clip as any).retention_expired));
               if (data.queue_stats) {
                 setQueueStats(data.queue_stats);
               }
+              hasNetworkSnapshotRef.current = true;
+              setShowingCachedClips(false);
+              setClipRefreshFailed(false);
+              revokeCachedThumbnailUrls();
+              persistClipsSnapshot('cloud', rList, aList, rj, data.queue_stats ?? null);
+              refreshSucceeded = true;
             }
             cloudOk = true;
           }
@@ -1680,6 +2004,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
     if (clipFetchGenerationRef.current === generation) {
       setIsLoading(false);
+      if (refreshSucceeded) {
+        setClipRefreshFailed(false);
+      } else if (cloudFailStreakRef.current >= 2) {
+        setClipRefreshFailed(true);
+      }
     }
     // Release the in-flight lock and honor one queued trailing refresh.
     clipsFetchBusyRef.current = false;
@@ -1690,6 +2019,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   const handleSubmitRemoteJob = async () => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to process a new video.');
+      return;
+    }
     if (!submitUrlInput.trim()) return;
     setIsSubmittingJob(true);
     setFeedback(null);
@@ -1883,6 +2216,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } else {
       setFilmstripFrames([]);
     }
+    if (offlineReadOnly) {
+      return () => {
+        isCurrentClip = false;
+        captionRequestControllerRef.current?.abort();
+        captionRequestControllerRef.current = null;
+        controller.abort();
+      };
+    }
 
     const timer = setTimeout(() => {
       fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { headers: getAuthHeaders(), signal: controller.signal })
@@ -1902,7 +2243,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       captionRequestControllerRef.current = null;
       controller.abort();
     };
-  }, [currentClip?.id, currentClip?.range_revision, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost, isCloudMode]);
+  }, [currentClip?.id, currentClip?.range_revision, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost, isCloudMode, offlineReadOnly]);
 
   // Source bounds for mapping local clip time (0 -> duration) to source video time
   const clipStart = currentClip ? (currentClip.start_time || 0) : 0;
@@ -2267,6 +2608,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   const handleLayoutChange = async (newMode: LayoutMode) => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to change clip framing.');
+      return;
+    }
     setLayoutMode(newMode);
     if (!currentClip) return;
 
@@ -2342,6 +2687,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // Explicit / Auto Save Captions to Server
   const handleSaveCaptions = async (): Promise<boolean> => {
+    if (offlineReadOnly) {
+      setSaveStatus('error');
+      setFeedback('Reconnect to save caption edits.');
+      return false;
+    }
     if (!currentClip) return false;
     if (!captionTrack) return true;
     if (captionTrack.clip_id && captionTrack.clip_id !== currentClip.id) {
@@ -2422,6 +2772,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   const handleTrimChange = async (sourceStart: number, sourceEnd: number): Promise<boolean> => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to change clip trim.');
+      return false;
+    }
     if (!currentClip) return false;
     if (!(timelineSourceDuration > 0)) {
       setFeedback('Source duration is not verified yet. Range changes are disabled.');
@@ -2551,6 +2905,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // 5. Approve & Publish Handler (Optimistic UI)
   const handleApprove = () => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to approve and publish.');
+      return;
+    }
     if (!currentClip) return;
     if (!titleDraft.trim()) {
       setFeedback('Clip title cannot be empty.');
@@ -2674,6 +3032,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
    * and offers a 10s Undo that voids the command.
    */
   const performCloudReject = async (clip: ClipItem) => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to reject a clip.');
+      return;
+    }
     if (cloudRejectWorkingRef.current) return;
     cloudRejectWorkingRef.current = true;
     setIsSubmitting(true);
@@ -2735,6 +3097,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   /** Undo within the 10s window: voids the pending reject command server-side. */
   const handleCloudRejectUndo = async () => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to restore the clip.');
+      return;
+    }
     const undoState = pendingRejectUndo;
     if (!undoState || rejectUndoWorking) return;
     setRejectUndoWorking(true);
@@ -2799,6 +3165,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   /** Restore a rejected cloud clip from the Rejected retention list. */
   const handleCloudRestore = async (clipId: string) => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to restore the clip.');
+      return;
+    }
     if (restoringId) return;
     setRestoringId(clipId);
     try {
@@ -2833,6 +3203,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   const handleConfirmReject = async () => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to reject a clip.');
+      return;
+    }
     if (!clipToReject || isSubmitting) return;
     const clip = clipToReject;
     if (isCloudMode) {
@@ -2947,7 +3321,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               Clips
             </h1>
             <p className="text-xs text-text-muted mt-0.5 tabular-nums truncate flex items-center gap-1.5">
-              {isCloudMode ? (
+              {offlineReadOnly ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
+                  <span>Offline · saved clips</span>
+                </>
+              ) : isCloudMode ? (
                 <>
                   <span className="w-1.5 h-1.5 rounded-full bg-primary" />
                   <span>Cloud Mode (Remote)</span>
@@ -2973,9 +3352,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <button
               type="button"
               onClick={() => setShowSubmitModal(true)}
+              disabled={offlineReadOnly}
               aria-label="Process YouTube Video"
-              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
-              title="Process YouTube Video in Cloud"
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all disabled:opacity-40"
+              title={offlineReadOnly ? 'Reconnect to process a video' : 'Process YouTube Video in Cloud'}
             >
               <Plus size={19} />
             </button>
@@ -3088,9 +3468,39 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         </div>
       )}
 
+      {showingCachedClips && (
+        <div className="shrink-0 px-4 py-2 bg-surface-2 border-b border-border flex items-center gap-2 text-xs text-text-secondary">
+          {offlineReadOnly ? <WifiOff size={13} className="shrink-0" /> : <RefreshCw size={13} className="shrink-0 animate-spin" />}
+          <span className="truncate">
+            {offlineReadOnly ? 'Offline — showing clips saved' : 'Showing saved clips while refreshing'}
+            {cachedAt ? ` ${new Date(cachedAt).toLocaleString()}` : ''}
+          </span>
+        </div>
+      )}
+
       {/* CLIP LIST — flat rows on canvas, separated by dividers (no cards) */}
       <main className="flex-1 min-h-0 overflow-y-auto pb-24">
-        {isLoading && allClips.length === 0 ? (
+        {clipRefreshFailed && allClips.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
+            <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
+              <WifiOff size={24} />
+            </div>
+            <h2 className="text-base font-semibold tracking-tight text-text-main">
+              No offline clips yet
+            </h2>
+            <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
+              Connect once to save your clip library for offline viewing.
+            </p>
+            <button
+              type="button"
+              onClick={fetchClips}
+              className="mt-5 min-h-[44px] px-4 rounded-xl bg-surface-2 text-sm font-medium text-text-main hover:bg-surface-3 active:scale-[0.98] transition-all flex items-center gap-2"
+            >
+              <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
+              <span>Retry</span>
+            </button>
+          </div>
+        ) : isLoading && allClips.length === 0 ? (
           <div className="px-4">
             {[1, 2, 3].map((i) => (
               <div key={i} className="py-3 flex gap-3 animate-pulse">
@@ -3124,7 +3534,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => { void handleCloudRestore(clip.id); }}
-                      disabled={restoringId === clip.id}
+                      disabled={offlineReadOnly || restoringId === clip.id}
                       className="shrink-0 min-h-[44px] px-4 rounded-xl bg-surface-2 text-sm font-medium text-text-main hover:bg-surface-3 active:scale-[0.98] transition-all disabled:opacity-50"
                     >
                       {restoringId === clip.id ? 'Restoring…' : 'Restore'}
@@ -3137,21 +3547,28 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         ) : filteredClips.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
             <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
-              {isCloudMode ? <Cloud size={24} className="text-primary" /> : <Film size={24} />}
+              {offlineReadOnly
+                ? <WifiOff size={24} />
+                : isCloudMode ? <Cloud size={24} className="text-primary" /> : <Film size={24} />}
             </div>
             <h2 className="text-base font-semibold tracking-tight text-text-main">
-              {isCloudMode ? 'Cloud Mode Active' : 'No clips yet'}
+              {offlineReadOnly
+                ? `No ${filterStatus} clips saved`
+                : isCloudMode ? 'Cloud Mode Active' : 'No clips yet'}
             </h2>
             <p className="text-sm text-text-secondary mt-1.5 max-w-[280px]">
-              {isCloudMode
-                ? 'Your app is connected to Dispatch Cloud. Submit a YouTube video to process clips from anywhere.'
-                : 'Dispatch will show generated clips here after processing a recording session.'}
+              {offlineReadOnly
+                ? 'Your saved library has no clips in this filter. Reconnect to refresh the full library.'
+                : isCloudMode
+                  ? 'Your app is connected to Dispatch Cloud. Submit a YouTube video to process clips from anywhere.'
+                  : 'Dispatch will show generated clips here after processing a recording session.'}
             </p>
             <div className="mt-5 flex items-center gap-3">
               <button
                 type="button"
                 onClick={() => setShowSubmitModal(true)}
-                className="min-h-[44px] px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow"
+                disabled={offlineReadOnly}
+                className="min-h-[44px] px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold active:scale-[0.98] transition-all flex items-center gap-2 shadow-hero-glow disabled:opacity-40"
               >
                 <Plus size={15} />
                 <span>Process Video</span>
@@ -3375,11 +3792,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
         {/* DETAIL MAIN VIEWPORT: Responsive preview with stable visual center */}
         <main className="flex-1 min-h-0 flex flex-col px-4 pt-2 pb-3 gap-3 overflow-hidden">
+          {offlineReadOnly && (
+            <div className="shrink-0 px-3 py-2 rounded-xl bg-surface-2 border border-border flex items-center gap-2 text-xs text-text-secondary">
+              <WifiOff size={14} className="shrink-0" />
+              <span>Video playback and edits need a connection. Your clip details are saved offline.</span>
+            </div>
+          )}
           {/* 1. CLEAN VIDEO PLAYER WITH DYNAMIC RESPONSIVE FRAMING: Stable center stage */}
           <div className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden py-1">
             <FramedVideoStage
-              sourceVideoUrl={currentClip.source_video_url ? apiUrl(currentClip.source_video_url, pcHost) : (pcHost ? apiUrl(`/api/clips/${currentClip.id}/source`, pcHost) : undefined)}
-              videoUrl={currentClip.video_url ? apiUrl(currentClip.video_url, pcHost) : undefined}
+              sourceVideoUrl={offlineReadOnly ? undefined : (currentClip.source_video_url ? apiUrl(currentClip.source_video_url, pcHost) : (pcHost ? apiUrl(`/api/clips/${currentClip.id}/source`, pcHost) : undefined))}
+              videoUrl={offlineReadOnly ? undefined : (currentClip.video_url ? apiUrl(currentClip.video_url, pcHost) : undefined)}
               poster={currentClip.thumbnail_url ? apiUrl(currentClip.thumbnail_url, pcHost) : undefined}
               preferRendered={true}
               mediaMissing={currentClip.media_missing === true}
@@ -3481,54 +3904,140 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
             {/* 3. DYNAMIC ACTIONS & TELEMETRY: Changes depending on clip lifecycle */}
             {(() => {
+              const loadedPublications = publicationLoad?.clipId === currentClip.id
+                ? publicationLoad.items
+                : (currentClip.publications ?? []);
+              const fallbackId = currentClip.remote_id || currentClip.remote_url;
+              const publications: PublicationItem[] = loadedPublications.length > 0
+                ? loadedPublications
+                : (fallbackId || currentClip.status === 'published')
+                  ? [{
+                      id: `legacy:${currentClip.id}`,
+                      platform: 'youtube',
+                      remote_id: currentClip.remote_id,
+                      remote_url: currentClip.remote_url,
+                      published_at: currentClip.published_at,
+                      publish_mode: currentClip.publish_mode,
+                      stats: { views: null, likes: null, comments: null },
+                      stats_updated_at: null,
+                      stats_stale: true,
+                    }]
+                  : [];
               const isClipPublished = Boolean(
                 currentClip.status === 'published' ||
-                currentClip.remote_id ||
-                currentClip.remote_url
+                publications.length > 0
               );
               const isClipPublishing = Boolean(
                 currentClip.status === 'approved' && !isClipPublished
               );
-              const liveUrl = currentClip.remote_url || (currentClip.remote_id ? `https://youtube.com/shorts/${currentClip.remote_id}` : '');
+              const primaryPublication = publications.find((p) => p.platform.startsWith('youtube'))
+                || publications[0];
+              const liveUrl = primaryPublication?.remote_url
+                || (primaryPublication?.remote_id ? `https://youtube.com/shorts/${primaryPublication.remote_id}` : '')
+                || currentClip.remote_url
+                || (currentClip.remote_id ? `https://youtube.com/shorts/${currentClip.remote_id}` : '');
+              const statsLoading = Boolean(
+                publicationLoad?.clipId === currentClip.id && publicationLoad.loading
+              );
+              const statsError = Boolean(
+                publicationLoad?.clipId === currentClip.id && publicationLoad.error
+              );
+              const openPlatform = primaryPublication
+                ? (primaryPublication.platform.startsWith('youtube') ? 'YouTube' : platformLabel(primaryPublication.platform))
+                : 'YouTube';
 
               if (isClipPublished) {
-                // Truthful destination label: the clip is PUBLISHED (not live).
-                // "Shorts" is only stated when the remote target is actually a
-                // Short (the youtube.com/shorts URL Dispatch exports to).
-                const destinationIsShorts = Boolean(
-                  currentClip.remote_id || (liveUrl && liveUrl.includes('/shorts/'))
-                );
                 return (
                   <section className="w-full space-y-3 pt-1">
-                    {/* Compact published status: state + age (+ visibility),
-                        with copy-link kept one tap away — no oversized URL panel. */}
-                    <div className="w-full px-3 py-2.5 rounded-2xl bg-surface-100 border border-border flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="w-2 h-2 rounded-full bg-status-success shadow-[0_0_8px_rgba(34,197,94,0.6)] shrink-0" />
-                        <div className="flex flex-col min-w-0">
-                          <span className="text-xs font-semibold text-status-success">
-                            Published to YouTube{destinationIsShorts ? ' Shorts' : ''}
-                          </span>
-                          <span className="text-[11px] text-text-muted font-mono tabular-nums truncate">
-                            {formatAge(currentClip.published_at || currentClip.approved_at)}
-                            {currentClip.publish_mode ? ` · ${currentClip.publish_mode}` : ''}
-                          </span>
-                        </div>
-                      </div>
-                      {liveUrl && (
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(liveUrl, 'YouTube link')}
-                          className="shrink-0 w-11 h-11 rounded-xl bg-surface-200 hover:bg-surface-3 text-text-secondary hover:text-text-main flex items-center justify-center active:scale-95 transition-all"
-                          aria-label="Copy YouTube link"
-                          title="Copy link"
+                    {publications.map((publication) => {
+                      const publicationUrl = publication.remote_url
+                        || (publication.remote_id
+                          ? (publication.platform.startsWith('youtube')
+                            ? `https://youtube.com/shorts/${publication.remote_id}`
+                            : '')
+                          : '');
+                      const isYouTube = publication.platform.startsWith('youtube');
+                      const isShorts = Boolean(
+                        publication.remote_id ||
+                        (publicationUrl && publicationUrl.includes('/shorts/'))
+                      );
+                      const label = isYouTube
+                        ? `YouTube${isShorts ? ' Shorts' : ''}`
+                        : platformLabel(publication.platform);
+                      const hasStats = Boolean(
+                        publication.stats &&
+                        [publication.stats.views, publication.stats.likes, publication.stats.comments]
+                          .some((value) => value !== null && value !== undefined)
+                      );
+                      const publishedAge = formatAge(
+                        publication.published_at || currentClip.published_at || currentClip.approved_at
+                      );
+                      return (
+                        <div
+                          key={publication.id}
+                          className="w-full px-3 py-2.5 rounded-2xl bg-surface-100 border border-border space-y-2.5"
                         >
-                          <Copy size={15} />
-                        </button>
-                      )}
-                    </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="w-2 h-2 rounded-full bg-status-success shadow-[0_0_8px_rgba(34,197,94,0.6)] shrink-0" />
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-xs font-semibold text-text-main">
+                                  {label}
+                                </span>
+                                <span className="text-[11px] text-text-muted font-mono tabular-nums truncate">
+                                  {publishedAge ? `Published ${publishedAge}` : 'Published'}
+                                  {publication.publish_mode ? ` · ${publication.publish_mode}` : ''}
+                                </span>
+                              </div>
+                            </div>
+                            {publicationUrl && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopy(publicationUrl, `${label} link`)}
+                                className="shrink-0 w-11 h-11 rounded-xl bg-surface-200 hover:bg-surface-3 text-text-secondary hover:text-text-main flex items-center justify-center active:scale-95 transition-all"
+                                aria-label={`Copy ${label} link`}
+                                title="Copy link"
+                              >
+                                <Copy size={15} />
+                              </button>
+                            )}
+                          </div>
 
-                    {/* Single hero action (opens the published video) +
+                          <div className="grid grid-cols-3 gap-2 border-t border-border pt-2.5">
+                            {[
+                              { key: 'views', label: 'views', value: publication.stats?.views, Icon: Eye },
+                              { key: 'likes', label: 'likes', value: publication.stats?.likes, Icon: Heart },
+                              { key: 'comments', label: 'comments', value: publication.stats?.comments, Icon: MessageCircle },
+                            ].map(({ key, label: metricLabel, value, Icon }) => (
+                              <div key={key} className="min-w-0" aria-label={`${label} ${metricLabel}: ${value ?? 'unavailable'}`}>
+                                <span className="flex items-center gap-1 text-[10px] uppercase font-semibold text-text-muted">
+                                  <Icon size={11} className="shrink-0" />
+                                  <span className="truncate">{metricLabel}</span>
+                                </span>
+                                <span
+                                  className={`block mt-0.5 text-sm font-semibold font-mono tabular-nums text-text-main truncate ${statsLoading && !hasStats ? 'animate-pulse' : ''}`}
+                                  aria-label={value === null || value === undefined ? 'Unavailable' : String(value)}
+                                >
+                                  {formatMetric(value)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <p className="text-[11px] text-text-muted">
+                            {statsLoading && !hasStats
+                              ? 'Loading stats…'
+                              : publication.stats_updated_at
+                                ? `${publication.stats_stale ? 'Last updated' : 'Stats updated'} ${formatAge(publication.stats_updated_at)}`
+                                : statsError || publication.stats_stale
+                                  ? 'Stats unavailable'
+                                  : 'Stats not available yet'}
+                          </p>
+                        </div>
+                      );
+                    })}
+
+                    {/* Single hero action (opens the primary destination) +
                         secondary edit affordance. */}
                     <div className="w-full grid grid-cols-2 gap-2.5">
                       <button
@@ -3540,13 +4049,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40 disabled:pointer-events-none"
                       >
                         <ExternalLink size={15} />
-                        <span>Open on YouTube</span>
+                        <span>Open on {openPlatform}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => setViewMode('studio')}
-                        className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-semibold text-text-secondary hover:text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
+                        disabled={offlineReadOnly}
+                        title={offlineReadOnly ? 'Reconnect to edit this clip' : undefined}
+                        className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-semibold text-text-secondary hover:text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-40"
                       >
                         <Scissors size={14} className="text-primary" />
                         <span>Edit a Copy</span>
