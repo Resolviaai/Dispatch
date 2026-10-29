@@ -87,25 +87,48 @@ class RecordingMediaPolicyTest {
     @Test
     fun openEndedByteRangeRunsToFileEnd() {
         val fileLength = 1_000_000L
-        assertEquals(0L to (fileLength - 1), RecordingMediaPolicy.parseByteRange("bytes=0-", fileLength))
-        assertEquals(500L to (fileLength - 1), RecordingMediaPolicy.parseByteRange("bytes=500-", fileLength))
+        assertEquals(
+            ByteRangeResult.Satisfiable(0L, fileLength - 1),
+            RecordingMediaPolicy.resolveRange("bytes=0-", fileLength)
+        )
+        assertEquals(
+            ByteRangeResult.Satisfiable(500L, fileLength - 1),
+            RecordingMediaPolicy.resolveRange("bytes=500-", fileLength)
+        )
     }
 
     @Test
     fun boundedByteRangeIsRespectedAndClamped() {
         val fileLength = 1000L
-        assertEquals(100L to 299L, RecordingMediaPolicy.parseByteRange("bytes=100-299", fileLength))
+        assertEquals(ByteRangeResult.Satisfiable(100L, 299L), RecordingMediaPolicy.resolveRange("bytes=100-299", fileLength))
         // Over-long end is clamped to the file end.
-        assertEquals(100L to 999L, RecordingMediaPolicy.parseByteRange("bytes=100-9999", fileLength))
-        // Reversed ranges restart from the beginning, matching the handler.
-        assertEquals(0L to 100L, RecordingMediaPolicy.parseByteRange("bytes=500-100", fileLength))
+        assertEquals(ByteRangeResult.Satisfiable(100L, 999L), RecordingMediaPolicy.resolveRange("bytes=100-9999", fileLength))
+    }
+
+    @Test
+    fun reversedOrOutOfBoundsRangeIsUnsatisfiable() {
+        val fileLength = 1000L
+        // RFC 7233: an unsatisfiable range is a 416, never a silent full-file read.
+        assertEquals(ByteRangeResult.Unsatisfiable, RecordingMediaPolicy.resolveRange("bytes=500-100", fileLength))
+        assertEquals(ByteRangeResult.Unsatisfiable, RecordingMediaPolicy.resolveRange("bytes=1000-", fileLength))
+        assertEquals(ByteRangeResult.Unsatisfiable, RecordingMediaPolicy.resolveRange("bytes=-0", fileLength))
+    }
+
+    @Test
+    fun suffixRangeMeansTheLastNBytes() {
+        val fileLength = 1000L
+        // Previously treated as 0..N, which served the wrong bytes entirely.
+        assertEquals(ByteRangeResult.Satisfiable(900L, 999L), RecordingMediaPolicy.resolveRange("bytes=-100", fileLength))
+        assertEquals(ByteRangeResult.Satisfiable(0L, 999L), RecordingMediaPolicy.resolveRange("bytes=-5000", fileLength))
     }
 
     @Test
     fun absentOrInvalidRangeHeaderFallsBackToFullResponse() {
         val fileLength = 1000L
-        assertNull(RecordingMediaPolicy.parseByteRange(null, fileLength))
-        assertNull(RecordingMediaPolicy.parseByteRange("items=0-5", fileLength))
-        assertNull(RecordingMediaPolicy.parseByteRange("bytes=-", 0L)) // empty file: serve 200
+        assertNull(RecordingMediaPolicy.resolveRange(null, fileLength))
+        assertNull(RecordingMediaPolicy.resolveRange("items=0-5", fileLength))
+        assertNull(RecordingMediaPolicy.resolveRange("bytes=-", 0L)) // empty file: serve 200
+        assertNull(RecordingMediaPolicy.resolveRange("bytes=0-1,5-9", fileLength)) // multi-range: serve 200
+        assertNull(RecordingMediaPolicy.resolveRange("bytes=abc-def", fileLength))
     }
 }

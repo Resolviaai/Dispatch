@@ -749,6 +749,7 @@ class DispatchNativeBridge(
                 } else {
                     database.recordingDao().getAllSegmentsList()
                 }
+com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
                 val jsonArr = JsonArray()
                 for (s in segments) {
                     val localFile = java.io.File(s.filepath)
@@ -768,13 +769,13 @@ class DispatchNativeBridge(
                         addProperty("youtubeVideoId", s.youtubeVideoId)
                         addProperty("userId", s.userId)
                         addProperty("fileExists", fileExists)
-                        addProperty("videoUrl", if (fileExists) "http://appassets.androidplatform.net/recordings/${s.filename}" else "")
+                        addProperty("videoUrl", if (fileExists) com.resolvia.dispatch.media.RecordingHttpServer.mediaUrl(s.filename).orEmpty() else "")
                         // Generated on demand so segments recorded before posters
                         // existed still get a thumbnail instead of a permanent gray tile.
                         val poster = com.resolvia.dispatch.recorder.RecordingPosterWriter.ensurePoster(localFile)
                         addProperty(
                             "thumbnailUrl",
-                            if (poster != null) "http://appassets.androidplatform.net/recordings/${poster.name}" else ""
+                            poster?.let { com.resolvia.dispatch.media.RecordingHttpServer.mediaUrl(it.name) }.orEmpty()
                         )
                     }
                     jsonArr.add(obj)

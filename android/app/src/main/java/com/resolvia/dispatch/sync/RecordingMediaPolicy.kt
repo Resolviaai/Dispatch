@@ -69,25 +69,49 @@ object RecordingMediaPolicy {
      * requests are clamped rather than rejected so playback/scrubbing always
      * resolves.
      */
-    fun parseByteRange(rangeHeader: String?, fileLength: Long): Pair<Long, Long>? {
+        /**
+     * RFC 7233 single-range resolution.
+     *
+     * Returns null when the header is absent, not a `bytes` range, malformed, or
+     * contains multiple ranges (a server may ignore Range and send 200, which is
+     * always valid). Returns [ByteRangeResult.Unsatisfiable] when the client asked
+     * for bytes that cannot exist, which must be answered with 416 + `Content-Range:
+     * bytes *\/length` rather than silently rewritten into a whole-file read.
+     */
+    fun resolveRange(rangeHeader: String?, fileLength: Long): ByteRangeResult? {
         if (rangeHeader == null) return null
         val header = rangeHeader.trim()
-        if (!header.startsWith("bytes=") || fileLength <= 0L) return null
+        if (!header.startsWith("bytes=", ignoreCase = true) || fileLength <= 0L) return null
+        val spec = header.substring(6).trim()
+        if (spec.isEmpty() || spec.contains(',')) return null
+        val dash = spec.indexOf('-')
+        if (dash < 0) return null
+        val first = spec.substring(0, dash).trim()
+        val last = spec.substring(dash + 1).trim()
         return try {
-            val range = header.removePrefix("bytes=").trim()
-            val parts = range.split("-", limit = 2)
-            var start = parts[0].toLongOrNull() ?: 0L
-            var end = if (parts.size > 1 && parts[1].isNotBlank()) {
-                parts[1].toLongOrNull() ?: (fileLength - 1)
+            if (first.isEmpty()) {
+                // Suffix range: the LAST n bytes, not the first n.
+                val suffix = last.toLongOrNull() ?: return null
+                if (suffix <= 0L) return ByteRangeResult.Unsatisfiable
+                val start = if (suffix >= fileLength) 0L else fileLength - suffix
+                ByteRangeResult.Satisfiable(start, fileLength - 1)
             } else {
-                fileLength - 1
+                val start = first.toLongOrNull() ?: return null
+                val end = if (last.isEmpty()) fileLength - 1 else (last.toLongOrNull() ?: return null)
+                if (start < 0L || start >= fileLength || end < start) {
+                    ByteRangeResult.Unsatisfiable
+                } else {
+                    ByteRangeResult.Satisfiable(start, minOf(end, fileLength - 1))
+                }
             }
-            if (end >= fileLength) end = fileLength - 1
-            if (start > end) start = 0L
-            if (start < 0) start = 0L
-            start to end
         } catch (e: Exception) {
             null
         }
     }
+}
+
+/** Outcome of resolving a client Range header. */
+sealed interface ByteRangeResult {
+    data class Satisfiable(val start: Long, val end: Long) : ByteRangeResult
+    object Unsatisfiable : ByteRangeResult
 }

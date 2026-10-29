@@ -208,6 +208,10 @@ class MainActivity : ComponentActivity() {
         cameraCaptureManager = CameraCaptureManager(this)
         pairingManager = PairingManager(this)
 
+        // Serve recorded media over loopback HTTP (real range semantics) for this
+        // activity's lifetime; the bridge builds media URLs from it.
+        com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(this)
+
         // Initialize native camera PreviewView (placed underneath WebView)
         // PERFORMANCE mode uses hardware SurfaceView directly via hardware composer, eliminating TextureView copy lag during 1080p recording
         previewView = PreviewView(this).apply {
@@ -221,35 +225,14 @@ class MainActivity : ComponentActivity() {
 
         // Set up WebViewAssetLoader to safely serve assets over http://appassets.androidplatform.net
         // Using HTTP scheme eliminates Chromium mixed-content auto-upgrade so local LAN HTTP video streaming works seamlessly.
-        val extRecDir = File(getExternalFilesDir(null) ?: filesDir, "recordings").apply { if (!exists()) mkdirs() }
-        val intRecDir = File(filesDir, "recordings").apply { if (!exists()) mkdirs() }
+        // Recorded media is served by RecordingHttpServer over real HTTP on loopback.
+        // The WebView only loads the app shell from its asset domain, so there is a
+        // single media transport rather than an interception path that behaves
+        // differently across devices and file sizes.
         val assetLoader = WebViewAssetLoader.Builder()
             .setDomain("appassets.androidplatform.net")
             .setHttpAllowed(true)
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
-            .addPathHandler("/recordings/", object : WebViewAssetLoader.PathHandler {
-                override fun handle(path: String): WebResourceResponse? {
-                    return try {
-                        val targetFile = resolveRecordingFile(path, extRecDir, intRecDir) ?: return null
-
-                        val mime = when {
-                            targetFile.name.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
-                            targetFile.name.endsWith(".jpg", ignoreCase = true) || targetFile.name.endsWith(".jpeg", ignoreCase = true) -> "image/jpeg"
-                            targetFile.name.endsWith(".png", ignoreCase = true) -> "image/png"
-                            else -> "application/octet-stream"
-                        }
-                        val headers = mapOf(
-                            "Access-Control-Allow-Origin" to "*",
-                            "Accept-Ranges" to "bytes",
-                            "Content-Type" to mime
-                        )
-                        WebResourceResponse(mime, null, 200, "OK", headers, FileInputStream(targetFile))
-                    } catch (e: Exception) {
-                        android.util.Log.e("MainActivity", "Error serving recording $path: ${e.message}")
-                        null
-                    }
-                }
-            })
             .build()
 
         // Configure full-bleed WebView with transparent background
@@ -323,14 +306,9 @@ class MainActivity : ComponentActivity() {
                     view: WebView,
                     request: WebResourceRequest
                 ): WebResourceResponse? {
-                    val url = request.url
-                    if (url.host == "appassets.androidplatform.net" && url.path?.startsWith("/recordings/") == true) {
-                        val path = url.path!!.removePrefix("/recordings/")
-                        val targetFile = resolveRecordingFile(path, extRecDir, intRecDir)
-                        if (targetFile != null) {
-                            return handleMediaFileWithRange(targetFile, request.requestHeaders)
-                        }
-                    }
+                    // Only the app shell is intercepted. Recording media is served by
+                    // RecordingHttpServer over loopback HTTP so the media stack gets
+                    // real 206/416 range semantics.
                     return assetLoader.shouldInterceptRequest(request.url)
                 }
 
@@ -487,78 +465,11 @@ class MainActivity : ComponentActivity() {
         if (::webView.isInitialized) {
             webView.destroy()
         }
-    }
-
-    /**
-     * Resolves a /recordings/ URL to a readable, in-scope media file.
-     * Enforces path containment (traversal outside the two recording roots is
-     * refused), URL-decodes the segment name, and refuses in-flight `.tmp`
-     * segment files so a half-written recording is never presented as a
-     * "LOCAL_FILE_READY" playable asset.
-     */
-    private fun resolveRecordingFile(path: String, extRecDir: File, intRecDir: File): File? =
-        com.resolvia.dispatch.sync.RecordingMediaPolicy.resolveRecordingPath(path, extRecDir, intRecDir)
-
-    private fun handleMediaFileWithRange(file: File, requestHeaders: Map<String, String>?): WebResourceResponse {
-        val fileLength = file.length()
-        val mime = com.resolvia.dispatch.sync.RecordingMediaPolicy.mediaMimeFor(file.name)
-
-        val rangeHeader = requestHeaders?.entries?.firstOrNull { it.key.equals("range", ignoreCase = true) }?.value
-        val parsedRange = com.resolvia.dispatch.sync.RecordingMediaPolicy.parseByteRange(rangeHeader, fileLength)
-
-        if (parsedRange != null) {
-            val (start, end) = parsedRange
-            try {
-                val contentLength = end - start + 1
-                // RandomAccessFile, not FileInputStream+FileChannel.position(): seeking the
-                // channel of a FileInputStream does NOT move the stream's read offset on
-                // Android, so every ranged read returned EOF immediately. That served zero
-                // bytes for any start > 0, which stalled <video> playback and left the
-                // Sessions thumbnails as placeholders (they must seek to the moov atom).
-                val raf = java.io.RandomAccessFile(file, "r")
-                raf.seek(start)
-
-                val boundedStream = object : java.io.InputStream() {
-                    private var bytesRemaining = contentLength
-                    override fun read(): Int {
-                        if (bytesRemaining <= 0) return -1
-                        val b = raf.read()
-                        if (b != -1) bytesRemaining--
-                        return b
-                    }
-                    override fun read(b: ByteArray, off: Int, len: Int): Int {
-                        if (bytesRemaining <= 0) return -1
-                        val toRead = Math.min(len.toLong(), bytesRemaining).toInt()
-                        val count = raf.read(b, off, toRead)
-                        if (count > 0) bytesRemaining -= count
-                        return count
-                    }
-                    override fun available(): Int =
-                        bytesRemaining.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                    override fun close() {
-                        raf.close()
-                    }
-                }
-
-                val responseHeaders = mapOf(
-                    "Access-Control-Allow-Origin" to "*",
-                    "Accept-Ranges" to "bytes",
-                    "Content-Range" to "bytes $start-$end/$fileLength",
-                    "Content-Length" to contentLength.toString(),
-                    "Content-Type" to mime
-                )
-                return WebResourceResponse(mime, null, 206, "Partial Content", responseHeaders, boundedStream)
-            } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Range request failed: ${e.message}")
-            }
+        // Only tear the media server down when the activity is really going away,
+        // so a configuration change does not invalidate URLs the player is using.
+        if (isFinishing) {
+            com.resolvia.dispatch.media.RecordingHttpServer.stop()
         }
-
-        val defaultHeaders = mapOf(
-            "Access-Control-Allow-Origin" to "*",
-            "Accept-Ranges" to "bytes",
-            "Content-Length" to fileLength.toString(),
-            "Content-Type" to mime
-        )
-        return WebResourceResponse(mime, null, 200, "OK", defaultHeaders, FileInputStream(file))
     }
+
 }
