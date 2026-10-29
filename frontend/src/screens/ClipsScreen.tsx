@@ -2522,6 +2522,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       setSourceDurationForClip({ clipId: currentClip.id, seconds: loadedDuration });
     }
     if (video) {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        if (currentClip) {
+          const isLandscape = video.videoWidth > video.videoHeight * 1.1;
+          if (isLandscape && currentClip.source_orientation !== 'landscape') {
+            currentClip.source_orientation = 'landscape';
+            currentClip.available_layout_modes = DEFAULT_LANDSCAPE_MODES;
+            if (!['crop_916', 'crop_follow', 'fit_blur', 'fit_black', 'native_169', 'landscape'].includes(layoutMode)) {
+              setLayoutMode('fit_blur');
+            }
+          }
+        }
+      }
       if (isSourceEffective) {
         if (video.duration >= clipStart && clipStart > 0) {
           video.currentTime = clipStart;
@@ -4094,9 +4106,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               }
 
               // Normal Ready-to-Review Mode:
+              const isLandscapeReview = currentClip.source_orientation === 'landscape'
+                || Boolean(videoRef.current && videoRef.current.videoWidth > videoRef.current.videoHeight * 1.1);
               const availableModes = (currentClip.available_layout_modes && currentClip.available_layout_modes.length > 0)
                 ? currentClip.available_layout_modes
-                : (currentClip.source_orientation === 'landscape' ? DEFAULT_LANDSCAPE_MODES : DEFAULT_PORTRAIT_MODES);
+                : (isLandscapeReview ? DEFAULT_LANDSCAPE_MODES : DEFAULT_PORTRAIT_MODES);
               const activeModeObj = availableModes.find((m) => m.id === layoutMode) || availableModes[0];
 
               return (

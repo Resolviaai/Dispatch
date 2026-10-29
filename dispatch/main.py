@@ -15,7 +15,6 @@ from dispatch.config import (
 )
 from dispatch import db
 from dispatch.governor.resource_governor import ResourceGovernor
-from dispatch.youtube_inbox.poller import YouTubeInboxPoller
 from dispatch.orchestrator.recovery import recover_laptop_orchestrator
 from dispatch.web.app import app
 
@@ -145,10 +144,7 @@ def start_dispatch(run_web: bool = True):
         sys.exit(1)
     logger.info("FFmpeg verified in system PATH")
 
-    # 5. YouTube is the only automatic video ingest path on PC (Pillar 1).
-    youtube_poller = YouTubeInboxPoller()
-    youtube_poller.start()
-    logger.info("Autonomous YouTube Cloud Inbox poller active (Checks immediately on boot + every 10 min)")
+    # 5. Video ingestion is driven autonomously via RemoteJobPoller from the cloud queue.
 
     # 6. Pillar 2: Autonomous Transcription Worker (YouTube captions with Whisper fallback)
     from dispatch.transcription.worker import TranscriptionWorker
@@ -235,7 +231,6 @@ def start_dispatch(run_web: bool = True):
             outbox_worker.stop()
             highlight_worker.stop()
             transcription_worker.stop()
-            youtube_poller.stop()
             release_single_instance_lock()
     else:
         logger.info("Running in headless daemon mode. Press Ctrl+C to stop.")
@@ -247,7 +242,6 @@ def start_dispatch(run_web: bool = True):
             outbox_worker.stop()
             highlight_worker.stop()
             transcription_worker.stop()
-            youtube_poller.stop()
             release_single_instance_lock()
             logger.info("Dispatch daemon stopped.")
 

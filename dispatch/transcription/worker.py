@@ -155,6 +155,11 @@ class TranscriptionWorker:
             "Video %s: Entering WAITING_FOR_TRANSCRIPT (Deadline: %s, Wait window: %ds, Reprobe: %ds)",
             video_id, deadline_str, self.caption_wait_seconds, self.caption_reprobe_seconds
         )
+        try:
+            from dispatch.youtube_connections import update_job_stage_by_video_id
+            update_job_stage_by_video_id(video_id, "transcribing")
+        except Exception:
+            pass
 
         # Stage 1 Fast Funnel: If local video exists and Gemini API key is configured,
         # transcribe immediately with gemini-3.5-flash-lite in ~3s without waiting for YouTube captions!
@@ -452,6 +457,11 @@ class TranscriptionWorker:
             transcript_source=source,
             segments_json=json.dumps(segments, ensure_ascii=False)
         )
+        try:
+            from dispatch.youtube_connections import update_job_stage_by_video_id
+            update_job_stage_by_video_id(video_id, "analyzing")
+        except Exception:
+            pass
 
         logger.info(
             "Pillar 2 Transcription SUCCESS for %s -> TRANSCRIBED (Source: %s, Segments: %d, Words: %d, TranscriptID: %s)",

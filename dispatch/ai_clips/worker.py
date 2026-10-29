@@ -196,10 +196,20 @@ class HighlightWorker:
                         if all_rendered:
                             db.update_youtube_video(video_id=video_id, status="COMPLETED")
                             logger.info("All clips rendered or queued for video %s -> COMPLETED", video_id)
+                            try:
+                                from dispatch.youtube_connections import update_job_stage_by_video_id
+                                update_job_stage_by_video_id(video_id, "ready")
+                            except Exception:
+                                pass
                         else:
                             logger.warning("Not all clips rendered yet for video %s; maintaining CLIPS_DEFINED", video_id)
                     else:
                         db.update_youtube_video(video_id=video_id, status="COMPLETED")
+                        try:
+                            from dispatch.youtube_connections import update_job_stage_by_video_id
+                            update_job_stage_by_video_id(video_id, "ready")
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.error("Error rendering CLIPS_DEFINED item %s: %s", video_id, e)
 
@@ -686,6 +696,11 @@ class HighlightWorker:
         # Transition to ANALYZING
         db.update_youtube_video(video_id=video_id, status="ANALYZING")
         logger.info("Transitioned %s to ANALYZING", video_id)
+        try:
+            from dispatch.youtube_connections import update_job_stage_by_video_id
+            update_job_stage_by_video_id(video_id, "analyzing")
+        except Exception:
+            pass
 
         # Handle zero-speech / empty transcript immediately
         if not segments or not any(s.get("text", "").strip() for s in segments):
@@ -781,6 +796,11 @@ class HighlightWorker:
                 next_ai_attempt_at="",
                 last_ai_error=""
             )
+            try:
+                from dispatch.youtube_connections import update_job_stage_by_video_id
+                update_job_stage_by_video_id(video_id, "rendering")
+            except Exception:
+                pass
 
             logger.info(
                 "Pillar 3 Highlight SUCCESS for %s -> CLIPS_DEFINED (Model: %s, Raw: %d, Accepted: %d, ClipIDs: %s)",

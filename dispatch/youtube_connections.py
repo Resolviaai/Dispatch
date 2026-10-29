@@ -199,6 +199,46 @@ def claim_remote_job(worker_id: str) -> Optional[RemoteJob]:
     return RemoteJob(row["job_id"], row["user_id"], row["youtube_url"])
 
 
+def update_remote_job_stage(job_id: str, stage: str, video_id: str = "") -> None:
+    """Report granular processing stage (downloading, transcribing, analyzing, rendering, ready) to Supabase."""
+    if not job_id:
+        return
+    try:
+        import httpx
+        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
+        if url and key:
+            payload: Dict[str, Any] = {"stage": stage, "last_error": f"stage:{stage}" if stage != "done" else ""}
+            if video_id:
+                payload["video_id"] = video_id
+            httpx.patch(
+                f"{url}/rest/v1/processing_jobs?id=eq.{job_id}",
+                json=payload,
+                headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                timeout=5.0
+            )
+    except Exception as e:
+        logger.debug("Failed to update remote job stage for %s: %s", job_id, e)
+
+
+def update_job_stage_by_video_id(video_id: str, stage: str) -> None:
+    """Report downstream processing stage for a video ID back to any matching cloud jobs."""
+    if not video_id:
+        return
+    try:
+        import httpx
+        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
+        if url and key:
+            payload: Dict[str, Any] = {"stage": stage, "last_error": f"stage:{stage}" if stage != "done" else ""}
+            httpx.patch(
+                f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}&status=neq.failed",
+                json=payload,
+                headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                timeout=5.0
+            )
+    except Exception as e:
+        logger.debug("Failed to update stage by video_id %s: %s", video_id, e)
+
+
 def finish_remote_job(job_id: str, status: str, video_id: str = "", error: str = "") -> None:
     _supabase_rpc("cloud_finish_job", {
         "p_job_id": job_id, "p_status": status, "p_video_id": video_id, "p_error": error,
@@ -237,16 +277,16 @@ class RemoteJobPoller:
 
     def _process(self, job: RemoteJob) -> None:
         try:
+            update_remote_job_stage(job.job_id, "downloading")
             result = self.ingest_video(job.youtube_url, user_id=job.user_id)
             status = result.get("status", "FAILED")
+            vid = result.get("video_id", "")
             if status in ("DOWNLOADED", "WAITING_FOR_YOUTUBE_PROCESSING", "WAITING_FOR_VISIBILITY_CHECK"):
-                # Ingestion accepted the source; downstream workers own the rest.
-                finish_remote_job(job.job_id, "done", result.get("video_id", ""),
-                                  str(result.get("error", "")))
+                update_remote_job_stage(job.job_id, "transcribing", video_id=vid)
+                finish_remote_job(job.job_id, "done", vid, str(result.get("error", "")))
                 logger.info("Remote job %s accepted: %s", job.job_id, status)
             else:
-                finish_remote_job(job.job_id, "failed", result.get("video_id", ""),
-                                  str(result.get("error", "ingestion failed")))
+                finish_remote_job(job.job_id, "failed", vid, str(result.get("error", "ingestion failed")))
         except Exception as e:
             finish_remote_job(job.job_id, "failed", "", str(e))
             logger.error("Remote job %s failed: %s", job.job_id, e)

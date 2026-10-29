@@ -96,10 +96,13 @@ class YouTubeInboxCatcher:
                 "channel": info.get("uploader", ""),
                 "duration": float(info.get("duration", 0.0) or 0.0),
                 "upload_date": info.get("upload_date", ""),
-                "description": info.get("description", "")
+                "description": info.get("description", ""),
+                "availability": info.get("availability"),
+                "view_count": info.get("view_count"),
+                "is_private": info.get("is_private", False),
             }
 
-    def fetch_youtube_captions(self, video_id: str) -> Optional[List[Dict[str, Any]]]:
+    def fetch_youtube_captions(self, video_id: str, user_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """Attempt to fetch existing YouTube captions or auto-generated VTT subtitles."""
         url = f"https://www.youtube.com/watch?v={video_id}"
         temp_sub_prefix = self.storage_dir / f"sub_{video_id}"
@@ -160,6 +163,15 @@ class YouTubeInboxCatcher:
         try:
             from dispatch.youtube_inbox.oauth import get_youtube_service
             service = get_youtube_service()
+            if not service and user_id:
+                try:
+                    from dispatch.youtube_connections import get_user_refresh_token
+                    from dispatch.publisher.youtube import build_youtube_service_from_credentials
+                    user_tok = get_user_refresh_token(user_id)
+                    if user_tok:
+                        service = build_youtube_service_from_credentials({"refresh_token": user_tok})
+                except Exception as u_err:
+                    logger.debug("Could not resolve user-scoped YouTube service for caption fetch: %s", u_err)
             if service:
                 captions_resp = service.captions().list(part="snippet", videoId=video_id).execute()
                 items = captions_resp.get("items", [])
@@ -385,6 +397,12 @@ class YouTubeInboxCatcher:
         from dispatch.youtube_inbox.oauth import get_youtube_processing_status
         status_info = None
         try:
+            status_map = (
+                get_youtube_processing_status([video_id], user_id=user_id) if user_id
+                else get_youtube_processing_status([video_id])
+            )
+            status_info = status_map.get(video_id)
+        except TypeError:
             status_map = get_youtube_processing_status([video_id])
             status_info = status_map.get(video_id)
         except Exception as e:
@@ -429,6 +447,11 @@ class YouTubeInboxCatcher:
         # authenticated yt-dlp cookies must never silently bypass this restriction.
         from dispatch.youtube_inbox.oauth import get_youtube_processing_status
         try:
+            privacy_info = (
+                get_youtube_processing_status([video_id], user_id=user_id) if user_id
+                else get_youtube_processing_status([video_id])
+            ).get(video_id, {})
+        except TypeError:
             privacy_info = get_youtube_processing_status([video_id]).get(video_id, {})
         except Exception as status_err:
             # Fail-closed policy (alpha brief B1): a transient visibility-API failure
@@ -442,6 +465,14 @@ class YouTubeInboxCatcher:
             db.update_youtube_video(video_id, status="WAITING_FOR_VISIBILITY_CHECK", last_error=err_msg)
             return {"video_id": video_id, "status": "WAITING_FOR_VISIBILITY_CHECK", "verified": False, "error": err_msg}
         privacy_status = (privacy_info.get("privacy_status") or "").lower()
+
+        # Fallback to yt-dlp visibility metadata if Data API service is not configured
+        if not privacy_status:
+            ytdlp_avail = (info.get("availability") or "").lower()
+            if ytdlp_avail in ("public", "unlisted"):
+                privacy_status = ytdlp_avail
+                logger.info("Verified video %s visibility via yt-dlp availability: %s", video_id, privacy_status)
+
         if privacy_status == "private":
             err_msg = "Private videos are not supported as sources."
             logger.error("Rejecting private source video %s", video_id)
@@ -522,7 +553,8 @@ class YouTubeInboxCatcher:
         url_or_id: str,
         session_id: Optional[str] = None,
         dispatch_id: Optional[str] = None,
-        force_whisper: bool = False
+        force_whisper: bool = False,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """[LEGACY DOWNSTREAM DEMO] Full end-to-end processing pipeline for a single YouTube video.
         WARNING: Do NOT use this in the active ingestion path! Active ingestion is handled
@@ -618,7 +650,7 @@ class YouTubeInboxCatcher:
 
         if not force_whisper:
             logger.info("Attempting to retrieve YouTube auto/manual captions for %s", video_id)
-            segments = self.fetch_youtube_captions(video_id)
+            segments = self.fetch_youtube_captions(video_id, user_id=user_id)
             if segments:
                 transcript_source = "youtube"
                 logger.info("Successfully loaded %d segments from YouTube captions", len(segments))
@@ -690,14 +722,16 @@ class YouTubeInboxCatcher:
         db.update_youtube_video(video_id, status="ANALYZING")
         logger.info("Detecting candidate highlights for %s (Duration: %.1fs)", video_id, total_duration)
         publish_mode = db.get_setting("publish_mode", DEFAULT_PUBLISH_MODE) or "private"
-        clip_ids = identify_and_save_highlights(
-            chunk_id=chunk_id,
-            session_id=session_id,
-            segments=segments,
-            total_duration=total_duration,
-            publish_mode=publish_mode,
-            user_id=user_id,
-        )
+        highlight_kwargs = {
+            "chunk_id": chunk_id,
+            "session_id": session_id,
+            "segments": segments,
+            "total_duration": total_duration,
+            "publish_mode": publish_mode,
+        }
+        if user_id is not None:
+            highlight_kwargs["user_id"] = user_id
+        clip_ids = identify_and_save_highlights(**highlight_kwargs)
 
         logger.info("Identified %d candidate clips for YouTube video %s", len(clip_ids), video_id)
         if not clip_ids:

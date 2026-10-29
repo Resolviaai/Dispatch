@@ -1671,11 +1671,45 @@ export default {
       const arr = Array.isArray(subBody) ? subBody as Array<{ id: string; status: string }> : [];
       return json(200, { job_id: arr[0]?.id ?? null, status: arr[0]?.status ?? "queued" });
     }
+    if (url.pathname === "/template/default") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+
+      if (request.method === "GET") {
+        const res = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/profiles?user_id=eq.${user.userId}&select=default_template`,
+          { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+        );
+        if (!res.ok) return json(502, { error: "failed to fetch template" });
+        const rows = await res.json() as Array<{ default_template?: unknown }>;
+        const tpl = rows[0]?.default_template || null;
+        return json(200, { template: tpl });
+      }
+
+      if (request.method === "POST") {
+        const body = await readJson<Record<string, unknown>>(request);
+        const patchRes = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/profiles?user_id=eq.${user.userId}`,
+          {
+            method: "PATCH",
+            headers: {
+              apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+              Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ default_template: body }),
+          }
+        );
+        if (!patchRes.ok) return json(502, { error: "failed to save template" });
+        return json(200, { status: "success", template: body });
+      }
+    }
+
     if (url.pathname === "/jobs/status" && request.method === "GET") {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
       const res = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,youtube_url,status,video_id,last_error,created_at&order=created_at.desc&limit=20`,
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,youtube_url,status,stage,video_id,last_error,created_at&order=created_at.desc&limit=20`,
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
       if (!res.ok) return json(502, { error: `status failed: ${res.status}` });
       return json(200, { jobs: await res.json() });
@@ -1731,7 +1765,7 @@ export default {
       // Supabase round trip previously degraded to an empty 200 response, which
       // wipe-cleaned; now it returns 502 so clients can keep their last data.
       const clipsRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after,source_orientation,source_aspect_ratio,layout_mode,available_layout_modes&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
       );
       if (!clipsRes.ok) {
@@ -1897,6 +1931,7 @@ export default {
         return {
           id: localId,
           cloud_id: c.id,
+          session_id: c.session_id,
           title: c.title,
           status: targetStatus,
           start_time: Number(c.start_time || 0),
@@ -1906,6 +1941,10 @@ export default {
           duration: Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
           range_revision: Number(c.range_revision || 0),
           is_render_stale: Boolean(c.render_stale),
+          source_orientation: (c.source_orientation as string) || "landscape",
+          source_aspect_ratio: (c.source_aspect_ratio as string) || "16:9",
+          layout_mode: (c.layout_mode as string) || "fit_blur",
+          available_layout_modes: c.available_layout_modes as unknown[],
           created_at: c.cloud_updated_at,
           video_url: videoUrl,
           source_video_url: undefined,
@@ -2408,6 +2447,8 @@ export default {
           local_clip_id: string; title: string; status: string;
           start_time: number; end_time: number;
           ai_suggested_start_time?: number; ai_suggested_end_time?: number; range_revision?: number;
+          source_orientation?: string; source_aspect_ratio?: string; layout_mode?: string;
+          available_layout_modes?: unknown; caption_data?: unknown; caption_revision?: number;
           publications?: Array<{
             platform?: string;
             account_id?: string;
@@ -2448,6 +2489,12 @@ export default {
                 start_time: Number(body?.start_time ?? 0),
                 end_time: Number(body?.end_time ?? 0),
                 range_revision: Number(body?.range_revision ?? 0),
+                source_orientation: body?.source_orientation || "landscape",
+                source_aspect_ratio: body?.source_aspect_ratio || "16:9",
+                layout_mode: body?.layout_mode || "fit_blur",
+                available_layout_modes: body?.available_layout_modes || null,
+                caption_data: body?.caption_data || null,
+                caption_revision: Number(body?.caption_revision || 0),
               }),
             }
           );

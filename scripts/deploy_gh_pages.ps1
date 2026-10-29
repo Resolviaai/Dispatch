@@ -141,6 +141,16 @@ try {
         Copy-Item (Join-Path $siteDir "favicon.svg") (Join-Path $wtSiteDir "favicon.svg") -Force
     }
 
+    if (Test-Path (Join-Path $siteDir "privacy.html")) {
+        Copy-Item (Join-Path $siteDir "privacy.html") (Join-Path $tempWorktree "privacy.html") -Force
+        Copy-Item (Join-Path $siteDir "privacy.html") (Join-Path $wtSiteDir "privacy.html") -Force
+    }
+
+    if (Test-Path (Join-Path $siteDir "terms.html")) {
+        Copy-Item (Join-Path $siteDir "terms.html") (Join-Path $tempWorktree "terms.html") -Force
+        Copy-Item (Join-Path $siteDir "terms.html") (Join-Path $wtSiteDir "terms.html") -Force
+    }
+
     Write-Host "== 4. Committing and pushing gh-pages =="
     Push-Location $tempWorktree
     try {

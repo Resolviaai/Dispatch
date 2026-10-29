@@ -137,8 +137,11 @@ def get_youtube_service(token_path: Optional[Path] = None):
                             f.write(creds.to_json())
                         logger.info("Refreshed and persisted YouTube OAuth token to %s", token_file)
                 except Exception as refresh_err:
-                    logger.warning("Failed to refresh YouTube OAuth token: %s", refresh_err)
-            return build("youtube", "v3", credentials=creds)
+                    logger.debug("YouTube OAuth token could not be refreshed (will use cloud auth): %s", refresh_err)
+                    return None
+            if creds and creds.valid:
+                return build("youtube", "v3", credentials=creds)
+            return None
 
         # Check environment variables
         access_token = os.getenv("YOUTUBE_ACCESS_TOKEN")
@@ -279,7 +282,7 @@ def list_authenticated_user_uploads(
     return discovered
 
 
-def get_youtube_processing_status(video_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+def get_youtube_processing_status(video_ids: List[str], user_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """Query authoritative YouTube Data API v3 for uploadStatus, processingStatus,
     failure reasons, and content duration for a list of video IDs.
 
@@ -300,6 +303,16 @@ def get_youtube_processing_status(video_ids: List[str]) -> Dict[str, Dict[str, A
         return {}
 
     service = get_youtube_service()
+    if not service and user_id:
+        try:
+            from dispatch.youtube_connections import get_user_refresh_token
+            from dispatch.publisher.youtube import build_youtube_service_from_credentials
+            user_tok = get_user_refresh_token(user_id)
+            if user_tok:
+                service = build_youtube_service_from_credentials({"refresh_token": user_tok})
+        except Exception as u_err:
+            logger.debug("Could not resolve user-scoped YouTube service for user %s: %s", user_id, u_err)
+
     if not service:
         logger.debug("YouTube API service unavailable; skipping authoritative status query.")
         return {}

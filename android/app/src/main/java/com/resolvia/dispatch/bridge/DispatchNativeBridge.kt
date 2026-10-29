@@ -196,54 +196,60 @@ class DispatchNativeBridge(
      *  Restricted to the known Dispatch cloud host; JavaScript cannot open
      *  arbitrary pages through this. */
     @JavascriptInterface
-    fun openCustomTab(url: String): Boolean {
-        if (!url.startsWith("https://dispatch-cloud.resolviaai.workers.dev/")) return false
-        return try {
-            val builder = androidx.browser.customtabs.CustomTabsIntent.Builder()
-                .setShowTitle(true)
-            val customTabsIntent = builder.build()
-            // Facebook OAuth can hand off to the Facebook app and dismiss a Custom Tab
-            // on some devices. Use a normal browser tab for that provider; the
-            // completion page returns through dispatch://oauth/return.
-            if (url.contains("/oauth/instagram/start")) {
-                activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-                return true
-            }
-
-
-            // Prefer Chrome so Google Accounts on the device are available in the OAuth account picker
-            val pm = activity.packageManager
-            val chromePackages = listOf(
-                "com.android.chrome",
-                "com.chrome.beta",
-                "com.chrome.dev",
-                "com.chrome.canary",
-                "com.google.android.apps.chrome"
-            )
-            val selectedPackage = chromePackages.firstOrNull { pkg ->
-                try {
-                    pm.getPackageInfo(pkg, 0)
-                    true
-                } catch (_: Exception) {
-                    false
-                }
-            }
-            if (selectedPackage != null) {
-                customTabsIntent.intent.setPackage(selectedPackage)
-            }
-            customTabsIntent.launchUrl(activity, android.net.Uri.parse(url))
-            true
-        } catch (e: Exception) {
-            try {
-                val browserIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                activity.startActivity(browserIntent)
-                true
-            } catch (_: Exception) {
-                false
-            }
-        }
+    fun openCustomTab(url: String): Boolean {
+        if (!url.startsWith("https://dispatch-cloud.resolviaai.workers.dev/")) return false
+        return try {
+            val builder = androidx.browser.customtabs.CustomTabsIntent.Builder()
+                .setShowTitle(true)
+                .setSendToExternalDefaultHandlerEnabled(false)
+            val customTabsIntent = builder.build()
+            customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+            // Prefer Chrome so Google/Social sessions on the device are available in the OAuth picker
+            val pm = activity.packageManager
+            val chromePackages = listOf(
+                "com.android.chrome",
+                "com.chrome.beta",
+                "com.chrome.dev",
+                "com.chrome.canary",
+                "com.google.android.apps.chrome"
+            )
+            val selectedPackage = chromePackages.firstOrNull { pkg ->
+                try {
+                    pm.getPackageInfo(pkg, 0)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (selectedPackage != null) {
+                customTabsIntent.intent.setPackage(selectedPackage)
+            }
+            activity.runOnUiThread {
+                try {
+                    customTabsIntent.launchUrl(activity, android.net.Uri.parse(url))
+                } catch (launchErr: Exception) {
+                    android.util.Log.e("DispatchBridge", "CustomTab launchUrl failed: " + launchErr.message + "; trying normal browser")
+                    val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activity.startActivity(browserIntent)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            try {
+                activity.runOnUiThread {
+                    val browserIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activity.startActivity(browserIntent)
+                }
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     @JavascriptInterface

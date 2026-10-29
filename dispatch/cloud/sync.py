@@ -436,6 +436,17 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
     # 1. Mode 1: Upsert into clips_cloud (AI suggestions & clip bounds) — the
     # Worker enforces the tombstone guard server-side as well.
     try:
+        from dispatch.web.app import get_clip_framing_context
+        framing_ctx = get_clip_framing_context(clip)
+        raw_caption_data = clip.get("caption_data")
+        caption_payload = None
+        if raw_caption_data:
+            try:
+                import json
+                caption_payload = json.loads(raw_caption_data) if isinstance(raw_caption_data, str) else raw_caption_data
+            except Exception:
+                pass
+
         r_clip = requests.post(
             f"{_worker_base()}/sync/pc/clips",
             headers=_cloud_headers(get_worker_token(), user_id),
@@ -448,6 +459,12 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
                 "ai_suggested_start_time": ai_s,
                 "ai_suggested_end_time": ai_e,
                 "range_revision": int(clip.get("range_revision") or 0),
+                "source_orientation": framing_ctx.get("source_orientation") or "landscape",
+                "source_aspect_ratio": framing_ctx.get("source_aspect_ratio") or "16:9",
+                "layout_mode": clip.get("layout_mode") or framing_ctx.get("layout_mode") or "fit_blur",
+                "available_layout_modes": framing_ctx.get("available_layout_modes") or [],
+                "caption_data": caption_payload,
+                "caption_revision": int(clip.get("caption_range_revision") or clip.get("captions_revision") or 0),
                 "publications": _publication_sync_payload(clip_id),
             },
             timeout=20,

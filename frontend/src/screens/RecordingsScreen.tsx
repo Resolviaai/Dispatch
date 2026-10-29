@@ -26,6 +26,7 @@ interface YouTubeInboxItem {
   dispatch_id?: string;
   title?: string;
   status: string;
+  stage?: string;
   last_error?: string | null;
   transcript_source?: string | null;
   discovered_at?: string;
@@ -56,6 +57,7 @@ export interface UnifiedSession {
   totalDuration: number;
   totalBytes: number;
   status: 'ready' | 'processing' | 'queued' | 'failed' | 'uploading';
+  stage?: string;
   /** Raw native status behind a 'failed' session, e.g. FAILED_YOUTUBE_PROCESSING. */
   failureStatus?: string | undefined;
   clipCount: number;
@@ -70,6 +72,140 @@ export interface UnifiedSession {
   rawNative?: SessionGroup;
   rawInbox?: YouTubeInboxItem;
 }
+
+export interface SessionStageInfo {
+  stage: 'queued' | 'uploading' | 'downloading' | 'validating' | 'transcribing' | 'analyzing' | 'rendering' | 'ready' | 'failed';
+  label: string;
+  shortLabel: string;
+  step: number;        // 1: Ingest, 2: Transcribe, 3: AI Highlights, 4: Render
+  totalSteps: number;  // 4
+  isSpinning: boolean;
+}
+
+export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo => {
+  if (session.status === 'ready' || session.clipCount > 0) {
+    return {
+      stage: 'ready',
+      label: `Ready (${session.clipCount || 1} clip${session.clipCount === 1 ? '' : 's'})`,
+      shortLabel: 'Ready',
+      step: 4,
+      totalSteps: 4,
+      isSpinning: false,
+    };
+  }
+
+  if (session.status === 'failed') {
+    return {
+      stage: 'failed',
+      label: session.errorMessage || `Failed${session.failureStatus ? ` · ${session.failureStatus}` : ''}`,
+      shortLabel: 'Failed',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: false,
+    };
+  }
+
+  const inbox = session.rawInbox;
+  const rawStatus = (inbox?.status || session.rawNative?.status || '').toUpperCase();
+  const rawStage = (session.stage || inbox?.stage || '').toLowerCase();
+
+  if (session.status === 'uploading' || rawStatus === 'UPLOADING') {
+    return {
+      stage: 'uploading',
+      label: 'Uploading to cloud…',
+      shortLabel: 'Uploading…',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (rawStatus === 'WAITING_FOR_YOUTUBE' || rawStatus === 'UPLOADED_AWAITING_PROCESSING' || rawStatus === 'WAITING_FOR_YOUTUBE_PROCESSING') {
+    return {
+      stage: 'uploading',
+      label: 'YouTube processing…',
+      shortLabel: 'YouTube…',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (rawStatus === 'DOWNLOADING' || rawStage === 'downloading') {
+    return {
+      stage: 'downloading',
+      label: 'Downloading video…',
+      shortLabel: 'Downloading…',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (rawStatus === 'VALIDATING' || rawStatus === 'DOWNLOADED' || rawStage === 'validating') {
+    return {
+      stage: 'validating',
+      label: 'Validating video…',
+      shortLabel: 'Validating…',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (rawStatus === 'WAITING_FOR_TRANSCRIPT' || rawStatus === 'TRANSCRIBING' || rawStage === 'transcribing') {
+    return {
+      stage: 'transcribing',
+      label: 'Transcribing speech…',
+      shortLabel: 'Transcribing…',
+      step: 2,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (rawStatus === 'TRANSCRIBED' || rawStatus === 'ANALYZING' || rawStage === 'analyzing') {
+    return {
+      stage: 'analyzing',
+      label: 'AI finding highlights…',
+      shortLabel: 'AI Highlights…',
+      step: 3,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (rawStatus === 'CLIPS_DEFINED' || rawStatus === 'RENDERING' || rawStage === 'rendering') {
+    return {
+      stage: 'rendering',
+      label: 'Rendering clip…',
+      shortLabel: 'Rendering…',
+      step: 4,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (session.status === 'processing') {
+    return {
+      stage: 'analyzing',
+      label: 'Processing video…',
+      shortLabel: 'Processing…',
+      step: 2,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  return {
+    stage: 'queued',
+    label: 'Queued in pipeline…',
+    shortLabel: 'Queued',
+    step: 0,
+    totalSteps: 4,
+    isSpinning: false,
+  };
+};
 
 type ViewMode = 'library' | 'detail';
 type FilterStatus = 'all' | 'ready' | 'processing' | 'queued' | 'failed';
@@ -225,15 +361,22 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         if (res.ok) {
           const data = await res.json();
           const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-          const items: YouTubeInboxItem[] = jobs.map((j: any) => ({
-            video_id: j.video_id || (j.youtube_url ? j.youtube_url.split('v=')[1]?.slice(0, 11) : j.id),
-            session_id: j.session_id,
-            dispatch_id: j.id,
-            title: j.youtube_url,
-            status: j.status === 'completed' ? 'CLIPS_CREATED' : j.status === 'processing' ? 'PROCESSING' : j.status === 'failed' ? 'FAILED' : 'QUEUED',
-            last_error: j.last_error,
-            discovered_at: j.created_at,
-          }));
+          const items: YouTubeInboxItem[] = jobs.map((j: any) => {
+            const rawStage = j.stage || (j.last_error?.startsWith('stage:') ? j.last_error.replace('stage:', '') : undefined);
+            const isDone = j.status === 'completed' || j.status === 'done';
+            const isFailed = j.status === 'failed';
+            const isClaimed = j.status === 'claimed' || j.status === 'processing';
+            return {
+              video_id: j.video_id || (j.youtube_url ? j.youtube_url.split('v=')[1]?.slice(0, 11) : j.id),
+              session_id: j.session_id,
+              dispatch_id: j.id,
+              title: j.youtube_url,
+              status: isDone ? 'COMPLETED' : isClaimed ? 'PROCESSING' : isFailed ? 'FAILED' : 'QUEUED',
+              stage: isDone ? 'ready' : rawStage,
+              last_error: j.last_error,
+              discovered_at: j.created_at,
+            };
+          });
           setInboxItems(items);
         }
       }
@@ -366,19 +509,23 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       );
       const clipCount = sessClips.length;
 
+      const matchingInbox = inboxItems.find(it =>
+        (it.session_id && it.session_id === ns.sessionId) ||
+        (ytId && it.video_id === ytId) ||
+        ns.segments.some(seg => (seg.youtubeVideoId && seg.youtubeVideoId === it.video_id) || (seg.segmentId && seg.segmentId === it.dispatch_id))
+      );
+
       const allStatuses = ns.segments.map(s => s.status);
       let status: UnifiedSession['status'] = 'queued';
       let failureStatus: string | null = null;
-      if (clipCount > 0) {
+      if (clipCount > 0 || (matchingInbox && (matchingInbox.status === 'COMPLETED' || matchingInbox.status === 'CLIPS_CREATED'))) {
         status = 'ready';
-      } else if (allStatuses.some(st => st.startsWith('FAILED_') || st.startsWith('ERROR_'))) {
-        failureStatus = allStatuses.find(st => st.startsWith('FAILED_') || st.startsWith('ERROR_')) || null;
+      } else if (allStatuses.some(st => st.startsWith('FAILED_') || st.startsWith('ERROR_')) || (matchingInbox && matchingInbox.status === 'FAILED')) {
+        failureStatus = allStatuses.find(st => st.startsWith('FAILED_') || st.startsWith('ERROR_')) || matchingInbox?.last_error || null;
         status = 'failed';
       } else if (allStatuses.some(st => st === 'UPLOADING' || st === 'WAITING_FOR_YOUTUBE')) {
         status = 'uploading';
-      } else if (allStatuses.some(st => st === 'PROCESSING' || st === 'UPLOADED_AWAITING_PROCESSING' || st === 'UPLOADED_TO_YOUTUBE' || st === 'PROCESSED_ON_YOUTUBE')) {
-        // UPLOADED_AWAITING_PROCESSING previously fell through to 'queued' forever;
-        // it is a real processing state and must read as such.
+      } else if (allStatuses.some(st => st === 'PROCESSING' || st === 'UPLOADED_AWAITING_PROCESSING' || st === 'UPLOADED_TO_YOUTUBE' || st === 'PROCESSED_ON_YOUTUBE') || (matchingInbox && matchingInbox.status === 'PROCESSING')) {
         status = 'processing';
       } else if (allStatuses.every(st => st === 'VERIFIED_BY_LAPTOP')) {
         status = 'ready';
@@ -394,18 +541,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         totalDuration: ns.totalDuration,
         totalBytes: ns.totalBytes,
         status,
+        stage: matchingInbox?.stage,
         failureStatus: failureStatus ?? undefined,
         clipCount,
         youtubeVideoId: ytId ?? undefined,
         videoUrl: ns.segments[0]?.videoUrl,
-        // Prefer the phone's own poster: PC-side clips have no thumbnail at all
-        // for recordings that have not been processed yet.
         thumbnailUrl: ns.segments[0]?.thumbnailUrl || sessClips[0]?.thumbnail_url || undefined,
         segmentsCount: ns.segments.length,
         uploadedBytes,
         uploadTotalBytes,
         uploadReason,
-        rawNative: ns
+        rawNative: ns,
+        rawInbox: matchingInbox
       });
     });
 
@@ -442,6 +589,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         totalDuration: item.duration || 0,
         totalBytes: 0,
         status,
+        stage: item.stage,
         clipCount,
         youtubeVideoId: item.video_id,
         errorMessage: item.last_error,
@@ -801,27 +949,115 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
             <div className="space-y-0.5 text-right">
               <span className="text-[10px] uppercase font-semibold text-text-muted block">Status</span>
-              <span className={`text-xs font-semibold tabular-nums ${
-                isReady ? 'text-status-success'
-                  : isProcessing ? 'text-status-warning'
-                  : isFailed ? 'text-danger'
-                  : 'text-text-secondary'
-              }`}>
-                {/* The old ternary had no failed branch, so a failed upload still
-                    read "Queued" while the banner above said it had failed. The raw
-                    FAILED_* code is shown because the app carries no other reason. */}
-                {isReady
-                  ? `Ready (${s.clipCount} clips)`
-                  : isProcessing
-                    ? 'Processing'
-                    : isFailed
-                      ? `Failed${s.failureStatus ? ` · ${s.failureStatus}` : ''}`
-                      : s.status === 'uploading'
-                        ? 'Uploading'
-                        : 'Queued'}
-              </span>
+              {(() => {
+                const stageInfo = resolveSessionStage(s);
+                if (isReady) {
+                  return (
+                    <span className="text-xs font-semibold tabular-nums text-status-success">
+                      Ready ({s.clipCount} clips)
+                    </span>
+                  );
+                }
+                if (isFailed) {
+                  return (
+                    <span className="text-xs font-semibold tabular-nums text-danger">
+                      Failed{s.failureStatus ? ` · ${s.failureStatus}` : ''}
+                    </span>
+                  );
+                }
+                return (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-status-warning">
+                    {stageInfo.isSpinning && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-status-warning animate-pulse shrink-0" />
+                    )}
+                    <span>{stageInfo.label}</span>
+                  </span>
+                );
+              })()}
             </div>
           </div>
+
+          {/* PROCESSING PIPELINE STEPPER */}
+          {!isReady && s.status !== 'failed' && (() => {
+            const stageInfo = resolveSessionStage(s);
+            const steps = [
+              { num: 1, title: 'Ingest', desc: s.origin === 'phone' ? 'Upload to cloud' : 'Download stream' },
+              { num: 2, title: 'Transcribe', desc: 'Speech-to-text sync' },
+              { num: 3, title: 'AI Highlights', desc: 'Viral moment detection' },
+              { num: 4, title: 'Render', desc: '9:16 vertical crop' },
+            ];
+
+            return (
+              <div className="p-4 rounded-xl bg-surface-2 border border-border space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
+                    <span className="text-xs font-semibold text-text-main">Processing Pipeline</span>
+                  </div>
+                  <span className="text-[11px] font-mono tabular-nums text-text-secondary">
+                    Step {stageInfo.step} of 4
+                  </span>
+                </div>
+
+                {/* Stepper Progress Bar */}
+                <div className="relative flex items-center justify-between px-1">
+                  <div className="absolute left-4 right-4 top-3 -translate-y-1/2 h-0.5 bg-surface-3 z-0">
+                    <div
+                      className="h-full bg-primary transition-all duration-500"
+                      style={{
+                        width: `${Math.max(0, Math.min(100, ((stageInfo.step - 1) / 3) * 100))}%`
+                      }}
+                    />
+                  </div>
+
+                  {steps.map((st) => {
+                    const isCompleted = stageInfo.step > st.num;
+                    const isCurrent = stageInfo.step === st.num;
+                    return (
+                      <div key={st.num} className="relative z-10 flex flex-col items-center">
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-mono font-bold transition-all ${
+                            isCompleted
+                              ? 'bg-status-success text-white shadow-sm'
+                              : isCurrent
+                              ? 'bg-primary text-white ring-4 ring-primary/20 shadow-hero-glow animate-pulse'
+                              : 'bg-surface-3 border border-border text-text-muted'
+                          }`}
+                        >
+                          {isCompleted ? <Check size={11} strokeWidth={3} /> : st.num}
+                        </div>
+                        <span
+                          className={`mt-1.5 text-[10px] font-medium text-center transition-colors ${
+                            isCurrent
+                              ? 'text-primary font-semibold'
+                              : isCompleted
+                              ? 'text-text-main'
+                              : 'text-text-muted'
+                          }`}
+                        >
+                          {st.title}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Live stage caption card */}
+                <div className="p-2.5 rounded-lg bg-surface-1 border border-border/60 flex items-center gap-2.5 text-xs text-text-secondary">
+                  <RotateCw size={13} className="text-primary animate-spin shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-text-main font-medium truncate">{stageInfo.label}</p>
+                    <p className="text-[10px] text-text-muted">
+                      {stageInfo.step === 1 && (s.origin === 'phone' ? 'Preparing video files for AI engine processing.' : 'Fetching high-resolution source video from YouTube.')}
+                      {stageInfo.step === 2 && 'Aligning word-level timestamps and speaker transcript.'}
+                      {stageInfo.step === 3 && 'Gemini AI scanning transcript for high-virality hooks.'}
+                      {stageInfo.step === 4 && 'Applying vertical 9:16 smart framing and dynamic captions.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {showUploadProgress(s) && (
             <div className="p-3 rounded-xl bg-surface-2 border border-border space-y-2">
@@ -1268,17 +1504,23 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted tabular-nums truncate">
                     <span>{session.totalBytes > 0 ? formatBytes(session.totalBytes) : 'YouTube'}</span>
                     <span>&middot;</span>
-                    {isReady ? (
-                      <span className="text-status-success font-medium">Ready</span>
-                    ) : isProcessing ? (
-                      <span className="text-status-warning font-medium">Processing</span>
-                    ) : session.status === 'failed' ? (
-                      <span className="text-danger font-medium">Failed</span>
-                    ) : session.status === 'uploading' ? (
-                      <span className="text-primary font-medium">Uploading</span>
-                    ) : (
-                      <span>Queued</span>
-                    )}
+                    {(() => {
+                      const stageInfo = resolveSessionStage(session);
+                      if (session.status === 'ready' || session.clipCount > 0) {
+                        return <span className="text-status-success font-medium">Ready</span>;
+                      }
+                      if (session.status === 'failed') {
+                        return <span className="text-danger font-medium">Failed</span>;
+                      }
+                      return (
+                        <span className="inline-flex items-center gap-1.5 text-status-warning font-medium truncate">
+                          {stageInfo.isSpinning && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-status-warning animate-pulse shrink-0" />
+                          )}
+                          <span className="truncate">{stageInfo.shortLabel}</span>
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   {showUploadProgress(session) && (
