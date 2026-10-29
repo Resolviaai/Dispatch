@@ -4,9 +4,9 @@
     "versionCode":  65,
     "versionName":  "1.6.8",
     "releaseTag":  "v1.6.8-alpha",
-    "generatedAt":  "2026-10-29T09:22:42Z",
+    "generatedAt":  "2026-10-29T14:22:19Z",
     "releaseNotes":  "Dispatch 1.6.8 alpha build.",
     "apkAsset":  "Dispatch.apk",
-    "apkSizeBytes":  21216572,
-    "apkSha256":  "ec11cd2e1da8311eac3f8881901788224421c59546b33bc439ec8fdc6940cc30"
+    "apkSizeBytes":  21216922,
+    "apkSha256":  "35ce42806e23cf4fc01306cfc8aacf5903941fdb9f180917537d7d65adb914e3"
 }
