@@ -145,7 +145,7 @@ export function buildInstagramAuthorizeUrl(clientId: string, redirectUri: string
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,pages_manage_posts",
+    scope: "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement",
     state,
   });
   return `https://www.facebook.com/v21.0/dialog/oauth?${q.toString()}`;
