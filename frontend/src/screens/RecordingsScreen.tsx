@@ -582,11 +582,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 controls
                 playsInline
                 onError={(e) => {
-                  const code = (e.currentTarget as HTMLVideoElement).error?.code;
+                  // A missing MediaError.code means the resource never loaded at all
+                  // (interceptor/network level) rather than failing to decode, so the
+                  // element state is the only thing that distinguishes the two.
+                  const el = e.currentTarget as HTMLVideoElement;
+                  const code = el.error?.code ?? 'none';
                   setVideoPlaybackError(
-                    code
-                      ? `The stored file played back as media error ${code}. The recording itself is intact on disk.`
-                      : 'The stored file could not be opened by the player.'
+                    `Media error ${code} · readyState ${el.readyState} · networkState ${el.networkState}. `
+                    + 'The file is still on this device.'
                   );
                 }}
                 className="w-full h-full object-contain"
@@ -599,13 +602,23 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 <AlertCircle size={28} className="mx-auto text-danger" />
                 <p className="text-xs font-semibold text-danger">Playback failed</p>
                 <p className="text-[11px] leading-relaxed">{videoPlaybackError}</p>
-                <button
-                  type="button"
-                  onClick={() => setVideoPlaybackError(null)}
-                  className="min-h-[34px] px-3 rounded-lg bg-surface-2 border border-border text-text-main text-xs font-semibold active:scale-[0.98] transition-all"
-                >
-                  Try again
-                </button>
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => Bridge.openNativePreview(s.id)}
+                    className="min-h-[38px] px-3.5 rounded-lg bg-primary text-white text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all"
+                  >
+                    <Play size={12} className="fill-white" />
+                    <span>Play in Phone Player</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVideoPlaybackError(null)}
+                    className="min-h-[38px] px-3 rounded-lg bg-surface-2 border border-border text-text-main text-xs font-semibold active:scale-[0.98] transition-all"
+                  >
+                    Try again
+                  </button>
+                </div>
               </div>
             ) : ytId ? (
               <div className="w-full h-full relative group">
