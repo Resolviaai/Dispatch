@@ -1,8 +1,15 @@
 package com.resolvia.dispatch.sync
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import androidx.core.app.NotificationCompat
 import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -51,7 +58,14 @@ class YouTubeDirectUploadWorker(
     companion object {
         /** Single-flight guard: overlapping drain runs race the same outbox rows. */
         private val drainLock = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        const val UPLOAD_CHANNEL_ID = "dispatch_uploads"
+        const val UPLOAD_NOTIFICATION_ID = 4202
     }
+
+    /** Label of the segment currently uploading, shown in the foreground notification. */
+    private var progressLabel = "Uploading"
+    private var lastForegroundPostAt = 0L
 
     /**
      * Framework-owned stop flag: true when WorkManager stops this worker (F,
@@ -208,6 +222,66 @@ class YouTubeDirectUploadWorker(
         }
     }
 
+    private fun ensureUploadChannel() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
+        val channel = NotificationChannel(
+            UPLOAD_CHANNEL_ID,
+            "Dispatch Uploads",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Progress while recordings upload to YouTube"
+            setSound(null, null)
+            setShowBadge(false)
+        }
+        applicationContext.getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+    }
+
+    private fun buildUploadNotification(text: String, percent: Int?): android.app.Notification {
+        val openApp = PendingIntent.getActivity(
+            applicationContext,
+            0,
+            Intent(applicationContext, com.resolvia.dispatch.MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val builder = NotificationCompat.Builder(applicationContext, UPLOAD_CHANNEL_ID)
+            .setContentTitle("Uploading to YouTube")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentIntent(openApp)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+        if (percent != null) {
+            builder.setProgress(100, percent.coerceIn(0, 100), false)
+        } else {
+            builder.setProgress(0, 0, true)
+        }
+        return builder.build()
+    }
+
+    /**
+     * Uploads run under a dataSync foreground service so they continue after the
+     * app is closed. Android 12+ can refuse a foreground start made from the
+     * background; the drain then proceeds as an ordinary worker instead of failing.
+     */
+    private suspend fun promoteUploadForeground(text: String, percent: Int?) {
+        try {
+            val serviceType = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            } else 0
+            setForeground(ForegroundInfo(UPLOAD_NOTIFICATION_ID, buildUploadNotification(text, percent), serviceType))
+            lastForegroundPostAt = System.currentTimeMillis()
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "Upload foreground unavailable: ${e.message}")
+        }
+    }
+
+    private suspend fun updateUploadForeground(percent: Int, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastForegroundPostAt < 2000L) return
+        promoteUploadForeground("$progressLabel \u00b7 $percent%", percent)
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         if (!drainLock.compareAndSet(false, true)) {
             android.util.Log.i("YouTubeUploader", "Another drain run is active; deferring")
@@ -217,6 +291,17 @@ class YouTubeDirectUploadWorker(
         try {
         var hasFailures = false
         val failedInThisRun = mutableSetOf<String>()
+
+        // Pin the run in a foreground service before the recovery/reconcile work
+        // so the OS cannot defer or kill the drain once the app is closed.
+        ensureUploadChannel()
+        val initialPending = dao.getPendingUploadSegments()
+        if (initialPending.isNotEmpty()) {
+            promoteUploadForeground(
+                "Preparing ${initialPending.size} clip${if (initialPending.size == 1) "" else "s"}",
+                null
+            )
+        }
 
         // 0. Recover any interrupted sessions from prior crashes before draining
         recoverInterruptedSessions(applicationContext)
@@ -467,6 +552,11 @@ class YouTubeDirectUploadWorker(
 
         val timestampStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
         val title = "[DISPATCH] Session ${seg.sessionId.takeLast(6)} - Part ${seg.sequenceNumber} ($timestampStr)"
+        // Foreground notification visibility: label live for the duration of this
+        // segment's upload; promote immediately so a segment discovered after the
+        // drain's initial count also pins the service.
+        progressLabel = "Session ${seg.sessionId.takeLast(6)} \u00b7 Part ${seg.sequenceNumber}"
+        promoteUploadForeground(progressLabel, ((dao.getOutboxOffset(segId) ?: 0L) * 100 / totalBytes).toInt())
         val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else calculateSha256(file)
         val description = "dispatch_id: $dispatchId\nsession_id: ${seg.sessionId}\nsegment_id: ${seg.segmentId}\nsequence_number: ${seg.sequenceNumber}\nsource_sha256: $sha\nsource_file_size: ${file.length()}\nAutonomous mobile recording uploaded by Dispatch."
 
@@ -663,11 +753,13 @@ class YouTubeDirectUploadWorker(
                                 android.util.Log.w("YouTubeUploader", "No confirmed upload progress for $segId at offset $currentOffset")
                             } else {
                                 android.util.Log.i("YouTubeUploader", "Server-confirmed upload offset for $segId: $currentOffset/$totalBytes")
+                                updateUploadForeground(((currentOffset * 100) / totalBytes).toInt())
                             }
                         }
                         200, 201 -> {
                             currentOffset = totalBytes
                             dao.updateOutboxOffset(segId, totalBytes)
+                            promoteUploadForeground("$progressLabel \u00b7 Finalizing", 100)
                             val bodyStr = resp.body?.string() ?: ""
                             val videoId = try {
                                 val json = gson.fromJson(bodyStr, JsonObject::class.java)

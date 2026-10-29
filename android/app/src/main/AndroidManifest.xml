@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Permissions for Camera, Audio, Network & Boot Recovery -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -10,6 +11,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -50,6 +52,15 @@
         <service
             android:name=".recorder.RecordingForegroundService"
             android:foregroundServiceType="camera|microphone"
+            android:exported="false" />
+
+        <!-- WorkManager foreground uploads (dataSync): Android 14 requires the
+             service type declaration, otherwise setForeground(FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+             throws MissingForegroundServiceTypeException and uploads lose their pinned-notification protection. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge"
             android:exported="false" />
 
         <!-- Boot Receiver for Automatic Crash & Battery Death Recovery -->
