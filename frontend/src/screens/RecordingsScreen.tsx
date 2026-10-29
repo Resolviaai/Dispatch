@@ -658,6 +658,26 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     Bridge.ensureUploadScheduler();
   }, [unifiedSessions]);
 
+  // Self-heal: ensure phone recordings uploaded to YouTube are submitted to the cloud job queue
+  const submittedSessionYtIdsRef = useRef(new Set<string>());
+  useEffect(() => {
+    const unsubmitted = unifiedSessions.filter(
+      s => s.origin === 'phone'
+        && s.youtubeVideoId
+        && s.clipCount === 0
+        && (s.status === 'processing' || s.status === 'queued')
+        && !inboxItems.some(it => it.video_id === s.youtubeVideoId || it.session_id === s.id)
+        && !submittedSessionYtIdsRef.current.has(s.youtubeVideoId)
+    );
+    if (unsubmitted.length === 0) return;
+    unsubmitted.forEach(s => {
+      if (s.youtubeVideoId) {
+        submittedSessionYtIdsRef.current.add(s.youtubeVideoId);
+        handleImportSubmit(`https://youtu.be/${s.youtubeVideoId}`);
+      }
+    });
+  }, [unifiedSessions, inboxItems]);
+
   // YouTube Link Extraction & Submission
   const extractVideoId = (raw: string): string | null => {
     const cleaned = raw.trim();
@@ -882,6 +902,16 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 <p className="text-[11px] text-text-muted max-w-[260px] mx-auto">
                   Your PC will automatically create vertical clips from this video.
                 </p>
+                {s.youtubeVideoId && s.clipCount === 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleReprocessSession(s)}
+                    className="mt-2.5 px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold flex items-center justify-center gap-1.5 mx-auto active:scale-[0.98] transition-all shadow-hero-glow"
+                  >
+                    <Sparkles size={13} />
+                    <span>Send to PC for AI Clips</span>
+                  </button>
+                )}
               </div>
             )}
             {s.origin === 'phone' && (

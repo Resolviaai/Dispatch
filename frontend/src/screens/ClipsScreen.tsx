@@ -1093,6 +1093,7 @@ interface FramedVideoStageProps {
   isCompact?: boolean;
   isDetail?: boolean;
   preferRendered?: boolean;
+  renderedLayoutMode?: string;
   onVideoClick?: () => void;
   muted?: boolean;
   /** Worker-reported: no media (rendered clip, window proxy, thumbnail) resolved. */
@@ -1119,6 +1120,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   isCompact = false,
   isDetail = false,
   preferRendered = false,
+  renderedLayoutMode,
   onVideoClick,
   muted = false,
   /** Worker-reported: no media (rendered clip, window proxy, thumbnail) resolved. */
@@ -1129,35 +1131,47 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
   // High-reliability media resolution:
-  // If preferRendered is requested (reviewing pre-rendered clips in detail mode) and _videoUrl exists, use it!
-  // Otherwise, attempt sourceVideoUrl first with graceful fallback to _videoUrl.
-  const activeVideoUrl = preferRendered
+  // If preferRendered is requested, only use the pre-rendered video if its layout matches the active layoutMode.
+  // When the user selects a different layout mode (e.g. Crop 9:16 instead of Fit + Blur), we play sourceVideoUrl
+  // so CSS framing (dynamic crop, blur, black bars) is accurately previewed from clean source video.
+  const layoutMatchesRender = Boolean(
+    renderedLayoutMode && (
+      renderedLayoutMode === layoutMode ||
+      (renderedLayoutMode === 'crop_follow' && layoutMode === 'crop_916') ||
+      (renderedLayoutMode === 'crop_916' && (layoutMode as string) === 'crop_follow') ||
+      (renderedLayoutMode === 'landscape' && layoutMode === 'native_169') ||
+      (renderedLayoutMode === 'native_169' && (layoutMode as string) === 'landscape') ||
+      (renderedLayoutMode === 'native_portrait' && layoutMode === 'native_916') ||
+      (renderedLayoutMode === 'native_916' && (layoutMode as string) === 'native_portrait')
+    )
+  );
+  const shouldPreferRendered = preferRendered && layoutMatchesRender;
+
+  const activeVideoUrl = shouldPreferRendered
     ? (!videoFailed && _videoUrl ? _videoUrl : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null))
     : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : (!videoFailed && _videoUrl ? _videoUrl : null));
 
   const isSourceTimebase = Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
 
-  // Determine whether the container must be 16:9 widescreen or 9:16 vertical
+  // Authoritative aspect ratio determination: strictly governed by sourceOrientation (never tainted by rendered files)
   const isTarget169 = useMemo(() => {
     if (targetAspect === '16:9') return true;
     if (targetAspect === '9:16') return false;
     if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
     if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow') return false;
-    const isPortrait = (videoDimensions.width > 0 && videoDimensions.height > 0)
-      ? videoDimensions.width < videoDimensions.height
-      : sourceOrientation === 'portrait';
-    if (isPortrait && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return true;
-    if (!isPortrait && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return false;
+    const isPortraitSource = sourceOrientation === 'portrait';
+    if (isPortraitSource && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return true;
+    if (!isPortraitSource && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return false;
     return false;
-  }, [layoutMode, sourceOrientation, targetAspect, videoDimensions.width, videoDimensions.height]);
+  }, [layoutMode, sourceOrientation, targetAspect]);
 
   const isCrop = (layoutMode === 'crop_916' || layoutMode === 'crop_follow');
 
-  // Exact mathematical crop scale based on measured video dimensions and target ratio
+  // Exact mathematical crop scale based on source video aspect ratio and target ratio
   const calculatedCropScale = useMemo(() => {
     if (!isCrop) return 1;
 
-    const sourceAspect = (videoDimensions.width > 0 && videoDimensions.height > 0)
+    const sourceAspect = (isSourceTimebase && videoDimensions.width > 0 && videoDimensions.height > 0)
       ? (videoDimensions.width / videoDimensions.height)
       : (sourceOrientation === 'landscape' ? (16 / 9) : (9 / 16));
 
@@ -1168,10 +1182,9 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
       return 1;
     }
 
-    // Exact scale factor to fill object-contain frame completely without artificial over-zoom
     const scale = Math.max(sourceAspect / targetRatio, targetRatio / sourceAspect);
     return Number(scale.toFixed(4));
-  }, [isCrop, videoDimensions, sourceOrientation, isTarget169]);
+  }, [isCrop, isSourceTimebase, videoDimensions.width, videoDimensions.height, sourceOrientation, isTarget169]);
 
   const stageContainerRef = useRef<HTMLDivElement>(null);
   const [stageBounds, setStageBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -3823,9 +3836,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           <div className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden py-1">
             <FramedVideoStage
               sourceVideoUrl={offlineReadOnly ? undefined : (currentClip.source_video_url ? apiUrl(currentClip.source_video_url, pcHost) : (pcHost ? apiUrl(`/api/clips/${currentClip.id}/source`, pcHost) : undefined))}
-              videoUrl={offlineReadOnly ? undefined : (currentClip.video_url ? apiUrl(currentClip.video_url, pcHost) : undefined)}
-              poster={currentClip.thumbnail_url ? apiUrl(currentClip.thumbnail_url, pcHost) : undefined}
+              videoUrl={offlineReadOnly ? undefined : (currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined)}
+              poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
               preferRendered={true}
+              renderedLayoutMode={currentClip.rendered_layout_mode}
               mediaMissing={currentClip.media_missing === true}
               clipStart={clipStart}
               clipEnd={clipEnd}
@@ -3843,7 +3857,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               showPlayPauseOverlay={true}
               isDetail={true}
             >
-              {isSourceTimebase && (
+              {visibleCaptionTrack && (
                 <DispatchCaptionRenderer
                   track={visibleCaptionTrack}
                   currentTime={currentTime}
@@ -4278,6 +4292,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
             videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
             poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
+            renderedLayoutMode={currentClip.rendered_layout_mode}
             clipStart={clipStart}
             clipEnd={clipEnd}
             clipDuration={clipDuration}
@@ -4597,6 +4612,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
                 poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
                 preferRendered={false}
+                renderedLayoutMode={currentClip.rendered_layout_mode}
                 clipStart={clipStart}
                 clipEnd={clipEnd}
                 clipDuration={clipDuration}
@@ -4613,7 +4629,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 showPlayPauseOverlay={true}
                 maxHeight="75vh"
               >
-                {isSourceTimebase && (
+                {visibleCaptionTrack && (
                   <DispatchCaptionRenderer
                     track={visibleCaptionTrack}
                     currentTime={currentTime}

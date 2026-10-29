@@ -1014,6 +1014,26 @@ def import_cloud_captions_for_clip(clip_id: str) -> int:
         return 0
 
 
+def sync_cloud_template_for_user(worker_url: str, worker_token: str, user_id: str) -> bool:
+    """Fetch user's default editing template from Cloud and persist to local SQLite."""
+    try:
+        res = requests.get(
+            f"{worker_url}/template/default",
+            headers=_cloud_headers(worker_token, user_id),
+            timeout=10,
+        )
+        if res.ok:
+            data = res.json() if res.text else {}
+            tpl = data.get("template")
+            if tpl and isinstance(tpl, dict) and tpl.get("captions"):
+                db.save_default_template(tpl, user_id=user_id)
+                logger.info("Synchronized cloud default template for user %s", user_id)
+                return True
+    except Exception as e:
+        logger.debug("Failed syncing template for user %s: %s", user_id, e)
+    return False
+
+
 def drain_clip_commands(limit: int = 25, user_ids: Optional[List[str]] = None) -> int:
     """Claim queued phone commands from Dispatch Cloud, apply them locally, and
     acknowledge. Runs every sync cycle and immediately at daemon startup; safe
@@ -1039,6 +1059,10 @@ def drain_clip_commands(limit: int = 25, user_ids: Optional[List[str]] = None) -
             import_cloud_captions_for_clips([user_id])
         except Exception as e:
             logger.error("cloud caption reconciliation for %s failed: %s", user_id, e)
+        try:
+            sync_cloud_template_for_user(worker_url, worker_token, user_id)
+        except Exception as e:
+            logger.debug("cloud template reconciliation for %s failed: %s", user_id, e)
 
     try:
         _flush_cloud_purges(worker_url, worker_token)

@@ -1342,6 +1342,76 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     }
   };
 
+  const handleApplyDefaultTemplate = () => {
+    if (!track) return;
+    try {
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_default_template') : null;
+      if (!raw) return;
+      const tpl = JSON.parse(raw);
+      const c = tpl.captions || {};
+      const newStyle: Partial<StyleConfig> = {
+        font_family: c.font_family || 'Montserrat',
+        font_size: Number(c.font_size ?? 38),
+        font_weight: c.font_weight || '700',
+        letter_spacing: Number(c.letter_spacing ?? 0),
+        line_height: Number(c.line_height ?? 1.25),
+        primary_color: c.primary_color || '#FFFFFF',
+        highlight_color: c.highlight_color || '#60A5FA',
+        highlight_enabled: c.highlight_enabled ?? true,
+        outline_enabled: c.outline_enabled ?? false,
+        outline_color: c.outline_color || '#000000',
+        outline_width: Number(c.outline_width ?? 4.5),
+        shadow_enabled: c.shadow_enabled ?? true,
+        shadow_color: c.shadow_color || '#000000',
+        shadow_blur: Number(c.shadow_blur ?? 4),
+        shadow_offset_x: Number(c.shadow_offset_x ?? 2),
+        shadow_offset_y: Number(c.shadow_offset_y ?? 3),
+        shadow_opacity: Number(c.shadow_opacity ?? 1.0),
+        glow_enabled: c.glow_enabled ?? false,
+        glow_color: c.glow_color || '#00F0FF',
+        glow_blur: Number(c.glow_blur ?? 12),
+        glow_opacity: Number(c.glow_opacity ?? 1.0),
+        background_enabled: c.background_enabled ?? false,
+        background_mode: c.background_mode || (c.background_enabled ? 'line' : 'none'),
+        background_color: c.background_color || '#000000',
+        background_opacity: Number(c.background_opacity ?? 1.0),
+        background_padding_x: Number(c.background_padding_x ?? 12),
+        background_padding_y: Number(c.background_padding_y ?? 6),
+        background_corner_radius: Number(c.background_corner_radius ?? 8),
+        background_offset_x: c.background_offset_x,
+        background_offset_y: c.background_offset_y,
+        text_transform: c.all_caps ? 'uppercase' : (c.text_transform || 'none'),
+      };
+      const newLayout: Partial<LayoutConfig> = {
+        position_y: Number(c.position_y ?? 0.78),
+      };
+      const newAnim: Partial<AnimationConfig> = c.animation_config ? {
+        ...c.animation_config,
+      } : {
+        type: c.animation || 'pop',
+      };
+
+      const nextTrack: CaptionTrack = {
+        ...track,
+        default_style: { ...(track.default_style || {}), ...newStyle },
+        default_layout: { ...(track.default_layout || {}), ...newLayout },
+        default_animation: { ...(track.default_animation || {}), ...newAnim },
+        groups: track.groups.map((grp) => {
+          if (grp.type === 'audio' || grp.type === 'voiceover') return grp;
+          return {
+            ...grp,
+            style: { ...(grp.style || {}), ...newStyle } as any,
+            layout: { ...(grp.layout || {}), ...newLayout } as any,
+            animation: { ...(grp.animation || {}), ...newAnim } as any,
+          };
+        }),
+      };
+      onUpdateTrack(nextTrack, true);
+    } catch (e) {
+      console.warn('Failed to apply default template:', e);
+    }
+  };
+
   const patch = (
     stylePatch?: Partial<StyleConfig>,
     layoutPatch?: Partial<LayoutConfig>,
@@ -2461,6 +2531,17 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar py-1 space-y-2">
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleApplyDefaultTemplate}
+                      className="p-2 rounded-lg border-2 border-primary/60 bg-primary/10 hover:bg-primary/20 hover:border-primary flex flex-col items-center justify-center gap-1 transition-all active:scale-95 min-h-[52px] shadow-sm relative group"
+                    >
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-primary">
+                        <Sparkles size={11} className="shrink-0" />
+                        <span>My Saved Default</span>
+                      </div>
+                      <span className="text-[10px] text-text-secondary">Custom Template</span>
+                    </button>
                     {CAPTION_TEMPLATES.map((tmpl) => (
                       <button
                         key={tmpl.id}

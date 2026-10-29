@@ -193,6 +193,27 @@ class YouTubeDirectUploadWorker(
     }
 
     /** Scoped YouTube status checks and lookups performed by the cloud worker. */
+    private suspend fun submitVideoForAiClipping(videoId: String) {
+        if (videoId.isBlank()) return
+        val token = pairingManager.cloudAccessToken.trim()
+        if (token.isBlank()) return
+        try {
+            val body = JsonObject().apply {
+                addProperty("url", "https://youtu.be/$videoId")
+            }
+            val req = Request.Builder()
+                .url("$workerUrl/jobs/submit")
+                .header("Authorization", "Bearer $token")
+                .post(body.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                android.util.Log.i("YouTubeUploader", "Auto-submitted video $videoId to /jobs/submit: code=${resp.code}")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "Failed to auto-submit video $videoId to /jobs/submit: ${e.message}")
+        }
+    }
+
     private suspend fun cloudYouTubeApi(endpoint: String, payload: JsonObject): JsonObject? {
         val body = JsonObject().apply {
             addProperty("account_id", pairingManager.rawVaultAccountId.trim())
@@ -435,6 +456,7 @@ class YouTubeDirectUploadWorker(
                         dao.updateSegment(updated)
                         dao.deleteOutboxItem(seg.segmentId)
                         pairingManager.clearUploadSessionUrl(seg.segmentId)
+                        submitVideoForAiClipping(videoId)
                         
                         // Check for immediate durable PC acknowledgement if PC is reachable
                         val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else calculateSha256(file)
@@ -1306,7 +1328,13 @@ class YouTubeDirectUploadWorker(
             dao.updateProcessingCheck(seg.segmentId, attempts, now)
 
             when (val verdict = checkYouTubeProcessingStatus(legacyToken, seg.youtubeVideoId ?: "", useCloud)) {
-                "succeeded" -> dao.updateSegmentStatus(seg.segmentId, "PROCESSED_ON_YOUTUBE")
+                "succeeded" -> {
+                    dao.updateSegmentStatus(seg.segmentId, "PROCESSED_ON_YOUTUBE")
+                    val vId = seg.youtubeVideoId ?: ""
+                    if (vId.isNotBlank()) {
+                        submitVideoForAiClipping(vId)
+                    }
+                }
                 "failed" -> {
                     android.util.Log.e("YouTubeUploader", "Segment ${seg.segmentId} video ${seg.youtubeVideoId} failed processing on YouTube.")
                     dao.updateSegmentStatus(seg.segmentId, "FAILED_YOUTUBE_PROCESSING")
