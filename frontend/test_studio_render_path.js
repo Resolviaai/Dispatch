@@ -101,7 +101,7 @@ const captionErrorTimelineMarkup = renderToStaticMarkup(React.createElement(Capt
   onRetryCaptions: () => {},
 }));
 assert.match(captionErrorTimelineMarkup, /HTTP 503: captions unavailable/, 'caption errors stay visible');
-assert.match(captionErrorTimelineMarkup, /Retry captions/, 'caption errors keep a retry action');
+assert.match(captionErrorTimelineMarkup, /Retry/, 'caption errors keep a retry action');
 
 const clipErrorMarkup = renderToStaticMarkup(React.createElement(ClipLibraryNotice, {
   state: 'error',

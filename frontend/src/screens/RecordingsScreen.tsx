@@ -101,6 +101,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [filter, setFilter] = useState<FilterStatus>('ready');
   const [isOptionsModalOpen, setIsOptionsModalOpen] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<UnifiedSession | null>(null);
+  const [deleteYoutubeCopy, setDeleteYoutubeCopy] = useState(false);
   const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
   const lastSchedulerNudgeRef = useRef(0);
@@ -904,7 +905,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowConfirmDelete(s)}
+                onClick={() => { setDeleteYoutubeCopy(false); setShowConfirmDelete(s); }}
                 className="min-h-[44px] px-3.5 rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger border border-border text-xs font-medium text-text-secondary flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
                 title="Delete Session"
               >
@@ -915,6 +916,40 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         </main>
       </div>
     );
+  };
+
+  // Best-effort cloud cleanup for a deleted session with a known YouTube
+  // video id: cancels any queued clip-generation job this user owns for that
+  // video, and (when the user opted in) removes the unlisted Short itself.
+  // Never throws — the caller has already completed the delete.
+  const cleanupCloudSessionArtifacts = async (
+    videoId: string,
+    alsoDeleteYouTube: boolean
+  ): Promise<string> => {
+    const sess = await currentSession().catch(() => null);
+    if (!sess?.access_token) return 'Session deleted.';
+
+    await fetch(`${WORKER_BASE}/jobs/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
+      body: JSON.stringify({ video_id: videoId })
+    }).catch(() => null);
+
+    if (!alsoDeleteYouTube) return 'Session deleted.';
+    try {
+      const res = await fetch(`${WORKER_BASE}/youtube/videos/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
+        body: JSON.stringify({ video_id: videoId })
+      });
+      const body = res.ok
+        ? await res.json().catch(() => ({} as { deleted?: boolean }))
+        : {} as { deleted?: boolean };
+      if (body.deleted) return 'Session deleted. The YouTube copy was removed too.';
+      return 'Session deleted, but the YouTube copy could not be removed.';
+    } catch {
+      return 'Session deleted, but the YouTube copy could not be removed.';
+    }
   };
 
   const handleDeleteSession = async (session?: UnifiedSession | null) => {
@@ -966,7 +1001,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       if (onDeleteSession) {
         onDeleteSession(target.id);
       }
-      showToast('Session deleted.', 'success');
+      // Local/PC removal already succeeded and is never rolled back; the cloud
+      // cleanup below is best-effort so a connectivity hiccup cannot strand the
+      // user's completed delete.
+      let finalToast = 'Session deleted.';
+      if (target.youtubeVideoId) {
+        finalToast = await cleanupCloudSessionArtifacts(target.youtubeVideoId, deleteYoutubeCopy);
+      }
+      showToast(finalToast, finalToast.includes('could not') ? 'error' : 'success');
     } catch (err) {
       console.error('Delete session error:', err);
       showToast('Could not delete session.', 'error');
@@ -1366,6 +1408,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <button
               type="button"
               onClick={() => {
+                setDeleteYoutubeCopy(false);
                 setShowConfirmDelete(currentSessionDetail);
                 setIsOptionsModalOpen(false);
               }}
@@ -1395,6 +1438,22 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   ? 'This recording is currently uploading. Deleting will be refused until the upload stops.'
                   : 'This recording has not finished uploading. Deleting it will permanently remove the local recording and cancel the pending upload.'}
               </p>
+            )}
+            {showConfirmDelete.youtubeVideoId && (
+              <label className="flex items-center gap-3 min-h-[44px] px-3 py-2 rounded-xl bg-surface-2 border border-border cursor-pointer select-none active:scale-[0.99] transition-colors">
+                <input
+                  type="checkbox"
+                  checked={deleteYoutubeCopy}
+                  onChange={(e) => setDeleteYoutubeCopy(e.target.checked)}
+                  className="w-4 h-4 accent-[#EF4444] shrink-0"
+                />
+                <span className="text-xs text-text-main leading-relaxed">
+                  Also delete the uploaded copy from YouTube
+                  <span className="block text-[10px] text-text-muted">
+                    Removes the unlisted Short for this session from your channel.
+                  </span>
+                </span>
+              </label>
             )}
             <div className="flex items-center justify-end gap-2 pt-2">
               <button

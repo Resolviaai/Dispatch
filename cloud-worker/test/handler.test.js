@@ -1528,4 +1528,68 @@ test("worker token cannot act for an unauthorized user", async () => {
   assert.equal(res.status, 401, "a token must not impersonate a non-owner");
 });
 
+// ---- /jobs/cancel (delete-flow cleanup) ----
+
+test("/jobs/cancel rejects unauthenticated callers", async () => {
+  const res = await post("/jobs/cancel", { video_id: "abc123def45" }, { "content-type": "application/json" });
+  assert.equal(res.status, 401);
+});
+
+test("/jobs/cancel rejects an invalid video id", async () => {
+  const res = await post("/jobs/cancel", { video_id: "bad id!!" });
+  assert.equal(res.status, 400);
+});
+
+test("/jobs/cancel cancels only the matching queued job of the caller", async () => {
+  supabase.set("processing_jobs?user_id=eq.", {
+    method: "GET",
+    fn: () => ({ body: [
+      { id: "j1", youtube_url: "https://youtu.be/abc123def45" },
+      { id: "j2", youtube_url: "https://www.youtube.com/watch?v=otherref000&si=xyz" },
+    ] }),
+  });
+  let patchSeen = "";
+  supabase.set("processing_jobs?id=in.", {
+    method: "PATCH",
+    fn: (url) => { patchSeen = String(url); return { body: [{ id: "j1", status: "cancelled" }] }; },
+  });
+  const res = await post("/jobs/cancel", { video_id: "abc123def45" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.cancelled, 1);
+  assert.ok(patchSeen.includes("id=in.(j1)"), "patch must be scoped to the matched job id");
+  assert.ok(patchSeen.includes("status=eq.queued"), "patch must re-assert queued so in-flight claims survive");
+});
+
+test("/jobs/cancel returns cancelled 0 when nothing matches", async () => {
+  supabase.set("processing_jobs?user_id=eq.", {
+    method: "GET",
+    fn: () => ({ body: [] }),
+  });
+  const res = await post("/jobs/cancel", { video_id: "abc123def45" });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).cancelled, 0);
+});
+
+// ---- /youtube/videos/delete (optional YouTube-copy cleanup) ----
+
+test("/youtube/videos/delete rejects unauthenticated callers", async () => {
+  const res = await post("/youtube/videos/delete", { video_id: "abc123def45" }, { "content-type": "application/json" });
+  assert.equal(res.status, 401);
+});
+
+test("/youtube/videos/delete rejects an invalid video id", async () => {
+  const res = await post("/youtube/videos/delete", { video_id: "nope" });
+  assert.equal(res.status, 400);
+});
+
+test("/youtube/videos/delete returns 409 when the caller has no linked YouTube account", async () => {
+  supabase.set("connected_accounts?user_id=eq.", {
+    method: "GET",
+    fn: () => ({ body: [] }),
+  });
+  const res = await post("/youtube/videos/delete", { video_id: "abc123def45" });
+  assert.equal(res.status, 409);
+});
+
 

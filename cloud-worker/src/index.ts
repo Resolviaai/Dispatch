@@ -1027,6 +1027,45 @@ export default {
       }
     }
 
+    if (url.pathname === "/youtube/videos/delete" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" }, reqOrigin);
+      const body = await request.json().catch(() => ({})) as { video_id?: string; account_id?: string };
+      const videoId = typeof body.video_id === "string" ? body.video_id.trim() : "";
+      const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId) || (accountId && !/^[0-9a-f-]{36}$/i.test(accountId))) {
+        return json(400, { error: "invalid delete request" }, reqOrigin);
+      }
+      // Only the user's own vault accounts are ever used; real ownership is
+      // enforced by YouTube itself (a non-owned video id returns 403, a
+      // missing one 404, and both leave the caller's data untouched).
+      const listRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${user.userId}&provider=eq.youtube&select=id&limit=10`,
+        { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
+      if (!listRes.ok) return json(502, { error: `account lookup failed: ${listRes.status}` }, reqOrigin);
+      const accounts = await listRes.json() as Array<{ id: string }>;
+      const candidates = accountId ? [accountId] : accounts.map(a => a.id).slice(0, 5);
+      if (candidates.length === 0) return json(409, { error: "no linked YouTube account" }, reqOrigin);
+      let lastError = "";
+      for (const acc of candidates) {
+        try {
+          const accessToken = await getUserYouTubeAccessToken(env, acc, user.userId);
+          if (!accessToken) { lastError = "account disconnected"; continue; }
+          const delRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${encodeURIComponent(videoId)}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${accessToken}` },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (delRes.status === 204) return json(200, { deleted: true }, reqOrigin);
+          if (delRes.status === 404) return json(200, { deleted: true, note: "video already missing" }, reqOrigin);
+          lastError = `youtube_http_${delRes.status}`;
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : "unknown error";
+        }
+      }
+      return json(200, { deleted: false, error: lastError || "delete failed" }, reqOrigin);
+    }
+
     // ---- Per-User Gemini API Keys Vault ----
     if (url.pathname === "/keys/gemini" && request.method === "GET") {
       const user = await authenticate(env, request);
@@ -1640,6 +1679,40 @@ export default {
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
       if (!res.ok) return json(502, { error: `status failed: ${res.status}` });
       return json(200, { jobs: await res.json() });
+    }
+    if (url.pathname === "/jobs/cancel" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const body = await request.json().catch(() => ({})) as { video_id?: string; url?: string };
+      let videoId = typeof body.video_id === "string" ? body.video_id.trim() : "";
+      if (!videoId && typeof body.url === "string") {
+        const m = body.url.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[?&#/]|$)/);
+        if (m) videoId = m[1];
+      }
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return json(400, { error: "invalid video id" });
+      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+      // Fetch this user's queued rows first and match canonically, so the cancel
+      // can never hit another user's job and cannot wildcard over unrelated URLs.
+      const listRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&select=id,youtube_url`,
+        { headers: svc });
+      if (!listRes.ok) return json(502, { error: `cancel lookup failed: ${listRes.status}` });
+      const rows = await listRes.json() as Array<{ id: string; youtube_url: string }>;
+      const eid = videoId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const urlRe = new RegExp(`(?:[?&]v=|/shorts/|/embed/|youtu\\.be/)${eid}([?&#/]|$)`);
+      const matchingIds = rows
+        .filter(r => urlRe.test(String(r.youtube_url ?? "")))
+        .map(r => r.id);
+      if (matchingIds.length === 0) return json(200, { cancelled: 0 });
+      // The PATCH re-asserts status=queued so a job claimed by the PC between
+      // the read and the write is left alone instead of corrupting an in-flight run.
+      const patchRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?id=in.(${matchingIds.join(",")})&user_id=eq.${user.userId}&status=eq.queued`,
+        { method: "PATCH", headers: { ...svc, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify({ status: "cancelled" }) });
+      if (!patchRes.ok) return json(502, { error: `cancel failed: ${patchRes.status}` });
+      const patched = await patchRes.json() as unknown;
+      const cancelled = Array.isArray(patched) ? (patched as Array<unknown>).length : 0;
+      return json(200, { cancelled });
     }
 
     // ---- Cloud Clips (authenticated clients on any network / cellular) ----
