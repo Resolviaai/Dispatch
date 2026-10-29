@@ -1779,29 +1779,34 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
   const persistClipsSnapshot = (
+    fetchUserId: string | null,
     source: 'pc' | 'cloud',
     ready: ClipItem[],
     approved: ClipItem[],
     rejected: unknown[],
     stats: QueueStats | null
   ) => {
+    if (!fetchUserId) return;
     const generation = ++cacheWriteGenerationRef.current;
     void (async () => {
       const activeUserId = await resolveActiveCacheUserId();
-      if (!activeUserId || generation !== cacheWriteGenerationRef.current) return;
-      if (cacheUserIdRef.current && cacheUserIdRef.current !== activeUserId) {
-        thumbnailCacheAttemptedRef.current.clear();
-        revokeCachedThumbnailUrls();
+      if (
+        !activeUserId
+        || activeUserId !== fetchUserId
+        || !componentMountedRef.current
+        || generation !== cacheWriteGenerationRef.current
+      ) {
+        return;
       }
       cacheUserIdRef.current = activeUserId;
-      await writeClipsCache(activeUserId, source, {
+      await writeClipsCache(fetchUserId, source, {
         ready,
         recent_approved: approved,
         rejected,
         queue_stats: stats,
       }).catch(() => {});
-      if (generation !== cacheWriteGenerationRef.current) return;
-      await cachePostersFromSnapshot(activeUserId, [...ready, ...approved]);
+      if (generation !== cacheWriteGenerationRef.current || !componentMountedRef.current) return;
+      await cachePostersFromSnapshot(fetchUserId, [...ready, ...approved]);
     })();
   };
 
@@ -1880,6 +1885,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     let loadedFromPc = false;
     let refreshSucceeded = false;
     const generation = clipFetchGenerationRef.current;
+    // Capture the account that authorized this request. A response fetched for
+    // A must never be written under B after an account switch.
+    const fetchUserId = cacheUserIdRef.current;
 
     if (pcHost && pcHost.trim()) {
       try {
@@ -1911,7 +1919,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             setShowingCachedClips(false);
             setClipRefreshFailed(false);
             revokeCachedThumbnailUrls();
-            persistClipsSnapshot('pc', rList, aList, [], data.queue_stats ?? null);
+            persistClipsSnapshot(fetchUserId, 'pc', rList, aList, [], data.queue_stats ?? null);
             refreshSucceeded = true;
           }
           setIsCloudMode(false);
@@ -1961,7 +1969,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               setShowingCachedClips(false);
               setClipRefreshFailed(false);
               revokeCachedThumbnailUrls();
-              persistClipsSnapshot('cloud', rList, aList, rj, data.queue_stats ?? null);
+              persistClipsSnapshot(fetchUserId, 'cloud', rList, aList, rj, data.queue_stats ?? null);
               refreshSucceeded = true;
             }
             cloudOk = true;
@@ -3480,7 +3488,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
       {/* CLIP LIST — flat rows on canvas, separated by dividers (no cards) */}
       <main className="flex-1 min-h-0 overflow-y-auto pb-24">
-        {clipRefreshFailed && allClips.length === 0 ? (
+        {clipRefreshFailed && allClips.length === 0 && rejectedClips.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
             <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
               <WifiOff size={24} />
@@ -4097,7 +4105,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => setViewMode('studio')}
-                      className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                      disabled={offlineReadOnly}
+                      title={offlineReadOnly ? 'Reconnect to edit this clip' : undefined}
+                      className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-semibold text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-40"
                     >
                       <Scissors size={15} className="text-primary" />
                       <span>Edit</span>
@@ -4105,7 +4115,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => setViewMode('publish')}
-                      className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all"
+                      disabled={offlineReadOnly}
+                      title={offlineReadOnly ? 'Reconnect to publish this clip' : undefined}
+                      className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-1.5 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
                     >
                       <Send size={14} />
                       <span>Publish</span>
@@ -4995,7 +5007,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 setIsMoreModalOpen(false);
                 setViewMode('studio');
               }}
-              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-sm font-medium text-text-main active:scale-[0.98]"
+              disabled={offlineReadOnly}
+              title={offlineReadOnly ? 'Reconnect to edit this clip' : undefined}
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-sm font-medium text-text-main active:scale-[0.98] disabled:opacity-40"
             >
               <Scissors size={14} className="text-text-muted" />
               <span>Open in Caption Studio</span>
@@ -5007,7 +5021,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 setIsMoreModalOpen(false);
                 setViewMode('publish');
               }}
-              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-sm font-medium text-text-main active:scale-[0.98]"
+              disabled={offlineReadOnly}
+              title={offlineReadOnly ? 'Reconnect to publish this clip' : undefined}
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center gap-2 text-sm font-medium text-text-main active:scale-[0.98] disabled:opacity-40"
             >
               <Share2 size={14} className="text-text-muted" />
               <span>Publish Destinations</span>

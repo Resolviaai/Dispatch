@@ -67,10 +67,14 @@ function openDatabase(): Promise<IDBDatabase> {
     };
     request.onsuccess = () => {
       const db = request.result;
-      db.onversionchange = () => {
-        db.close();
+      const forgetConnection = () => {
         if (databasePromise === opening) databasePromise = null;
       };
+      db.onversionchange = () => {
+        db.close();
+        forgetConnection();
+      };
+      db.onclose = forgetConnection;
       resolve(db);
     };
     request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
@@ -89,7 +93,9 @@ function thumbnailVersionOf(clip: ClipItem): string {
 }
 
 function thumbnailKey(userId: string, clip: ClipItem): string {
-  return `${encodeURIComponent(userId)}:${encodeURIComponent(clip.id)}:${encodeURIComponent(thumbnailVersionOf(clip))}`;
+  // One current record per clip. The version is stored on the record, so a
+  // failed refresh can retain the last good poster instead of deleting it.
+  return `t2:${encodeURIComponent(userId)}:${encodeURIComponent(clip.id)}`;
 }
 
 export async function readClipsCache(userId: string): Promise<ClipsCacheSnapshot | null> {
@@ -129,17 +135,6 @@ export async function writeClipsCache(
   await transactionDone(tx);
 }
 
-async function listThumbnailKeys(userId: string): Promise<Set<string>> {
-  const db = await openDatabase();
-  const tx = db.transaction(THUMBNAIL_STORE, 'readonly');
-  const index = tx.objectStore(THUMBNAIL_STORE).index(THUMBNAIL_INDEX);
-  const records = await requestResult<ThumbnailRecord[]>(
-    index.getAll(IDBKeyRange.only(userId))
-  );
-  await transactionDone(tx);
-  return new Set(records.map((record) => record.key));
-}
-
 async function listThumbnailRecords(userId: string): Promise<ThumbnailRecord[]> {
   const db = await openDatabase();
   const tx = db.transaction(THUMBNAIL_STORE, 'readonly');
@@ -157,49 +152,66 @@ export async function cacheClipThumbnails(
   shouldAttempt?: (clip: ClipItem) => boolean
 ): Promise<void> {
   if (!userId || clips.length === 0) return;
-  const existingKeys = await listThumbnailKeys(userId);
-  const currentKeys = new Set(clips.map((clip) => thumbnailKey(userId, clip)));
+  const existingRecords = await listThumbnailRecords(userId);
+  const recordsByClip = new Map<string, ThumbnailRecord[]>();
+  for (const record of existingRecords) {
+    const records = recordsByClip.get(record.clipId) ?? [];
+    records.push(record);
+    recordsByClip.set(record.clipId, records);
+  }
+  const currentClipIds = new Set(clips.map((clip) => clip.id));
 
   const db = await openDatabase();
   for (const clip of clips) {
     if (!clip.thumbnail_url) continue;
     const key = thumbnailKey(userId, clip);
-    if (existingKeys.has(key)) continue;
+    const version = thumbnailVersionOf(clip);
+    const family = recordsByClip.get(clip.id) ?? [];
+    if (family.some((record) => record.key === key && record.thumbnailVersion === version)) {
+      continue;
+    }
     if (shouldAttempt && !shouldAttempt(clip)) continue;
     try {
       const response = await fetch(clip.thumbnail_url, {
         cache: 'no-store',
         credentials: 'omit',
+        signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) continue;
       const blob = await response.blob();
       if (!blob.type.startsWith('image/') || blob.size <= 0 || blob.size > MAX_THUMBNAIL_BYTES) {
         continue;
       }
-      const tx = db.transaction(THUMBNAIL_STORE, 'readwrite');
-      tx.objectStore(THUMBNAIL_STORE).put({
+      const saved: ThumbnailRecord = {
         key,
         userId,
         clipId: clip.id,
-        thumbnailVersion: thumbnailVersionOf(clip),
+        thumbnailVersion: version,
         blob,
         savedAt: Date.now(),
-      } satisfies ThumbnailRecord);
+      };
+      const tx = db.transaction(THUMBNAIL_STORE, 'readwrite');
+      const store = tx.objectStore(THUMBNAIL_STORE);
+      store.put(saved);
+      // Remove legacy/versioned keys only after the replacement is stored.
+      family.forEach((record) => {
+        if (record.key !== key) store.delete(record.key);
+      });
       await transactionDone(tx);
-      existingKeys.add(key);
+      recordsByClip.set(clip.id, [saved]);
     } catch {
-      // A thumbnail is optional; a failed cache fetch must not affect the list.
+      // A thumbnail is optional; keep the previous poster on any failure.
     }
   }
 
   const staleKeys: string[] = [];
-  for (const key of existingKeys) {
-    if (!currentKeys.has(key)) staleKeys.push(key);
+  for (const [clipId, records] of recordsByClip) {
+    if (!currentClipIds.has(clipId)) staleKeys.push(...records.map((record) => record.key));
   }
   if (staleKeys.length > 0) {
     const tx = db.transaction(THUMBNAIL_STORE, 'readwrite');
     const store = tx.objectStore(THUMBNAIL_STORE);
-    staleKeys.forEach((key) => store.delete(key));
+    staleKeys.forEach((staleKey) => store.delete(staleKey));
     await transactionDone(tx);
   }
 }
@@ -210,12 +222,25 @@ export async function cachedThumbnailUrls(userId: string, clips: ClipItem[]): Pr
     return urls;
   }
   try {
-    const keys = new Set(clips.map((clip) => thumbnailKey(userId, clip)));
+    const wanted = new Map(clips.map((clip) => [clip.id, thumbnailVersionOf(clip)]));
     const records = await listThumbnailRecords(userId);
+    const selected = new Map<string, ThumbnailRecord>();
     for (const record of records) {
-      if (!keys.has(record.key) || !(record.blob instanceof Blob)) continue;
-      urls.set(record.clipId, URL.createObjectURL(record.blob));
+      if (!wanted.has(record.clipId) || !(record.blob instanceof Blob)) continue;
+      const existing = selected.get(record.clipId);
+      if (!existing) {
+        selected.set(record.clipId, record);
+        continue;
+      }
+      const recordIsCurrent = record.thumbnailVersion === wanted.get(record.clipId);
+      const existingIsCurrent = existing.thumbnailVersion === wanted.get(record.clipId);
+      if ((recordIsCurrent && !existingIsCurrent) || (recordIsCurrent === existingIsCurrent && record.savedAt > existing.savedAt)) {
+        selected.set(record.clipId, record);
+      }
     }
+    selected.forEach((record, clipId) => {
+      urls.set(clipId, URL.createObjectURL(record.blob));
+    });
   } catch {
     // The cached list remains usable without thumbnails.
   }

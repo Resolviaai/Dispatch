@@ -1090,6 +1090,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   <span
                     className="absolute top-1 left-1 w-4 h-4 rounded bg-black/85 text-white flex items-center justify-center"
                     title={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                    role="img"
                     aria-label={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
                   >
                     {session.origin === 'phone'
