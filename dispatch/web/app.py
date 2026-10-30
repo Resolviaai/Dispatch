@@ -959,6 +959,8 @@ async def list_clips(request: Request):
         published_clips = [dict(r) for r in cursor.fetchall()]
         publication_map = db.get_publications_for_clips([str(c.get("id")) for c in published_clips])
         for c in published_clips:
+            chunk = db.get_chunk_by_id(c.get("chunk_id")) if c.get("chunk_id") else None
+            c["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
             populate_clip_media_urls(c)
             c["published_at"] = str(c.get("published_at") or c.get("approved_at") or c.get("created_at") or "")
             publications = [
@@ -2409,7 +2411,7 @@ async def get_recordings(request: Request):
                     c.session_id,
                     c.filename,
                     c.filepath,
-                    c.duration,
+                    COALESCE(NULLIF(c.duration, 0.0), y.duration, 0.0) as duration,
                     c.status as chunk_status,
                     c.created_at,
                     s.status as session_status,
@@ -2455,7 +2457,7 @@ async def get_recordings(request: Request):
                     c.session_id,
                     c.filename,
                     c.filepath,
-                    c.duration,
+                    COALESCE(NULLIF(c.duration, 0.0), y.duration, 0.0) as duration,
                     c.status as chunk_status,
                     c.created_at,
                     s.status as session_status,

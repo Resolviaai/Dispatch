@@ -536,6 +536,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       const sessClips = clips.filter(c =>
         c.session_id === ns.sessionId ||
         c.chunk_id === ns.sessionId ||
+        ns.segments.some(seg => seg.segmentId === c.chunk_id || (seg.youtubeVideoId && (c.session_id === seg.youtubeVideoId || c.chunk_id === seg.youtubeVideoId))) ||
         (ytId && (c.session_id === ytId || c.chunk_id === ytId))
       );
       const clipCount = sessClips.length;
