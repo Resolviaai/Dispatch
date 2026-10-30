@@ -1,5 +1,11 @@
 import sys
 import shutil
+
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 import logging
 import time
 import os
@@ -247,7 +253,7 @@ def start_dispatch(run_web: bool = True):
         logger.info("Launching Web Dashboard on %s://%s:%d", scheme, WEB_HOST, WEB_PORT)
         logger.info("Review clips on PC: %s://localhost:%d", scheme, WEB_PORT)
         try:
-            uvicorn.run(app, host=WEB_HOST, port=WEB_PORT, log_level="warning",
+            uvicorn.run(app, host=WEB_HOST, port=WEB_PORT, log_config=None,
                         ssl_certfile=tls_files[0] if tls_files else None,
                         ssl_keyfile=tls_files[1] if tls_files else None)
         finally:

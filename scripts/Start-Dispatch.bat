@@ -62,7 +62,7 @@ echo Starting Dispatch Desktop Server on http://127.0.0.1:8000 ...
 echo Press Ctrl+C to shut down.
 echo.
 
-"%PYTHON_EXE%" -m uvicorn dispatch.main:app --host 127.0.0.1 --port 8000
+"%PYTHON_EXE%" -m dispatch.main
 
 if %ERRORLEVEL% neq 0 (
     echo.

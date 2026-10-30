@@ -35,6 +35,9 @@ export const App: React.FC = () => {
     )) {
       return '';
     }
+    if (typeof window !== 'undefined' && window.location.protocol.startsWith('http') && window.location.host) {
+      return window.location.host;
+    }
     return '';
   });
   const [isMobileFrame, setIsMobileFrame] = useState<boolean>(() => {

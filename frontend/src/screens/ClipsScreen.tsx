@@ -2363,14 +2363,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
+    // Check if the loaded video duration actually supports source timebase
+    const effectiveSource = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
+
     if (video.paused) {
-      if (isSourceTimebase) {
+      if (effectiveSource) {
         if (video.currentTime >= clipEnd - 0.1 || video.currentTime < clipStart - 0.2) {
           video.currentTime = clipStart;
           if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
         }
       } else {
-        if (video.currentTime >= clipDuration - 0.1) {
+        if (video.currentTime >= clipDuration - 0.1 || (video.duration && video.currentTime >= video.duration - 0.1)) {
           video.currentTime = 0;
           if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
         }
@@ -2400,9 +2403,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const safeTarget = clamp(targetSec, 0, clipDuration);
     lastTimeUpdateRef.current = safeTarget;
     setCurrentTime(safeTarget);
-    const actualTarget = isSourceTimebase ? (clipStart + safeTarget) : safeTarget;
-    if (videoRef.current) {
-      videoRef.current.currentTime = actualTarget;
+    const video = videoRef.current;
+    const effectiveSource = isSourceTimebase && Boolean(video && video.duration >= clipEnd - 1.0);
+    const actualTarget = effectiveSource ? (clipStart + safeTarget) : safeTarget;
+    if (video) {
+      video.currentTime = actualTarget;
     }
     if (bgVideoRef.current && layoutMode === 'fit_blur') {
       bgVideoRef.current.currentTime = actualTarget;
@@ -2469,7 +2474,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (!video) return;
     const cur = video.currentTime;
 
-    if (isSourceTimebase && contextPreviewRef.current) {
+    const effectiveSourceForContext = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
+    if (effectiveSourceForContext && contextPreviewRef.current) {
       const context = contextPreviewRef.current;
       if (cur >= context.sourceEnd) {
         contextPreviewRef.current = null;
@@ -2483,7 +2489,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       return;
     }
 
-    if (isSourceTimebase) {
+    const effectiveSource = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
+
+    if (effectiveSource) {
       const localTime = Math.max(0, cur - clipStart);
 
       // Check if preview animation completed
@@ -2608,10 +2616,21 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   }, [isPlaying, isSourceTimebase, clipStart, clipEnd, clipDuration, layoutMode]);
 
   const handleLoadedMetadata = (isSource?: boolean, mediaDuration?: number) => {
-    const isSourceEffective = (typeof isSource === 'boolean') ? isSource : isSourceTimebase;
-    setIsSourceTimebase(isSourceEffective);
     const video = videoRef.current;
     const loadedDuration = Number.isFinite(mediaDuration) ? mediaDuration : video?.duration;
+
+    // Determine authoritative timebase from actual media duration vs clip timestamps:
+    // If loadedDuration is smaller than clipEnd - 1.0 (when clipEnd > clipDuration + 2.0),
+    // this media file cannot be the raw source; it is the rendered clip (0-based timebase).
+    let isSourceEffective = (typeof isSource === 'boolean') ? isSource : isSourceTimebase;
+    if (loadedDuration && Number.isFinite(loadedDuration)) {
+      if (clipEnd > clipDuration + 2.0 && loadedDuration < clipEnd - 1.0) {
+        isSourceEffective = false;
+      } else if (clipEnd > clipDuration + 2.0 && loadedDuration >= clipEnd - 1.0) {
+        isSourceEffective = true;
+      }
+    }
+    setIsSourceTimebase(isSourceEffective);
     if (currentClip && isSourceEffective && loadedDuration && Number.isFinite(loadedDuration)) {
       setSourceDurationForClip({ clipId: currentClip.id, seconds: loadedDuration });
     }
