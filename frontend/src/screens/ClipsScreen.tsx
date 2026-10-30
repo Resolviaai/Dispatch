@@ -18,6 +18,8 @@ import {
   Layers,
   Clock,
   Sliders,
+  Camera,
+  Youtube,
   Check,
   Copy,
   Trash2,
@@ -229,6 +231,9 @@ export interface ClipItem {  id: string;
   source_aspect_ratio?: '9:16' | '16:9';
   available_layout_modes?: AvailableLayoutMode[];
   target_aspect?: '16:9' | '9:16';
+  origin?: 'phone' | 'youtube';
+  youtube_video_id?: string | null;
+  source_title?: string | null;
   /** Cloud caption payload: an edited track (groups) or a transcript seed (words). */
   captions?: {
     words?: Array<{ w?: string; text?: string; word?: string; start: number; end: number }>;
@@ -3324,7 +3329,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const groupedSessions = useMemo(() => {
     const map = new Map<string, ClipItem[]>();
     filteredClips.forEach((clip) => {
-      const sessKey = clip.session_id || 'Direct Ingestion';
+      const sessKey = clip.session_id || (clip.youtube_video_id ? `yt_${clip.youtube_video_id}` : 'Imported Video');
       if (!map.has(sessKey)) {
         map.set(sessKey, []);
       }
@@ -3618,101 +3623,136 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             </div>
           </div>
         ) : (
-          groupedSessions.map(([sessionId, clipsInSession]) => (
-            <section key={sessionId}>
-              {/* Session section header — plain text, no card */}
-              <div className="px-4 pt-4 pb-1 flex items-center justify-between">
-                <span className="text-xs font-medium uppercase tracking-wider text-text-muted">
-                  Session {sessionId.replace('sess_', '')}
-                </span>
-                <span className="text-xs text-text-muted tabular-nums">
-                  {clipsInSession.length}&nbsp;{clipsInSession.length === 1 ? 'clip' : 'clips'}
-                </span>
-              </div>
+          groupedSessions.map(([sessionId, clipsInSession]) => {
+            const firstClip = clipsInSession[0];
+            const sessionOrigin = firstClip?.origin || (firstClip?.youtube_video_id || sessionId.startsWith('yt_') ? 'youtube' : 'phone');
+            const sessionLabel = sessionId.startsWith('yt_')
+              ? (firstClip?.source_title || `YouTube ${sessionId.replace('yt_', '')}`)
+              : sessionId === 'Imported Video'
+                ? 'Imported Video'
+                : `Session ${sessionId.replace('sess_', '')}`;
 
-              <div className="px-4">
-                {clipsInSession.map((clip) => {
-                  const isUploaded = clip.status === 'approved' || clip.status === 'published';
-                  const isPublished = clip.status === 'published' || Boolean(clip.remote_id || clip.remote_url);
-                  const youtubeUrl = clip.remote_url || (clip.remote_id ? 'https://youtu.be/' + clip.remote_id : null);
-                  const daysLeft = getRetentionDaysLeft(clip.published_at);
-                  const age = formatAge(isUploaded ? (clip.published_at || clip.approved_at || clip.created_at) : clip.created_at);
-
-                  return (
-                    <div
-                      key={clip.id}
-                      onClick={() => {
-                        if (clip.is_cloud_only && youtubeUrl) {
-                          window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
-                          return;
-                        }
-                        setSelectedClipId(clip.id);
-                        setViewMode('detail');
-                      }}
-                      className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors"
+            return (
+              <section key={sessionId}>
+                {/* Session section header — clean origin & title, no noisy technical hashes */}
+                <div className="px-4 pt-4 pb-1 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className="w-4 h-4 rounded bg-surface-2 flex items-center justify-center shrink-0"
+                      title={sessionOrigin === 'phone' ? 'Camera recording' : 'YouTube video'}
                     >
-                      {/* 16:9 thumbnail — uniform aspect for every clip (Studio pattern) */}
-                      <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
-                        <Film size={16} className="text-white/40" />
-                        {clip.thumbnail_url && (
-                          <img
-                            src={clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)}
-                            alt=""
-                            loading="lazy"
-                            decoding="async"
-                            className="absolute inset-0 w-full h-full object-cover"
-                            onError={(e) => {
-                              // Hide (not remove) so layout never shifts; the
-                              // frame placeholder stays visible behind it.
-                              (e.target as HTMLElement).style.visibility = 'hidden';
-                            }}
-                          />
-                        )}
-                        {clip.is_cloud_only && (
-                          <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/85 text-white text-[9px] font-medium flex items-center gap-0.5">
-                            <Cloud size={8} />
-                            Cloud
-                          </span>
-                        )}
-                        {/* Uploading shimmer overlay on thumbnail */}
-                        {isUploaded && !isPublished && (
-                          <div className="absolute inset-0 bg-primary/15 flex items-center justify-center">
-                            <span className="w-5 h-5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
-                          </div>
-                        )}
-                        {/* Duration badge — black bg, white text, both themes */}
-                        <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
-                          {formatDuration(clip.duration)}
-                        </span>
-                      </div>
+                      {sessionOrigin === 'phone' ? (
+                        <Camera size={10} className="text-text-muted" />
+                      ) : (
+                        <Youtube size={10} className="text-danger" />
+                      )}
+                    </span>
+                    <span className="text-xs font-medium uppercase tracking-wider text-text-muted truncate">
+                      {sessionLabel}
+                    </span>
+                  </div>
+                  <span className="text-xs text-text-muted tabular-nums shrink-0">
+                    {clipsInSession.length}&nbsp;{clipsInSession.length === 1 ? 'clip' : 'clips'}
+                  </span>
+                </div>
 
-                      {/* Title + metadata — Studio row anatomy */}
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
-                          {clip.title || clip.hook || 'Untitled Clip'}
-                        </h3>
-                        <p className="text-xs text-text-muted mt-1 tabular-nums truncate">
-                          {typeof clip.virality_score === 'number' && clip.virality_score > 0 && (
-                            <>{clip.virality_score}% &middot; </>
-                          )}
-                          {age || (clip.session_id ? clip.session_id.replace('sess_', '#') : 'Direct')}
-                          {isPublished ? (
-                            !clip.is_cloud_only && <> &middot; {daysLeft}d left</>
-                          ) : isUploaded ? (
-                            <> &middot; <span className="inline-flex items-center gap-1 text-primary font-medium"><span className="w-2.5 h-2.5 rounded-full border border-primary/30 border-t-primary animate-spin inline-block" /><span>Uploading…</span></span></>
-                          ) : null}
-                          {clip.is_cloud_only && <> &middot; Cloud only</>}
-                        </p>
-                      </div>
+                <div className="px-4">
+                  {clipsInSession.map((clip) => {
+                    const isUploaded = clip.status === 'approved' || clip.status === 'published';
+                    const isPublished = clip.status === 'published' || Boolean(clip.remote_id || clip.remote_url);
+                    const youtubeUrl = clip.remote_url || (clip.remote_id ? 'https://youtu.be/' + clip.remote_id : null);
+                    const daysLeft = getRetentionDaysLeft(clip.published_at);
+                    const age = formatAge(isUploaded ? (clip.published_at || clip.approved_at || clip.created_at) : clip.created_at);
+                    const clipOrigin = clip.origin || (clip.youtube_video_id ? 'youtube' : (clip.session_id ? 'phone' : 'youtube'));
 
-                      {/* Kebab — circular ghost, aligned to the 16px margin */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                    return (
+                      <div
+                        key={clip.id}
+                        onClick={() => {
+                          if (clip.is_cloud_only && youtubeUrl) {
+                            window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
+                            return;
+                          }
                           setSelectedClipId(clip.id);
-                          setIsMoreModalOpen(true);
+                          setViewMode('detail');
                         }}
+                        className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors"
+                      >
+                        {/* 16:9 thumbnail — uniform aspect for every clip (Studio pattern) */}
+                        <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
+                          <Film size={16} className="text-white/40" />
+                          {clip.thumbnail_url && (
+                            <img
+                              src={clip.thumbnail_url.startsWith('http') ? clip.thumbnail_url : apiUrl(clip.thumbnail_url, pcHost)}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                              className="absolute inset-0 w-full h-full object-cover"
+                              onError={(e) => {
+                                // Hide (not remove) so layout never shifts; the
+                                // frame placeholder stays visible behind it.
+                                (e.target as HTMLElement).style.visibility = 'hidden';
+                              }}
+                            />
+                          )}
+
+                          {/* Minimal origin badge matching Sessions screen pattern */}
+                          <span
+                            className="absolute top-1 left-1 w-4 h-4 rounded bg-black/85 text-white flex items-center justify-center shadow-sm"
+                            title={clipOrigin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                            role="img"
+                            aria-label={clipOrigin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                          >
+                            {clipOrigin === 'phone'
+                              ? <Camera size={10} />
+                              : <Youtube size={10} className="text-danger" />}
+                          </span>
+
+                          {clip.is_cloud_only && (
+                            <span className="absolute top-1 left-6 px-1 py-0.5 rounded bg-black/85 text-white text-[9px] font-medium flex items-center gap-0.5">
+                              <Cloud size={8} />
+                              Cloud
+                            </span>
+                          )}
+                          {/* Uploading shimmer overlay on thumbnail */}
+                          {isUploaded && !isPublished && (
+                            <div className="absolute inset-0 bg-primary/15 flex items-center justify-center">
+                              <span className="w-5 h-5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                            </div>
+                          )}
+                          {/* Duration badge — black bg, white text, both themes */}
+                          <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
+                            {formatDuration(clip.duration)}
+                          </span>
+                        </div>
+
+                        {/* Title + metadata — Studio row anatomy */}
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
+                            {clip.title || clip.hook || 'Untitled Clip'}
+                          </h3>
+                          <p className="text-xs text-text-muted mt-1 tabular-nums truncate">
+                            {typeof clip.virality_score === 'number' && clip.virality_score > 0 && (
+                              <>{clip.virality_score}% &middot; </>
+                            )}
+                            {age || (clip.session_id ? `#${clip.session_id.replace('sess_', '')}` : 'Clip')}
+                            {isPublished ? (
+                              !clip.is_cloud_only && <> &middot; {daysLeft}d left</>
+                            ) : isUploaded ? (
+                              <> &middot; <span className="inline-flex items-center gap-1 text-primary font-medium"><span className="w-2.5 h-2.5 rounded-full border border-primary/30 border-t-primary animate-spin inline-block" /><span>Uploading…</span></span></>
+                            ) : null}
+                            {clip.is_cloud_only && <> &middot; Cloud only</>}
+                          </p>
+                        </div>
+
+                        {/* Kebab — circular ghost, aligned to the 16px margin */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedClipId(clip.id);
+                            setIsMoreModalOpen(true);
+                          }}
                         aria-label="More options"
                         className="-mr-2 w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
                       >
@@ -3721,9 +3761,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                     </div>
                   );
                 })}
-              </div>
-            </section>
-          ))
+                </div>
+              </section>
+            );
+          })
         )}
       </main>
 
@@ -3807,8 +3848,24 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <h2 className="text-base font-semibold tracking-tight text-text-main truncate leading-tight">
                 {currentClip.title || 'Clip Detail'}
               </h2>
-              <div className="text-xs text-text-muted truncate tabular-nums">
-                {currentClip.session_id ? 'Session ' + currentClip.session_id.replace('sess_', '') : 'Dispatch review'}
+              <div className="text-xs text-text-muted truncate tabular-nums flex items-center gap-1.5">
+                <span
+                  className="w-3.5 h-3.5 rounded bg-surface-2 flex items-center justify-center shrink-0"
+                  title={currentClip.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                >
+                  {(currentClip.origin || (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube'))) === 'phone' ? (
+                    <Camera size={9} className="text-text-muted" />
+                  ) : (
+                    <Youtube size={9} className="text-danger" />
+                  )}
+                </span>
+                <span>
+                  {currentClip.session_id
+                    ? `Session ${currentClip.session_id.replace('sess_', '')}`
+                    : (currentClip.youtube_video_id ? `YouTube ${currentClip.youtube_video_id}` : 'Dispatch review')}
+                </span>
+                <span>&middot;</span>
+                <span className="font-mono">{formatDuration(currentClip.duration)}</span>
               </div>
             </div>
           </div>
@@ -5031,6 +5088,48 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 </span>
               </button>
             )}
+
+            {currentClip.youtube_video_id && (
+              <button
+                type="button"
+                onClick={() => handleCopy(`https://youtu.be/${currentClip.youtube_video_id}`, 'YouTube Link')}
+                className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 hover:bg-surface-200 border border-border flex items-center justify-between text-sm font-medium text-text-main active:scale-[0.98]"
+              >
+                <div className="flex items-center gap-2">
+                  <Youtube size={14} className="text-danger" />
+                  <span>YouTube ID</span>
+                </div>
+                <span className="font-mono text-[10px] text-text-muted truncate max-w-[120px]">
+                  {currentClip.youtube_video_id}
+                </span>
+              </button>
+            )}
+
+            <div className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 border border-border flex items-center justify-between text-sm font-medium text-text-main">
+              <div className="flex items-center gap-2">
+                {((currentClip.origin || (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube'))) === 'phone') ? (
+                  <Camera size={14} className="text-text-muted" />
+                ) : (
+                  <Youtube size={14} className="text-danger" />
+                )}
+                <span>Origin</span>
+              </div>
+              <span className="text-xs text-text-muted font-medium">
+                {((currentClip.origin || (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube'))) === 'phone')
+                  ? 'Phone Camera'
+                  : 'YouTube Ingest'}
+              </span>
+            </div>
+
+            <div className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 border border-border flex items-center justify-between text-sm font-medium text-text-main">
+              <div className="flex items-center gap-2">
+                <Clock size={14} className="text-text-muted" />
+                <span>Duration</span>
+              </div>
+              <span className="font-mono text-xs text-text-muted tabular-nums">
+                {formatDuration(currentClip.duration)}
+              </span>
+            </div>
 
             <button
               type="button"

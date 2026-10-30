@@ -726,6 +726,50 @@ def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
     return None
 
 
+def resolve_clip_origin(clip: Dict[str, Any]) -> Dict[str, Any]:
+    """Derive true origin (phone vs youtube), youtube_video_id, and parent session_id."""
+    chunk_id = clip.get("chunk_id")
+    session_id = clip.get("session_id")
+    yt_id = None
+    source_title = None
+
+    if chunk_id:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT ch.session_id, ch.file_hash, yi.video_id, yi.title
+                FROM chunks ch
+                LEFT JOIN youtube_inbox yi ON (ch.file_hash = 'yt_' || yi.video_id OR yi.local_video_path = ch.filepath)
+                WHERE ch.id = ?
+            """, (chunk_id,))
+            row = cursor.fetchone()
+            if row:
+                if not session_id and row["session_id"]:
+                    session_id = row["session_id"]
+                if row["video_id"]:
+                    yt_id = row["video_id"]
+                    source_title = row["title"]
+                elif row["file_hash"] and str(row["file_hash"]).startswith("yt_"):
+                    yt_id = str(row["file_hash"])[3:]
+
+    if not yt_id and session_id:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT video_id, title FROM youtube_inbox WHERE session_id = ?", (session_id,))
+            row = cursor.fetchone()
+            if row and row["video_id"]:
+                yt_id = row["video_id"]
+                source_title = row["title"]
+
+    origin = "youtube" if yt_id else "phone"
+    return {
+        "origin": origin,
+        "session_id": session_id,
+        "youtube_video_id": yt_id,
+        "source_title": source_title,
+    }
+
+
 def get_clip_framing_context(clip: Dict[str, Any]) -> Dict[str, Any]:
     """Derive authentic source orientation, allowed framing modes, and target dimensions.
     The original session recording is the single source of truth.
@@ -875,6 +919,12 @@ async def list_clips(request: Request):
         c["layout_mode"] = ctx["layout_mode"]
         c["target_aspect"] = ctx["target_aspect"]
         c["is_render_stale"] = clip_render_is_stale(c)
+        orig_info = resolve_clip_origin(c)
+        c["origin"] = orig_info["origin"]
+        if not c.get("session_id") and orig_info["session_id"]:
+            c["session_id"] = orig_info["session_id"]
+        c["youtube_video_id"] = orig_info["youtube_video_id"]
+        c["source_title"] = orig_info["source_title"]
 
     # D7: the 7-day published-clip purge moved to the scheduled janitor in main.py
     # (daemon thread "dispatch-published-clip-janitor", first sweep 5 min after
@@ -928,6 +978,12 @@ async def list_clips(request: Request):
             c["layout_mode"] = ctx["layout_mode"]
             c["target_aspect"] = ctx["target_aspect"]
             c["is_render_stale"] = clip_render_is_stale(c)
+            orig_info = resolve_clip_origin(c)
+            c["origin"] = orig_info["origin"]
+            if not c.get("session_id") and orig_info["session_id"]:
+                c["session_id"] = orig_info["session_id"]
+            c["youtube_video_id"] = orig_info["youtube_video_id"]
+            c["source_title"] = orig_info["source_title"]
 
     queued_clips = db.get_queued_transcription_clips(limit=50, user_id=caller_user_id)
     queue_stats = db.get_transcription_queue_stats()
@@ -959,6 +1015,12 @@ async def get_clip_detail(clip_id: str, request: Request):
     clip["layout_mode"] = ctx["layout_mode"]
     clip["target_aspect"] = ctx["target_aspect"]
     clip["is_render_stale"] = clip_render_is_stale(clip)
+    orig_info = resolve_clip_origin(clip)
+    clip["origin"] = orig_info["origin"]
+    if not clip.get("session_id") and orig_info["session_id"]:
+        clip["session_id"] = orig_info["session_id"]
+    clip["youtube_video_id"] = orig_info["youtube_video_id"]
+    clip["source_title"] = orig_info["source_title"]
     return clip
 
 

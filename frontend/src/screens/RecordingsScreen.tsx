@@ -1619,6 +1619,37 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               </button>
             </div>
 
+            <button
+              type="button"
+              onClick={() => {
+                handleCopy(currentSessionDetail.id, 'Session ID');
+                setIsOptionsModalOpen(false);
+              }}
+              className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center justify-between transition-all active:scale-[0.98]"
+            >
+              <div className="flex items-center gap-2">
+                <Copy size={14} className="text-text-muted" />
+                <span>Session ID</span>
+              </div>
+              <span className="font-mono text-[10px] text-text-muted truncate max-w-[130px]">
+                {currentSessionDetail.id}
+              </span>
+            </button>
+
+            <div className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between text-xs font-medium text-text-main">
+              <div className="flex items-center gap-2">
+                {currentSessionDetail.origin === 'phone' ? (
+                  <Camera size={14} className="text-text-muted" />
+                ) : (
+                  <Youtube size={14} className="text-danger" />
+                )}
+                <span>Origin</span>
+              </div>
+              <span className="text-[11px] text-text-muted font-medium">
+                {currentSessionDetail.origin === 'phone' ? 'Phone Camera Recording' : 'YouTube Ingest'}
+              </span>
+            </div>
+
             {currentSessionDetail.origin === 'phone' && (
               <button
                 type="button"
@@ -1639,13 +1670,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 const text = currentSessionDetail.youtubeVideoId
                   ? `https://youtu.be/${currentSessionDetail.youtubeVideoId}`
                   : currentSessionDetail.id;
-                handleCopy(text, 'Link');
+                handleCopy(text, currentSessionDetail.youtubeVideoId ? 'YouTube Link' : 'Session ID');
                 setIsOptionsModalOpen(false);
               }}
               className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-medium text-text-main flex items-center gap-2 transition-all active:scale-[0.98]"
             >
               <Copy size={14} />
-              <span>Copy Link</span>
+              <span>{currentSessionDetail.youtubeVideoId ? 'Copy YouTube Link' : 'Copy Session ID'}</span>
             </button>
 
             {currentSessionDetail.youtubeVideoId && (

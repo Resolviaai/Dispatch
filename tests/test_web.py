@@ -99,5 +99,38 @@ class TestWebDashboard(unittest.TestCase):
                 test_file.unlink()
 
 
+    def test_resolve_clip_origin(self):
+        """Verify origin resolution for clips from phone, youtube inbox, and fallback chunks."""
+        from dispatch.web.app import resolve_clip_origin
+        from dispatch.db import get_db_connection
+
+        # Edge case: empty clip
+        res = resolve_clip_origin({})
+        self.assertEqual(res["origin"], "phone")
+        self.assertIsNone(res["youtube_video_id"])
+
+        # Test case: youtube clip linked via session_id in youtube_inbox
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO sessions (id, status) VALUES (?, ?)", ("sess_phone_test", "completed"))
+            cursor.execute("INSERT OR REPLACE INTO youtube_inbox (video_id, title, session_id, duration) VALUES (?, ?, ?, ?)",
+                           ("yt_test_123", "Test YouTube Video", "sess_yt_test", 120.0))
+            cursor.execute("INSERT OR REPLACE INTO chunks (id, session_id, filename, filepath, duration, status) VALUES (?, ?, ?, ?, ?, ?)",
+                           ("ch_phone_test", "sess_phone_test", "phone.mp4", "phone.mp4", 60.0, "processed"))
+            conn.commit()
+
+        # Phone clip with session_id
+        phone_res = resolve_clip_origin({"chunk_id": "ch_phone_test", "session_id": "sess_phone_test"})
+        self.assertEqual(phone_res["origin"], "phone")
+        self.assertIsNone(phone_res["youtube_video_id"])
+        self.assertEqual(phone_res["session_id"], "sess_phone_test")
+
+        # YouTube clip with session_id
+        yt_res = resolve_clip_origin({"session_id": "sess_yt_test"})
+        self.assertEqual(yt_res["origin"], "youtube")
+        self.assertEqual(yt_res["youtube_video_id"], "yt_test_123")
+        self.assertEqual(yt_res["source_title"], "Test YouTube Video")
+
+
 if __name__ == "__main__":
     unittest.main()
