@@ -58,8 +58,8 @@ def get_configured_gemini_models() -> List[str]:
     return DEFAULT_GEMINI_MODELS
 
 
-def snap_to_word_boundary(timestamp: float, segments: List[Dict[str, Any]], prefer_start: bool = True) -> float:
-    """Snap a timestamp to the closest actual spoken word boundary in segments."""
+def snap_to_word_boundary(timestamp: float, segments: List[Dict[str, Any]], prefer_start: bool = True, max_tolerance: float = 2.0) -> float:
+    """Snap a timestamp to the closest actual spoken word boundary in segments within tolerance."""
     if not segments:
         return round(timestamp, 2)
 
@@ -84,7 +84,9 @@ def snap_to_word_boundary(timestamp: float, segments: List[Dict[str, Any]], pref
                     min_diff = diff
                     best_time = target
 
-    return round(best_time, 2)
+    if min_diff <= max_tolerance:
+        return round(best_time, 2)
+    return round(timestamp, 2)
 
 
 def compute_interval_overlap(start1: float, end1: float, start2: float, end2: float) -> float:

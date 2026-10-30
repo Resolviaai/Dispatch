@@ -27,10 +27,11 @@ The phone does not transfer recordings to the PC over LAN. A YouTube upload alon
 
 1. Submit a public or unlisted video through the Dispatch Studio.
 2. The PC downloads and probes the source, then persists its processing state.
-3. Dispatch obtains YouTube captions where available and uses the configured transcription fallback when needed.
-4. Gemini proposes highlight ranges. FFmpeg prepares candidate clips and captions.
-5. Review the candidate, adjust its range or captions, then approve or reject it.
-6. Approved output enters the publishing outbox. Local upload completion and YouTube’s later processing status are separate states.
+3. Dispatch obtains YouTube captions where available or uses **`gemini-3.5-flash-lite`** for Stage 1 full audio transcription and viral highlight analysis.
+4. Gemini proposes highlight ranges. FFmpeg extracts bounded candidate audio, which is aligned at exact millisecond word levels using **`gemini-3.5-transcribe`** (with **`gemini-3.5-flash-lite`** word-timestamp fallback).
+5. Dynamic caption grouping and layout rendering format the clip into the user's choice of 4 framing options: **Crop 9:16**, **Fit + Blur**, **Fit + Black**, or **Native 16:9**.
+6. Review the candidate in Studio, adjust its range or captions, and approve or reject it.
+7. Approved output enters the publishing outbox for multi-platform distribution.
 
 Private videos are rejected by the manual URL-ingestion visibility gate.
 
@@ -44,7 +45,10 @@ The React Studio is available at http://localhost:8000/studio/ when the PC daemo
 - Final selected clips are limited to **5–180 seconds**.
 - Keep source timestamps, temporary edit-window timestamps, and rendered-clip timestamps distinct. AI context padding must not restrict the user's selectable range.
 - Long audio is processed in bounded windows with overlap and timestamp offsets. Stage 2 extraction must remain bounded; failure must not trigger transcription of an entire multi-hour source.
-- The product's storage budget is **10,000,000,000 bytes total** to control cost. This is Dispatch's budget policy, not a claim about the storage provider's technical maximum.
+- **3-Tier Smart Storage Retention Law:**
+  - **Tier 1 (7-Day Source Retention):** Full source video chunks are retained on PC for 168 hours (7 days) to enable creator re-clipping and trim expansions.
+  - **Tier 2 (72-Hour Post-Publish Early Release):** Once all clips extracted from a source video have been published or approved, the full source video is released after 72 hours.
+  - **Tier 3 (10 GB Disk Safety Ceiling):** If local storage exceeds 10 GB (10,000,000,000 bytes), the oldest source videos past 72 hours are automatically pruned FIFO until storage drops below the ceiling.
 - The current cloud media contract caps an individual clip/edit-window object at **512 MiB** and a thumbnail at **8 MiB**. A **2,000,000,000-byte** per-user starting quota is configurable by the administrator.
 - Full recording sources belong in the YouTube/PC workflow, not R2. Cloud edit-window staging and phone-side consumption have had separate implementation/deployment gates; verify current migrations and live services before assuming remote editing is fully available.
 
@@ -67,6 +71,14 @@ The React Studio is available at http://localhost:8000/studio/ when the PC daemo
 
 ## Run Dispatch on Windows
 
+### One-Click Desktop Launcher
+Double-click `scripts/Start-Dispatch.bat` or run:
+```cmd
+scripts\Start-Dispatch.bat
+```
+This launcher checks Python, verifies FFmpeg on PATH, creates storage folders, and starts the uvicorn server on `http://127.0.0.1:8000`.
+
+### Manual PowerShell Setup
 From the repository root in PowerShell:
 
 ```powershell

@@ -317,14 +317,14 @@ def _validate_local_network_trust(request: Request, client_host: str) -> None:
             origin_hostname = (split_origin.hostname or "").lower()
             origin_port = split_origin.port
 
-            # Allow loopback/testserver origins, Android appassets, and local network peer origins
+            # Allow loopback/testserver origins and local network peer origins
             is_valid = (
                 origin_scheme in ("http", "https")
                 and (
-                    origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver", "appassets.androidplatform.net")
+                    origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
                     or _is_local_network_peer(origin_hostname)
                 )
-                and (origin_port in (8000, 5173, None) or origin_hostname in ("testserver", "appassets.androidplatform.net"))
+                and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
             )
             if not is_valid:
                 logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
