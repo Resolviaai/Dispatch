@@ -1142,6 +1142,12 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   const [fallbackFailed, setFallbackFailed] = useState(false);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
+  useEffect(() => {
+    setSourceFailed(false);
+    setVideoFailed(false);
+    setFallbackFailed(false);
+  }, [sourceVideoUrl, _videoUrl, fallbackVideoUrl]);
+
   // High-reliability media resolution:
   // If preferRendered is requested, only use the pre-rendered video if its layout matches the active layoutMode.
   // When the user selects a different layout mode (e.g. Crop 9:16 instead of Fit + Blur), we play sourceVideoUrl

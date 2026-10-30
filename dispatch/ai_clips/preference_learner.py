@@ -30,9 +30,9 @@ def get_negative_feedback_prompt(user_id: str | None = None) -> str:
     other_critiques = []
 
     for idx, r in enumerate(rejections, 1):
-        title = r.get("title", "Untitled")
-        reason = r.get("reason", "No reason provided")
-        snippet = r.get("transcript_snippet", "")
+        title = r.get("title") or "Untitled"
+        reason = r.get("reason") or "No reason provided"
+        snippet = r.get("transcript_snippet") or ""
         lines.append(f"- Rejected Example {idx}: '{title}' | Reason: {reason} | Excerpt: \"{snippet[:100]}...\"")
 
         r_lower = reason.lower()

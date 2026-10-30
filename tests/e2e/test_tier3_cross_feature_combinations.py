@@ -156,17 +156,24 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
         """Pairwise 3: Dashboard clip approval for 4 platforms -> outbox marks unauthenticated blocked_needs_auth."""
         # Real tiny MP4 fixture: the approval path runs a genuine FFmpeg render +
         # ffprobe validation, so a fake byte-string is correctly rejected (audit L1).
-        dummy_video = self.temp_dir / "p03_clip.mp4"
+        dummy_video = self.temp_dir / "p03_source.mp4"
         fixture = Path(__file__).resolve().parents[1] / "fixtures" / "tiny_valid.mp4"
         shutil.copyfile(fixture, dummy_video)
 
+        chunk_id = register_chunk(
+            session_id=None,
+            filename="p03_source.mp4",
+            filepath=str(dummy_video),
+            file_hash="hash_p03_source",
+        )
+        with get_db_connection() as conn:
+            conn.execute("UPDATE chunks SET duration = 5.0 WHERE id = ?", (chunk_id,))
+
         clip_id = save_clip(
-            session_id=None, chunk_id=None, start_time=0.0, end_time=5.0,
+            session_id=None, chunk_id=chunk_id, start_time=0.0, end_time=5.0,
             title="P03 Pairwise Clip", hook="High retention", description="Description",
             hashtags="#Shorts", virality_score=88, layout_mode="fit_blur"
         )
-        with get_db_connection() as conn:
-            conn.execute("UPDATE clips SET video_path = ? WHERE id = ?", (str(dummy_video), clip_id))
 
         # Creator 1-click approves via dashboard API
         res = self.client.post(f"/api/clips/{clip_id}/approve", json={
