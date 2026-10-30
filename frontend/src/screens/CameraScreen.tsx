@@ -124,11 +124,11 @@ const ContinuousZoomSlider: React.FC<{
   const segWidth = isDragging ? Math.abs(thumbFraction - 0.5) * 100 : 0;
 
   return (
-    <div className="flex flex-col items-center w-full max-w-[280px] mb-5 select-none" data-interactive>
+    <div className="flex flex-col items-center w-full max-w-[280px] mb-5 select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.7)]" data-interactive>
       {/* Zoom Ratio Readout Label — shown only while holding/dragging */}
       <div className="h-6 flex items-center justify-center mb-1">
         {isDragging ? (
-          <span className="text-white font-mono text-[15px] font-bold tracking-wide drop-shadow-md animate-in fade-in duration-100">
+          <span className="text-white font-mono text-[15px] font-bold tracking-wide drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] animate-in fade-in duration-100">
             {ratio.toFixed(1)}X
           </span>
         ) : null}
@@ -140,7 +140,7 @@ const ContinuousZoomSlider: React.FC<{
         <button
           type="button"
           onClick={() => stepZoom(-0.2)}
-          className="w-8 h-8 flex items-center justify-center text-white/80 hover:text-white text-lg font-light active:scale-90 transition-all"
+          className="w-8 h-8 flex items-center justify-center text-white/90 hover:text-white text-lg font-light active:scale-90 transition-all drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
           title="Zoom out"
         >
           −
@@ -155,23 +155,23 @@ const ContinuousZoomSlider: React.FC<{
           onPointerCancel={handlePointerUp}
           className="relative flex-1 h-9 flex items-center cursor-pointer touch-none"
         >
-          {/* Base Muted Track */}
-          <div className="w-full h-[1.5px] bg-white/40 rounded-full" />
+          {/* Base Muted Track with outline */}
+          <div className="w-full h-[2px] bg-white/60 rounded-full ring-1 ring-black/40 shadow-[0_1px_3px_rgba(0,0,0,0.7)]" />
 
           {/* Active White Track Segment */}
           {segWidth > 0 && (
             <div
-              className="absolute h-[2px] bg-white rounded-full pointer-events-none"
+              className="absolute h-[2.5px] bg-white rounded-full pointer-events-none ring-1 ring-black/30"
               style={{ left: `${segLeft}%`, width: `${segWidth}%` }}
             />
           )}
 
           {/* Jog Circle Thumb — Snaps to 50% on release, expands on hold, displays zoom inside when resting */}
           <div
-            className={`absolute -translate-x-1/2 pointer-events-none flex items-center justify-center ${
+            className={`absolute -translate-x-1/2 pointer-events-none flex items-center justify-center ring-1 ring-black/30 drop-shadow-[0_1px_3px_rgba(0,0,0,0.7)] ${
               isDragging
                 ? 'w-[32px] h-[32px] rounded-full border-2 border-white bg-transparent shadow-xl'
-                : 'w-[28px] h-[28px] rounded-full border border-white/80 bg-black/45 backdrop-blur-sm shadow-md'
+                : 'w-[28px] h-[28px] rounded-full border border-white/90 bg-black/55 backdrop-blur-sm shadow-md'
             }`}
             style={{
               left: `${(isDragging ? thumbFraction : 0.5) * 100}%`,
@@ -179,7 +179,7 @@ const ContinuousZoomSlider: React.FC<{
             }}
           >
             {!isDragging && (
-              <span className="font-mono text-[10px] font-bold text-white tracking-tight leading-none select-none">
+              <span className="font-mono text-[10px] font-bold text-white tracking-tight leading-none select-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
                 {ratio.toFixed(1)}X
               </span>
             )}
@@ -190,7 +190,7 @@ const ContinuousZoomSlider: React.FC<{
         <button
           type="button"
           onClick={() => stepZoom(0.2)}
-          className="w-8 h-8 flex items-center justify-center text-white/80 hover:text-white text-lg font-light active:scale-90 transition-all"
+          className="w-8 h-8 flex items-center justify-center text-white/90 hover:text-white text-lg font-light active:scale-90 transition-all drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
           title="Zoom in"
         >
           +
@@ -1478,21 +1478,21 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                 )}
               </div>
             ) : (
-              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-black/65 border border-white/20 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] text-white">
-                <span className="w-2 h-2 rounded-full bg-success drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]" />
-                <span className="text-xs tabular-nums font-semibold tracking-wide drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">1080P 30FPS</span>
+              <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/65 border border-white/20 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] text-white [html[data-theme=light]_&]:bg-white/80 [html[data-theme=light]_&]:border-black/10 [html[data-theme=light]_&]:text-text-main [html[data-theme=light]_&]:shadow-md">
+                <span className="w-2 h-2 rounded-full bg-success drop-shadow-[0_0_4px_rgba(34,197,94,0.8)] [html[data-theme=light]_&]:drop-shadow-none" />
+                <span className="text-xs tabular-nums font-semibold tracking-wide drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] [html[data-theme=light]_&]:drop-shadow-none">1080P 30FPS</span>
                 {micActive && (
                   <div className="flex items-end gap-0.5 h-2.5 opacity-80">
-                    <span className="w-0.5 h-1.5 bg-white rounded-full" />
-                    <span className="w-0.5 h-2.5 bg-white rounded-full" />
-                    <span className="w-0.5 h-1 bg-white rounded-full" />
+                    <span className="w-0.5 h-1.5 bg-white [html[data-theme=light]_&]:bg-text-secondary rounded-full" />
+                    <span className="w-0.5 h-2.5 bg-white [html[data-theme=light]_&]:bg-text-secondary rounded-full" />
+                    <span className="w-0.5 h-1 bg-white [html[data-theme=light]_&]:bg-text-secondary rounded-full" />
                   </div>
                 )}
               </div>
             )}
           </div>
 
-                    {/* Right: Quick Toggles (Switch camera on left, Flashlight on rightmost) */}
+          {/* Right: Quick Toggles (Switch camera on left, Flashlight on rightmost) */}
           <div className="flex items-center gap-2">
             {!isRecording && (
               <button
@@ -1501,9 +1501,9 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
                   handleSwitchCamera();
                 }}
                 aria-label="Switch Camera"
-                className="w-11 h-11 rounded-full flex items-center justify-center bg-black/65 border border-white/20 text-white hover:bg-black/75 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition-all active:scale-[0.95]"
+                className="w-11 h-11 rounded-full flex items-center justify-center bg-black/65 border border-white/20 text-white hover:bg-black/75 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition-all active:scale-[0.95] [html[data-theme=light]_&]:bg-white/80 [html[data-theme=light]_&]:border-black/10 [html[data-theme=light]_&]:text-text-main [html[data-theme=light]_&]:shadow-md [html[data-theme=light]_&]:hover:bg-white/95"
               >
-                <SwitchCamera size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
+                <SwitchCamera size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)] [html[data-theme=light]_&]:drop-shadow-none" />
               </button>
             )}
 
@@ -1517,13 +1517,13 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur-md border transition-all active:scale-[0.95] ${
                 torchActive 
                   ? 'bg-amber-400 text-black border-amber-300 shadow-[0_0_14px_rgba(251,191,36,0.6)]' 
-                  : 'bg-black/65 border-white/20 text-white shadow-[0_2px_8px_rgba(0,0,0,0.5)] hover:bg-black/75 disabled:opacity-30'
+                  : "bg-black/65 border-white/20 text-white shadow-[0_2px_8px_rgba(0,0,0,0.5)] hover:bg-black/75 disabled:opacity-30 [html[data-theme=light]_&]:bg-white/80 [html[data-theme=light]_&]:border-black/10 [html[data-theme=light]_&]:text-text-main [html[data-theme=light]_&]:shadow-md [html[data-theme=light]_&]:hover:bg-white/95"
               }`}
             >
               {torchActive ? (
                 <Zap size={18} fill="currentColor" className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" />
               ) : (
-                <ZapOff size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
+                <ZapOff size={18} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)] [html[data-theme=light]_&]:drop-shadow-none" />
               )}
             </button>
           </div>
@@ -1606,12 +1606,12 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               onClick={handleStartRecording}
               disabled={isStartingNative || isFinalizingNativeRecording}
               aria-label={isStartingNative ? 'Starting recording' : isFinalizingNativeRecording ? 'Finishing recording' : 'Start Recording'}
-              className="relative w-20 h-20 rounded-full flex items-center justify-center border-4 border-white/80 bg-white/10 backdrop-blur transition-all active:scale-95 hover:border-white shadow-xl disabled:opacity-50 disabled:cursor-wait"
+              className="relative w-20 h-20 rounded-full p-1 flex items-center justify-center border-4 border-white/80 bg-white/10 backdrop-blur transition-all active:scale-95 hover:border-white shadow-xl disabled:opacity-50 disabled:cursor-wait"
             >
               {isStartingNative ? (
                 <Loader2 size={30} className="text-white animate-spin" />
               ) : (
-                <span className="w-14 h-14 rounded-full bg-danger transition-all hover:bg-rose-500 shadow-md" />
+                <span className="w-full h-full rounded-full bg-danger transition-all hover:bg-rose-500 shadow-md" />
               )}
             </button>
           )}

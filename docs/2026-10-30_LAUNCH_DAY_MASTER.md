@@ -166,6 +166,11 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
      - **The Fix:** Expand the inner red circle or adjust concentric sizing so the red surface fits snugly against the white border (`w-full h-full` or concentric fit with 0 empty gap), creating a solid, cohesive shutter button.
 - **Key Files:**
   - `frontend/src/screens/CameraScreen.tsx`
+- **Resolution & Implementation:**
+  - Added diffuse drop-shadow (`drop-shadow-[0_1px_3px_rgba(0,0,0,0.7)]`) and subtle contrast outline/ring around the continuous zoom slider track, readout, and thumb.
+  - Adapted top camera controls (1080P 30FPS status pill, Switch Camera button, and Torch button) to `[data-theme='light']` with frosted white surface (`bg-white/80 border-black/10 text-text-main shadow-md backdrop-blur-md`), dark glyphs, and concentric geometry.
+  - Sized inner red shutter circle to `w-full h-full` inside `p-1` concentric outer ring, eliminating empty gap and establishing a solid cohesive shutter button.
+- **Status:** Complete (Verified with frontend unit tests and production asset build).
 
 ---
 
