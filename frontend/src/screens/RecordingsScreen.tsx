@@ -352,6 +352,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     source_duration?: number | null;
     start_time?: number;
     end_time?: number;
+    youtube_video_id?: string;
+    source_title?: string;
+    title?: string;
+    origin?: string;
   }[]>([]);
   const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -461,24 +465,35 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         if (res.ok) {
           const data = await res.json();
           const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-          const items: YouTubeInboxItem[] = jobs.map((j: any) => {
+          // Deduplicate jobs by canonical video ID to eliminate duplicate cloud retries
+          const jobMap = new Map<string, YouTubeInboxItem>();
+          jobs.forEach((j: any) => {
+            const extracted = extractVideoId(j.youtube_url || j.video_id || '');
+            const vId = extracted || j.video_id || j.id;
+            if (!vId) return;
             const rawStage = j.stage || (j.last_error?.startsWith('stage:') ? j.last_error.replace('stage:', '') : undefined);
             const isDone = j.status === 'completed' || j.status === 'done';
             const isFailed = j.status === 'failed';
             const isClaimed = j.status === 'claimed' || j.status === 'processing';
-            return {
-              video_id: j.video_id || (j.youtube_url ? j.youtube_url.split('v=')[1]?.slice(0, 11) : j.id),
-              session_id: j.session_id,
-              dispatch_id: j.id,
-              title: j.youtube_url,
-              status: isDone ? 'COMPLETED' : isClaimed ? 'PROCESSING' : isFailed ? 'FAILED' : 'QUEUED',
-              stage: isDone ? 'ready' : rawStage,
-              last_error: j.last_error,
-              discovered_at: j.created_at,
-              duration: typeof j.duration === 'number' ? j.duration : (parseFloat(j.duration) || undefined),
-            };
+            const itemStatus = isDone ? 'COMPLETED' : isClaimed ? 'PROCESSING' : isFailed ? 'FAILED' : 'QUEUED';
+            const parsedDur = typeof j.duration === 'number' ? j.duration : (parseFloat(j.duration) || undefined);
+
+            const existing = jobMap.get(vId);
+            if (!existing || (existing.status !== 'COMPLETED' && isDone)) {
+              jobMap.set(vId, {
+                video_id: vId,
+                session_id: j.session_id,
+                dispatch_id: j.id,
+                title: j.title || j.youtube_url,
+                status: itemStatus,
+                stage: isDone ? 'ready' : rawStage,
+                last_error: j.last_error,
+                discovered_at: j.created_at,
+                duration: parsedDur,
+              });
+            }
           });
-          setInboxItems(items);
+          setInboxItems(Array.from(jobMap.values()));
         }
       }
     } catch {
@@ -674,10 +689,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       if (seenYtIds.has(item.video_id)) return;
       if (item.session_id && seenSessionIds.has(item.session_id)) return;
       if (item.dispatch_id && seenSegmentIds.has(item.dispatch_id)) return;
+      seenYtIds.add(item.video_id);
+      if (item.session_id) seenSessionIds.add(item.session_id);
 
       const itemClips = clips.filter(c =>
         c.session_id === item.video_id ||
-        c.chunk_id === item.video_id
+        c.chunk_id === item.video_id ||
+        c.youtube_video_id === item.video_id ||
+        (item.session_id && (c.session_id === item.session_id || c.chunk_id === item.session_id))
       );
       const clipCount = itemClips.length;
 
@@ -692,7 +711,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         status = 'processing';
       }
 
-      const displayTitle = item.title ? cleanTitle(item.title) : `YouTube ${item.video_id}`;
+      const firstClipWithTitle = itemClips.find(c => c.source_title);
+      const displayTitle = firstClipWithTitle?.source_title
+        ? cleanTitle(firstClipWithTitle.source_title)
+        : (item.title && !item.title.startsWith('http') ? cleanTitle(item.title) : `YouTube ${item.video_id}`);
 
       // Derive authentic duration: item.duration -> source_duration of clips -> max clip end_time / sum -> 0
       let computedDuration = item.duration || 0;

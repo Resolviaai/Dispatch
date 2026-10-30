@@ -3684,11 +3684,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         ) : (
           groupedSessions.map(([sessionId, clipsInSession]) => {
             const firstClip = clipsInSession[0];
-            const sessionOrigin = firstClip?.origin || (firstClip?.youtube_video_id || sessionId.startsWith('yt_') ? 'youtube' : 'phone');
+            const isYt = Boolean(
+              firstClip?.origin === 'youtube' ||
+              firstClip?.youtube_video_id ||
+              sessionId.startsWith('yt_') ||
+              sessionId === 'Imported Video' ||
+              clipsInSession.some((c) => c.origin === 'youtube' || c.youtube_video_id || c.source_aspect_ratio === '16:9')
+            );
+            const sessionOrigin: 'phone' | 'youtube' = isYt ? 'youtube' : 'phone';
             const sessionLabel = sessionId.startsWith('yt_')
               ? (firstClip?.source_title || `YouTube ${sessionId.replace('yt_', '')}`)
               : sessionId === 'Imported Video'
-                ? 'Imported Video'
+                ? (sessionOrigin === 'youtube' ? 'YouTube Imports' : 'Imported Video')
                 : `Session ${sessionId.replace('sess_', '')}`;
 
             return (
@@ -4922,7 +4929,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
                 return (
                   <div key={p.id} className="relative">
-                    {pIdx > 0 && <div className="ml-14 border-t border-border/40" />}
+                    {/* Inset divider removed for clean edge-to-edge row appearance */}
                     <div className="p-3.5 space-y-2">
                       <div className="flex items-center justify-between gap-3">
                         <button

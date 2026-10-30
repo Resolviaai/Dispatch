@@ -127,7 +127,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const timelineDuration = Math.max(1, sourceDuration || clipEnd || (clipStart + duration), duration);
   const safeClipDuration = Math.max(1, duration);
-  const timelineCurrentTime = clipTimeToSourceTime(currentTime, clipStart);
+  const timelineCurrentTime = (sourceTimebase && (sourceDuration ?? 0) > duration + 2.0) ? clipTimeToSourceTime(currentTime, clipStart) : currentTime;
 
   // Trim boundaries and the filmstrip use source time. Caption words stay clip-relative.
   const [activeTrim, setActiveTrim] = useState<{ start: number; end: number }>({
@@ -1307,9 +1307,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                     style={{ width: `${totalTimelineWidth}px` }}
                   >
                     {rowGroups.map((grp) => {
-                      const left = (clipStart + grp.start) * pxPerSec;
+                      const left = ((sourceTimebase && (sourceDuration ?? 0) > duration + 2.0) ? (clipStart + grp.start) : grp.start) * pxPerSec;
                       const rawDur = Math.max(0.04, grp.end - grp.start);
-                      const trueWidth = Math.max(4, rawDur * pxPerSec);
+                      const trueWidth = Math.max(28, rawDur * pxPerSec);
                       const isSelected = selectedGroupId === grp.id;
                       const isCaption = !grp.type || grp.type === 'caption';
                       const isSpoken = isCaption && captionTimeIsActive(currentTime, grp.start, grp.end);
@@ -1319,7 +1319,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                       const isThisBlockDragging = dragSession?.groupId === grp.id;
                       const showHandles = isSelected && trueWidth >= 32;
                       const showDuration = isSelected && trueWidth >= 96;
-                      const showLabel = trueWidth >= 40;
+                      const showLabel = trueWidth >= 24;
                       const showIcon = trueWidth >= 20;
 
                       return (
@@ -1380,7 +1380,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                               ) : null}
                               {showLabel && (
                                 <div className="flex items-center min-w-0 truncate">
-                                  {(meta as any).badge && trueWidth >= 48 && (
+                                  {(meta as any).badge && trueWidth >= 64 && (
                                     <span className="text-[8px] font-black uppercase tracking-wider px-1 py-0.2 rounded bg-black/40 text-white/90 mr-1 shrink-0 select-none">
                                       {(meta as any).badge}
                                     </span>

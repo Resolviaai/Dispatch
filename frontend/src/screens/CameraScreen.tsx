@@ -168,10 +168,10 @@ const ContinuousZoomSlider: React.FC<{
 
           {/* Jog Circle Thumb — Snaps to 50% on release, expands on hold, displays zoom inside when resting */}
           <div
-            className={`absolute -translate-x-1/2 pointer-events-none flex items-center justify-center ring-1 ring-black/30 drop-shadow-[0_1px_3px_rgba(0,0,0,0.7)] ${
+            className={`absolute -translate-x-1/2 pointer-events-none flex items-center justify-center drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)] ${
               isDragging
                 ? 'w-[32px] h-[32px] rounded-full border-2 border-white bg-transparent shadow-xl'
-                : 'w-[28px] h-[28px] rounded-full border border-white/90 bg-black/55 backdrop-blur-sm shadow-md'
+                : 'w-[28px] h-[28px] rounded-full border border-white/70 bg-white/15 backdrop-blur-md shadow-sm'
             }`}
             style={{
               left: `${(isDragging ? thumbFraction : 0.5) * 100}%`,
