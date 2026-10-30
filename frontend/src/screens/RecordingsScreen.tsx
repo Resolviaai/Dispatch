@@ -14,11 +14,15 @@ import {
   Trash2,
   Camera,
   MoreVertical,
-  Check
+  Check,
+  Bell
 } from 'lucide-react';
 import { Bridge, RecordingItem, apiUrl, getAuthHeaders } from '../bridge';
 import { WORKER_BASE } from '../accounts/accountsService';
 import { currentSession } from '../auth/supabase';
+import { useActivity } from '../context/ActivityContext';
+import { NotificationCenterModal } from '../components/NotificationCenterModal';
+import { PullToRefresh } from '../components/PullToRefresh';
 
 interface YouTubeInboxItem {
   video_id: string;
@@ -258,12 +262,28 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [importState, setImportState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle');
   const [importError, setImportError] = useState<string | null>(null);
 
+  // Activity & Notifications Center
+  const {
+    hasActiveActivity,
+    openNotificationCenter,
+    isNotificationCenterOpen,
+    closeNotificationCenter,
+    addNotification,
+  } = useActivity();
+
   // Clips & Inbox items
   const [clips, setClips] = useState<{ id: string; session_id?: string; chunk_id?: string; status: string; thumbnail_url?: string }[]>([]);
   const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    // Also record in Activity Center
+    addNotification(msg, type === 'error' ? 'error' : 'success');
+    // If it's a persistent session/import confirmation like "Video added!...",
+    // it lives in Notification Center and does not clutter the screen with a permanent alert banner.
+    if (msg.includes('Video added! Your PC will create clips')) {
+      return;
+    }
     setToastMessage({ text: msg, type });
     setTimeout(() => setToastMessage(null), 3000);
   };
@@ -1327,16 +1347,15 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
           <button
             type="button"
-            onClick={() => {
-              checkPcStudio();
-              fetchClips();
-              fetchInbox();
-            }}
-            disabled={pcStatus.checking}
-            aria-label="Refresh sessions"
-            className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all -mr-2"
+            onClick={openNotificationCenter}
+            aria-label="Activity & Notifications"
+            className="relative w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all -mr-2"
+            title="Activity & Notifications"
           >
-            <RotateCw size={18} className={pcStatus.checking ? 'animate-spin' : ''} />
+            <Bell size={18} />
+            {hasActiveActivity && (
+              <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-primary ring-2 ring-canvas animate-pulse" />
+            )}
           </button>
         </div>
       </header>
@@ -1431,10 +1450,20 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         </div>
       )}
 
-      {/* 4. SESSIONS LIST — completely free of separator lines */}
-      <main className="flex-1 min-h-0 overflow-y-auto px-4 pb-24 space-y-1">
-        {filteredSessions.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
+      {/* 4. SESSIONS LIST — pull down to refresh, completely free of separator lines */}
+      <PullToRefresh
+        onRefresh={async () => {
+          await Promise.allSettled([
+            checkPcStudio(),
+            fetchClips(),
+            fetchInbox(),
+          ]);
+        }}
+        className="flex-1 min-h-0"
+      >
+        <main className="min-h-full px-4 pb-24 space-y-1">
+          {filteredSessions.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
             <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
               <Film size={24} />
             </div>
@@ -1593,7 +1622,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             );
           })
         )}
-      </main>
+        </main>
+      </PullToRefresh>
     </div>
   );
 
@@ -1794,6 +1824,19 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
           </div>
         </div>
       )}
+
+      {/* ACTIVITY & NOTIFICATION CENTER BOTTOM SHEET */}
+      <NotificationCenterModal
+        isOpen={isNotificationCenterOpen}
+        onClose={closeNotificationCenter}
+        onRefreshAll={async () => {
+          await Promise.allSettled([
+            checkPcStudio(),
+            fetchClips(),
+            fetchInbox(),
+          ]);
+        }}
+      />
     </div>
   );
 };

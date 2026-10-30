@@ -58,7 +58,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 
 ```
 [X] TASK 1: Minimal Badging on Sessions & Clips Lists + Clean Origin/ID Inspector in Details
-[ ] TASK 2: Notification Center & Activity Sheet (Replacing Header Banners & Refresh Buttons with Pull-to-Refresh)
+[X] TASK 2: Notification Center & Activity Sheet (Replacing Header Banners & Refresh Buttons with Pull-to-Refresh)
 [ ] TASK 3: Fix 00:00 Duration Display for YouTube / Cloud-Ingested Sessions
 [ ] TASK 4: Reconcile "Ingestion Failed" Session Status with Ready Clips & Fix Clip Video Playback
 [ ] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
@@ -289,7 +289,8 @@ Every code change must adhere to the **Dispatch UI/UX & Mobile Engineering Invar
 | **2026-10-30 10:55** | Master Tracking Document Created | `docs/2026-10-30_LAUNCH_DAY_MASTER.md` | Initialized canonical tracker; standing by for first specific task. |
 | **2026-10-30 12:05** | Master Backlog Order Finalized | `docs/2026-10-30_LAUNCH_DAY_MASTER.md` | Reordered tasks 1 to 14 according to user sequence. Ready to commence Task 1. |
 | **2026-10-30 12:35** | TASK 1: Minimal Badging & Origin/ID Inspector | `dispatch/web/app.py`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/RecordingsScreen.tsx`, `tests/test_web.py` | Commit `5b1894d`: Ultra-minimal list badging (Camera vs YouTube icon on thumbnails), eliminated technical strings from headers, integrated origin/session/YouTube ID inspector in Details & Options sheets. Verified by tests & Vite production build. |
+| **2026-10-30 12:55** | TASK 2: Notification Center & Activity Sheet | `frontend/src/context/ActivityContext.tsx`, `frontend/src/components/NotificationCenterModal.tsx`, `frontend/src/components/PullToRefresh.tsx`, `frontend/src/screens/RecordingsScreen.tsx`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/SettingsScreen.tsx`, `frontend/src/App.tsx` | Replaced top-right refresh buttons with uniform Bell trigger and active primary dot indicator across Sessions, Clips, and Settings. Created Design System v3 Notification Center bottom sheet for cloud jobs, queue backlog, and transient notifications. Removed redundant alert banners from header. Implemented mobile-standard PullToRefresh on scrollable library views with manual fallback in activity sheet. Verified with test suite and production Vite build. |
 
 ---
 
-*End of Active Master Tracker. Next entry to be appended upon completion of Task 2.*
+*End of Active Master Tracker. Next entry to be appended upon completion of Task 3.*

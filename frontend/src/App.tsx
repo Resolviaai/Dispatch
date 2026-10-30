@@ -9,6 +9,7 @@ import { RecordingItem, Bridge, apiUrl, getAuthHeaders } from './bridge';
 import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
 import { StudioWorkstation } from './studio/StudioWorkstation';
 import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
+import { ActivityProvider } from './context/ActivityContext';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
@@ -266,7 +267,8 @@ export const App: React.FC = () => {
   // Email/password gate: everything below renders only for an authenticated user.
   return (
     <AuthGate>{(session) => (
-    <div className={`h-[100dvh] w-full ${isNative && currentTab === 'record' ? 'bg-transparent' : 'bg-studio'} text-text-main flex flex-col items-center overflow-hidden p-0 md:py-2 md:px-3 font-sans`}>
+      <ActivityProvider pcHost={pcHost}>
+        <div className={`h-[100dvh] w-full ${isNative && currentTab === 'record' ? 'bg-transparent' : 'bg-studio'} text-text-main flex flex-col items-center overflow-hidden p-0 md:py-2 md:px-3 font-sans`}>
       
       {/* DESKTOP REVIEW CONTROL HEADER (Layer 1: Surface) */}
       <header className="hidden md:flex shrink-0 items-center justify-between w-full max-w-5xl mb-1.5 px-3 py-1.5 rounded-xl bg-surface-100 border border-border">
@@ -389,8 +391,8 @@ export const App: React.FC = () => {
         )}
       </main>
       </div>
-
     </div>
+    </ActivityProvider>
     )}</AuthGate>
   );
 };

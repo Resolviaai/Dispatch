@@ -25,7 +25,10 @@ import {
   ExternalLink,
   AlertCircle,
   CheckCircle2,
+  Bell,
 } from 'lucide-react';
+import { useActivity } from '../context/ActivityContext';
+import { NotificationCenterModal } from '../components/NotificationCenterModal';
 import { TemplateStudio } from '../captions/TemplateStudio';
 import { checkAppUpdate, ReleaseManifest } from '../update/updateService';
 import { Bridge, StorageInfo, apiUrl, getAuthHeaders } from '../bridge';
@@ -472,6 +475,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const instagramAccount = instagramAccounts[0] ?? null;
   const facebookAccount = facebookAccounts[0] ?? null;
 
+  // Global Activity & Notification Center
+  const {
+    hasActiveActivity,
+    openNotificationCenter,
+    isNotificationCenterOpen,
+    closeNotificationCenter,
+  } = useActivity();
+
   if (isTemplateEditorOpen) {
     return (
       <TemplateStudio
@@ -485,11 +496,23 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     <div className="w-full h-full flex flex-col bg-canvas text-text-main overflow-hidden select-none">
 
       {/* SCREEN HEADER */}
-      <div className="shrink-0 px-4 pt-4 pb-2 border-b border-border bg-canvas">
+      <div className="shrink-0 px-4 pt-4 pb-2 border-b border-border bg-canvas flex items-center justify-between">
         <h1 className="text-lg font-semibold tracking-tight text-text-main flex items-center gap-2">
           <SettingsIcon size={18} className="text-primary" />
           Settings
         </h1>
+        <button
+          type="button"
+          onClick={openNotificationCenter}
+          aria-label="Activity & Notifications"
+          className="relative w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all -mr-2"
+          title="Activity & Notifications"
+        >
+          <Bell size={18} />
+          {hasActiveActivity && (
+            <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-primary ring-2 ring-canvas animate-pulse" />
+          )}
+        </button>
       </div>
 
       {/* CONTENT SCROLL AREA — hierarchy from spacing + typography + hairlines,
@@ -1143,7 +1166,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
       </div>
 
-
+      {/* ACTIVITY & NOTIFICATION CENTER BOTTOM SHEET */}
+      <NotificationCenterModal
+        isOpen={isNotificationCenterOpen}
+        onClose={closeNotificationCenter}
+      />
     </div>
   );
 };

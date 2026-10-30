@@ -40,7 +40,11 @@ import {
   ExternalLink,
   Cloud,
   Plus,
+  Bell,
 } from 'lucide-react';
+import { useActivity } from '../context/ActivityContext';
+import { NotificationCenterModal } from '../components/NotificationCenterModal';
+import { PullToRefresh } from '../components/PullToRefresh';
 import { CaptionTrack, CaptionGroup, Word, StyleConfig, LayoutConfig, AnimationConfig } from '../captions/types';
 import { normalizeCaptionTrack } from '../captions/normalizeTrack';
 import { CaptionTimeline } from '../captions/CaptionTimeline';
@@ -1443,6 +1447,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  // Global Activity & Notification Center
+  const {
+    hasActiveActivity,
+    openNotificationCenter,
+    isNotificationCenterOpen,
+    closeNotificationCenter,
+    addNotification,
+  } = useActivity();
+
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isCloudMode, setIsCloudMode] = useState<boolean>(false);
   const [remoteJobs, setRemoteJobs] = useState<Array<{ id: string; youtube_url: string; status: string; last_error?: string; created_at?: string }>>([]);
@@ -3400,12 +3414,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             </button>
             <button
               type="button"
-              onClick={fetchClips}
-              disabled={isLoading}
-              aria-label="Refresh clips"
-              className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+              onClick={openNotificationCenter}
+              aria-label="Activity & Notifications"
+              className="relative w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+              title="Activity & Notifications"
             >
-              <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
+              <Bell size={18} />
+              {hasActiveActivity && (
+                <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-primary ring-2 ring-canvas animate-pulse" />
+              )}
             </button>
           </div>
         </div>
@@ -3438,28 +3455,6 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           })}
         </div>
       </header>
-
-      {/* REMOTE CLOUD JOBS IN PROGRESS */}
-      {remoteJobs.filter((j) => j.status === 'queued' || j.status === 'claimed').length > 0 && (
-        <div className="shrink-0 px-4 py-2 bg-primary-soft border-b border-primary/20 flex items-center justify-between gap-3">
-          <p className="text-xs text-primary tabular-nums truncate">
-            <span className="font-semibold">{remoteJobs.filter((j) => j.status === 'queued' || j.status === 'claimed').length} cloud job(s) in progress</span>
-            {' '}&middot; analyzing highlights and speech
-          </p>
-          <span className="shrink-0 text-xs font-mono text-primary font-medium">Processing</span>
-        </div>
-      )}
-
-      {/* BACKLOG — flat notice line, not a card */}
-      {queueStats && queueStats.queued_count > 0 && (
-        <div className="shrink-0 px-4 py-2 bg-surface-2 border-b border-border flex items-center justify-between gap-3">
-          <p className="text-xs text-text-secondary tabular-nums truncate">
-            <span className="text-status-warning font-medium">{queueStats.queued_count} queued</span>
-            {' '}&middot; daily quota {queueStats.daily_quota_used}/{queueStats.daily_quota_max} &middot; auto-drains at midnight UTC
-          </p>
-          <span className="shrink-0 text-xs font-medium text-status-warning">Backlog</span>
-        </div>
-      )}
 
       {/* SESSION FILTER — flat strip */}
       {sessionFilter && (
@@ -3517,8 +3512,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         </div>
       )}
 
-      {/* CLIP LIST — flat rows on canvas, separated by dividers (no cards) */}
-      <main className="flex-1 min-h-0 overflow-y-auto pb-24">
+      {/* CLIP LIST — pull down to refresh, flat rows on canvas (no cards) */}
+      <PullToRefresh
+        onRefresh={fetchClips}
+        isRefreshing={isLoading}
+        className="flex-1 min-h-0"
+      >
+        <main className="min-h-full pb-24">
         {clipRefreshFailed && allClips.length === 0 && rejectedClips.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-center select-none my-12">
             <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 text-text-muted">
@@ -3766,7 +3766,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             );
           })
         )}
-      </main>
+        </main>
+      </PullToRefresh>
 
       {/* SUBMIT YOUTUBE VIDEO MODAL (Cloud Processing on any connection) */}
       {showSubmitModal && (
@@ -5246,6 +5247,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       {viewMode === 'publish' && renderPublishView()}
       {renderMoreModal()}
       {renderRejectConfirmationModal()}
+
+      {/* ACTIVITY & NOTIFICATION CENTER BOTTOM SHEET */}
+      <NotificationCenterModal
+        isOpen={isNotificationCenterOpen}
+        onClose={closeNotificationCenter}
+        onRefreshAll={fetchClips}
+      />
     </div>
   );
 };
