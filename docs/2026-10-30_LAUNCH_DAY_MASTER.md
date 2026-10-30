@@ -63,7 +63,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 [X] TASK 4: Reconcile "Ingestion Failed" Session Status with Ready Clips & Fix Clip Video Playback
 [X] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
 [X] TASK 6: Cellular / Wi-Fi Network Upload Selector (Clear 2-Option Radio Switch in Settings)
-[ ] TASK 7: Granular Pipeline Stage Status in Sessions Screen & Session Detail
+[X] TASK 7: Granular Pipeline Stage Status in Sessions Screen & Session Detail
 [ ] TASK 8: Input Orientation Classification & Multi-Layout System Hardening
 [ ] TASK 9: Layout-Specific Thumbnails & Preview Frame Generation
 [ ] TASK 10: Captions Generation, Whisper Alignment Audit & Saved Default Template Sync
@@ -194,10 +194,19 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 
 ### [TASK 7] Granular Pipeline Stage Status in Sessions Screen & Session Detail
 - **Reported Issue:**
-  - In Sessions screen, status chips sometimes jump between `Processing` without showing whether it is ingesting, transcribing with Whisper, generating AI highlights, or rendering clips.
-- **Key Files:**
-  - `frontend/src/screens/RecordingsScreen.tsx`
-  - `dispatch/pipeline/manager.py`
+  - In Sessions screen, status chips sometimes jump between `Processing` without showing whether it is ingesting, transcribing with Gemini Audio, generating AI highlights, or rendering clips.
+- **Root Cause & Scope:**
+  - `resolveSessionStage` previously lacked explicit mappings for native recording states (`RECORDING`, `QUEUED_FOR_UPLOAD`, `UPLOADED_TO_YOUTUBE`, `PROCESSED_ON_YOUTUBE`) and inbox state (`DISCOVERED`), causing them to drop into generic "Processing video…".
+  - Backend workers did not transition `youtube_inbox.status` to `RENDERING` before calling clip render, leaving status at `CLIPS_DEFINED` during long render passes.
+- **Resolution & Implementation:**
+  - In `frontend/src/screens/RecordingsScreen.tsx`: Updated `resolveSessionStage` to reflect the 4-step Gemini architecture:
+    1. **Ingest (Step 1):** `RECORDING`, `QUEUED_FOR_UPLOAD`, `UPLOADING` ("Uploading to cloud…"), `WAITING_FOR_YOUTUBE` / `UPLOADED_TO_YOUTUBE` ("YouTube processing…"), `DISCOVERED` ("Queued in pipeline…"), `DOWNLOADING` ("Downloading stream…"), `VALIDATING` ("Validating stream…").
+    2. **Transcribe (Gemini Audio, Step 2):** `WAITING_FOR_TRANSCRIPT`, `TRANSCRIBING` ("Transcribing (Gemini Audio)…").
+    3. **AI Highlights (Gemini, Step 3):** `TRANSCRIBED`, `ANALYZING` ("AI Highlights (Gemini)…").
+    4. **Render Layouts (Step 4):** `CLIPS_DEFINED`, `RENDERING` ("Rendering 9:16 layouts…") $\rightarrow$ `Ready` ("Ready (N clips)").
+  - Updated Session Details Stepper labels and live stage caption card: "Transcribe (Gemini Audio)" and "AI Highlights (Gemini)" with accurate descriptions.
+  - In `dispatch/ai_clips/worker.py` and `dispatch/transcription/worker.py`: Explicitly updated `youtube_inbox.status` to `RENDERING` and `TRANSCRIBING` before execution and notified cloud stages.
+- **Status:** Complete (Verified with unit tests and production Vite build).
 
 ---
 

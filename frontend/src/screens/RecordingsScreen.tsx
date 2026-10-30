@@ -113,7 +113,30 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
   const rawStatus = (inbox?.status || session.rawNative?.status || '').toUpperCase();
   const rawStage = (session.stage || inbox?.stage || '').toLowerCase();
 
-  if (session.status === 'uploading' || rawStatus === 'UPLOADING') {
+  // Stage 1: INGEST
+  if (rawStatus === 'RECORDING') {
+    return {
+      stage: 'uploading',
+      label: 'Recording in progress…',
+      shortLabel: 'Recording…',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: true,
+    };
+  }
+
+  if (rawStatus === 'QUEUED_FOR_UPLOAD') {
+    return {
+      stage: 'queued',
+      label: 'Queued for upload…',
+      shortLabel: 'Queued',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: false,
+    };
+  }
+
+  if (session.status === 'uploading' || rawStatus === 'UPLOADING' || rawStage === 'uploading' || rawStage === 'ingest') {
     return {
       stage: 'uploading',
       label: 'Uploading to cloud…',
@@ -124,7 +147,13 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
     };
   }
 
-  if (rawStatus === 'WAITING_FOR_YOUTUBE' || rawStatus === 'UPLOADED_AWAITING_PROCESSING' || rawStatus === 'WAITING_FOR_YOUTUBE_PROCESSING') {
+  if (
+    rawStatus === 'WAITING_FOR_YOUTUBE' ||
+    rawStatus === 'UPLOADED_AWAITING_PROCESSING' ||
+    rawStatus === 'WAITING_FOR_YOUTUBE_PROCESSING' ||
+    rawStatus === 'UPLOADED_TO_YOUTUBE' ||
+    rawStatus === 'PROCESSED_ON_YOUTUBE'
+  ) {
     return {
       stage: 'uploading',
       label: 'YouTube processing…',
@@ -135,10 +164,21 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
     };
   }
 
+  if (rawStatus === 'DISCOVERED') {
+    return {
+      stage: 'queued',
+      label: 'Queued in pipeline…',
+      shortLabel: 'Queued',
+      step: 1,
+      totalSteps: 4,
+      isSpinning: false,
+    };
+  }
+
   if (rawStatus === 'DOWNLOADING' || rawStage === 'downloading') {
     return {
       stage: 'downloading',
-      label: 'Downloading video…',
+      label: 'Downloading stream…',
       shortLabel: 'Downloading…',
       step: 1,
       totalSteps: 4,
@@ -149,7 +189,7 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
   if (rawStatus === 'VALIDATING' || rawStatus === 'DOWNLOADED' || rawStage === 'validating') {
     return {
       stage: 'validating',
-      label: 'Validating video…',
+      label: 'Validating stream…',
       shortLabel: 'Validating…',
       step: 1,
       totalSteps: 4,
@@ -157,10 +197,16 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
     };
   }
 
-  if (rawStatus === 'WAITING_FOR_TRANSCRIPT' || rawStatus === 'TRANSCRIBING' || rawStage === 'transcribing') {
+  // Stage 2: TRANSCRIBE (GEMINI AUDIO)
+  if (
+    rawStatus === 'WAITING_FOR_TRANSCRIPT' ||
+    rawStatus === 'TRANSCRIBING' ||
+    rawStage === 'transcribing' ||
+    rawStage === 'transcribe'
+  ) {
     return {
       stage: 'transcribing',
-      label: 'Transcribing speech…',
+      label: 'Transcribing (Gemini Audio)…',
       shortLabel: 'Transcribing…',
       step: 2,
       totalSteps: 4,
@@ -168,10 +214,16 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
     };
   }
 
-  if (rawStatus === 'TRANSCRIBED' || rawStatus === 'ANALYZING' || rawStage === 'analyzing') {
+  // Stage 3: AI HIGHLIGHTS (GEMINI)
+  if (
+    rawStatus === 'TRANSCRIBED' ||
+    rawStatus === 'ANALYZING' ||
+    rawStage === 'analyzing' ||
+    rawStage === 'highlights'
+  ) {
     return {
       stage: 'analyzing',
-      label: 'AI finding highlights…',
+      label: 'AI Highlights (Gemini)…',
       shortLabel: 'AI Highlights…',
       step: 3,
       totalSteps: 4,
@@ -179,10 +231,16 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
     };
   }
 
-  if (rawStatus === 'CLIPS_DEFINED' || rawStatus === 'RENDERING' || rawStage === 'rendering') {
+  // Stage 4: RENDER LAYOUTS
+  if (
+    rawStatus === 'CLIPS_DEFINED' ||
+    rawStatus === 'RENDERING' ||
+    rawStage === 'rendering' ||
+    rawStage === 'render'
+  ) {
     return {
       stage: 'rendering',
-      label: 'Rendering clip…',
+      label: 'Rendering 9:16 layouts…',
       shortLabel: 'Rendering…',
       step: 4,
       totalSteps: 4,
@@ -190,11 +248,23 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
     };
   }
 
-  if (session.status === 'processing') {
+  if (rawStatus === 'CLIPS_CREATED' || rawStatus === 'COMPLETED' || rawStage === 'ready') {
     return {
-      stage: 'analyzing',
-      label: 'Processing video…',
-      shortLabel: 'Processing…',
+      stage: 'ready',
+      label: 'Clips ready',
+      shortLabel: 'Ready',
+      step: 4,
+      totalSteps: 4,
+      isSpinning: false,
+    };
+  }
+
+  // Contextual fallback for active processing
+  if (session.status === 'processing' || rawStatus === 'PROCESSING' || rawStatus === 'VERIFIED_BY_LAPTOP') {
+    return {
+      stage: 'transcribing',
+      label: 'Transcribing (Gemini Audio)…',
+      shortLabel: 'Transcribing…',
       step: 2,
       totalSteps: 4,
       isSpinning: true,
@@ -205,7 +275,7 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
     stage: 'queued',
     label: 'Queued in pipeline…',
     shortLabel: 'Queued',
-    step: 0,
+    step: 1,
     totalSteps: 4,
     isSpinning: false,
   };
@@ -1066,9 +1136,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             const stageInfo = resolveSessionStage(s);
             const steps = [
               { num: 1, title: 'Ingest', desc: s.origin === 'phone' ? 'Upload to cloud' : 'Download stream' },
-              { num: 2, title: 'Transcribe', desc: 'Speech-to-text sync' },
-              { num: 3, title: 'AI Highlights', desc: 'Viral moment detection' },
-              { num: 4, title: 'Render', desc: '9:16 vertical crop' },
+              { num: 2, title: 'Transcribe (Gemini Audio)', desc: 'Gemini audio word sync' },
+              { num: 3, title: 'AI Highlights (Gemini)', desc: 'Viral moment detection' },
+              { num: 4, title: 'Render Layouts', desc: '9:16 vertical crop' },
             ];
 
             return (
@@ -1132,10 +1202,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   <div className="min-w-0 flex-1">
                     <p className="text-text-main font-medium truncate">{stageInfo.label}</p>
                     <p className="text-[10px] text-text-muted">
-                      {stageInfo.step === 1 && (s.origin === 'phone' ? 'Preparing video files for AI engine processing.' : 'Fetching high-resolution source video from YouTube.')}
-                      {stageInfo.step === 2 && 'Aligning word-level timestamps and speaker transcript.'}
-                      {stageInfo.step === 3 && 'Gemini AI scanning transcript for high-virality hooks.'}
-                      {stageInfo.step === 4 && 'Applying vertical 9:16 smart framing and dynamic captions.'}
+                      {stageInfo.step === 1 && (s.origin === 'phone' ? 'Preparing and uploading video files for AI engine processing.' : 'Fetching high-resolution source video from YouTube.')}
+                      {stageInfo.step === 2 && 'Transcribing audio and aligning word-level timestamps with Gemini Audio.'}
+                      {stageInfo.step === 3 && 'Gemini AI scanning transcript for high-virality hooks and moments.'}
+                      {stageInfo.step === 4 && 'Rendering vertical 9:16 smart framing layouts and dynamic captions.'}
                     </p>
                   </div>
                 </div>

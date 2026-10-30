@@ -181,6 +181,13 @@ class HighlightWorker:
                         from dispatch.config import GEMINI_API_KEY
                         active_render_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
+                    db.update_youtube_video(video_id=video_id, status="RENDERING")
+                    try:
+                        from dispatch.youtube_connections import update_job_stage_by_video_id
+                        update_job_stage_by_video_id(video_id, "rendering")
+                    except Exception:
+                        pass
+
                     self._render_clips_for_video(video_id, clip_ids, segments, src_path, session_id=session_id, api_key=active_render_key)
                     # Verify rendered outputs exist on disk before marking COMPLETED
                     if clip_ids:

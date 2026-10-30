@@ -177,6 +177,7 @@ class TranscriptionWorker:
             api_key = vaulted_key if user_id else (os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY)
             if api_key:
                 try:
+                    db.update_youtube_video(video_id=video_id, status="TRANSCRIBING")
                     logger.info("Stage 1 Fast Ingestion: Transcribing %s with gemini-3.5-flash-lite...", video_id)
                     from dispatch.transcription.gemini_engine import transcribe_stage1_flash_lite
                     stage1_segments = transcribe_stage1_flash_lite(Path(local_path_str), api_key=api_key)
