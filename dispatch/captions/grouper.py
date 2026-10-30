@@ -214,10 +214,69 @@ def apply_template_to_track(track: CaptionTrack, tpl_captions: Optional[Dict[str
         track.default_style.shadow_enabled = bool(tpl_captions["shadow_enabled"])
     if tpl_captions.get("shadow_color"):
         track.default_style.shadow_color = str(tpl_captions["shadow_color"])
+    if tpl_captions.get("shadow_offset_x") is not None:
+        try:
+            track.default_style.shadow_offset_x = float(tpl_captions["shadow_offset_x"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("shadow_offset_y") is not None:
+        try:
+            track.default_style.shadow_offset_y = float(tpl_captions["shadow_offset_y"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("shadow_blur") is not None:
+        try:
+            track.default_style.shadow_blur = float(tpl_captions["shadow_blur"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("shadow_opacity") is not None:
+        try:
+            track.default_style.shadow_opacity = float(tpl_captions["shadow_opacity"])
+        except (ValueError, TypeError):
+            pass
+
+    if tpl_captions.get("glow_enabled") is not None:
+        track.default_style.glow_enabled = bool(tpl_captions["glow_enabled"])
+    if tpl_captions.get("glow_color"):
+        track.default_style.glow_color = str(tpl_captions["glow_color"])
+    if tpl_captions.get("glow_blur") is not None:
+        try:
+            track.default_style.glow_blur = float(tpl_captions["glow_blur"])
+        except (ValueError, TypeError):
+            pass
+
     if tpl_captions.get("background_enabled") is not None:
         track.default_style.background_enabled = bool(tpl_captions["background_enabled"])
     if tpl_captions.get("background_color"):
         track.default_style.background_color = str(tpl_captions["background_color"])
+    if tpl_captions.get("background_mode"):
+        track.default_style.background_mode = str(tpl_captions["background_mode"])
+    if tpl_captions.get("background_opacity") is not None:
+        try:
+            track.default_style.background_opacity = float(tpl_captions["background_opacity"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("background_padding_x") is not None:
+        try:
+            track.default_style.background_padding_x = float(tpl_captions["background_padding_x"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("background_padding_y") is not None:
+        try:
+            track.default_style.background_padding_y = float(tpl_captions["background_padding_y"])
+        except (ValueError, TypeError):
+            pass
+    if tpl_captions.get("background_corner_radius") is not None:
+        try:
+            track.default_style.background_corner_radius = float(tpl_captions["background_corner_radius"])
+        except (ValueError, TypeError):
+            pass
+
+    if tpl_captions.get("all_caps") is not None:
+        track.default_style.text_transform = "uppercase" if tpl_captions["all_caps"] else "none"
+    elif tpl_captions.get("text_transform"):
+        track.default_style.text_transform = str(tpl_captions["text_transform"])
+
     if tpl_captions.get("letter_spacing") is not None:
         try:
             track.default_style.letter_spacing = float(tpl_captions["letter_spacing"])

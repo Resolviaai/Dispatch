@@ -321,34 +321,101 @@ def transcribe_stage2_precision_words(
 
         logger.info("Stage 2: Calling gemini-3.5-transcribe with word timestamps...")
         t0 = time.time()
-        response = client.models.generate_content(
-            model="gemini-3.5-transcribe",
-            contents=[uploaded_file],
-            config=types.GenerateContentConfig(
-                audio_transcription_config=types.AudioTranscriptionConfig(
-                    word_timestamp=True,
-                    diarization=True
+        words: List[Dict[str, Any]] = []
+        full_text = ""
+        transcribe_err = None
+
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.5-transcribe",
+                contents=[uploaded_file],
+                config=types.GenerateContentConfig(
+                    audio_transcription_config=types.AudioTranscriptionConfig(
+                        word_timestamp=True,
+                        diarization=True
+                    )
                 )
             )
-        )
-        elapsed = time.time() - t0
-        logger.info("Stage 2 completed in %.2fs", elapsed)
+            elapsed = time.time() - t0
+            logger.info("Stage 2 completed in %.2fs", elapsed)
+            full_text = response.text or ""
 
-        words: List[Dict[str, Any]] = []
-        for cand in getattr(response, "candidates", []) or []:
-            for part in getattr(getattr(cand, "content", None), "parts", []) or []:
-                trans = getattr(part, "audio_transcription", None)
-                if trans:
-                    spk = getattr(trans, "speaker_label", "")
-                    for w in getattr(trans, "words", []) or []:
-                        w_start = _parse_offset_to_seconds(getattr(w, "start_offset", 0.0))
-                        w_end = _parse_offset_to_seconds(getattr(w, "end_offset", 0.0))
-                        words.append({
-                            "word": getattr(w, "word", ""),
-                            "speaker": spk,
-                            "start": w_start,
-                            "end": w_end
-                        })
+            for cand in getattr(response, "candidates", []) or []:
+                for part in getattr(getattr(cand, "content", None), "parts", []) or []:
+                    trans = getattr(part, "audio_transcription", None)
+                    if trans:
+                        spk = getattr(trans, "speaker_label", "")
+                        for w in getattr(trans, "words", []) or []:
+                            w_start = _parse_offset_to_seconds(getattr(w, "start_offset", 0.0))
+                            w_end = _parse_offset_to_seconds(getattr(w, "end_offset", 0.0))
+                            words.append({
+                                "word": getattr(w, "word", ""),
+                                "speaker": spk,
+                                "start": w_start,
+                                "end": w_end
+                            })
+        except Exception as e:
+            transcribe_err = e
+            logger.warning("Stage 2 gemini-3.5-transcribe failed (%s). Attempting fallback to gemini-3.5-flash-lite...", e)
+
+        # Fallback to gemini-3.5-flash-lite if gemini-3.5-transcribe produced no words or failed
+        if not words:
+            try:
+                logger.info("Stage 2 Fallback: Calling gemini-3.5-flash-lite for clip timestamps...")
+                fallback_prompt = (
+                    "You are an expert audio transcription engine. "
+                    "Transcribe the audio verbatim in original language (Hindi, English, Hinglish). "
+                    "Provide millisecond word-level timestamps in valid JSON array format: "
+                    '[{"word": "word", "start": 0.12, "end": 0.45, "speaker": "spk:0"}]. '
+                    "If word-level is unavailable, return phrase segments: "
+                    '[{"start": 0.0, "end": 2.5, "text": "phrase words here", "speaker": "spk:0"}]. '
+                    "Return ONLY valid JSON."
+                )
+                fb_resp = client.models.generate_content(
+                    model="gemini-3.5-flash-lite",
+                    contents=[uploaded_file, fallback_prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.0,
+                    ),
+                )
+                if fb_resp and fb_resp.text:
+                    parsed_fb = json.loads(fb_resp.text)
+                    if isinstance(parsed_fb, list):
+                        for item in parsed_fb:
+                            if not isinstance(item, dict):
+                                continue
+                            if "word" in item:
+                                w_str = str(item.get("word", "")).strip()
+                                if w_str:
+                                    words.append({
+                                        "word": w_str,
+                                        "speaker": str(item.get("speaker", "spk:0")),
+                                        "start": _parse_stage1_time(item.get("start", 0.0)),
+                                        "end": _parse_stage1_time(item.get("end", 0.0)),
+                                    })
+                            elif "text" in item:
+                                s_st = _parse_stage1_time(item.get("start", 0.0))
+                                s_en = _parse_stage1_time(item.get("end", 0.0))
+                                seg_txt = str(item.get("text", "")).strip()
+                                spk = str(item.get("speaker", "spk:0"))
+                                sws = seg_txt.split()
+                                if sws:
+                                    s_dur = max(0.01, s_en - s_st)
+                                    step = s_dur / len(sws)
+                                    for i, sw in enumerate(sws):
+                                        words.append({
+                                            "word": sw,
+                                            "speaker": spk,
+                                            "start": round(s_st + i * step, 3),
+                                            "end": round(s_st + (i + 1) * step, 3),
+                                        })
+                    if words and not full_text:
+                        full_text = " ".join(w["word"] for w in words)
+            except Exception as fb_err:
+                logger.warning("Stage 2 gemini-3.5-flash-lite fallback also failed: %s", fb_err)
+                if transcribe_err:
+                    raise transcribe_err
 
         speech_start = words[0]["start"] if words else 0.0
         speech_end = words[-1]["end"] if words else 0.0
@@ -360,7 +427,7 @@ def transcribe_stage2_precision_words(
             pass
 
         return {
-            "full_text": response.text or "",
+            "full_text": full_text,
             "words": words,
             "speech_start": speech_start,
             "speech_end": speech_end
@@ -515,19 +582,38 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                             "end": w_e
                         })
 
+                from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish
+                raw_stage2_segments = [{"id": 0, "start": c_start, "end": c_end, "words": clean_words}]
+                clean_stage2_segments = transliterate_segments_to_hinglish(raw_stage2_segments)
+                if clean_stage2_segments and clean_stage2_segments[0].get("words"):
+                    clean_words = clean_stage2_segments[0]["words"]
+
+                user_tpl = db.get_default_template(user_id=clip.get("user_id"))
+                tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+                preset_cand = tpl_captions.get("preset_id")
+                effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
+
+                from dispatch.captions.grouper import apply_template_to_track
                 track = group_words_into_captions(
                     raw_segments=[{"id": 0, "start": c_start, "end": c_end, "words": clean_words}],
                     clip_start=c_start,
                     clip_end=c_end,
                     clip_id=clip_id,
-                    preset_id=get_default_preset_id()
+                    preset_id=effective_preset_id
                 )
+                apply_template_to_track(track, tpl_captions)
+                track_dict = track.to_dict()
+                track_dict["words"] = clean_words
                 if not db.save_clip_caption_data(
-                    clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
+                    clip_id, json.dumps(track_dict), expected_range_revision=range_revision,
                     source_range_start=c_start, source_range_end=c_end,
                 ):
                     logger.info("Skipping stale caption save for %s after its range changed", clip_id)
                     continue
+
+            user_tpl = db.get_default_template(user_id=clip.get("user_id"))
+            tpl_layout = user_tpl.get("framing", {}).get("horizontal_mode") or "crop_916"
+            c_layout = clip.get("layout_mode") or tpl_layout
 
             render_clip(
                 source_video=source_path,
@@ -535,7 +621,8 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                 start_time=c_start,
                 end_time=c_end,
                 aspect_ratio=None,
-                layout_mode=clip.get("layout_mode", "fit_blur"),
+                layout_mode=c_layout,
+                segments=clean_words if words else None,
                 subtitle_options={"enabled": False, "preserve_timing": True},
                 expected_range_revision=range_revision,
             )

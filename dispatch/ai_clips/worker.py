@@ -602,13 +602,19 @@ class HighlightWorker:
 
                 clean_segs = transliterate_segments_to_hinglish(clip_segs)
                 try:
+                    user_tpl = db.get_default_template(user_id=clip.get("user_id"))
+                    tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+                    preset_cand = tpl_captions.get("preset_id")
+                    effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
+
                     track = group_words_into_captions(
                         raw_segments=clean_segs,
                         clip_start=eff_c_start,
                         clip_end=eff_c_end,
                         clip_id=clip_id,
-                        preset_id=(db.get_default_template(user_id=clip.get("user_id")).get("captions", {}).get("preset_id") or get_default_preset_id())
+                        preset_id=effective_preset_id
                     )
+                    apply_template_to_track(track, tpl_captions)
                     if not db.save_clip_caption_data(
                         clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
                         source_range_start=eff_c_start, source_range_end=eff_c_end,

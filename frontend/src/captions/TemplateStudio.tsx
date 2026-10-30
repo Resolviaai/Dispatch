@@ -5,6 +5,7 @@ import {
   Play,
   Pause,
   Save,
+  Check,
   Maximize2,
   Undo2,
   Redo2,
@@ -12,6 +13,15 @@ import {
   Smartphone,
   Monitor,
 } from 'lucide-react';
+
+function createAbortTimeout(ms: number): AbortSignal {
+  if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).timeout === 'function') {
+    return (AbortSignal as any).timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
 import {
   CaptionTrack,
   CaptionGroup,
@@ -180,6 +190,8 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
 
   const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isFullscreenPreview, setIsFullscreenPreview] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
@@ -221,43 +233,51 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     }
 
     const loadBackendTemplate = async () => {
-      // 1. Try local PC if pcHost is provided
-      if (pcHost) {
-        try {
-          const res = await fetch(apiUrl('/api/template/default', pcHost), {
-            headers: getAuthHeaders(),
-            signal: AbortSignal.timeout(1500),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data && typeof data === 'object') {
-              const backendTime = data.updated_at ? new Date(data.updated_at).getTime() : 0;
-              if (!localSavedTime || backendTime > localSavedTime) {
-                applyLoadedTemplate(data);
-                if (typeof localStorage !== 'undefined') {
-                  localStorage.setItem('dispatch_default_template', JSON.stringify(data));
-                }
-                return;
+      // 1. Try local PC daemon (via pcHost or auto-resolved apiUrl)
+      try {
+        const pcUrl = apiUrl('/api/template/default', pcHost);
+        const res = await fetch(pcUrl, {
+          headers: getAuthHeaders(),
+          signal: createAbortTimeout(1500),
+        });
+        if (res.ok) {
+          const resJson = await res.json().catch(() => null);
+          const data = (resJson && resJson.template) ? resJson.template : resJson;
+          if (data && typeof data === 'object') {
+            const backendTime = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+            if (!localSavedTime || backendTime > localSavedTime) {
+              applyLoadedTemplate(data);
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('dispatch_default_template', JSON.stringify(data));
               }
+              return;
             }
           }
-        } catch {
-          // PC not reachable, fall through to Cloud
         }
+      } catch {
+        // PC not reachable, fall through to Cloud
       }
 
       // 2. Try Dispatch Cloud
       try {
-        const session = await currentSession();
-        const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+        let token: string | null = null;
+        try {
+          const sessionPromise = currentSession();
+          const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000));
+          const session = await Promise.race([sessionPromise, timeoutPromise]);
+          token = session?.access_token || null;
+        } catch {}
+        if (!token && typeof window !== 'undefined') {
+          token = (window as any).DispatchBridge?.getAuthToken?.() || null;
+        }
         if (token) {
           const cloudRes = await fetch(`${WORKER_BASE}/template/default`, {
             headers: { 'Authorization': `Bearer ${token}` },
-            signal: AbortSignal.timeout(2000),
+            signal: createAbortTimeout(2000),
           });
           if (cloudRes.ok) {
-            const cloudData = await cloudRes.json();
-            const template = cloudData?.template;
+            const cloudData = await cloudRes.json().catch(() => null);
+            const template = (cloudData && cloudData.template) ? cloudData.template : cloudData;
             if (template && typeof template === 'object') {
               const cloudTime = template.updated_at ? new Date(template.updated_at).getTime() : 0;
               if (!localSavedTime || cloudTime > localSavedTime) {
@@ -392,7 +412,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
   };
 
   // --- Save Template Handler ---
-  const handleSaveTemplate = async () => {
+  const handleSaveTemplate = async (shouldClose = false) => {
     if (!track) return;
     setIsSaving(true);
     try {
@@ -416,6 +436,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           line_height: style.line_height ?? 1.25,
           primary_color: style.primary_color || '#FFFFFF',
           highlight_color: style.highlight_color || '#FFD700',
+          highlight_enabled: style.highlight_enabled ?? true,
           outline_enabled: style.outline_enabled ?? true,
           outline_color: style.outline_color || '#000000',
           outline_width: style.outline_width ?? 4.5,
@@ -460,67 +481,94 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
         localStorage.setItem('dispatch_default_template', JSON.stringify(payload));
       }
 
-      // 2. Sync to PC and Cloud in parallel with strict short timeouts
+      // 2. Sync to PC and Cloud in parallel with resilient timeouts
       const syncPromises: Promise<any>[] = [];
 
-      if (pcHost) {
-        syncPromises.push(
-          fetch(apiUrl('/api/template/default', pcHost), {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(1500),
-          }).then(async (res) => {
-            if (res.ok) {
-              const resData = await res.json().catch(() => null);
-              if (resData?.template && typeof localStorage !== 'undefined') {
-                localStorage.setItem('dispatch_default_template', JSON.stringify(resData.template));
-              }
+      const pcUrl = apiUrl('/api/template/default', pcHost);
+      syncPromises.push(
+        fetch(pcUrl, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+          signal: createAbortTimeout(2000),
+        }).then(async (res) => {
+          if (res.ok) {
+            const resData = await res.json().catch(() => null);
+            const savedTpl = (resData && resData.template) ? resData.template : resData;
+            if (savedTpl && typeof savedTpl === 'object' && typeof localStorage !== 'undefined') {
+              localStorage.setItem('dispatch_default_template', JSON.stringify(savedTpl));
             }
-          }).catch((err) => {
-            console.warn('PC template sync skipped/timed out:', err);
-          })
-        );
-      }
+            return { target: 'pc', success: true };
+          }
+          console.warn(`PC template sync returned HTTP ${res.status}`);
+          return { target: 'pc', success: false, status: res.status };
+        }).catch((err) => {
+          console.warn('PC template sync skipped/timed out:', err);
+          return { target: 'pc', success: false, error: err };
+        })
+      );
 
       syncPromises.push(
         (async () => {
           try {
-            const session = await currentSession();
-            const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+            let token: string | null = null;
+            try {
+              const sessionPromise = currentSession();
+              const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000));
+              const session = await Promise.race([sessionPromise, timeoutPromise]);
+              token = session?.access_token || null;
+            } catch {}
+            if (!token && typeof window !== 'undefined') {
+              token = (window as any).DispatchBridge?.getAuthToken?.() || null;
+            }
             if (token) {
-              await fetch(`${WORKER_BASE}/template/default`, {
+              const cloudRes = await fetch(`${WORKER_BASE}/template/default`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(payload),
-                signal: AbortSignal.timeout(2000),
+                signal: createAbortTimeout(2000),
               });
+              return { target: 'cloud', success: cloudRes.ok };
             }
+            return { target: 'cloud', success: false };
           } catch (cloudErr) {
             console.warn('Cloud template sync skipped/timed out:', cloudErr);
+            return { target: 'cloud', success: false, error: cloudErr };
           }
         })()
       );
 
-      // Wait maximum 1800ms for syncs to complete or timeout
+      // Wait maximum 2200ms for syncs to complete or timeout
       await Promise.race([
         Promise.allSettled(syncPromises),
-        new Promise((resolve) => setTimeout(resolve, 1800)),
+        new Promise((resolve) => setTimeout(resolve, 2200)),
       ]);
 
+      setIsSaving(false);
+      setIsDirty(false);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
       showToast('Default template saved');
       onSaved?.();
 
-      setTimeout(() => {
-        onClose();
-      }, 300);
+      if (shouldClose) {
+        setTimeout(() => {
+          onClose();
+        }, 500);
+      }
     } catch (err) {
       console.warn('Failed to save default template:', err);
+      setIsSaving(false);
+      setIsDirty(false);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
       showToast('Template saved locally (offline)');
-      setTimeout(() => onClose(), 600);
+      if (shouldClose) {
+        setTimeout(() => onClose(), 600);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -802,12 +850,18 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           <button
             type="button"
             disabled={isSaving}
-            onClick={handleSaveTemplate}
+            onClick={() => handleSaveTemplate(false)}
             className="h-7 px-3 rounded-lg bg-primary hover:bg-primary-hover text-white text-[11px] font-semibold flex items-center gap-1.5 active:scale-95 shadow-hero-glow transition-all disabled:opacity-75"
             title="Save as default template for all newly generated clips"
           >
-            {isSaving ? <RotateCw size={11} className="animate-spin" /> : <Save size={11} />}
-            <span>Save Template</span>
+            {isSaving ? (
+              <RotateCw size={11} className="animate-spin" />
+            ) : saveSuccess ? (
+              <Check size={11} className="text-emerald-300" />
+            ) : (
+              <Save size={11} />
+            )}
+            <span>{saveSuccess ? 'Saved!' : 'Save Template'}</span>
           </button>
         </div>
       </header>
@@ -1089,7 +1143,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
                 type="button"
                 onClick={async () => {
                   setShowExitConfirm(false);
-                  await handleSaveTemplate();
+                  await handleSaveTemplate(true);
                 }}
                 className="w-full h-10 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center active:scale-98 transition-all shadow-hero-glow"
               >
