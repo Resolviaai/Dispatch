@@ -1233,31 +1233,9 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
         rendered_mode and not is_matching_layout(rendered_mode, raw_mode)
     )
 
-    # Asynchronously re-render clip media to match chosen layout
-    if is_stale:
-        def _background_reframe(cid: str, target_mode: str):
-            try:
-                c = db.get_clip_by_id(cid)
-                if not c:
-                    return
-                source_p = resolve_clip_source_path(c)
-                if not source_p or not source_p.exists():
-                    return
-                from dispatch.video_engine.renderer import render_clip
-                render_clip(
-                    source_video=source_p,
-                    clip_id=cid,
-                    start_time=float(c.get("start_time", 0.0)),
-                    end_time=float(c.get("end_time", 0.0)),
-                    layout_mode=target_mode,
-                    segments=None,
-                )
-                logger.info("Background re-render completed for clip %s to %s", cid, target_mode)
-            except Exception as e:
-                logger.warning("Background re-render for clip %s to %s failed: %s", cid, target_mode, e)
-
-        import threading
-        threading.Thread(target=_background_reframe, args=(clip_id, raw_mode), daemon=True).start()
+    # Canonical architecture: Layout framing selection is an instantaneous UI player
+    # preference and persists to DB. Zero background FFmpeg baking occurs during review;
+    # heavy delivery rendering with burned subtitles is deferred strictly to Publish / Export.
 
     return {
         "status": "success",

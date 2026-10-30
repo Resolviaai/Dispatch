@@ -334,3 +334,120 @@ def render_clip(
         "thumbnail_path": output_thumb_path if output_thumb_path.exists() else None,
         "duration": actual_duration
     }
+
+
+def slice_clean_clip(
+    source_video: Path,
+    clip_id: str,
+    start_time: float,
+    end_time: float,
+    expected_range_revision: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Slice an untouched, pristine segment from the source video for interactive review.
+
+    Invariants (Canonical Architecture):
+      1. Preserves original source resolution, aspect ratio (e.g. 16:9 widescreen), and framing.
+      2. ZERO layout filters (no pre-baked blurred bars, letterboxing, or pillarboxing).
+      3. ZERO burned-in subtitles (subtitles are rendered dynamically by the client UI).
+      4. Audio is normalized and encoded with +faststart for instant progressive streaming.
+      5. Output is saved to CLIPS_DIR / f"{clip_id}.mp4" with rendered_layout_mode = NULL.
+    """
+    if not source_video.exists():
+        raise FileNotFoundError(f"Source video not found: {source_video}")
+
+    clip_at_start = db.get_clip_by_id(clip_id)
+    render_range_revision = expected_range_revision
+    if render_range_revision is None and clip_at_start:
+        render_range_revision = int(clip_at_start.get("range_revision") or 0)
+
+    eff_duration = max(0.0, end_time - start_time)
+    output_video_path = CLIPS_DIR / f"{clip_id}.mp4"
+    output_thumb_path = CLIPS_DIR / f"{clip_id}.jpg"
+
+    render_suffix = f"_{uuid.uuid4().hex[:8]}"
+    temp_video_path = CLIPS_DIR / f"{clip_id}{render_suffix}.tmp.mp4"
+    temp_thumb_path = CLIPS_DIR / f"{clip_id}{render_suffix}.tmp.jpg"
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(round(start_time, 3)),
+        "-to", str(round(end_time, 3)),
+        "-i", str(source_video),
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-threads", "2",
+        "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(temp_video_path),
+    ]
+
+    logger.info("Executing clean slice for clip %s (%.1fs - %.1fs, duration: %.1fs)",
+                clip_id, start_time, end_time, eff_duration)
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=300)
+
+    if result.returncode != 0:
+        error_msg = result.stderr.strip()
+        logger.error("FFmpeg clean slice failed for %s: %s", clip_id, error_msg)
+        if temp_video_path.exists():
+            temp_video_path.unlink()
+        raise RuntimeError(f"FFmpeg clean slice failed: {error_msg}")
+
+    # Validate output duration
+    from dispatch.ingestion.validator import probe_video
+    is_valid, meta, validation_error = probe_video(temp_video_path)
+    if not is_valid or not meta or not meta.get("duration"):
+        temp_video_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Sliced clip failed media validation: {validation_error or 'invalid output'}")
+    actual_duration = float(meta["duration"])
+
+    if actual_duration > MAX_CLIP_DURATION:
+        temp_video_path.unlink(missing_ok=True)
+        raise ValueError(f"Clip {clip_id} exceeds hard duration limit ({actual_duration:.2f}s > {MAX_CLIP_DURATION}s)")
+
+    if actual_duration < MIN_CLIP_DURATION:
+        temp_video_path.unlink(missing_ok=True)
+        raise ValueError(f"Clip {clip_id} below minimum duration limit ({actual_duration:.2f}s < {MIN_CLIP_DURATION}s)")
+
+    # Atomic move
+    temp_video_path.replace(output_video_path)
+
+    # Clean thumbnail extraction at midpoint
+    thumb_time = max(0.0, min(1.0, actual_duration / 2.0))
+    thumb_cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(round(thumb_time, 3)),
+        "-i", str(output_video_path),
+        "-vframes", "1",
+        "-q:v", "2",
+        str(temp_thumb_path)
+    ]
+    thumb_res = subprocess.run(thumb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    if thumb_res.returncode == 0 and temp_thumb_path.exists():
+        temp_thumb_path.replace(output_thumb_path)
+    elif temp_thumb_path.exists():
+        temp_thumb_path.unlink()
+
+    # Update DB: unbaked clean slice has rendered_layout_mode = None
+    media_updated = db.update_clip_media(
+        clip_id=clip_id,
+        video_path=str(output_video_path),
+        thumbnail_path=str(output_thumb_path) if output_thumb_path.exists() else None,
+        rendered_layout_mode=None,
+        clear_rendered_layout_mode=True,
+        expected_range_revision=render_range_revision,
+    )
+    if render_range_revision is not None and not media_updated:
+        raise RuntimeError("Clip range changed during slicing; obsolete media was not installed")
+
+    logger.info("Successfully sliced clean clip %s -> %s (duration: %.2fs)", clip_id, output_video_path.name, actual_duration)
+
+    return {
+        "clip_id": clip_id,
+        "video_path": output_video_path,
+        "thumbnail_path": output_thumb_path if output_thumb_path.exists() else None,
+        "duration": actual_duration
+    }

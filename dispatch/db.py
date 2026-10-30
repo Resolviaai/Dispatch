@@ -745,6 +745,7 @@ def update_clip_media(
     video_path: str,
     thumbnail_path: Optional[str],
     rendered_layout_mode: Optional[str] = None,
+    clear_rendered_layout_mode: bool = False,
     expected_range_revision: Optional[int] = None,
 ) -> bool:
     """Attach rendered media to a clip and promote it back to ready_review.
@@ -765,6 +766,13 @@ def update_clip_media(
                 SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = ?, render_stale = 0, status = 'ready_review'
                 WHERE id = ?""" + status_clause + revision_clause,
                 (video_path, thumbnail_path, rendered_layout_mode, clip_id)
+                + ((expected_range_revision,) if expected_range_revision is not None else ()))
+        elif clear_rendered_layout_mode:
+            cursor.execute("""
+                UPDATE clips 
+                SET video_path = ?, thumbnail_path = ?, rendered_layout_mode = NULL, render_stale = 0, status = 'ready_review'
+                WHERE id = ?""" + status_clause + revision_clause,
+                (video_path, thumbnail_path, clip_id)
                 + ((expected_range_revision,) if expected_range_revision is not None else ()))
         else:
             cursor.execute("""

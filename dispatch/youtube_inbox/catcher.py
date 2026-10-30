@@ -754,25 +754,46 @@ class YouTubeInboxCatcher:
             end_t = c_row["end_time"] if c_row else total_duration
             l_mode = (c_row["layout_mode"] if c_row else None) or "fit_blur"
 
+            # 1. Generate CaptionTrack and save to DB for interactive live UI overlay
+            if segments:
+                try:
+                    import json
+                    from dispatch.captions import group_words_into_captions, apply_template_to_track
+                    from dispatch.captions.presets import get_default_preset_id
+                    clip_row = db.get_clip_by_id(cid) if cid else None
+                    user_tpl = db.get_default_template(user_id=clip_row.get("user_id") if clip_row else None)
+                    tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+                    preset_cand = tpl_captions.get("preset_id")
+                    effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
+                    track = group_words_into_captions(
+                        raw_segments=segments,
+                        clip_start=start_t,
+                        clip_end=end_t,
+                        clip_id=cid,
+                        preset_id=effective_preset_id
+                    )
+                    apply_template_to_track(track, tpl_captions)
+                    db.save_clip_caption_data(
+                        cid, json.dumps(track.to_dict()),
+                        source_range_start=start_t,
+                        source_range_end=end_t,
+                    )
+                except Exception as cap_err:
+                    logger.warning("Failed saving caption data for clean clip %s: %s", cid, cap_err)
+
+            # 2. Slice clean, untouched video (canonical architecture: zero layout baking, zero burned subtitles)
             try:
-                render_result = render_clip(
+                from dispatch.video_engine.renderer import slice_clean_clip
+                render_result = slice_clean_clip(
                     source_video=local_video_path,
                     clip_id=cid,
                     start_time=start_t,
                     end_time=end_t,
-                    aspect_ratio="16:9",
-                    layout_mode=l_mode,
-                    segments=segments
-                )
-                db.update_clip_media(
-                    clip_id=cid,
-                    video_path=str(render_result.get("video_path", "")),
-                    thumbnail_path=str(render_result.get("thumbnail_path", ""))
                 )
                 rendered_clips.append(cid)
             except Exception as e:
-                logger.exception("Failed to render clip %s", cid)
-                db.update_youtube_video(video_id, status="FAILED", last_error=f"FFmpeg render failed: {e}")
+                logger.exception("Failed to slice clean clip %s", cid)
+                db.update_youtube_video(video_id, status="FAILED", last_error=f"FFmpeg clean slice failed: {e}")
                 raise
 
         if not rendered_clips:

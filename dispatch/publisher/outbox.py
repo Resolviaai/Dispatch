@@ -398,6 +398,26 @@ def _process_outbox_queue_internal() -> int:
                     """, (err_msg, job_id))
                 continue
 
+            # Canonical Architecture: Ensure final delivery render (target layout + burned subtitles) is built
+            if claimed_clip.get("rendered_layout_mode") is None or claimed_clip.get("rendered_layout_mode") != claimed_clip.get("layout_mode"):
+                try:
+                    logger.info("Outbox: Finalizing delivery render for clip %s (layout: %s) before %s upload...",
+                                clip_id, claimed_clip.get("layout_mode"), platform)
+                    from dispatch.web.app import resolve_clip_source_path
+                    source_p = resolve_clip_source_path(claimed_clip)
+                    if source_p and source_p.exists():
+                        from dispatch.video_engine.renderer import render_clip
+                        render_res = render_clip(
+                            source_video=source_p,
+                            clip_id=clip_id,
+                            start_time=float(claimed_clip.get("start_time", 0.0)),
+                            end_time=float(claimed_clip.get("end_time", 0.0)),
+                            layout_mode=claimed_clip.get("layout_mode", "fit_blur"),
+                        )
+                        video_path = Path(render_res["video_path"])
+                except Exception as rend_err:
+                    logger.warning("Delivery render check note for %s: %s", clip_id, rend_err)
+
             if platform in ("youtube", "youtube_shorts"):
                 privacy = "public" if publish_mode == "public" else ("unlisted" if publish_mode == "unlisted" else "private")
                 # Include idempotency key marker in description

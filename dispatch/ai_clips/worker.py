@@ -632,16 +632,13 @@ class HighlightWorker:
             # 5.2 Animated Pop-Up Subtitle Burner via FFmpeg
             if clip_src_path and clip_src_path.exists():
                 try:
-                    logger.info("Auto-rendering clip %s (%.1fs - %.1fs) with FFmpeg...", clip_id, eff_c_start, eff_c_end)
-                    render_clip(
+                    logger.info("Auto-slicing clean clip %s (%.1fs - %.1fs) with FFmpeg...", clip_id, eff_c_start, eff_c_end)
+                    from dispatch.video_engine.renderer import slice_clean_clip
+                    slice_clean_clip(
                         source_video=clip_src_path,
                         clip_id=clip_id,
                         start_time=eff_c_start,
                         end_time=eff_c_end,
-                        aspect_ratio=None,
-                        layout_mode=c_layout,
-                        segments=active_segs,
-                        subtitle_options={"enabled": False, "preserve_timing": True},
                         expected_range_revision=range_revision,
                     )
                     with db.get_db_connection() as conn:

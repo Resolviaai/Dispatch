@@ -1148,28 +1148,13 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
     setFallbackFailed(false);
   }, [sourceVideoUrl, _videoUrl, fallbackVideoUrl, layoutMode]);
 
-  // High-reliability media resolution:
-  // If preferRendered is requested, only use the pre-rendered video if its layout matches the active layoutMode.
-  // When the user selects a different layout mode (e.g. Crop 9:16 instead of Fit + Blur), we play sourceVideoUrl
-  // so CSS framing (dynamic crop, blur, black bars) is accurately previewed from clean source video.
-  const layoutMatchesRender = Boolean(
-    renderedLayoutMode && (
-      renderedLayoutMode === layoutMode ||
-      (renderedLayoutMode === 'crop_follow' && layoutMode === 'crop_916') ||
-      (renderedLayoutMode === 'crop_916' && (layoutMode as string) === 'crop_follow') ||
-      (renderedLayoutMode === 'landscape' && layoutMode === 'native_169') ||
-      (renderedLayoutMode === 'native_169' && (layoutMode as string) === 'landscape') ||
-      (renderedLayoutMode === 'native_portrait' && layoutMode === 'native_916') ||
-      (renderedLayoutMode === 'native_916' && (layoutMode as string) === 'native_portrait')
-    )
-  );
-  const shouldPreferRendered = preferRendered && layoutMatchesRender;
+  // Canonical Architecture media resolution:
+  // _videoUrl is the unbaked clean slice (native 16:9, no baked-in blur, no burned subtitles).
+  // It is the primary interactive media. Falls back to sourceVideoUrl or fallbackVideoUrl if missing.
+  const candidateVideoUrl = !videoFailed && _videoUrl
+    ? _videoUrl
+    : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null);
 
-  const candidateVideoUrl = shouldPreferRendered
-    ? (!videoFailed && _videoUrl ? _videoUrl : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null))
-    : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : (!videoFailed && _videoUrl ? _videoUrl : null));
-
-  // If both rendered and source local URLs have failed or are unavailable, fall back resiliently to remote/proxy/edit-window URL
   const activeVideoUrl = candidateVideoUrl || (!fallbackFailed && fallbackVideoUrl ? fallbackVideoUrl : null);
 
   const isFallbackTimebase = Boolean(fallbackVideoUrl && activeVideoUrl === fallbackVideoUrl && activeVideoUrl !== _videoUrl);
@@ -1180,18 +1165,15 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
     // 1. Explicit native widescreen layouts ALWAYS render in 16:9 frame
     if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
 
-    // 2. Explicit vertical crop ALWAYS renders in 9:16 frame
-    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow') return false;
+    // 2. Vertical short-form layouts (Fit + Blur, Fit + Black, Crop 9:16) ALWAYS render in 9:16 frame
+    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow' || layoutMode === 'fit_blur' || layoutMode === 'fit_black') {
+      return false;
+    }
 
-    // 3. For Fit + Blur and Fit + Black:
-    // Respect explicit targetAspect if provided
     if (targetAspect === '16:9') return true;
     if (targetAspect === '9:16') return false;
 
-    // Landscape source fitted to shorts is 9:16
     if (sourceOrientation === 'landscape') return false;
-
-    // Portrait source fitted to widescreen is 16:9
     if (sourceOrientation === 'portrait') return true;
 
     return false;
@@ -1279,11 +1261,6 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
     setVideoFailed(false);
   }, [sourceVideoUrl, _videoUrl, preferRendered, layoutMode]);
 
-  const isBakedInFitBlur = Boolean(
-    (!isSourceTimebase || activeVideoUrl === _videoUrl) &&
-    (renderedLayoutMode === 'fit_blur' || (!renderedLayoutMode && sourceOrientation === 'landscape'))
-  );
-
   const computedMaxHeight = maxHeight || (isCompact ? '220px' : '100%');
 
   return (
@@ -1325,8 +1302,8 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
       >
         {activeVideoUrl ? (
           <>
-            {/* Fit + Blur synchronized background video layer: only mount and decode when clean source video requires dynamic blur */}
-            {layoutMode === 'fit_blur' && !isBakedInFitBlur && isSourceTimebase && (
+            {/* Fit + Blur synchronized background video layer: dynamically renders blurred background for 9:16 portrait fit */}
+            {layoutMode === 'fit_blur' && (
               <video
                 ref={bgVideoRef}
                 src={activeVideoUrl}
@@ -1346,7 +1323,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               />
             )}
 
-            {/* Primary foreground video layer: prioritized loading with instant poster */}
+            {/* Primary foreground video layer: pure native framing (Crop 9:16 -> object-cover; Fit -> object-contain) */}
             <video
               ref={videoRef}
               src={activeVideoUrl}
@@ -1365,15 +1342,15 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               onError={() => {
                 if (activeVideoUrl === fallbackVideoUrl) {
                   setFallbackFailed(true);
-                } else if (isSourceTimebase) {
-                  setSourceFailed(true);
-                } else {
+                } else if (_videoUrl && activeVideoUrl === _videoUrl) {
                   setVideoFailed(true);
+                } else {
+                  setSourceFailed(true);
                 }
               }}
               onPlay={() => {
                 setIsPlaying(true);
-                if (layoutMode === 'fit_blur' && !isBakedInFitBlur && isSourceTimebase) {
+                if (layoutMode === 'fit_blur') {
                   bgVideoRef.current?.play().catch(() => { });
                 }
               }}
@@ -1386,25 +1363,9 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 bgVideoRef.current?.pause();
               }}
               className={`absolute inset-0 z-10 w-full h-full pointer-events-none will-change-transform ${
-                isCrop && !isBakedInFitBlur ? 'object-cover object-center' : 'object-contain'
+                isCrop ? 'object-cover object-center' : 'object-contain object-center'
               }`}
-              style={{
-                transform: isBakedInFitBlur
-                  ? (isTarget169 ? 'scale(3.16) translateZ(0)' : (isCrop ? 'scale(1.778) translateZ(0)' : 'scale(1) translateZ(0)'))
-                  : 'scale(1) translateZ(0)',
-                transformOrigin: 'center center',
-                transition: 'transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
-                backfaceVisibility: 'hidden',
-              }}
             />
-
-            {/* Pure black masking overlays for Fit + Black when pre-rendered file contains baked-in blurred bars */}
-            {isBakedInFitBlur && layoutMode === 'fit_black' && (
-              <>
-                <div className="absolute top-0 inset-x-0 h-[34.3%] bg-black z-15 pointer-events-none" />
-                <div className="absolute bottom-0 inset-x-0 h-[34.3%] bg-black z-15 pointer-events-none" />
-              </>
-            )}
           </>
         ) : (
           <div className="flex flex-col items-center justify-center p-6 text-center text-text-muted z-10">
