@@ -1146,7 +1146,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
     setSourceFailed(false);
     setVideoFailed(false);
     setFallbackFailed(false);
-  }, [sourceVideoUrl, _videoUrl, fallbackVideoUrl]);
+  }, [sourceVideoUrl, _videoUrl, fallbackVideoUrl, layoutMode]);
 
   // High-reliability media resolution:
   // If preferRendered is requested, only use the pre-rendered video if its layout matches the active layoutMode.
@@ -1277,7 +1277,12 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   useEffect(() => {
     setSourceFailed(false);
     setVideoFailed(false);
-  }, [sourceVideoUrl, _videoUrl, preferRendered]);
+  }, [sourceVideoUrl, _videoUrl, preferRendered, layoutMode]);
+
+  const isBakedInFitBlur = Boolean(
+    (!isSourceTimebase || activeVideoUrl === _videoUrl) &&
+    (renderedLayoutMode === 'fit_blur' || (!renderedLayoutMode && sourceOrientation === 'landscape'))
+  );
 
   const computedMaxHeight = maxHeight || (isCompact ? '220px' : '100%');
 
@@ -1320,8 +1325,8 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
       >
         {activeVideoUrl ? (
           <>
-            {/* Fit + Blur synchronized background video layer: only mount and decode when layoutMode === 'fit_blur' */}
-            {layoutMode === 'fit_blur' && (
+            {/* Fit + Blur synchronized background video layer: only mount and decode when clean source video requires dynamic blur */}
+            {layoutMode === 'fit_blur' && !isBakedInFitBlur && isSourceTimebase && (
               <video
                 ref={bgVideoRef}
                 src={activeVideoUrl}
@@ -1368,7 +1373,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               }}
               onPlay={() => {
                 setIsPlaying(true);
-                if (layoutMode === 'fit_blur') {
+                if (layoutMode === 'fit_blur' && !isBakedInFitBlur && isSourceTimebase) {
                   bgVideoRef.current?.play().catch(() => { });
                 }
               }}
@@ -1381,14 +1386,25 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 bgVideoRef.current?.pause();
               }}
               className={`absolute inset-0 z-10 w-full h-full pointer-events-none will-change-transform ${
-                isCrop ? 'object-cover object-center' : 'object-contain'
+                isCrop && !isBakedInFitBlur ? 'object-cover object-center' : 'object-contain'
               }`}
               style={{
-                transform: 'scale(1) translateZ(0)',
+                transform: isBakedInFitBlur
+                  ? (isTarget169 ? 'scale(3.16) translateZ(0)' : (isCrop ? 'scale(1.778) translateZ(0)' : 'scale(1) translateZ(0)'))
+                  : 'scale(1) translateZ(0)',
                 transformOrigin: 'center center',
                 transition: 'transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+                backfaceVisibility: 'hidden',
               }}
             />
+
+            {/* Pure black masking overlays for Fit + Black when pre-rendered file contains baked-in blurred bars */}
+            {isBakedInFitBlur && layoutMode === 'fit_black' && (
+              <>
+                <div className="absolute top-0 inset-x-0 h-[34.3%] bg-black z-15 pointer-events-none" />
+                <div className="absolute bottom-0 inset-x-0 h-[34.3%] bg-black z-15 pointer-events-none" />
+              </>
+            )}
           </>
         ) : (
           <div className="flex flex-col items-center justify-center p-6 text-center text-text-muted z-10">

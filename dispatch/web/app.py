@@ -565,9 +565,9 @@ async def get_clip_file(filename: str, request: Request):
 
     is_versioned = bool(request.query_params.get("v"))
     if is_versioned:
-        cache_control = "public, max-age=86400, stale-while-revalidate=60"
+        cache_control = "public, max-age=604800, immutable"
     else:
-        cache_control = "no-cache, must-revalidate"
+        cache_control = "public, max-age=3600, stale-while-revalidate=60"
 
     # Handle conditional GET for non-range requests
     if not request.headers.get("range") and request.method in ("GET", "HEAD"):
@@ -1135,9 +1135,9 @@ async def get_clip_source_media(clip_id: str, request: Request):
 
     is_versioned = bool(request.query_params.get("v"))
     if is_versioned:
-        cache_control = "public, max-age=86400, stale-while-revalidate=60"
+        cache_control = "public, max-age=604800, immutable"
     else:
-        cache_control = "no-cache, must-revalidate"
+        cache_control = "public, max-age=3600, stale-while-revalidate=60"
 
     headers["ETag"] = etag
     headers["Last-Modified"] = last_modified
@@ -1232,6 +1232,32 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
     is_stale = bool(updated_clip and updated_clip.get("render_stale")) or bool(
         rendered_mode and not is_matching_layout(rendered_mode, raw_mode)
     )
+
+    # Asynchronously re-render clip media to match chosen layout
+    if is_stale:
+        def _background_reframe(cid: str, target_mode: str):
+            try:
+                c = db.get_clip_by_id(cid)
+                if not c:
+                    return
+                source_p = resolve_clip_source_path(c)
+                if not source_p or not source_p.exists():
+                    return
+                from dispatch.video_engine.renderer import render_clip
+                render_clip(
+                    source_video=source_p,
+                    clip_id=cid,
+                    start_time=float(c.get("start_time", 0.0)),
+                    end_time=float(c.get("end_time", 0.0)),
+                    layout_mode=target_mode,
+                    segments=None,
+                )
+                logger.info("Background re-render completed for clip %s to %s", cid, target_mode)
+            except Exception as e:
+                logger.warning("Background re-render for clip %s to %s failed: %s", cid, target_mode, e)
+
+        import threading
+        threading.Thread(target=_background_reframe, args=(clip_id, raw_mode), daemon=True).start()
 
     return {
         "status": "success",

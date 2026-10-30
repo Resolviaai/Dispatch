@@ -626,7 +626,8 @@ export const Bridge = {
   openCustomTab(url: string): boolean {
     if (window.DispatchBridge?.openCustomTab) {
       try {
-        return window.DispatchBridge.openCustomTab(url);
+        const handled = window.DispatchBridge.openCustomTab(url);
+        if (handled) return true;
       } catch (e) {
         console.warn('Failed to open custom tab', e);
       }

@@ -61,31 +61,39 @@ export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: nu
   const tplLayout = savedTpl.layout || {};
   const tplAnim = savedTpl.anim || {};
 
+  // If the user explicitly customized this clip, preserve clip styles;
+  // otherwise, the user's default template from Template Studio takes precedence.
+  const hasUserCustomEdits = Boolean(
+    source.is_user_edited ||
+    source.user_edited ||
+    (typeof source.captions_revision === 'number' && source.captions_revision > 1)
+  );
+
   const default_style: StyleConfig = {
-    font_family: rawStyle.font_family || tplStyle.font_family || 'Montserrat',
-    font_size: rawStyle.font_size || tplStyle.font_size || 44,
-    font_weight: rawStyle.font_weight || tplStyle.font_weight || '900',
-    text_transform: rawStyle.text_transform || tplStyle.text_transform || 'none',
-    letter_spacing: rawStyle.letter_spacing ?? tplStyle.letter_spacing ?? 0,
-    line_height: rawStyle.line_height ?? tplStyle.line_height ?? 1.25,
-    primary_color: rawStyle.primary_color || rawStyle.color || tplStyle.primary_color || '#FFFFFF',
-    highlight_color: rawStyle.highlight_color || tplStyle.highlight_color || '#FFD700',
-    outline_enabled: rawStyle.outline_enabled ?? tplStyle.outline_enabled ?? Boolean(rawStyle.stroke_width ?? tplStyle.outline_width),
-    outline_color: rawStyle.outline_color || rawStyle.stroke_color || tplStyle.outline_color || '#000000',
-    outline_width: rawStyle.outline_width ?? rawStyle.stroke_width ?? tplStyle.outline_width ?? 3,
-    shadow_enabled: rawStyle.shadow_enabled ?? tplStyle.shadow_enabled ?? rawStyle.has_shadow ?? true,
-    shadow_color: rawStyle.shadow_color || tplStyle.shadow_color || '#000000',
-    shadow_offset_x: rawStyle.shadow_offset_x ?? tplStyle.shadow_offset_x ?? 0,
-    shadow_offset_y: rawStyle.shadow_offset_y ?? tplStyle.shadow_offset_y ?? 2,
-    shadow_blur: rawStyle.shadow_blur ?? tplStyle.shadow_blur ?? 6,
-    glow_enabled: rawStyle.glow_enabled ?? tplStyle.glow_enabled ?? false,
-    glow_color: rawStyle.glow_color || tplStyle.glow_color || '#00F0FF',
-    glow_blur: rawStyle.glow_blur ?? tplStyle.glow_blur ?? 12,
-    background_enabled: rawStyle.background_enabled ?? tplStyle.background_enabled ?? rawStyle.has_background ?? false,
-    background_color: rawStyle.background_color || tplStyle.background_color || '#000000',
-    background_padding_x: rawStyle.background_padding_x ?? tplStyle.background_padding_x ?? 12,
-    background_padding_y: rawStyle.background_padding_y ?? tplStyle.background_padding_y ?? 6,
-    background_corner_radius: rawStyle.background_corner_radius ?? tplStyle.background_corner_radius ?? 8,
+    font_family: (hasUserCustomEdits ? rawStyle.font_family : (tplStyle.font_family || rawStyle.font_family)) || 'Montserrat',
+    font_size: (hasUserCustomEdits ? rawStyle.font_size : (tplStyle.font_size || rawStyle.font_size)) || 44,
+    font_weight: (hasUserCustomEdits ? rawStyle.font_weight : (tplStyle.font_weight || rawStyle.font_weight)) || '900',
+    text_transform: (hasUserCustomEdits ? rawStyle.text_transform : (tplStyle.text_transform || rawStyle.text_transform)) || 'none',
+    letter_spacing: (hasUserCustomEdits ? rawStyle.letter_spacing : (tplStyle.letter_spacing ?? rawStyle.letter_spacing)) ?? 0,
+    line_height: (hasUserCustomEdits ? rawStyle.line_height : (tplStyle.line_height ?? rawStyle.line_height)) ?? 1.25,
+    primary_color: (hasUserCustomEdits ? (rawStyle.primary_color || rawStyle.color) : (tplStyle.primary_color || rawStyle.primary_color || rawStyle.color)) || '#FFFFFF',
+    highlight_color: (hasUserCustomEdits ? rawStyle.highlight_color : (tplStyle.highlight_color || rawStyle.highlight_color)) || '#FFD700',
+    outline_enabled: (hasUserCustomEdits ? rawStyle.outline_enabled : (tplStyle.outline_enabled ?? rawStyle.outline_enabled)) ?? Boolean(tplStyle.outline_width ?? rawStyle.stroke_width),
+    outline_color: (hasUserCustomEdits ? (rawStyle.outline_color || rawStyle.stroke_color) : (tplStyle.outline_color || rawStyle.outline_color || rawStyle.stroke_color)) || '#000000',
+    outline_width: (hasUserCustomEdits ? (rawStyle.outline_width ?? rawStyle.stroke_width) : (tplStyle.outline_width ?? rawStyle.outline_width ?? rawStyle.stroke_width)) ?? 3,
+    shadow_enabled: (hasUserCustomEdits ? (rawStyle.shadow_enabled ?? rawStyle.has_shadow) : (tplStyle.shadow_enabled ?? rawStyle.shadow_enabled ?? rawStyle.has_shadow)) ?? true,
+    shadow_color: (hasUserCustomEdits ? rawStyle.shadow_color : (tplStyle.shadow_color || rawStyle.shadow_color)) || '#000000',
+    shadow_offset_x: (hasUserCustomEdits ? rawStyle.shadow_offset_x : (tplStyle.shadow_offset_x ?? rawStyle.shadow_offset_x)) ?? 0,
+    shadow_offset_y: (hasUserCustomEdits ? rawStyle.shadow_offset_y : (tplStyle.shadow_offset_y ?? rawStyle.shadow_offset_y)) ?? 2,
+    shadow_blur: (hasUserCustomEdits ? rawStyle.shadow_blur : (tplStyle.shadow_blur ?? rawStyle.shadow_blur)) ?? 6,
+    glow_enabled: (hasUserCustomEdits ? rawStyle.glow_enabled : (tplStyle.glow_enabled ?? rawStyle.glow_enabled)) ?? false,
+    glow_color: (hasUserCustomEdits ? rawStyle.glow_color : (tplStyle.glow_color || rawStyle.glow_color)) || '#00F0FF',
+    glow_blur: (hasUserCustomEdits ? rawStyle.glow_blur : (tplStyle.glow_blur ?? rawStyle.glow_blur)) ?? 12,
+    background_enabled: (hasUserCustomEdits ? (rawStyle.background_enabled ?? rawStyle.has_background) : (tplStyle.background_enabled ?? rawStyle.background_enabled ?? rawStyle.has_background)) ?? false,
+    background_color: (hasUserCustomEdits ? rawStyle.background_color : (tplStyle.background_color || rawStyle.background_color)) || '#000000',
+    background_padding_x: (hasUserCustomEdits ? rawStyle.background_padding_x : (tplStyle.background_padding_x ?? rawStyle.background_padding_x)) ?? 12,
+    background_padding_y: (hasUserCustomEdits ? rawStyle.background_padding_y : (tplStyle.background_padding_y ?? rawStyle.background_padding_y)) ?? 6,
+    background_corner_radius: (hasUserCustomEdits ? rawStyle.background_corner_radius : (tplStyle.background_corner_radius ?? rawStyle.background_corner_radius)) ?? 8,
   };
 
   const default_layout: LayoutConfig = {

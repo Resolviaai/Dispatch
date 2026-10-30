@@ -332,9 +332,20 @@ class DispatchNativeBridge(
     @JavascriptInterface
 
     fun openCustomTab(url: String): Boolean {
-        val isAllowed = url.startsWith("https://dispatch-cloud.resolviaai.workers.dev/") ||
-            url.startsWith("https://accounts.google.com/") ||
-            url.startsWith("https://resolviaai.github.io/")
+        val lower = url.lowercase()
+        val isAllowed = lower.startsWith("https://dispatch-cloud.resolviaai.workers.dev/") ||
+            lower.startsWith("https://accounts.google.com/") ||
+            lower.startsWith("https://resolviaai.github.io/") ||
+            lower.startsWith("https://www.facebook.com/") ||
+            lower.startsWith("https://m.facebook.com/") ||
+            lower.startsWith("https://facebook.com/") ||
+            lower.startsWith("https://api.instagram.com/") ||
+            lower.startsWith("https://www.instagram.com/") ||
+            lower.startsWith("https://instagram.com/") ||
+            lower.startsWith("https://www.linkedin.com/") ||
+            lower.startsWith("https://linkedin.com/") ||
+            lower.startsWith("https://twitter.com/") ||
+            lower.startsWith("https://x.com/")
         if (!isAllowed) return false
         return try {
             val builder = androidx.browser.customtabs.CustomTabsIntent.Builder()
