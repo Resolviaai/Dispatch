@@ -1,41 +1,99 @@
 import { AnimationConfig, CaptionGroup, CaptionTrack, LayerType, LayoutConfig, StyleConfig, Word } from './types';
 
+function getSavedTemplate(): { style?: Partial<StyleConfig>; layout?: Partial<LayoutConfig>; anim?: Partial<AnimationConfig> } {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('dispatch_default_template');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const c = parsed?.captions || parsed?.template?.captions || parsed?.default_style;
+        if (c && typeof c === 'object') {
+          return {
+            style: {
+              font_family: c.font_family,
+              font_size: c.font_size,
+              font_weight: c.font_weight,
+              text_transform: c.all_caps ? 'uppercase' : (c.text_transform || 'none'),
+              letter_spacing: c.letter_spacing,
+              line_height: c.line_height,
+              primary_color: c.primary_color,
+              highlight_color: c.highlight_color,
+              outline_enabled: c.outline_enabled,
+              outline_color: c.outline_color,
+              outline_width: c.outline_width,
+              shadow_enabled: c.shadow_enabled,
+              shadow_color: c.shadow_color,
+              shadow_offset_x: c.shadow_offset_x,
+              shadow_offset_y: c.shadow_offset_y,
+              shadow_blur: c.shadow_blur,
+              glow_enabled: c.glow_enabled,
+              glow_color: c.glow_color,
+              glow_blur: c.glow_blur,
+              background_enabled: c.background_enabled,
+              background_color: c.background_color,
+              background_padding_x: c.background_padding_x,
+              background_padding_y: c.background_padding_y,
+              background_corner_radius: c.background_corner_radius,
+            },
+            layout: {
+              position_y: typeof c.position_y === 'number' ? c.position_y : undefined,
+              position_x: typeof c.position_x === 'number' ? c.position_x : undefined,
+              alignment: c.alignment,
+              scale: c.scale,
+            },
+            anim: c.animation_config || (c.animation ? { type: c.animation } : undefined),
+          };
+        }
+      }
+    } catch {}
+  }
+  return {};
+}
+
 export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: number): CaptionTrack {
   const source = raw && typeof raw === 'object' ? raw as Record<string, any> : {};
   const rawStyle = source.default_style || {};
   const rawLayout = source.default_layout || {};
   const rawAnimation = source.default_animation || {};
 
+  const savedTpl = getSavedTemplate();
+  const tplStyle = savedTpl.style || {};
+  const tplLayout = savedTpl.layout || {};
+  const tplAnim = savedTpl.anim || {};
+
   const default_style: StyleConfig = {
-    font_family: rawStyle.font_family || 'Montserrat',
-    font_size: rawStyle.font_size || 44,
-    font_weight: rawStyle.font_weight || '900',
-    text_transform: rawStyle.text_transform || 'none',
-    letter_spacing: rawStyle.letter_spacing || 0,
-    line_height: rawStyle.line_height || 1.25,
-    primary_color: rawStyle.primary_color || rawStyle.color || '#FFFF00',
-    highlight_color: rawStyle.highlight_color || '#FFFFFF',
-    outline_enabled: rawStyle.outline_enabled ?? Boolean(rawStyle.stroke_width),
-    outline_color: rawStyle.outline_color || rawStyle.stroke_color || '#000000',
-    outline_width: rawStyle.outline_width || rawStyle.stroke_width || 3,
-    shadow_enabled: rawStyle.shadow_enabled ?? rawStyle.has_shadow ?? true,
-    shadow_color: rawStyle.shadow_color || '#000000',
-    shadow_offset_x: rawStyle.shadow_offset_x || 0,
-    shadow_offset_y: rawStyle.shadow_offset_y || 2,
-    shadow_blur: rawStyle.shadow_blur || 6,
-    background_enabled: rawStyle.background_enabled ?? rawStyle.has_background ?? false,
-    background_color: rawStyle.background_color || '#000000',
-    background_padding_x: rawStyle.background_padding_x || 12,
-    background_padding_y: rawStyle.background_padding_y || 6,
-    background_corner_radius: rawStyle.background_corner_radius || 8,
+    font_family: rawStyle.font_family || tplStyle.font_family || 'Montserrat',
+    font_size: rawStyle.font_size || tplStyle.font_size || 44,
+    font_weight: rawStyle.font_weight || tplStyle.font_weight || '900',
+    text_transform: rawStyle.text_transform || tplStyle.text_transform || 'none',
+    letter_spacing: rawStyle.letter_spacing ?? tplStyle.letter_spacing ?? 0,
+    line_height: rawStyle.line_height ?? tplStyle.line_height ?? 1.25,
+    primary_color: rawStyle.primary_color || rawStyle.color || tplStyle.primary_color || '#FFFF00',
+    highlight_color: rawStyle.highlight_color || tplStyle.highlight_color || '#FFFFFF',
+    outline_enabled: rawStyle.outline_enabled ?? tplStyle.outline_enabled ?? Boolean(rawStyle.stroke_width ?? tplStyle.outline_width),
+    outline_color: rawStyle.outline_color || rawStyle.stroke_color || tplStyle.outline_color || '#000000',
+    outline_width: rawStyle.outline_width ?? rawStyle.stroke_width ?? tplStyle.outline_width ?? 3,
+    shadow_enabled: rawStyle.shadow_enabled ?? tplStyle.shadow_enabled ?? rawStyle.has_shadow ?? true,
+    shadow_color: rawStyle.shadow_color || tplStyle.shadow_color || '#000000',
+    shadow_offset_x: rawStyle.shadow_offset_x ?? tplStyle.shadow_offset_x ?? 0,
+    shadow_offset_y: rawStyle.shadow_offset_y ?? tplStyle.shadow_offset_y ?? 2,
+    shadow_blur: rawStyle.shadow_blur ?? tplStyle.shadow_blur ?? 6,
+    glow_enabled: rawStyle.glow_enabled ?? tplStyle.glow_enabled ?? false,
+    glow_color: rawStyle.glow_color || tplStyle.glow_color || '#00F0FF',
+    glow_blur: rawStyle.glow_blur ?? tplStyle.glow_blur ?? 12,
+    background_enabled: rawStyle.background_enabled ?? tplStyle.background_enabled ?? rawStyle.has_background ?? false,
+    background_color: rawStyle.background_color || tplStyle.background_color || '#000000',
+    background_padding_x: rawStyle.background_padding_x ?? tplStyle.background_padding_x ?? 12,
+    background_padding_y: rawStyle.background_padding_y ?? tplStyle.background_padding_y ?? 6,
+    background_corner_radius: rawStyle.background_corner_radius ?? tplStyle.background_corner_radius ?? 8,
   };
 
   const default_layout: LayoutConfig = {
-    position_x: rawLayout.position_x ?? 0.5,
-    position_y: rawLayout.position_y ?? 0.78,
-    scale: rawLayout.scale ?? 1.0,
+    position_x: rawLayout.position_x ?? tplLayout.position_x ?? 0.5,
+    position_y: rawLayout.position_y ?? tplLayout.position_y ?? 0.78,
+    scale: rawLayout.scale ?? tplLayout.scale ?? 1.0,
     rotation: rawLayout.rotation ?? 0,
-    alignment: rawLayout.alignment || 'center',
+    alignment: rawLayout.alignment || tplLayout.alignment || 'center',
     max_width: rawLayout.max_width ?? 0.88,
     max_lines: rawLayout.max_lines ?? 2,
   };
