@@ -187,6 +187,7 @@ def init_db():
                 hashtags TEXT,
                 virality_score INTEGER DEFAULT 0,
                 layout_mode TEXT DEFAULT 'fit_blur', -- crop_follow, fit_blur, native_portrait
+                crop_anchor_x REAL DEFAULT 0.5,
                 rendered_layout_mode TEXT,           -- records the framing mode used for current video_path
                 render_stale INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'ready_review', -- ready_review, approved, rejected, published
@@ -404,6 +405,8 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN render_attempt_count INTEGER NOT NULL DEFAULT 0;")
         if "last_render_error" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN last_render_error TEXT;")
+        if "crop_anchor_x" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN crop_anchor_x REAL DEFAULT 0.5;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
 
         # Suggestions are immutable candidate metadata. Legacy selected ranges

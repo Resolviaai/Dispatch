@@ -493,6 +493,7 @@ class TrimClipRequest(BaseModel):
 
 class LayoutModeRequest(BaseModel):
     layout_mode: str
+    crop_anchor_x: Optional[float] = None
 
 
 class YouTubeIngestRequest(BaseModel):
@@ -923,6 +924,7 @@ def get_clip_framing_context(clip: Dict[str, Any]) -> Dict[str, Any]:
         "valid_mode_ids": valid_ids,
         "source_width": source_w,
         "source_height": source_h,
+        "crop_anchor_x": float(clip.get("crop_anchor_x", 0.5) if clip.get("crop_anchor_x") is not None else 0.5),
     }
 
 
@@ -950,6 +952,7 @@ async def list_clips(request: Request):
         c["available_layout_modes"] = ctx["available_layout_modes"]
         c["layout_mode"] = ctx["layout_mode"]
         c["target_aspect"] = ctx["target_aspect"]
+        c["crop_anchor_x"] = ctx["crop_anchor_x"]
         c["is_render_stale"] = clip_render_is_stale(c)
         orig_info = resolve_clip_origin(c)
         c["origin"] = orig_info["origin"]
@@ -1048,6 +1051,7 @@ async def get_clip_detail(clip_id: str, request: Request):
     clip["available_layout_modes"] = ctx["available_layout_modes"]
     clip["layout_mode"] = ctx["layout_mode"]
     clip["target_aspect"] = ctx["target_aspect"]
+    clip["crop_anchor_x"] = ctx["crop_anchor_x"]
     clip["is_render_stale"] = clip_render_is_stale(clip)
     orig_info = resolve_clip_origin(clip)
     clip["origin"] = orig_info["origin"]
@@ -1221,9 +1225,18 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
             detail=f"Invalid layout_mode '{payload.layout_mode}' for {ctx['source_orientation']} source. Allowed: {allowed_list}"
         )
 
+    anchor = clip.get("crop_anchor_x", 0.5)
+    if anchor is None:
+        anchor = 0.5
+    if payload.crop_anchor_x is not None:
+        try:
+            anchor = max(0.0, min(1.0, float(payload.crop_anchor_x)))
+        except (ValueError, TypeError):
+            pass
+
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE clips SET layout_mode = ? WHERE id = ?", (raw_mode, clip_id))
+        cursor.execute("UPDATE clips SET layout_mode = ?, crop_anchor_x = ? WHERE id = ?", (raw_mode, anchor, clip_id))
         conn.commit()
 
     updated_clip = db.get_clip_by_id(clip_id)
@@ -1241,11 +1254,57 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
         "status": "success",
         "clip_id": clip_id,
         "layout_mode": raw_mode,
+        "crop_anchor_x": anchor,
         "source_orientation": updated_ctx["source_orientation"],
         "target_aspect": updated_ctx["target_aspect"],
         "available_layout_modes": updated_ctx["available_layout_modes"],
         "rendered_layout_mode": rendered_mode,
         "is_render_stale": is_stale
+    }
+
+
+
+@app.post("/api/clips/{clip_id}/auto_reframe")
+@_serialize_clip_mutation
+async def handle_auto_reframe(clip_id: str, request: Request):
+    """Analyze clip video with lightweight face tracking and update crop_anchor_x."""
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+
+    source_path = resolve_clip_source_path(clip)
+    if not source_path or not source_path.exists():
+        vp = clip.get("video_path")
+        if vp and Path(vp).exists():
+            source_path = Path(vp)
+
+    start_time = float(clip.get("start_time") or 0.0)
+    end_time = float(clip.get("end_time") or 0.0)
+
+    from dispatch.video_engine.tracker import detect_subject_crop_anchor
+    anchor = 0.5
+    if source_path and source_path.exists():
+        anchor = await asyncio.to_thread(detect_subject_crop_anchor, source_path, start_time, end_time)
+
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE clips SET crop_anchor_x = ?, layout_mode = 'crop_916' WHERE id = ?", (anchor, clip_id))
+        conn.commit()
+
+    updated_clip = db.get_clip_by_id(clip_id)
+    updated_ctx = get_clip_framing_context(updated_clip)
+
+    return {
+        "status": "success",
+        "clip_id": clip_id,
+        "crop_anchor_x": anchor,
+        "layout_mode": "crop_916",
+        "available_layout_modes": updated_ctx["available_layout_modes"],
+        "target_aspect": updated_ctx["target_aspect"]
     }
 
 

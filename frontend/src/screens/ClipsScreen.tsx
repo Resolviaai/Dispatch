@@ -120,12 +120,19 @@ function buildCloudCaptionGroups(
   }));
 }
 
+const captionTrackCache = new Map<string, { track: CaptionTrack; revision: number; timestamp: number }>();
+
 async function loadClipCaptionTrack(
   clipId: string,
   duration: number,
   pcHost: string,
   parentSignal: AbortSignal,
+  expectedRevision?: number,
 ): Promise<CaptionTrack> {
+  const cached = captionTrackCache.get(clipId);
+  if (cached && (expectedRevision === undefined || cached.revision === expectedRevision)) {
+    return cached.track;
+  }
   const controller = new AbortController();
   let timedOut = false;
   const abortFromParent = () => controller.abort();
@@ -150,10 +157,11 @@ async function loadClipCaptionTrack(
       if (controller.signal.aborted) throw error;
       return null;
     });
-    if (rawData && Array.isArray(rawData.groups)) {
-      return normalizeCaptionTrack(rawData, clipId, duration);
-    }
-    return normalizeCaptionTrack({ clip_id: clipId, groups: [] }, clipId, duration);
+    const normalized = (rawData && Array.isArray(rawData.groups))
+      ? normalizeCaptionTrack(rawData, clipId, duration)
+      : normalizeCaptionTrack({ clip_id: clipId, groups: [] }, clipId, duration);
+    captionTrackCache.set(clipId, { track: normalized, revision: expectedRevision ?? 0, timestamp: Date.now() });
+    return normalized;
   } catch (error) {
     if (timedOut) throw new Error('Caption loading timed out. Check the PC connection and retry.');
     throw error;
@@ -216,6 +224,7 @@ export interface ClipItem {  id: string;
   hashtags?: string;
   virality_score: number;
   layout_mode?: LayoutMode;
+  crop_anchor_x?: number;
   rendered_layout_mode?: string;
   is_render_stale?: boolean;
   status: string;
@@ -238,6 +247,7 @@ export interface ClipItem {  id: string;
   origin?: 'phone' | 'youtube';
   youtube_video_id?: string | null;
   source_title?: string | null;
+  caption_data?: any;
   /** Cloud caption payload: an edited track (groups) or a transcript seed (words). */
   captions?: {
     words?: Array<{ w?: string; text?: string; word?: string; start: number; end: number }>;
@@ -1087,6 +1097,8 @@ interface FramedVideoStageProps {
   clipEnd?: number;
   clipDuration?: number;
   layoutMode: LayoutMode;
+  cropAnchorX?: number;
+  onCropAnchorChange?: (newAnchor: number, isFinal: boolean) => void;
   sourceOrientation?: 'portrait' | 'landscape';
   targetAspect?: '16:9' | '9:16';
   isPlaying: boolean;
@@ -1116,6 +1128,8 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   fallbackVideoUrl,
   poster,
   layoutMode,
+  cropAnchorX = 0.5,
+  onCropAnchorChange,
   sourceOrientation = 'portrait',
   targetAspect,
   isPlaying,
@@ -1261,6 +1275,57 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
     setVideoFailed(false);
   }, [sourceVideoUrl, _videoUrl, preferRendered, layoutMode]);
 
+  const isDraggingAnchor = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartAnchor = useRef(cropAnchorX);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isCrop) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    isDraggingAnchor.current = true;
+    dragStartX.current = e.clientX;
+    dragStartAnchor.current = cropAnchorX;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (_) {}
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingAnchor.current || !isCrop) return;
+    const dx = e.clientX - dragStartX.current;
+    const containerW = stageBounds.width || 320;
+    const deltaAnchor = -dx / (containerW * 1.3);
+    const newAnchor = Math.max(0.0, Math.min(1.0, dragStartAnchor.current + deltaAnchor));
+    onCropAnchorChange?.(newAnchor, false);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingAnchor.current) return;
+    isDraggingAnchor.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+    const dx = e.clientX - dragStartX.current;
+    const containerW = stageBounds.width || 320;
+    const deltaAnchor = -dx / (containerW * 1.3);
+    const newAnchor = Math.max(0.0, Math.min(1.0, dragStartAnchor.current + deltaAnchor));
+    if (Math.abs(dx) > 5) {
+      onCropAnchorChange?.(newAnchor, true);
+    } else {
+      if (onVideoClick) onVideoClick();
+      else onTogglePlay?.();
+    }
+  };
+
+  const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingAnchor.current) return;
+    isDraggingAnchor.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+    onCropAnchorChange?.(cropAnchorX, true);
+  };
+
   const computedMaxHeight = maxHeight || (isCompact ? '220px' : '100%');
 
   return (
@@ -1290,15 +1355,20 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               willChange: 'max-width, max-height',
             }
         }
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onClick={(e) => {
           e.stopPropagation();
+          if (isCrop) return;
           if (onVideoClick) {
             onVideoClick();
           } else {
             onTogglePlay?.();
           }
         }}
-        className="relative bg-black rounded-xl border border-border overflow-hidden shadow-2xl flex items-center justify-center select-none cursor-pointer"
+        className="relative bg-black rounded-xl border border-border overflow-hidden shadow-2xl flex items-center justify-center select-none cursor-pointer touch-none"
       >
         {activeVideoUrl ? (
           <>
@@ -1309,7 +1379,11 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 src={activeVideoUrl}
                 muted
                 playsInline
-                preload="auto"
+                preload="none"
+                style={{
+                  transform: 'translate3d(0, 0, 0)',
+                  willChange: 'transform',
+                }}
                 aria-hidden="true"
                 onLoadedData={() => {
                   if (videoRef.current && bgVideoRef.current) {
@@ -1329,7 +1403,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               src={activeVideoUrl}
               poster={poster}
               muted={muted}
-              preload="auto"
+              preload="metadata"
               playsInline
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget;
@@ -1363,8 +1437,11 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 bgVideoRef.current?.pause();
               }}
               className={`absolute inset-0 z-10 w-full h-full pointer-events-none will-change-transform ${
-                isCrop ? 'object-cover object-center' : 'object-contain object-center'
+                isCrop ? 'object-cover' : 'object-contain object-center'
               }`}
+              style={{
+                objectPosition: isCrop ? `${Math.round(cropAnchorX * 100)}% center` : 'center center'
+              }}
             />
           </>
         ) : (
@@ -1510,6 +1587,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   // Active Clip Customization Fields
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('crop_follow');
+  const [cropAnchorX, setCropAnchorX] = useState<number>(0.5);
+  const [isAutoReframing, setIsAutoReframing] = useState<boolean>(false);
   const [publishMode, setPublishMode] = useState<'private' | 'unlisted' | 'public'>('private');
   const [hookOverlayText, setHookOverlayText] = useState<string>('');
   const [showHookBanner, setShowHookBanner] = useState<boolean>(true);
@@ -2127,7 +2206,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } else {
       mountedOnceRef.current = true;
     }
-    if (viewMode !== 'library' && viewMode !== 'detail') return;
+    if (viewMode !== 'library') return;
     // 10s poll cadence; background tabs skip polling entirely (battery + no
     // presigned media churn) and an immediate refresh runs on tab return.
     const interval = setInterval(() => {
@@ -2188,18 +2267,48 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       const defaultMode = currentClip.source_orientation === 'landscape' ? 'crop_916' : 'native_916';
       setLayoutMode(defaultMode as LayoutMode);
     }
+    setCropAnchorX(typeof currentClip.crop_anchor_x === 'number' ? currentClip.crop_anchor_x : 0.5);
 
-    // Load captions independently; the timeline remains mounted while this request runs.
-    setCaptionLoadingState('loading');
-    setCaptionErrorMessage(null);
-    setCaptionClipId(null); // Clear previous track association immediately
+    // Fast-path: Check in-memory cache or pre-fetched caption_data for 0ms instant display
+    const currentRev = Number(currentClip.range_revision ?? 0);
+    const cachedEntry = captionTrackCache.get(currentClip.id);
+    let seededFromLocal = false;
+
+    if (cachedEntry && cachedEntry.revision === currentRev) {
+      resetHistory(cachedEntry.track);
+      setCaptionClipId(currentClip.id);
+      setCaptionLoadingState(cachedEntry.track.groups.length > 0 ? 'success' : 'empty');
+      setSaveStatus('saved');
+      if (cachedEntry.track.groups.length > 0) setSelectedGroupId(cachedEntry.track.groups[0].id);
+      seededFromLocal = true;
+    } else if (currentClip.caption_data && typeof currentClip.caption_data === 'string' && currentClip.caption_data.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(currentClip.caption_data);
+        if (parsed && Array.isArray(parsed.groups)) {
+          const track = normalizeCaptionTrack(parsed, currentClip.id, currentClip.duration || 40);
+          captionTrackCache.set(currentClip.id, { track, revision: currentRev, timestamp: Date.now() });
+          resetHistory(track);
+          setCaptionClipId(currentClip.id);
+          setCaptionLoadingState(track.groups.length > 0 ? 'success' : 'empty');
+          setSaveStatus('saved');
+          if (track.groups.length > 0) setSelectedGroupId(track.groups[0].id);
+          seededFromLocal = true;
+        }
+      } catch (_) {}
+    }
+
+    if (!seededFromLocal) {
+      setCaptionLoadingState('loading');
+      setCaptionErrorMessage(null);
+      setCaptionClipId(null);
+    }
 
     captionRequestControllerRef.current?.abort();
     const controller = new AbortController();
     captionRequestControllerRef.current = controller;
     let isCurrentClip = true;
     if (!isCloudMode) {
-      loadClipCaptionTrack(currentClip.id, currentClip.duration || 40, pcHost, controller.signal)
+      loadClipCaptionTrack(currentClip.id, currentClip.duration || 40, pcHost, controller.signal, currentRev)
         .then((track) => {
           if (!isCurrentClip) return;
           resetHistory(track);
@@ -2303,25 +2412,28 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       };
     }
 
-    const timer = setTimeout(() => {
-      fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { headers: getAuthHeaders(), signal: controller.signal })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((fsData) => {
-          if (reqId === filmstripReqIdRef.current && fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
-            setFilmstripFrames(fsData.frames.map((f: string) => (f.startsWith('http') ? f : apiUrl(f, pcHost))));
-          }
-        })
-        .catch(() => { });
-    }, 700);
+    let timer: any = null;
+    if (viewMode === 'studio') {
+      timer = setTimeout(() => {
+        fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { headers: getAuthHeaders(), signal: controller.signal })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((fsData) => {
+            if (reqId === filmstripReqIdRef.current && fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
+              setFilmstripFrames(fsData.frames.map((f: string) => (f.startsWith('http') ? f : apiUrl(f, pcHost))));
+            }
+          })
+          .catch(() => { });
+      }, 700);
+    }
 
     return () => {
       isCurrentClip = false;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       captionRequestControllerRef.current?.abort();
       captionRequestControllerRef.current = null;
       controller.abort();
     };
-  }, [currentClip?.id, currentClip?.range_revision, currentClip?.thumbnail_url, currentClip?.thumbnail_version, pcHost, isCloudMode, offlineReadOnly]);
+  }, [currentClip?.id, currentClip?.range_revision, pcHost, isCloudMode, offlineReadOnly, viewMode]);
 
   // Source bounds for mapping local clip time (0 -> duration) to source video time
   const clipStart = currentClip ? (currentClip.start_time || 0) : 0;
@@ -2717,14 +2829,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
   };
 
-  const handleLayoutChange = async (newMode: LayoutMode) => {
+  const handleLayoutChange = async (newMode: LayoutMode, newAnchor?: number) => {
     if (offlineReadOnly) {
       setFeedback('Reconnect to change clip framing.');
       return;
     }
     setLayoutMode(newMode);
+    if (typeof newAnchor === 'number') {
+      setCropAnchorX(newAnchor);
+    }
     if (!currentClip) return;
 
+    const effAnchor = typeof newAnchor === 'number' ? newAnchor : cropAnchorX;
     const availModes = (currentClip.available_layout_modes && currentClip.available_layout_modes.length > 0)
       ? currentClip.available_layout_modes
       : (currentClip.source_orientation === 'landscape' ? DEFAULT_LANDSCAPE_MODES : DEFAULT_PORTRAIT_MODES);
@@ -2733,28 +2849,28 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     // 1. INSTANT 0ms Optimistic In-Memory Update:
     setReadyClips((prev) =>
-      prev.map((c) => (c.id === currentClip.id ? { ...c, layout_mode: newMode, target_aspect: immediateTargetAspect, is_render_stale: true } : c))
+      prev.map((c) => (c.id === currentClip.id ? { ...c, layout_mode: newMode, crop_anchor_x: effAnchor, target_aspect: immediateTargetAspect, is_render_stale: true } : c))
     );
     setApprovedClips((prev) =>
-      prev.map((c) => (c.id === currentClip.id ? { ...c, layout_mode: newMode, target_aspect: immediateTargetAspect, is_render_stale: true } : c))
+      prev.map((c) => (c.id === currentClip.id ? { ...c, layout_mode: newMode, crop_anchor_x: effAnchor, target_aspect: immediateTargetAspect, is_render_stale: true } : c))
     );
 
-    // 2. Non-blocking asynchronous persistence to server & background re-render
+    // 2. Non-blocking asynchronous persistence to server
     try {
       fetch(apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ layout_mode: newMode }),
+        body: JSON.stringify({ layout_mode: newMode, crop_anchor_x: effAnchor }),
       }).then(async (res) => {
         if (res.ok) {
           const data = await res.json();
-
           setReadyClips((prev) =>
             prev.map((c) =>
               c.id === currentClip.id
                 ? {
                   ...c,
                   layout_mode: data.layout_mode || newMode,
+                  crop_anchor_x: typeof data.crop_anchor_x === 'number' ? data.crop_anchor_x : effAnchor,
                   target_aspect: data.target_aspect,
                   source_orientation: data.source_orientation,
                   available_layout_modes: data.available_layout_modes,
@@ -2764,14 +2880,54 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 : c
             )
           );
-
-// Layout changed optimistically; server marks render_stale for publish/export
         }
       }).catch((e) => {
         console.warn('Failed to persist layout framing mode:', e);
       });
     } catch (e) {
       console.warn('Failed to persist layout framing mode:', e);
+    }
+  };
+
+  const handleAutoReframe = async () => {
+    if (!currentClip || isAutoReframing) return;
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to use Auto-Reframe.');
+      return;
+    }
+    setIsAutoReframing(true);
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/auto_reframe`, pcHost), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const detectedAnchor = typeof data.crop_anchor_x === 'number' ? data.crop_anchor_x : 0.5;
+        setCropAnchorX(detectedAnchor);
+        setLayoutMode('crop_916');
+        setReadyClips((prev) =>
+          prev.map((c) =>
+            c.id === currentClip.id
+              ? {
+                ...c,
+                layout_mode: 'crop_916',
+                crop_anchor_x: detectedAnchor,
+                target_aspect: '9:16',
+                is_render_stale: true,
+              }
+              : c
+          )
+        );
+        setFeedback(`Subject centered (${Math.round(detectedAnchor * 100)}%)`);
+      } else {
+        setFeedback('Could not center subject automatically.');
+      }
+    } catch (e) {
+      console.warn('Auto-reframe error:', e);
+      setFeedback('Auto-reframe failed.');
+    } finally {
+      setIsAutoReframing(false);
     }
   };
 
@@ -3688,41 +3844,50 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               firstClip?.origin === 'youtube' ||
               firstClip?.youtube_video_id ||
               sessionId.startsWith('yt_') ||
-              sessionId === 'Imported Video' ||
-              clipsInSession.some((c) => c.origin === 'youtube' || c.youtube_video_id || c.source_aspect_ratio === '16:9')
+              clipsInSession.some((c) => c.origin === 'youtube' || c.youtube_video_id)
             );
-            const sessionOrigin: 'phone' | 'youtube' = isYt ? 'youtube' : 'phone';
+            const isPhone = Boolean(
+              firstClip?.origin === 'phone' ||
+              (sessionId.startsWith('sess_') && !isYt)
+            );
+            const sessionOrigin: 'phone' | 'youtube' | 'import' = isYt ? 'youtube' : isPhone ? 'phone' : 'import';
             const sessionLabel = sessionId.startsWith('yt_')
               ? (firstClip?.source_title || `YouTube ${sessionId.replace('yt_', '')}`)
               : sessionId === 'Imported Video'
-                ? (sessionOrigin === 'youtube' ? 'YouTube Imports' : 'Imported Video')
+                ? (sessionOrigin === 'youtube' ? 'YouTube Imports' : 'Imported Videos')
                 : `Session ${sessionId.replace('sess_', '')}`;
+
+            const showGroupHeader = groupedSessions.length > 1;
 
             return (
               <section key={sessionId}>
-                {/* Session section header — clean origin & title, no noisy technical hashes */}
-                <div className="px-4 pt-4 pb-1 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span
-                      className="w-4 h-4 rounded bg-surface-2 flex items-center justify-center shrink-0"
-                      title={sessionOrigin === 'phone' ? 'Camera recording' : 'YouTube video'}
-                    >
-                      {sessionOrigin === 'phone' ? (
-                        <Camera size={10} className="text-text-muted" />
-                      ) : (
-                        <Youtube size={10} className="text-danger" />
-                      )}
-                    </span>
-                    <span className="text-xs font-medium uppercase tracking-wider text-text-muted truncate">
-                      {sessionLabel}
+                {/* Session section header — only shown when multiple distinct sessions exist */}
+                {showGroupHeader && (
+                  <div className="px-4 pt-3 pb-1 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span
+                        className="w-4 h-4 rounded bg-surface-2 flex items-center justify-center shrink-0"
+                        title={sessionOrigin === 'phone' ? 'Camera recording' : sessionOrigin === 'youtube' ? 'YouTube video' : 'Imported video'}
+                      >
+                        {sessionOrigin === 'phone' ? (
+                          <Camera size={10} className="text-text-muted" />
+                        ) : sessionOrigin === 'youtube' ? (
+                          <Youtube size={10} className="text-danger" />
+                        ) : (
+                          <Film size={10} className="text-primary" />
+                        )}
+                      </span>
+                      <span className="text-xs font-semibold text-text-secondary truncate">
+                        {sessionLabel}
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-mono text-text-muted tabular-nums shrink-0">
+                      {clipsInSession.length}&nbsp;{clipsInSession.length === 1 ? 'clip' : 'clips'}
                     </span>
                   </div>
-                  <span className="text-xs text-text-muted tabular-nums shrink-0">
-                    {clipsInSession.length}&nbsp;{clipsInSession.length === 1 ? 'clip' : 'clips'}
-                  </span>
-                </div>
+                )}
 
-                <div className="px-4">
+                <div className={`px-4 ${!showGroupHeader ? 'pt-1' : ''}`}>
                   {clipsInSession.map((clip) => {
                     const isUploaded = clip.status === 'approved' || clip.status === 'published';
                     const isPublished = clip.status === 'published' || Boolean(clip.remote_id || clip.remote_url);
@@ -3970,6 +4135,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               clipEnd={clipEnd}
               clipDuration={clipDuration}
               layoutMode={layoutMode}
+              cropAnchorX={cropAnchorX}
+              onCropAnchorChange={(newAnchor, isFinal) => {
+                setCropAnchorX(newAnchor);
+                if (isFinal) {
+                  handleLayoutChange(layoutMode, newAnchor);
+                }
+              }}
               sourceOrientation={(currentClip.source_orientation || (currentClip.origin === 'youtube' || currentClip.youtube_video_id || currentClip.source_aspect_ratio === '16:9' ? 'landscape' : 'portrait'))}
               targetAspect={currentClip.target_aspect}
               isPlaying={isPlaying}
@@ -4308,6 +4480,63 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         </button>
                       ))}
                     </div>
+                    {(layoutMode === 'crop_916' || layoutMode === 'crop_follow') && (
+                      <div className="mt-2.5 p-2 rounded-xl bg-surface-2 border border-border flex flex-col gap-2">
+                        <div className="flex items-center justify-between text-[11px] leading-tight">
+                          <span className="text-text-muted font-medium">Crop Anchor ({Math.round(cropAnchorX * 100)}%)</span>
+                          <span className="text-[10px] text-text-muted">Drag preview or tap preset</span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-1.5 w-full">
+                          <button
+                            type="button"
+                            onClick={() => handleLayoutChange('crop_916', 0.25)}
+                            className={`h-7 px-1 rounded-lg text-[11px] font-medium text-center flex items-center justify-center active:scale-[0.98] transition-all ${
+                              Math.abs(cropAnchorX - 0.25) < 0.08
+                                ? 'chip-selected font-semibold shadow-sm'
+                                : 'bg-surface-1 text-text-secondary hover:text-text-main'
+                            }`}
+                          >
+                            Left
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleLayoutChange('crop_916', 0.50)}
+                            className={`h-7 px-1 rounded-lg text-[11px] font-medium text-center flex items-center justify-center active:scale-[0.98] transition-all ${
+                              Math.abs(cropAnchorX - 0.50) < 0.08
+                                ? 'chip-selected font-semibold shadow-sm'
+                                : 'bg-surface-1 text-text-secondary hover:text-text-main'
+                            }`}
+                          >
+                            Center
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleLayoutChange('crop_916', 0.75)}
+                            className={`h-7 px-1 rounded-lg text-[11px] font-medium text-center flex items-center justify-center active:scale-[0.98] transition-all ${
+                              Math.abs(cropAnchorX - 0.75) < 0.08
+                                ? 'chip-selected font-semibold shadow-sm'
+                                : 'bg-surface-1 text-text-secondary hover:text-text-main'
+                            }`}
+                          >
+                            Right
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleAutoReframe}
+                            disabled={isAutoReframing}
+                            className={`h-7 px-1 rounded-lg text-[11px] font-medium text-center flex items-center justify-center gap-1 active:scale-[0.98] transition-all ${
+                              isAutoReframing
+                                ? 'bg-primary/20 text-primary animate-pulse'
+                                : 'bg-surface-1 text-primary hover:bg-surface-2 font-semibold border border-primary/30'
+                            }`}
+                            title="Auto-detect speaker and center crop"
+                          >
+                            <Sparkles size={11} className={isAutoReframing ? 'animate-spin' : ''} />
+                            <span>{isAutoReframing ? 'Detecting…' : 'Auto'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </section>
                 </>
               );
@@ -4426,6 +4655,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             clipEnd={clipEnd}
             clipDuration={clipDuration}
             layoutMode={layoutMode}
+            cropAnchorX={cropAnchorX}
+            onCropAnchorChange={(newAnchor, isFinal) => {
+              setCropAnchorX(newAnchor);
+              if (isFinal) {
+                handleLayoutChange(layoutMode, newAnchor);
+              }
+            }}
             sourceOrientation={(currentClip.source_orientation || (currentClip.origin === 'youtube' || currentClip.youtube_video_id || currentClip.source_aspect_ratio === '16:9' ? 'landscape' : 'portrait'))}
             targetAspect={currentClip.target_aspect}
             isPlaying={isPlaying}
@@ -4776,6 +5012,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 clipEnd={clipEnd}
                 clipDuration={clipDuration}
                 layoutMode={layoutMode}
+                cropAnchorX={cropAnchorX}
+                onCropAnchorChange={(newAnchor, isFinal) => {
+                  setCropAnchorX(newAnchor);
+                  if (isFinal) {
+                    handleLayoutChange(layoutMode, newAnchor);
+                  }
+                }}
                 sourceOrientation={(currentClip.source_orientation || (currentClip.origin === 'youtube' || currentClip.youtube_video_id || currentClip.source_aspect_ratio === '16:9' ? 'landscape' : 'portrait'))}
                 targetAspect={currentClip.target_aspect}
                 isPlaying={isPlaying}
@@ -4978,7 +5221,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                           <button
                             type="button"
                             onClick={() => setFeedback(`To connect ${p.label}, open Settings -> Connected Accounts`)}
-                            className="shrink-0 px-3 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-[11px] font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all"
+                            className="shrink-0 px-3.5 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-white/[0.08] text-xs font-medium text-text-main active:scale-[0.98] transition-all"
                           >
                             Connect
                           </button>

@@ -774,7 +774,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('instagram')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
+                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-white/[0.08] text-xs font-medium text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
                   >
                     Connect
                   </button>
@@ -805,7 +805,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('facebook')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
+                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-white/[0.08] text-xs font-medium text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
                   >
                     Connect
                   </button>
@@ -836,7 +836,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('linkedin')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
+                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-white/[0.08] text-xs font-medium text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
                   >
                     Connect
                   </button>
@@ -867,7 +867,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('twitter')}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-surface-1 border border-border text-xs font-medium text-text-main transition-colors flex items-center shrink-0"
+                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-white/[0.08] text-xs font-medium text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
                   >
                     Connect
                   </button>

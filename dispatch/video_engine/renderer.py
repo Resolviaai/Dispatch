@@ -64,6 +64,7 @@ def render_clip(
     # Candidate/editor renders preserve source timing so the browser caption overlay and
     # approved render share the same clip-relative timeline.
     sub_opts = subtitle_options or {}
+    crop_anchor_x = sub_opts.get("crop_anchor_x") if sub_opts.get("crop_anchor_x") is not None else (clip_at_start.get("crop_anchor_x") if clip_at_start else None)
     if sub_opts.get("preserve_timing"):
         eff_duration, cuts = max(0.0, end_time - start_time), []
     else:
@@ -192,7 +193,8 @@ def render_clip(
             aspect_ratio=aspect_ratio,
             layout_mode=layout_mode,
             ass_subtitle_path=ass_path,
-            input_v_label="[concat_v]"
+            input_v_label="[concat_v]",
+            crop_anchor_x=crop_anchor_x
         )
 
         full_filter_complex = ";".join(trim_filters) + ";" + framing_filter
@@ -225,7 +227,8 @@ def render_clip(
             aspect_ratio=aspect_ratio,
             layout_mode=layout_mode,
             ass_subtitle_path=ass_path,
-            input_v_label="[0:v]"
+            input_v_label="[0:v]",
+            crop_anchor_x=crop_anchor_x
         )
 
         cmd = [

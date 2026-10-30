@@ -26,7 +26,8 @@ def build_filter_complex(
     aspect_ratio: str,
     layout_mode: str = "fit_blur",
     ass_subtitle_path: Optional[Path] = None,
-    input_v_label: str = "[0:v]"
+    input_v_label: str = "[0:v]",
+    crop_anchor_x: Optional[float] = None
 ) -> Tuple[str, str]:
     """Build FFmpeg filter_complex string for orientation-aware conversion and subtitle burning.
     
@@ -89,8 +90,10 @@ def build_filter_complex(
         if mode in ("crop_916", "crop_follow"):
             # OPTION 1 — CROP 9:16
             # Output: 9:16. 16:9 source cropped vertically to fill 9:16 frame.
+            anchor = 0.5 if crop_anchor_x is None else max(0.0, min(1.0, float(crop_anchor_x)))
+            crop_expr = f"trunc((iw-ow)*{anchor:.4f})"
             filters.append(
-                f"{in_v}crop=w=trunc(ih*9/16/2)*2:h=ih:x=trunc((iw-ow)/2):y=0,scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}[base]"
+                f"{in_v}crop=w=trunc(ih*9/16/2)*2:h=ih:x={crop_expr}:y=0,scale={PORTRAIT_WIDTH}:{PORTRAIT_HEIGHT}[base]"
             )
         elif mode == "fit_blur":
             # OPTION 2 — FIT + BLUR
