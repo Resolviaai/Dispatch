@@ -552,6 +552,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       let failureStatus: string | null = null;
       if (clipCount > 0 || (matchingInbox && (matchingInbox.status === 'COMPLETED' || matchingInbox.status === 'CLIPS_CREATED'))) {
         status = 'ready';
+        failureStatus = null;
       } else if (allStatuses.some(st => st.startsWith('FAILED_') || st.startsWith('ERROR_')) || (matchingInbox && matchingInbox.status === 'FAILED')) {
         failureStatus = allStatuses.find(st => st.startsWith('FAILED_') || st.startsWith('ERROR_')) || matchingInbox?.last_error || null;
         status = 'failed';
@@ -645,7 +646,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         stage: item.stage,
         clipCount,
         youtubeVideoId: item.video_id,
-        errorMessage: item.last_error,
+        errorMessage: clipCount > 0 ? undefined : item.last_error,
         rawInbox: item
       });
     });
@@ -823,9 +824,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     if (!currentSessionDetail) return null;
     const s = currentSessionDetail;
     const ytId = s.youtubeVideoId;
-    const isReady = s.status === 'ready';
-    const isProcessing = s.status === 'processing';
-    const isFailed = s.status === 'failed';
+    const isReady = s.status === 'ready' || s.clipCount > 0;
+    const isProcessing = s.status === 'processing' && s.clipCount === 0;
+    const isFailed = s.status === 'failed' && s.clipCount === 0;
 
     return (
       <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
@@ -980,8 +981,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             )}
           </div>
 
-          {/* FAILED STATUS BANNER WITH DIRECT RETRY */}
-          {s.status === 'failed' && (
+          {/* FAILED STATUS BANNER WITH DIRECT RETRY (Suppressed if clips are ready) */}
+          {isFailed && s.clipCount === 0 && (
             <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs space-y-2">
               <div className="flex items-center gap-2 font-semibold text-danger">
                 <AlertCircle size={15} />

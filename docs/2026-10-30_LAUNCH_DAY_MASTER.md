@@ -60,7 +60,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 [X] TASK 1: Minimal Badging on Sessions & Clips Lists + Clean Origin/ID Inspector in Details
 [X] TASK 2: Notification Center & Activity Sheet (Replacing Header Banners & Refresh Buttons with Pull-to-Refresh)
 [X] TASK 3: Fix 00:00 Duration Display for YouTube / Cloud-Ingested Sessions
-[ ] TASK 4: Reconcile "Ingestion Failed" Session Status with Ready Clips & Fix Clip Video Playback
+[X] TASK 4: Reconcile "Ingestion Failed" Session Status with Ready Clips & Fix Clip Video Playback
 [ ] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
 [ ] TASK 6: Cellular / Wi-Fi Network Upload Selector (Clear 2-Option Radio Switch in Settings)
 [ ] TASK 7: Granular Pipeline Stage Status in Sessions Screen & Session Detail
@@ -145,7 +145,11 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 - **Key Files:**
   - `frontend/src/screens/RecordingsScreen.tsx`
   - `frontend/src/screens/ClipsScreen.tsx`
-  - `frontend/src/captions/FramedVideoStage.tsx`
+- **Resolution & Implementation:**
+  - In `RecordingsScreen.tsx`: Enforced that whenever a session has generated clips (`clipCount > 0`), its status is unequivocally `'ready'`, `failureStatus` is `null`, and `errorMessage` is cleared. In the detail view, `isReady` accounts for `clipCount > 0`, `isFailed` is strictly scoped to `s.status === 'failed' && s.clipCount === 0`, and the red failure banner is fully suppressed when ready clips exist.
+  - In `ClipsScreen.tsx` / `FramedVideoStage`: Added `fallbackVideoUrl` prop and error-handling state fallback chain. If local rendered or local source PC streaming fails (e.g. daemon offline/unreachable), `FramedVideoStage` seamlessly falls back to `edit_window_url`, `remote_url`, or direct public media URLs. Also enabled `remote_url` caching in `stabilizeMediaUrls`.
+  - In caption loading: Added resilient fallback in `loadClipCaptionTrack` catch handlers. If PC caption endpoint fails while daemon is offline, it parses already-present `currentClip.captions` (or `word_timings`) into normalized tracks, ensuring captions remain visible and editable.
+- **Status:** Complete (Verified with frontend unit tests and production asset build).
 
 ---
 

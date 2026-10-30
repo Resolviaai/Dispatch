@@ -1082,6 +1082,7 @@ export function InteractiveCaptionCanvas({
 interface FramedVideoStageProps {
   sourceVideoUrl?: string;
   videoUrl?: string;
+  fallbackVideoUrl?: string;
   clipStart?: number;
   clipEnd?: number;
   clipDuration?: number;
@@ -1112,6 +1113,7 @@ interface FramedVideoStageProps {
 export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   sourceVideoUrl,
   videoUrl: _videoUrl,
+  fallbackVideoUrl,
   poster,
   layoutMode,
   sourceOrientation = 'portrait',
@@ -1137,6 +1139,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
 }) => {
   const [sourceFailed, setSourceFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [fallbackFailed, setFallbackFailed] = useState(false);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
   // High-reliability media resolution:
@@ -1156,11 +1159,15 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   );
   const shouldPreferRendered = preferRendered && layoutMatchesRender;
 
-  const activeVideoUrl = shouldPreferRendered
+  const candidateVideoUrl = shouldPreferRendered
     ? (!videoFailed && _videoUrl ? _videoUrl : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null))
     : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : (!videoFailed && _videoUrl ? _videoUrl : null));
 
-  const isSourceTimebase = Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
+  // If both rendered and source local URLs have failed or are unavailable, fall back resiliently to remote/proxy/edit-window URL
+  const activeVideoUrl = candidateVideoUrl || (!fallbackFailed && fallbackVideoUrl ? fallbackVideoUrl : null);
+
+  const isFallbackTimebase = Boolean(fallbackVideoUrl && activeVideoUrl === fallbackVideoUrl && activeVideoUrl !== _videoUrl);
+  const isSourceTimebase = isFallbackTimebase || Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
 
   // Authoritative aspect ratio determination: strictly governed by sourceOrientation (never tainted by rendered files)
   const isTarget169 = useMemo(() => {
@@ -1335,7 +1342,9 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               }}
               onTimeUpdate={onTimeUpdate}
               onError={() => {
-                if (isSourceTimebase) {
+                if (activeVideoUrl === fallbackVideoUrl) {
+                  setFallbackFailed(true);
+                } else if (isSourceTimebase) {
                   setSourceFailed(true);
                 } else {
                   setVideoFailed(true);
@@ -1722,7 +1731,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       for (const [k, v] of cache) if (v.expires <= now) cache.delete(k);
       if (cache.size > 600) cache.clear();
     }
-    const stable = (field: 'video_url' | 'thumbnail_url' | 'edit_window_url'): string | undefined => {
+    const stable = (field: 'video_url' | 'thumbnail_url' | 'edit_window_url' | 'remote_url'): string | undefined => {
       const raw = clip[field];
       if (!raw) return undefined;
       const url = raw.startsWith('http') ? raw : apiUrl(raw, pcHost);
@@ -1737,6 +1746,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       video_url: stable('video_url'),
       thumbnail_url: stable('thumbnail_url'),
       edit_window_url: stable('edit_window_url'),
+      remote_url: stable('remote_url'),
     };
   }, [pcHost]);
 
@@ -2205,7 +2215,39 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         })
         .catch((err) => {
           if (!isCurrentClip) return;
-          console.warn('Captions unavailable for clip:', err);
+          console.warn('Captions unavailable from PC daemon:', err);
+
+          // Resilient fallback: If the clip already has captions, groups, or word_timings attached, use them
+          const clipDuration = Math.max(0.1, currentClip.duration || 10);
+          const rawCap = currentClip.captions as { words?: unknown[]; groups?: unknown[] } | undefined;
+          const fallbackGroups = rawCap && Array.isArray(rawCap.groups) && rawCap.groups.length > 0 ? rawCap.groups : null;
+          const fallbackWords = (rawCap && Array.isArray(rawCap.words) && rawCap.words.length > 0 ? rawCap.words : null)
+            || ((currentClip as any).word_timings && Array.isArray((currentClip as any).word_timings) && (currentClip as any).word_timings.length > 0 ? (currentClip as any).word_timings : null);
+
+          if (fallbackGroups) {
+            const track = normalizeCaptionTrack({ ...(rawCap as object), clip_id: currentClip.id }, currentClip.id, clipDuration);
+            resetHistory(track);
+            setCaptionClipId(currentClip.id);
+            setCaptionLoadingState('success');
+            setSaveStatus('saved');
+            setSelectedGroupId((track.groups[0]?.id as string | undefined) ?? null);
+            return;
+          }
+
+          if (fallbackWords) {
+            const seeded = normalizeCaptionTrack(
+              { clip_id: currentClip.id, groups: buildCloudCaptionGroups(fallbackWords, clipDuration) },
+              currentClip.id,
+              clipDuration
+            );
+            resetHistory(seeded);
+            setCaptionClipId(currentClip.id);
+            setCaptionLoadingState(seeded.groups.length > 0 ? 'success' : 'empty');
+            setSaveStatus('saved');
+            setSelectedGroupId((seeded.groups[0]?.id as string | undefined) ?? null);
+            return;
+          }
+
           setCaptionLoadingState('error');
           setCaptionErrorMessage(err instanceof Error ? err.message : 'Caption request failed. Retry.');
         });
@@ -3895,6 +3937,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             <FramedVideoStage
               sourceVideoUrl={offlineReadOnly ? undefined : (currentClip.source_video_url ? apiUrl(currentClip.source_video_url, pcHost) : (pcHost ? apiUrl(`/api/clips/${currentClip.id}/source`, pcHost) : undefined))}
               videoUrl={offlineReadOnly ? undefined : (currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined)}
+              fallbackVideoUrl={offlineReadOnly ? undefined : (currentClip.edit_window_url || currentClip.remote_url || (currentClip.video_url && currentClip.video_url.startsWith('http') ? currentClip.video_url : undefined))}
               poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
               preferRendered={true}
               renderedLayoutMode={currentClip.rendered_layout_mode}
@@ -4349,6 +4392,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           <FramedVideoStage
             sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
             videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
+            fallbackVideoUrl={currentClip.edit_window_url || currentClip.remote_url || (currentClip.video_url && currentClip.video_url.startsWith('http') ? currentClip.video_url : undefined)}
             poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
             renderedLayoutMode={currentClip.rendered_layout_mode}
             clipStart={clipStart}
@@ -4523,6 +4567,35 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                               })
                               .catch((err) => {
                                 if (controller.signal.aborted || captionRequestControllerRef.current !== controller) return;
+                                const rawCap = currentClip.captions as { words?: unknown[]; groups?: unknown[] } | undefined;
+                                const fallbackGroups = rawCap && Array.isArray(rawCap.groups) && rawCap.groups.length > 0 ? rawCap.groups : null;
+                                const fallbackWords = (rawCap && Array.isArray(rawCap.words) && rawCap.words.length > 0 ? rawCap.words : null)
+                                  || ((currentClip as any).word_timings && Array.isArray((currentClip as any).word_timings) && (currentClip as any).word_timings.length > 0 ? (currentClip as any).word_timings : null);
+
+                                if (fallbackGroups) {
+                                  const track = normalizeCaptionTrack({ ...(rawCap as object), clip_id: clipId }, clipId, clipDuration);
+                                  resetHistory(track);
+                                  setCaptionClipId(clipId);
+                                  setCaptionLoadingState('success');
+                                  setSaveStatus('saved');
+                                  setSelectedGroupId((track.groups[0]?.id as string | undefined) ?? null);
+                                  return;
+                                }
+
+                                if (fallbackWords) {
+                                  const seeded = normalizeCaptionTrack(
+                                    { clip_id: clipId, groups: buildCloudCaptionGroups(fallbackWords, clipDuration) },
+                                    clipId,
+                                    clipDuration
+                                  );
+                                  resetHistory(seeded);
+                                  setCaptionClipId(clipId);
+                                  setCaptionLoadingState(seeded.groups.length > 0 ? 'success' : 'empty');
+                                  setSaveStatus('saved');
+                                  setSelectedGroupId((seeded.groups[0]?.id as string | undefined) ?? null);
+                                  return;
+                                }
+
                                 setCaptionLoadingState('error');
                                 setCaptionErrorMessage(err instanceof Error ? err.message : 'Caption request failed. Retry.');
                               })
@@ -4668,6 +4741,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               <FramedVideoStage
                 sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
                 videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
+                fallbackVideoUrl={currentClip.edit_window_url || currentClip.remote_url || (currentClip.video_url && currentClip.video_url.startsWith('http') ? currentClip.video_url : undefined)}
                 poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
                 preferRendered={false}
                 renderedLayoutMode={currentClip.rendered_layout_mode}
