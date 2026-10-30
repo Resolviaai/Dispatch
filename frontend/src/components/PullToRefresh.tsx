@@ -95,7 +95,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
-      className={`relative overflow-y-auto ${className}`}
+      className={`relative overflow-y-auto overscroll-contain touch-pan-y ${className}`}
     >
       {/* Pull-to-refresh Visual Indicator Bubble */}
       <div

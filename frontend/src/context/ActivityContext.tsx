@@ -109,7 +109,11 @@ export const ActivityProvider: React.FC<{
     setIsRefreshing(true);
     try {
       const sess = await currentSession().catch(() => null);
-      const token = sess?.access_token;
+      const token =
+        sess?.access_token ||
+        (typeof window !== 'undefined'
+          ? (window as any).DispatchBridge?.getAuthToken?.()
+          : null);
 
       // 1. Fetch Cloud Jobs & Backlog from Worker if authenticated
       if (token) {
@@ -118,7 +122,7 @@ export const ActivityProvider: React.FC<{
             headers: { Authorization: `Bearer ${token}` },
             signal: AbortSignal.timeout(4000),
           }),
-          fetch(`${WORKER_BASE}/clips`, {
+          fetch(`${WORKER_BASE}/clips?limit=1`, {
             headers: { Authorization: `Bearer ${token}` },
             signal: AbortSignal.timeout(4000),
           }),
