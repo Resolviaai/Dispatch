@@ -935,37 +935,58 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           )}
         </section>
 
-        {/* 6. UPLOADS — network behavior toggle, flat row */}
+        {/* 6. UPLOADS — network behavior selector, grouped segmented control */}
         <section className="space-y-2.5">
           <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Uploads</h2>
-
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <span className="flex items-center gap-2 text-sm font-medium text-text-main">
-                <Wifi size={14} className="text-text-muted" />
-                Wi-Fi only upload
+          <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Upload Network Policy">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={wifiOnly}
+              aria-label="Wi-Fi Only"
+              title="Uploads wait for unmetered Wi-Fi connection."
+              onClick={() => {
+                setWifiOnly(true);
+                Bridge.setWifiOnly(true);
+              }}
+              className={`min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-0.5 px-2 py-2 text-xs font-medium transition-all active:scale-[0.98] ${
+                wifiOnly
+                  ? 'bg-surface border border-border-strong text-text-main shadow-sm'
+                  : 'text-text-secondary hover:text-text-main'
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <Wifi size={16} className={wifiOnly ? 'text-primary' : 'text-text-muted'} />
+                <span className="font-semibold">Wi-Fi Only</span>
+              </div>
+              <span className="text-[10px] text-text-muted text-center leading-tight">
+                Uploads wait for unmetered Wi-Fi connection.
               </span>
-              <span className="text-[11px] text-text-muted block mt-0.5">
-                Never uses mobile data
-              </span>
-            </div>
+            </button>
 
             <button
+              type="button"
+              role="radio"
+              aria-checked={!wifiOnly}
+              aria-label="Wi-Fi & Cellular"
+              title="Uploads immediately over any available connection."
               onClick={() => {
-                const nextVal = !wifiOnly;
-                setWifiOnly(nextVal);
-                Bridge.setWifiOnly(nextVal);
+                setWifiOnly(false);
+                Bridge.setWifiOnly(false);
               }}
-              role="switch"
-              aria-checked={wifiOnly}
-              className="w-12 h-11 flex items-center justify-center active:scale-[0.98] transition-all duration-150"
-              title="Toggle Wi-Fi upload"
+              className={`min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-0.5 px-2 py-2 text-xs font-medium transition-all active:scale-[0.98] ${
+                !wifiOnly
+                  ? 'bg-surface border border-border-strong text-text-main shadow-sm'
+                  : 'text-text-secondary hover:text-text-main'
+              }`}
             >
-              <div className={`w-11 h-6 rounded-full transition-colors duration-150 p-0.5 flex items-center ${
-                wifiOnly ? 'bg-primary justify-end' : 'bg-surface-3 border border-border justify-start'
-              }`}>
-                <div className="w-5 h-5 rounded-full bg-white shadow-sm" />
+              <div className="flex items-center gap-1.5">
+                <Smartphone size={16} className={!wifiOnly ? 'text-primary' : 'text-text-muted'} />
+                <span className="font-semibold">Wi-Fi &amp; Cellular</span>
               </div>
+              <span className="text-[10px] text-text-muted text-center leading-tight">
+                Uploads immediately over any available connection.
+              </span>
             </button>
           </div>
         </section>

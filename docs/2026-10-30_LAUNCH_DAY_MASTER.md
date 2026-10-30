@@ -62,7 +62,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 [X] TASK 3: Fix 00:00 Duration Display for YouTube / Cloud-Ingested Sessions
 [X] TASK 4: Reconcile "Ingestion Failed" Session Status with Ready Clips & Fix Clip Video Playback
 [ ] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
-[ ] TASK 6: Cellular / Wi-Fi Network Upload Selector (Clear 2-Option Radio Switch in Settings)
+[X] TASK 6: Cellular / Wi-Fi Network Upload Selector (Clear 2-Option Radio Switch in Settings)
 [ ] TASK 7: Granular Pipeline Stage Status in Sessions Screen & Session Detail
 [ ] TASK 8: Input Orientation Classification & Multi-Layout System Hardening
 [ ] TASK 9: Layout-Specific Thumbnails & Preview Frame Generation
@@ -178,9 +178,12 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
   - Replace the ambiguous single toggle with a **2-Option Segmented Selector** (identical to the clean 3-option Appearance selector right above it in Settings):
     1. **"Wi-Fi Only"** (`<Wifi size={16} />`): "Uploads wait for unmetered Wi-Fi connection."
     2. **"Wi-Fi & Cellular"** (`<Smartphone size={16} />` or `<Radio size={16} />`): "Uploads immediately over any available connection."
-  - This maps directly to the underlying boolean `Bridge.setWifiOnly(true/false)` and Android `PairingManager.isWifiOnlyEnabled`, eliminating all ambiguity.
-- **Key Files:**
-  - `frontend/src/screens/SettingsScreen.tsx`
+- **Resolution & Implementation:**
+  - In `frontend/src/screens/SettingsScreen.tsx`: Replaced the single binary toggle with a segmented 2-option selector in an accessible `role="radiogroup"` container (`bg-surface-2 border border-border`).
+  - Option 1 ("Wi-Fi Only", `<Wifi size={16} />`): Explicitly sets `Bridge.setWifiOnly(true)`. Explanatory subtext: "Uploads wait for unmetered Wi-Fi connection."
+  - Option 2 ("Wi-Fi & Cellular", `<Smartphone size={16} />`): Explicitly sets `Bridge.setWifiOnly(false)`. Explanatory subtext: "Uploads immediately over any available connection."
+  - Both options enforce 44px min-height touch targets, tactile `active:scale-[0.98]` feedback, and Design System v3 active card elevation (`bg-surface border border-border-strong text-text-main shadow-sm`).
+- **Status:** Complete (Verified with frontend regression tests and production asset build).
 
 ---
 
