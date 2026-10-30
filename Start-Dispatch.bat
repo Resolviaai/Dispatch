@@ -8,11 +8,19 @@ echo           DISPATCH AUTONOMOUS SERVER
 echo ===================================================
 echo.
 
-:: 1. Navigate to repository root
+:: 1. Navigate to repository root (supports running from root, scripts, desktop, or anywhere)
 if exist "%~dp0dispatch\main.py" (
     cd /d "%~dp0"
-) else (
+) else if exist "%~dp0..\dispatch\main.py" (
     cd /d "%~dp0.."
+) else if exist "c:\CODE\Dispatch\dispatch\main.py" (
+    cd /d "c:\CODE\Dispatch"
+) else (
+    echo [ERROR] Could not locate the Dispatch repository folder!
+    echo Please make sure this file is inside the repository or create a desktop shortcut to c:\CODE\Dispatch\Start-Dispatch.bat.
+    echo.
+    pause
+    exit /b 1
 )
 echo Working Directory: %CD%
 
