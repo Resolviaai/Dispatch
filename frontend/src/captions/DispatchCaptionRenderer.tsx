@@ -251,7 +251,7 @@ const CaptionGroupItem: React.FC<CaptionGroupItemProps> = React.memo(({
           }
 
           // Dynamic colors: Normal text strictly preserves primary_color; Spoken highlight only applies to captions
-          let textColor = style.primary_color || (style as any).color || '#FFFF00';
+          let textColor = style.primary_color || (style as any).color || '#FFFFFF';
           if (isCaption && isSpoken && highlightEnabled) {
             textColor = wordOverride?.highlight_color || style.highlight_color || '#FFFFFF';
           } else if (wordOverride?.color) {

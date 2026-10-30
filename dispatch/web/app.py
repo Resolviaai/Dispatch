@@ -1339,8 +1339,8 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
         "target_aspect": updated_ctx["target_aspect"],
         "available_layout_modes": updated_ctx["available_layout_modes"],
         "rendered_layout_mode": target_layout,
-        "video_url": f"/clips/{out_file.name}",
-        "thumbnail_url": f"/thumbnails/{thumb_name}" if thumb_name else None,
+        "video_url": f"/clips/{out_file.name}?v={int(time.time())}",
+        "thumbnail_url": f"/clips/{thumb_name}?v={int(time.time())}" if thumb_name else None,
         "is_render_stale": False
     }
 

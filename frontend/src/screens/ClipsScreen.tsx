@@ -939,7 +939,7 @@ function InteractiveCanvasItem({
                       : 1.0;
                     const wordColor = (isCaption && isSpoken && highlightEnabled)
                       ? word.style_override?.highlight_color || style.highlight_color || '#FFFFFF'
-                      : word.style_override?.color || style.primary_color || '#FFFF00';
+                      : word.style_override?.color || style.primary_color || '#FFFFFF';
 
                     const strokeWidth = style.outline_enabled
                       ? `${Math.max(1, (style.outline_width || 2) * 0.6)}px`
@@ -1175,29 +1175,20 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   const isFallbackTimebase = Boolean(fallbackVideoUrl && activeVideoUrl === fallbackVideoUrl && activeVideoUrl !== _videoUrl);
   const isSourceTimebase = isFallbackTimebase || Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
 
-  // Authoritative aspect ratio determination: strictly governed by sourceOrientation (never tainted by rendered files)
+  // Authoritative aspect ratio determination: strictly governed by layoutMode and targetAspect (never flips short clips to 16:9)
   const isTarget169 = useMemo(() => {
     // 1. Explicit native widescreen layouts ALWAYS render in 16:9 frame
     if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
 
-    // 2. Explicit vertical layouts ALWAYS render in 9:16 frame
-    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow') return false;
-
-    // 3. For Fit + Blur and Fit + Black:
-    // If source is horizontal (landscape): we fit it into a vertical 9:16 frame with letterbox bars above/below
-    if (sourceOrientation === 'landscape') {
-      return false; // target is 9:16 vertical short-form
-    }
-
-    // If source is vertical (portrait): we fit it into a 16:9 widescreen frame with pillarbox bars left/right
-    if (sourceOrientation === 'portrait') {
-      return true; // target is 16:9 widescreen long-form
+    // 2. Explicit vertical and fitted short layouts ALWAYS render in 9:16 frame (never flip to 16:9)
+    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow' || layoutMode === 'fit_blur' || layoutMode === 'fit_black') {
+      return false;
     }
 
     if (targetAspect === '16:9') return true;
     if (targetAspect === '9:16') return false;
     return false;
-  }, [layoutMode, sourceOrientation, targetAspect]);
+  }, [layoutMode, targetAspect]);
 
   const isCrop = (layoutMode === 'crop_916' || layoutMode === 'crop_follow');
 
@@ -1386,7 +1377,9 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 isCrop ? 'object-cover object-center' : 'object-contain'
               }`}
               style={{
-                transform: 'scale(1) translateZ(0)',
+                transform: (isCrop && renderedLayoutMode && (renderedLayoutMode === 'fit_blur' || renderedLayoutMode === 'fit_black'))
+                  ? 'scale(3.16) translateZ(0)'
+                  : 'scale(1) translateZ(0)',
                 transformOrigin: 'center center',
                 transition: 'transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
               }}
@@ -2764,7 +2757,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       prev.map((c) => (c.id === currentClip.id ? { ...c, layout_mode: newMode, target_aspect: immediateTargetAspect, is_render_stale: true } : c))
     );
 
-    // 2. Non-blocking asynchronous persistence to server
+    // 2. Non-blocking asynchronous persistence to server & background re-render
     try {
       fetch(apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost), {
         method: 'POST',
@@ -2789,6 +2782,28 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 : c
             )
           );
+
+          // Task 9: Trigger server-side re-render so video and layout-specific thumbnail are updated
+          fetch(apiUrl(`/api/clips/${currentClip.id}/render`, pcHost), {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ layout_mode: newMode }),
+          }).then(async (renderRes) => {
+            if (renderRes.ok) {
+              const renderData = await renderRes.json();
+              const updateClipWithRender = (c: ClipItem) => c.id === currentClip.id ? {
+                ...c,
+                video_url: renderData.video_url || c.video_url,
+                thumbnail_url: renderData.thumbnail_url || c.thumbnail_url,
+                rendered_layout_mode: renderData.rendered_layout_mode || newMode,
+                is_render_stale: false,
+              } : c;
+              setReadyClips((prev) => prev.map(updateClipWithRender));
+              setApprovedClips((prev) => prev.map(updateClipWithRender));
+            }
+          }).catch((renderErr) => {
+            console.warn('Failed to trigger background render after layout change:', renderErr);
+          });
         }
       }).catch((e) => {
         console.warn('Failed to persist layout framing mode:', e);
@@ -3760,8 +3775,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         }}
                         className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors"
                       >
-                        {/* 16:9 thumbnail — uniform aspect for every clip (Studio pattern) */}
-                        <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
+                        {/* Layout-specific thumbnail: 58px 9:16 portrait for vertical shorts, 124px 16:9 for widescreen */}
+                        <div className={`relative ${clip.target_aspect === '16:9' || clip.layout_mode === 'native_169' || clip.layout_mode === 'landscape' ? 'w-[124px] aspect-video' : 'w-[58px] aspect-[9/16]'} rounded-lg bg-black border border-white/10 overflow-hidden shrink-0 flex items-center justify-center shadow-sm`}>
                           <Film size={16} className="text-white/40" />
                           {clip.thumbnail_url && (
                             <img
