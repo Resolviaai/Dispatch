@@ -288,7 +288,7 @@ Every code change must adhere to the **Dispatch UI/UX & Mobile Engineering Invar
 | :--- | :--- | :--- | :--- |
 | **2026-10-30 10:55** | Master Tracking Document Created | `docs/2026-10-30_LAUNCH_DAY_MASTER.md` | Initialized canonical tracker; standing by for first specific task. |
 | **2026-10-30 12:05** | Master Backlog Order Finalized | `docs/2026-10-30_LAUNCH_DAY_MASTER.md` | Reordered tasks 1 to 14 according to user sequence. Ready to commence Task 1. |
-| **2026-10-30 12:35** | TASK 1: Minimal Badging & Origin/ID Inspector | `dispatch/web/app.py`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/RecordingsScreen.tsx` | Ultra-minimal list badging (Camera vs YouTube icon on thumbnails), eliminated technical strings from headers, integrated origin/session/YouTube ID inspector in Details & Options sheets. Verified by tests & Vite production build. |
+| **2026-10-30 12:35** | TASK 1: Minimal Badging & Origin/ID Inspector | `dispatch/web/app.py`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/RecordingsScreen.tsx`, `tests/test_web.py` | Commit `5b1894d`: Ultra-minimal list badging (Camera vs YouTube icon on thumbnails), eliminated technical strings from headers, integrated origin/session/YouTube ID inspector in Details & Options sheets. Verified by tests & Vite production build. |
 
 ---
 
