@@ -748,7 +748,12 @@ export function apiUrl(path: string, pcHost?: string): string {
     return path;
   }
   const base = getApiBaseUrl(pcHost);
-  if (!base) return path;
+  if (!base) {
+    if (typeof window !== 'undefined' && (window.location.hostname === 'appassets.androidplatform.net' || !!(window as any).DispatchBridge)) {
+      return '';
+    }
+    return path;
+  }
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${base}${cleanPath}`;
 }

@@ -1,11 +1,11 @@
 {
     "schemaVersion":  1,
     "packageName":  "com.resolvia.dispatch",
-    "versionCode":  77,
-    "versionName":  "1.7.9",
-    "releaseTag":  "v1.7.9-alpha",
+    "versionCode":  78,
+    "versionName":  "1.7.10",
+    "releaseTag":  "v1.7.10-alpha",
     "generatedAt":  "2026-10-30T16:36:47Z",
-    "releaseNotes":  "Dispatch 1.7.9 alpha build.",
+    "releaseNotes":  "Dispatch 1.7.10 alpha build.",
     "apkAsset":  "Dispatch.apk",
     "apkSizeBytes":  21243109,
     "apkSha256":  "c9c46f5732867e35264ff7aa6d12924cb5ce67202ce67774639f6bcb548a3aba"

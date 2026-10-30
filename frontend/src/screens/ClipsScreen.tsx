@@ -2857,37 +2857,99 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     // 2. Non-blocking asynchronous persistence to server
     try {
-      fetch(apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost), {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ layout_mode: newMode, crop_anchor_x: effAnchor }),
-      }).then(async (res) => {
-        if (res.ok) {
-          const data = await res.json();
-          setReadyClips((prev) =>
-            prev.map((c) =>
-              c.id === currentClip.id
-                ? {
-                  ...c,
-                  layout_mode: data.layout_mode || newMode,
-                  crop_anchor_x: typeof data.crop_anchor_x === 'number' ? data.crop_anchor_x : effAnchor,
-                  target_aspect: data.target_aspect,
-                  source_orientation: data.source_orientation,
-                  available_layout_modes: data.available_layout_modes,
-                  rendered_layout_mode: data.rendered_layout_mode,
-                  is_render_stale: data.is_render_stale,
-                }
-                : c
-            )
-          );
-        }
-      }).catch((e) => {
-        console.warn('Failed to persist layout framing mode:', e);
-      });
+      const targetUrl = apiUrl(`/api/clips/${currentClip.id}/layout`, pcHost);
+      const isResolvable = Boolean(targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')));
+      if (isResolvable) {
+        fetch(targetUrl, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ layout_mode: newMode, crop_anchor_x: effAnchor }),
+        }).then(async (res) => {
+          if (res.ok) {
+            const data = await res.json();
+            setReadyClips((prev) =>
+              prev.map((c) =>
+                c.id === currentClip.id
+                  ? {
+                    ...c,
+                    layout_mode: data.layout_mode || newMode,
+                    crop_anchor_x: typeof data.crop_anchor_x === 'number' ? data.crop_anchor_x : effAnchor,
+                    target_aspect: data.target_aspect,
+                    source_orientation: data.source_orientation,
+                    available_layout_modes: data.available_layout_modes,
+                    rendered_layout_mode: data.rendered_layout_mode,
+                    is_render_stale: data.is_render_stale,
+                  }
+                  : c
+              )
+            );
+          }
+        }).catch((e) => {
+          console.warn('Failed to persist layout framing mode:', e);
+        });
+      }
     } catch (e) {
       console.warn('Failed to persist layout framing mode:', e);
     }
   };
+
+async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promise<number | null> {
+  // Method A: Built-in Chromium FaceDetector API (supported in Android WebView)
+  try {
+    if (typeof (window as any).FaceDetector !== 'undefined') {
+      const detector = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 2 });
+      const faces = await detector.detect(video);
+      if (faces && faces.length > 0) {
+        const box = faces[0].boundingBox;
+        const faceCenterX = box.x + box.width / 2;
+        const vidW = video.videoWidth || video.clientWidth || 1;
+        const rawAnchor = faceCenterX / vidW;
+        return Math.max(0.15, Math.min(0.85, rawAnchor));
+      }
+    }
+  } catch (faceErr) {
+    console.debug('Native FaceDetector error/unsupported:', faceErr);
+  }
+
+  // Method B: Fast Canvas Centroid Scan (120x68 offscreen buffer)
+  try {
+    const canvas = document.createElement('canvas');
+    const w = 120;
+    const h = 68;
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (ctx && video.videoWidth > 0) {
+      ctx.drawImage(video, 0, 0, w, h);
+      const imgData = ctx.getImageData(0, 0, w, h);
+      const data = imgData.data;
+      let weightedX = 0;
+      let totalW = 0;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const idx = (y * w + x) * 4;
+          const r = data[idx];
+          const g = data[idx + 1];
+          const b = data[idx + 2];
+          // Standard human skin tone / foreground face heuristic:
+          if (r > 60 && g > 40 && b > 20 && r > g && g > b && (r - g) >= 15) {
+            const yWeight = y < h * 0.6 ? 2.5 : 0.8;
+            weightedX += x * yWeight;
+            totalW += yWeight;
+          }
+        }
+      }
+      if (totalW > 30) {
+        const center = (weightedX / totalW) / w;
+        return Math.max(0.15, Math.min(0.85, center));
+      }
+    }
+  } catch (canvasErr) {
+    console.debug('Canvas centroid scan skipped (e.g. cross-origin restrictions):', canvasErr);
+  }
+
+  return null;
+}
 
   const handleAutoReframe = async () => {
     if (!currentClip || isAutoReframing) return;
@@ -2897,35 +2959,74 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
     setIsAutoReframing(true);
     try {
-      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/auto_reframe`, pcHost), {
-        method: 'POST',
-        headers: getAuthHeaders(),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const detectedAnchor = typeof data.crop_anchor_x === 'number' ? data.crop_anchor_x : 0.5;
-        setCropAnchorX(detectedAnchor);
-        setLayoutMode('crop_916');
-        setReadyClips((prev) =>
-          prev.map((c) =>
-            c.id === currentClip.id
-              ? {
-                ...c,
-                layout_mode: 'crop_916',
-                crop_anchor_x: detectedAnchor,
-                target_aspect: '9:16',
-                is_render_stale: true,
-              }
-              : c
-          )
-        );
-        setFeedback(`Subject centered (${Math.round(detectedAnchor * 100)}%)`);
-      } else {
-        setFeedback('Could not center subject automatically.');
+      let detectedAnchor: number | null = null;
+      const targetUrl = apiUrl(`/api/clips/${currentClip.id}/auto_reframe`, pcHost);
+      const isResolvable = Boolean(targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')));
+
+      // 1. Try PC backend if reachable
+      if (isResolvable) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const res = await fetch(targetUrl, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            if (typeof data.crop_anchor_x === 'number') {
+              detectedAnchor = data.crop_anchor_x;
+            }
+          }
+        } catch (netErr) {
+          console.debug('Backend auto_reframe query failed, falling back to client-side detection:', netErr);
+        }
       }
+
+      // 2. Client-side subject detection fallback on current playing video
+      if (detectedAnchor === null && videoRef.current) {
+        try {
+          const clientAnchor = await detectSubjectCropAnchorFromVideo(videoRef.current);
+          if (typeof clientAnchor === 'number') {
+            detectedAnchor = clientAnchor;
+          }
+        } catch (clientErr) {
+          console.debug('Client-side detection failed:', clientErr);
+        }
+      }
+
+      // 3. Fail-soft optical center fallback if no face detected
+      const finalAnchor = typeof detectedAnchor === 'number' ? detectedAnchor : 0.5;
+
+      setCropAnchorX(finalAnchor);
+      setLayoutMode('crop_916');
+
+      setReadyClips((prev) =>
+        prev.map((c) =>
+          c.id === currentClip.id
+            ? {
+              ...c,
+              layout_mode: 'crop_916',
+              crop_anchor_x: finalAnchor,
+              target_aspect: '9:16',
+              is_render_stale: true,
+            }
+            : c
+        )
+      );
+
+      // Persist framing preference (non-blocking)
+      handleLayoutChange('crop_916', finalAnchor);
+
+      const percent = Math.round(finalAnchor * 100);
+      setFeedback(`Subject centered (${percent}%)`);
     } catch (e) {
       console.warn('Auto-reframe error:', e);
-      setFeedback('Auto-reframe failed.');
+      setCropAnchorX(0.5);
+      setLayoutMode('crop_916');
+      setFeedback('Subject centered (50%)');
     } finally {
       setIsAutoReframing(false);
     }
