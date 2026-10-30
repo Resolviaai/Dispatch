@@ -4978,7 +4978,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                           <button
                             type="button"
                             onClick={() => setFeedback(`To connect ${p.label}, open Settings -> Connected Accounts`)}
-                            className="shrink-0 px-2.5 py-1 rounded-lg bg-surface-2 border border-border/50 text-[11px] font-medium text-text-muted hover:text-text-main transition-colors"
+                            className="shrink-0 px-3 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-[11px] font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all"
                           >
                             Connect
                           </button>

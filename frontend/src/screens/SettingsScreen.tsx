@@ -966,19 +966,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 setWifiOnly(true);
                 Bridge.setWifiOnly(true);
               }}
-              className={`min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-0.5 px-2 py-2 text-xs font-medium transition-all active:scale-[0.98] ${
+              className={`min-h-[44px] rounded-lg flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-all active:scale-[0.98] ${
                 wifiOnly
                   ? 'bg-surface border border-border-strong text-text-main shadow-sm'
                   : 'text-text-secondary hover:text-text-main'
               }`}
             >
-              <div className="flex items-center gap-1.5">
-                <Wifi size={16} className={wifiOnly ? 'text-primary' : 'text-text-muted'} />
-                <span className="font-semibold">Wi-Fi Only</span>
-              </div>
-              <span className="text-[10px] text-text-muted text-center leading-tight">
-                Uploads wait for unmetered Wi-Fi connection.
-              </span>
+              <Wifi size={16} className={wifiOnly ? 'text-primary' : 'text-text-muted'} />
+              <span className="font-semibold">Wi-Fi Only</span>
             </button>
 
             <button
@@ -991,19 +986,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 setWifiOnly(false);
                 Bridge.setWifiOnly(false);
               }}
-              className={`min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-0.5 px-2 py-2 text-xs font-medium transition-all active:scale-[0.98] ${
+              className={`min-h-[44px] rounded-lg flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-all active:scale-[0.98] ${
                 !wifiOnly
                   ? 'bg-surface border border-border-strong text-text-main shadow-sm'
                   : 'text-text-secondary hover:text-text-main'
               }`}
             >
-              <div className="flex items-center gap-1.5">
-                <Smartphone size={16} className={!wifiOnly ? 'text-primary' : 'text-text-muted'} />
-                <span className="font-semibold">Wi-Fi &amp; Cellular</span>
-              </div>
-              <span className="text-[10px] text-text-muted text-center leading-tight">
-                Uploads immediately over any available connection.
-              </span>
+              <Smartphone size={16} className={!wifiOnly ? 'text-primary' : 'text-text-muted'} />
+              <span className="font-semibold">Wi-Fi &amp; Cellular</span>
             </button>
           </div>
         </section>
