@@ -611,8 +611,11 @@ async def get_clip_file(filename: str, request: Request):
 async def download_android_apk():
     """Download the native Dispatch Android APK compiled for POCO C65."""
     candidates = [
-        ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+        ROOT_DIR / "release-out" / "Dispatch.apk",
         STORAGE_DIR / "dispatch.apk",
+        ROOT_DIR / "site" / "Dispatch.apk",
+        ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk",
+        ROOT_DIR / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
         STORAGE_DIR / "download" / "dispatch.apk",
     ]
     apk_path = next((p for p in candidates if p.exists() and p.is_file() and p.stat().st_size > 0), None)

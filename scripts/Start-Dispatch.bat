@@ -9,21 +9,30 @@ echo ===================================================
 echo.
 
 :: 1. Navigate to repository root
-set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%.."
+if exist "%~dp0dispatch\main.py" (
+    cd /d "%~dp0"
+) else (
+    cd /d "%~dp0.."
+)
 echo Working Directory: %CD%
 
-:: 2. Check Python installation
-where python >nul 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Python is not found in PATH!
-    echo Please install Python 3.10+ and make sure it is added to your PATH.
-    echo.
-    pause
-    exit /b 1
+:: 2. Resolve Python (prefer repo .venv if available)
+if exist ".venv\Scripts\python.exe" (
+    set "PYTHON_EXE=.venv\Scripts\python.exe"
+    echo Using Repository Virtual Environment: .venv
+) else (
+    where python >nul 2>nul
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] Python is not found in PATH or .venv!
+        echo Please install Python 3.10+ or initialize .venv.
+        echo.
+        pause
+        exit /b 1
+    )
+    set "PYTHON_EXE=python"
 )
 
-for /f "tokens=*" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
+for /f "tokens=*" %%i in ('"%PYTHON_EXE%" --version 2^>^&1') do set PYTHON_VERSION=%%i
 echo Detected Python: !PYTHON_VERSION!
 
 :: 3. Check FFmpeg installation
@@ -45,7 +54,7 @@ echo Starting Dispatch Desktop Server on http://127.0.0.1:8000 ...
 echo Press Ctrl+C to shut down.
 echo.
 
-python -m uvicorn dispatch.main:app --host 127.0.0.1 --port 8000
+"%PYTHON_EXE%" -m uvicorn dispatch.main:app --host 127.0.0.1 --port 8000
 
 if %ERRORLEVEL% neq 0 (
     echo.
