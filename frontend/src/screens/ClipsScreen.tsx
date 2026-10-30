@@ -121,6 +121,7 @@ function buildCloudCaptionGroups(
 }
 
 const captionTrackCache = new Map<string, { track: CaptionTrack; revision: number; timestamp: number }>();
+const publicationCache = new Map<string, { items: PublicationItem[]; timestamp: number }>();
 
 async function loadClipCaptionTrack(
   clipId: string,
@@ -1122,7 +1123,7 @@ interface FramedVideoStageProps {
   mediaMissing?: boolean;
 }
 
-export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
+export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
   sourceVideoUrl,
   videoUrl: _videoUrl,
   fallbackVideoUrl,
@@ -1380,10 +1381,6 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 muted
                 playsInline
                 preload="none"
-                style={{
-                  transform: 'translate3d(0, 0, 0)',
-                  willChange: 'transform',
-                }}
                 aria-hidden="true"
                 onLoadedData={() => {
                   if (videoRef.current && bgVideoRef.current) {
@@ -1393,7 +1390,12 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                     }
                   }
                 }}
-                className="absolute inset-0 w-full h-full object-cover filter blur-2xl brightness-75 scale-125 pointer-events-none select-none z-0 transition-opacity duration-300 ease-out opacity-100"
+                style={{
+                  transform: 'translate3d(0, 0, 0)',
+                  willChange: 'transform',
+                  contain: 'strict',
+                }}
+                className="absolute inset-0 w-full h-full object-cover filter blur-lg brightness-75 scale-110 pointer-events-none select-none z-0 transition-opacity duration-300 ease-out opacity-100"
               />
             )}
 
@@ -1403,7 +1405,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
               src={activeVideoUrl}
               poster={poster}
               muted={muted}
-              preload="metadata"
+              preload={isDetail ? "auto" : "metadata"}
               playsInline
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget;
@@ -1484,7 +1486,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
       </section>
     </div>
   );
-};
+});
 
 export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   pcHost,
@@ -1664,13 +1666,22 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       return;
     }
     const isPublished = Boolean(
-      currentClip.status === 'published' ||
-      currentClip.remote_id ||
-      currentClip.remote_url ||
-      (currentClip.publications && currentClip.publications.length > 0)
+      currentClip.status === 'published' &&
+      (currentClip.published_at || (currentClip.publications && currentClip.publications.length > 0))
     );
     if (!isPublished) {
       setPublicationLoad(null);
+      return;
+    }
+
+    const cachedPub = publicationCache.get(currentClip.id);
+    if (cachedPub && Date.now() - cachedPub.timestamp < 60_000) {
+      setPublicationLoad({
+        clipId: currentClip.id,
+        items: cachedPub.items,
+        loading: false,
+        error: false,
+      });
       return;
     }
 
@@ -1687,11 +1698,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     let cancelled = false;
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 20_000);
+    const timeoutId = window.setTimeout(() => controller.abort(), 10_000);
     setPublicationLoad({
       clipId: currentClip.id,
       items: cachedItems,
-      loading: true,
+      loading: cachedItems.length === 0,
       error: false,
     });
 
@@ -1726,6 +1737,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     void loadPublications()
       .then((items) => {
         if (cancelled) return;
+        publicationCache.set(currentClip.id, { items, timestamp: Date.now() });
         setPublicationLoad({
           clipId: currentClip.id,
           items,
@@ -2307,7 +2319,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const controller = new AbortController();
     captionRequestControllerRef.current = controller;
     let isCurrentClip = true;
-    if (!isCloudMode) {
+    if (!isCloudMode && !seededFromLocal) {
       loadClipCaptionTrack(currentClip.id, currentClip.duration || 40, pcHost, controller.signal, currentRev)
         .then((track) => {
           if (!isCurrentClip) return;
@@ -2616,14 +2628,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         return;
       }
 
-      if (Math.abs(localTime - lastTimeUpdateRef.current) >= 0.045 || cur <= clipStart + 0.05) {
+      if (Math.abs(localTime - lastTimeUpdateRef.current) >= 0.12 || cur <= clipStart + 0.05) {
         lastTimeUpdateRef.current = localTime;
         setCurrentTime(localTime);
       }
 
       if (bgVideoRef.current && layoutMode === 'fit_blur') {
         const diff = Math.abs(bgVideoRef.current.currentTime - cur);
-        if (diff > 0.15) {
+        if (diff > 1.2) {
           bgVideoRef.current.currentTime = cur;
         }
       }
@@ -2655,14 +2667,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         return;
       }
 
-      if (Math.abs(cur - lastTimeUpdateRef.current) >= 0.045 || cur <= 0.05) {
+      if (Math.abs(cur - lastTimeUpdateRef.current) >= 0.12 || cur <= 0.05) {
         lastTimeUpdateRef.current = cur;
         setCurrentTime(cur);
       }
 
       if (bgVideoRef.current && layoutMode === 'fit_blur') {
         const diff = Math.abs(bgVideoRef.current.currentTime - cur);
-        if (diff > 0.15) {
+        if (diff > 1.2) {
           bgVideoRef.current.currentTime = cur;
         }
       }
@@ -2894,7 +2906,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   };
 
 async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promise<number | null> {
-  // Method A: Built-in Chromium FaceDetector API (supported in Android WebView)
+  // Method A: Built-in Chromium FaceDetector API (standard if enabled in Android WebView)
   try {
     if (typeof (window as any).FaceDetector !== 'undefined') {
       const detector = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 2 });
@@ -2909,43 +2921,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
   } catch (faceErr) {
     console.debug('Native FaceDetector error/unsupported:', faceErr);
-  }
-
-  // Method B: Fast Canvas Centroid Scan (120x68 offscreen buffer)
-  try {
-    const canvas = document.createElement('canvas');
-    const w = 120;
-    const h = 68;
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (ctx && video.videoWidth > 0) {
-      ctx.drawImage(video, 0, 0, w, h);
-      const imgData = ctx.getImageData(0, 0, w, h);
-      const data = imgData.data;
-      let weightedX = 0;
-      let totalW = 0;
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const idx = (y * w + x) * 4;
-          const r = data[idx];
-          const g = data[idx + 1];
-          const b = data[idx + 2];
-          // Standard human skin tone / foreground face heuristic:
-          if (r > 60 && g > 40 && b > 20 && r > g && g > b && (r - g) >= 15) {
-            const yWeight = y < h * 0.6 ? 2.5 : 0.8;
-            weightedX += x * yWeight;
-            totalW += yWeight;
-          }
-        }
-      }
-      if (totalW > 30) {
-        const center = (weightedX / totalW) / w;
-        return Math.max(0.15, Math.min(0.85, center));
-      }
-    }
-  } catch (canvasErr) {
-    console.debug('Canvas centroid scan skipped (e.g. cross-origin restrictions):', canvasErr);
   }
 
   return null;
@@ -2963,11 +2938,23 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       const targetUrl = apiUrl(`/api/clips/${currentClip.id}/auto_reframe`, pcHost);
       const isResolvable = Boolean(targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')));
 
-      // 1. Try PC backend if reachable
-      if (isResolvable) {
+      // 1. Instant client-side detection directly from on-screen video frame (under 50ms)
+      if (videoRef.current) {
+        try {
+          const clientAnchor = await detectSubjectCropAnchorFromVideo(videoRef.current);
+          if (typeof clientAnchor === 'number') {
+            detectedAnchor = clientAnchor;
+          }
+        } catch (clientErr) {
+          console.debug('Client-side detection failed, falling back to backend:', clientErr);
+        }
+      }
+
+      // 2. Fallback to PC backend only if on-screen detection was inconclusive
+      if (detectedAnchor === null && isResolvable) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const timeoutId = setTimeout(() => controller.abort(), 3500);
           const res = await fetch(targetUrl, {
             method: 'POST',
             headers: getAuthHeaders(),
@@ -2981,19 +2968,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             }
           }
         } catch (netErr) {
-          console.debug('Backend auto_reframe query failed, falling back to client-side detection:', netErr);
-        }
-      }
-
-      // 2. Client-side subject detection fallback on current playing video
-      if (detectedAnchor === null && videoRef.current) {
-        try {
-          const clientAnchor = await detectSubjectCropAnchorFromVideo(videoRef.current);
-          if (typeof clientAnchor === 'number') {
-            detectedAnchor = clientAnchor;
-          }
-        } catch (clientErr) {
-          console.debug('Client-side detection failed:', clientErr);
+          console.debug('Backend auto_reframe query failed:', netErr);
         }
       }
 
@@ -4340,10 +4315,11 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               const loadedPublications = publicationLoad?.clipId === currentClip.id
                 ? publicationLoad.items
                 : (currentClip.publications ?? []);
-              const fallbackId = currentClip.remote_id || currentClip.remote_url;
+              const isStatusPublished = currentClip.status === 'published';
+              const fallbackId = isStatusPublished ? (currentClip.remote_id || currentClip.remote_url) : null;
               const publications: PublicationItem[] = loadedPublications.length > 0
                 ? loadedPublications
-                : (fallbackId || currentClip.status === 'published')
+                : (isStatusPublished && fallbackId)
                   ? [{
                       id: `legacy:${currentClip.id}`,
                       platform: 'youtube',
@@ -4357,8 +4333,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     }]
                   : [];
               const isClipPublished = Boolean(
-                currentClip.status === 'published' ||
-                publications.length > 0
+                isStatusPublished &&
+                (publications.length > 0 || currentClip.published_at)
               );
               const isClipPublishing = Boolean(
                 currentClip.status === 'approved' && !isClipPublished
@@ -5322,7 +5298,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                           <button
                             type="button"
                             onClick={() => setFeedback(`To connect ${p.label}, open Settings -> Connected Accounts`)}
-                            className="shrink-0 px-3.5 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-white/[0.08] text-xs font-medium text-text-main active:scale-[0.98] transition-all"
+                            className="shrink-0 px-3 py-1.5 rounded-lg bg-surface-3 hover:bg-surface-2 border border-white/[0.05] text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all"
                           >
                             Connect
                           </button>

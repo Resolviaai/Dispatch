@@ -26,10 +26,14 @@ def _get_detector():
         return _CACHED_DETECTOR
     try:
         import cv2
+        import numpy as np
         cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
         if os.path.exists(cascade_path):
             detector = cv2.CascadeClassifier(cascade_path)
             if not detector.empty():
+                # Warm up detector JIT compiled trees
+                dummy = np.zeros((120, 160), dtype=np.uint8)
+                detector.detectMultiScale(dummy, scaleFactor=1.2, minNeighbors=3, minSize=(20, 20))
                 _CACHED_DETECTOR = detector
                 return _CACHED_DETECTOR
     except Exception as e:
@@ -41,7 +45,7 @@ def detect_subject_crop_anchor(
     video_path: Union[str, Path],
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
-    num_samples: int = 5
+    num_samples: int = 3
 ) -> float:
     """Detect the horizontal center of the primary subject across video frames.
 
@@ -111,8 +115,8 @@ def detect_subject_crop_anchor(
             if w <= 0 or h <= 0:
                 continue
 
-            # Downsample to 480px width for 10x faster Haar evaluation
-            target_w = 480
+            # Downsample to 320px width for fast 10ms Haar evaluation
+            target_w = 320
             if w > target_w:
                 target_h = int(h * (target_w / float(w)))
                 small = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
@@ -121,12 +125,11 @@ def detect_subject_crop_anchor(
                 target_w, target_h = w, h
 
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-            min_dim = int(min(target_h, target_w) * 0.06)
             faces = detector.detectMultiScale(
                 gray,
-                scaleFactor=1.1,
+                scaleFactor=1.15,
                 minNeighbors=4,
-                minSize=(min_dim, min_dim)
+                minSize=(20, 20)
             )
 
             if len(faces) > 0:

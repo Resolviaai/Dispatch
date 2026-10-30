@@ -1276,19 +1276,17 @@ async def handle_auto_reframe(clip_id: str, request: Request):
     if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
-    source_path = resolve_clip_source_path(clip)
-    if not source_path or not source_path.exists():
-        vp = clip.get("video_path")
-        if vp and Path(vp).exists():
-            source_path = Path(vp)
+    vp = clip.get("video_path")
+    cut_path = Path(vp) if vp and Path(vp).exists() else None
+    source_path = cut_path or resolve_clip_source_path(clip)
 
-    start_time = float(clip.get("start_time") or 0.0)
-    end_time = float(clip.get("end_time") or 0.0)
+    start_time = 0.0 if cut_path else float(clip.get("start_time") or 0.0)
+    end_time = float(clip.get("duration") or 0.0) if cut_path else float(clip.get("end_time") or 0.0)
 
     from dispatch.video_engine.tracker import detect_subject_crop_anchor
     anchor = 0.5
     if source_path and source_path.exists():
-        anchor = await asyncio.to_thread(detect_subject_crop_anchor, source_path, start_time, end_time)
+        anchor = await asyncio.to_thread(detect_subject_crop_anchor, source_path, start_time, end_time, 3)
 
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
