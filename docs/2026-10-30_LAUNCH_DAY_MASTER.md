@@ -59,7 +59,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 ```
 [X] TASK 1: Minimal Badging on Sessions & Clips Lists + Clean Origin/ID Inspector in Details
 [X] TASK 2: Notification Center & Activity Sheet (Replacing Header Banners & Refresh Buttons with Pull-to-Refresh)
-[ ] TASK 3: Fix 00:00 Duration Display for YouTube / Cloud-Ingested Sessions
+[X] TASK 3: Fix 00:00 Duration Display for YouTube / Cloud-Ingested Sessions
 [ ] TASK 4: Reconcile "Ingestion Failed" Session Status with Ready Clips & Fix Clip Video Playback
 [ ] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
 [ ] TASK 6: Cellular / Wi-Fi Network Upload Selector (Clear 2-Option Radio Switch in Settings)
@@ -120,10 +120,16 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 - **Root Cause & Scope:**
   - In `RecordingsScreen.tsx#L589`: `totalDuration: item.duration || 0`. When jobs come from Cloudflare Worker `/jobs/status` or PC `/api/youtube/inbox`, `item.duration` is `undefined` or `null` before audio analysis or if metadata was not saved into the job payload.
   - When clips have already been generated for that session (`itemClips.length > 0`), the session can compute its duration from the clips or fetch source duration from the first clip's metadata / source metadata, rather than defaulting to `00:00`.
+- **Resolution & Implementation:**
+  - In `RecordingsScreen.tsx`: Added multi-tier fallback resolution for `totalDuration` in both imported YouTube sessions and native sessions. If recorded duration is 0 or undefined, derive authentic duration from child clip `source_duration` or `Math.max(c.end_time, c.duration)`. Also mapped `duration` from `/jobs/status` payloads and typed `clips` state with duration properties.
+  - In backend `dispatch/db.py`: Added `duration` parameter support to `update_youtube_video` so durations probed during ingestion/transcription are saved into `youtube_inbox`.
+  - In backend `dispatch/youtube_inbox/catcher.py` & `dispatch/transcription/worker.py`: Persist probed source media duration to `youtube_inbox` on transcript fetch / transcription finalization.
 - **Key Files:**
   - `frontend/src/screens/RecordingsScreen.tsx`
-  - `dispatch/api/routers/youtube.py`
-  - `cloudflare-worker/src/index.ts`
+  - `dispatch/db.py`
+  - `dispatch/youtube_inbox/catcher.py`
+  - `dispatch/transcription/worker.py`
+- **Status:** Complete (Verified with Python unittest suite and npm test + build).
 
 ---
 

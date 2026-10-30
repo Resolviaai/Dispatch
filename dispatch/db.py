@@ -1548,6 +1548,7 @@ def update_youtube_video(
     last_ai_error: Optional[str] = None,
     source_sha256: Optional[str] = None,
     source_file_size: Optional[int] = None,
+    duration: Optional[float] = None,
     user_id: Optional[str] = None,
     expected_status: Optional[str] = None
 ):
@@ -1618,6 +1619,10 @@ def update_youtube_video(
         if source_file_size is not None:
             updates.append("source_file_size = ?")
             params.append(source_file_size)
+
+        if duration is not None:
+            updates.append("duration = ?")
+            params.append(float(duration))
 
         if user_id is not None:
             updates.append("user_id = ?")

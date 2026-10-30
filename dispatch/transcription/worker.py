@@ -455,7 +455,8 @@ class TranscriptionWorker:
             video_id=video_id,
             status="TRANSCRIBED",
             transcript_source=source,
-            segments_json=json.dumps(segments, ensure_ascii=False)
+            segments_json=json.dumps(segments, ensure_ascii=False),
+            duration=duration if duration and duration > 0 else None
         )
         try:
             from dispatch.youtube_connections import update_job_stage_by_video_id

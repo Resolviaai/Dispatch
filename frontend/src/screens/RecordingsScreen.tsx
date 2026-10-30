@@ -272,7 +272,17 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   } = useActivity();
 
   // Clips & Inbox items
-  const [clips, setClips] = useState<{ id: string; session_id?: string; chunk_id?: string; status: string; thumbnail_url?: string }[]>([]);
+  const [clips, setClips] = useState<{
+    id: string;
+    session_id?: string;
+    chunk_id?: string;
+    status: string;
+    thumbnail_url?: string;
+    duration?: number;
+    source_duration?: number | null;
+    start_time?: number;
+    end_time?: number;
+  }[]>([]);
   const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
@@ -395,6 +405,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               stage: isDone ? 'ready' : rawStage,
               last_error: j.last_error,
               discovered_at: j.created_at,
+              duration: typeof j.duration === 'number' ? j.duration : (parseFloat(j.duration) || undefined),
             };
           });
           setInboxItems(items);
@@ -553,12 +564,22 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         status = 'queued';
       }
 
+      let nativeDuration = ns.totalDuration;
+      if (nativeDuration <= 0 && sessClips.length > 0) {
+        const clipWithSource = sessClips.find(c => (c.source_duration ?? 0) > 0);
+        if (clipWithSource && clipWithSource.source_duration) {
+          nativeDuration = clipWithSource.source_duration;
+        } else {
+          nativeDuration = sessClips.reduce((max, c) => Math.max(max, c.end_time || c.duration || 0), 0);
+        }
+      }
+
       list.push({
         id: ns.sessionId,
         title: formatSessionDate(ns.createdAt),
         origin: 'phone',
         createdAt: ns.createdAt,
-        totalDuration: ns.totalDuration,
+        totalDuration: nativeDuration,
         totalBytes: ns.totalBytes,
         status,
         stage: matchingInbox?.stage,
@@ -601,12 +622,23 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
       const displayTitle = item.title ? cleanTitle(item.title) : `YouTube ${item.video_id}`;
 
+      // Derive authentic duration: item.duration -> source_duration of clips -> max clip end_time / sum -> 0
+      let computedDuration = item.duration || 0;
+      if (computedDuration <= 0 && itemClips.length > 0) {
+        const clipWithSource = itemClips.find(c => (c.source_duration ?? 0) > 0);
+        if (clipWithSource && clipWithSource.source_duration) {
+          computedDuration = clipWithSource.source_duration;
+        } else {
+          computedDuration = itemClips.reduce((max, c) => Math.max(max, c.end_time || c.duration || 0), 0);
+        }
+      }
+
       list.push({
         id: item.video_id,
         title: displayTitle,
         origin: 'youtube',
         createdAt: item.discovered_at ? new Date(item.discovered_at).getTime() : Date.now(),
-        totalDuration: item.duration || 0,
+        totalDuration: computedDuration,
         totalBytes: 0,
         status,
         stage: item.stage,

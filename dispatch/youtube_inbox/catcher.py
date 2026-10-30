@@ -693,6 +693,10 @@ class YouTubeInboxCatcher:
                 raise RuntimeError(f"Downloaded YouTube video is not readable: {error}")
             total_duration = meta.get("duration", 60.0)
 
+        # Ensure youtube_inbox records the authoritative duration
+        if total_duration > 0.0:
+            db.update_youtube_video(video_id, status="TRANSCRIPT_FETCHED", duration=total_duration)
+
         # Also register a chunk in the DB so clips have a valid chunk_id reference
         file_hash = f"yt_{video_id}"
         chunk_id = db.register_chunk(
