@@ -1175,20 +1175,27 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
   const isFallbackTimebase = Boolean(fallbackVideoUrl && activeVideoUrl === fallbackVideoUrl && activeVideoUrl !== _videoUrl);
   const isSourceTimebase = isFallbackTimebase || Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
 
-  // Authoritative aspect ratio determination: strictly governed by layoutMode and targetAspect (never flips short clips to 16:9)
+  // Authoritative aspect ratio determination: governed by layoutMode, targetAspect, and sourceOrientation
   const isTarget169 = useMemo(() => {
     // 1. Explicit native widescreen layouts ALWAYS render in 16:9 frame
     if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
 
-    // 2. Explicit vertical and fitted short layouts ALWAYS render in 9:16 frame (never flip to 16:9)
-    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow' || layoutMode === 'fit_blur' || layoutMode === 'fit_black') {
-      return false;
-    }
+    // 2. Explicit vertical crop ALWAYS renders in 9:16 frame
+    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow') return false;
 
+    // 3. For Fit + Blur and Fit + Black:
+    // Respect explicit targetAspect if provided
     if (targetAspect === '16:9') return true;
     if (targetAspect === '9:16') return false;
+
+    // Landscape source fitted to shorts is 9:16
+    if (sourceOrientation === 'landscape') return false;
+
+    // Portrait source fitted to widescreen is 16:9
+    if (sourceOrientation === 'portrait') return true;
+
     return false;
-  }, [layoutMode, targetAspect]);
+  }, [layoutMode, targetAspect, sourceOrientation]);
 
   const isCrop = (layoutMode === 'crop_916' || layoutMode === 'crop_follow');
 
@@ -1377,9 +1384,7 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 isCrop ? 'object-cover object-center' : 'object-contain'
               }`}
               style={{
-                transform: (isCrop && renderedLayoutMode && (renderedLayoutMode === 'fit_blur' || renderedLayoutMode === 'fit_black'))
-                  ? 'scale(3.16) translateZ(0)'
-                  : 'scale(1) translateZ(0)',
+                transform: 'scale(1) translateZ(0)',
                 transformOrigin: 'center center',
                 transition: 'transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
               }}
@@ -2783,27 +2788,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             )
           );
 
-          // Task 9: Trigger server-side re-render so video and layout-specific thumbnail are updated
-          fetch(apiUrl(`/api/clips/${currentClip.id}/render`, pcHost), {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ layout_mode: newMode }),
-          }).then(async (renderRes) => {
-            if (renderRes.ok) {
-              const renderData = await renderRes.json();
-              const updateClipWithRender = (c: ClipItem) => c.id === currentClip.id ? {
-                ...c,
-                video_url: renderData.video_url || c.video_url,
-                thumbnail_url: renderData.thumbnail_url || c.thumbnail_url,
-                rendered_layout_mode: renderData.rendered_layout_mode || newMode,
-                is_render_stale: false,
-              } : c;
-              setReadyClips((prev) => prev.map(updateClipWithRender));
-              setApprovedClips((prev) => prev.map(updateClipWithRender));
-            }
-          }).catch((renderErr) => {
-            console.warn('Failed to trigger background render after layout change:', renderErr);
-          });
+// Layout changed optimistically; server marks render_stale for publish/export
         }
       }).catch((e) => {
         console.warn('Failed to persist layout framing mode:', e);
@@ -3776,7 +3761,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                         className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors"
                       >
                         {/* Layout-specific thumbnail: 58px 9:16 portrait for vertical shorts, 124px 16:9 for widescreen */}
-                        <div className={`relative ${clip.target_aspect === '16:9' || clip.layout_mode === 'native_169' || clip.layout_mode === 'landscape' ? 'w-[124px] aspect-video' : 'w-[58px] aspect-[9/16]'} rounded-lg bg-black border border-white/10 overflow-hidden shrink-0 flex items-center justify-center shadow-sm`}>
+                        <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
                           <Film size={16} className="text-white/40" />
                           {clip.thumbnail_url && (
                             <img
