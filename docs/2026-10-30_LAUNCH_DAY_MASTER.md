@@ -61,7 +61,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 [X] TASK 2: Notification Center & Activity Sheet (Replacing Header Banners & Refresh Buttons with Pull-to-Refresh)
 [X] TASK 3: Fix 00:00 Duration Display for YouTube / Cloud-Ingested Sessions
 [X] TASK 4: Reconcile "Ingestion Failed" Session Status with Ready Clips & Fix Clip Video Playback
-[ ] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
+[X] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
 [X] TASK 6: Cellular / Wi-Fi Network Upload Selector (Clear 2-Option Radio Switch in Settings)
 [ ] TASK 7: Granular Pipeline Stage Status in Sessions Screen & Session Detail
 [ ] TASK 8: Input Orientation Classification & Multi-Layout System Hardening
@@ -69,7 +69,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 [ ] TASK 10: Captions Generation, Whisper Alignment Audit & Saved Default Template Sync
 [ ] TASK 11: Social Account OAuth Connection Stability (LinkedIn, Instagram, Facebook)
 [ ] TASK 12: Google Cloud Console App Verification & Brand Identity Assets
-[ ] TASK 13: One-Click Desktop Server Launcher & Multi-Tier Smart Storage Retention Policy (7-Day / 72-Hour / 10 GB)
+[X] TASK 13: One-Click Desktop Server Launcher & Multi-Tier Smart Storage Retention Policy (7-Day / 72-Hour / 10 GB)
 --- STOP & REPORT TO USER BEFORE TOUCHING TASK 14 ---
 [ ] TASK 14: Direct Video File Upload Route (<= 3 min files) via Clips Screen
 ```
@@ -257,15 +257,18 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 
 ### [TASK 13] One-Click Desktop Server Launcher & Multi-Tier Smart Storage Retention Policy
 - **User Architecture & Forensic Requirements:**
-  - **Desktop One-Click Launcher:** A clean Windows batch file (`Start-Dispatch.bat`) placed directly on Windows Desktop to start the server.
+  - **Desktop One-Click Launcher:** A clean Windows batch file (`scripts/Start-Dispatch.bat`) placed directly on repo root / scripts to start the server (checks Python environment, FFmpeg PATH, ensures storage directory, and starts uvicorn `dispatch.main:app --host 127.0.0.1 --port 8000`).
   - **The 3-Tier Storage Retention Law:**
     1. **Primary Time-Based Rule: 7-Day Source Retention (168 hours):** Full source video remains on PC for 7 days so creator can re-clip or expand trims.
-    2. **Publication-Based Early Release Rule (72-Hour Post-Publish Grace):** If ALL clips extracted from that source video have been published/approved, full source video can be cleaned up after 72 hours.
-    3. **Hard Disk Safety Ceiling (10 GB):** If `storage/` exceeds 10 GB, oldest source videos past 72 hours are pruned FIFO.
+    2. **Publication-Based Early Release Rule (72-Hour Post-Publish Grace):** If ALL clips extracted from that source video have been published/approved, full source video can be cleaned up after 72 hours from the latest publication/approval.
+    3. **Hard Disk Safety Ceiling (10 GB):** If `storage/` exceeds 10 GB (configurable), oldest source videos past 72 hours are pruned FIFO until storage drops below the ceiling.
 - **Key Files:**
   - `scripts/Start-Dispatch.bat`
   - `dispatch/storage/retention.py`
+  - `dispatch/storage/__init__.py`
   - `dispatch/main.py`
+  - `tests/test_retention.py`
+- **Status:** Complete (Verified with comprehensive unit test suite `tests/test_retention.py`).
 
 ---
 
@@ -303,7 +306,8 @@ Every code change must adhere to the **Dispatch UI/UX & Mobile Engineering Invar
 | **2026-10-30 12:05** | Master Backlog Order Finalized | `docs/2026-10-30_LAUNCH_DAY_MASTER.md` | Reordered tasks 1 to 14 according to user sequence. Ready to commence Task 1. |
 | **2026-10-30 12:35** | TASK 1: Minimal Badging & Origin/ID Inspector | `dispatch/web/app.py`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/RecordingsScreen.tsx`, `tests/test_web.py` | Commit `5b1894d`: Ultra-minimal list badging (Camera vs YouTube icon on thumbnails), eliminated technical strings from headers, integrated origin/session/YouTube ID inspector in Details & Options sheets. Verified by tests & Vite production build. |
 | **2026-10-30 12:55** | TASK 2: Notification Center & Activity Sheet | `frontend/src/context/ActivityContext.tsx`, `frontend/src/components/NotificationCenterModal.tsx`, `frontend/src/components/PullToRefresh.tsx`, `frontend/src/screens/RecordingsScreen.tsx`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/SettingsScreen.tsx`, `frontend/src/App.tsx` | Replaced top-right refresh buttons with uniform Bell trigger and active primary dot indicator across Sessions, Clips, and Settings. Created Design System v3 Notification Center bottom sheet for cloud jobs, queue backlog, and transient notifications. Removed redundant alert banners from header. Implemented mobile-standard PullToRefresh on scrollable library views with manual fallback in activity sheet. Verified with test suite and production Vite build. |
+| **2026-10-30 14:45** | TASK 13: Desktop Launcher & 3-Tier Storage Retention Policy | `scripts/Start-Dispatch.bat`, `dispatch/storage/retention.py`, `dispatch/storage/__init__.py`, `dispatch/main.py`, `tests/test_retention.py`, `docs/2026-10-30_LAUNCH_DAY_MASTER.md` | Created Windows batch launcher for single-click uvicorn daemon start. Implemented 3-Tier Retention Law: 7-day source retention, 72-hour post-publish early release grace, and 10 GB disk safety ceiling with FIFO eviction for videos older than 72h. Integrated periodic janitor thread in main.py. Verified with 4 unit tests in test_retention.py. |
 
 ---
 
-*End of Active Master Tracker. Next entry to be appended upon completion of Task 3.*
+*End of Active Master Tracker. Next entry to be appended upon completion of next task.*

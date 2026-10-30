@@ -208,11 +208,35 @@ def start_dispatch(run_web: bool = True):
                 finally:
                     first = False
 
+        def _storage_retention_janitor() -> None:
+            first = True
+            while True:
+                try:
+                    time.sleep(120 if first else 6 * 60 * 60)
+                    from dispatch.storage.retention import enforce_retention_policy
+                    stats = enforce_retention_policy()
+                    total_pruned = stats["pruned_7_day"] + stats["pruned_72_hour_published"] + stats["pruned_ceiling_fifo"]
+                    if total_pruned > 0:
+                        logger.info(
+                            "Storage retention janitor pruned %d source video(s) (freed %d MB): 7d=%d, 72h=%d, FIFO_ceiling=%d",
+                            total_pruned,
+                            stats["freed_bytes"] // (1024 * 1024),
+                            stats["pruned_7_day"],
+                            stats["pruned_72_hour_published"],
+                            stats["pruned_ceiling_fifo"],
+                        )
+                except Exception as sweep_err:
+                    logger.warning("Storage retention janitor sweep failed: %s", sweep_err)
+                finally:
+                    first = False
+
         threading.Thread(target=_published_clip_janitor, daemon=True,
                           name="dispatch-published-clip-janitor").start()
-        logger.info("Published-clip janitor active (first sweep in 5 min, then every 6 h)")
+        threading.Thread(target=_storage_retention_janitor, daemon=True,
+                          name="dispatch-storage-retention-janitor").start()
+        logger.info("Published-clip and 3-Tier Storage retention janitors active")
     except Exception as e:
-        logger.warning("Published-clip janitor not started: %s", e)
+        logger.warning("Storage janitors not started: %s", e)
 
     # 9. Start Web Dashboard
     if run_web:
