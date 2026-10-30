@@ -889,9 +889,10 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
   const handleViewfinderPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const session = clearPointerInteraction(e.pointerId, true);
     if (!session) {
-      // While locked, pointer-down intentionally opens no gesture session; the tap
-      // lands here and must unlock + refocus (unless it hit a real control).
-      if (shouldUnlockAndRefocusOnTap(focusState)) {
+      // While locked, pointer-down intentionally opens no gesture session.
+      // During active recording, screen taps must NEVER unlock exposure or disrupt focus.
+      // When idle, a single tap outside controls unlocks + refocuses.
+      if (!isRecording && shouldUnlockAndRefocusOnTap(focusState)) {
         const target = e.target as HTMLElement | null;
         if (!target?.closest('button, [data-interactive]')) {
           handleTapUnlockAndFocus(e);

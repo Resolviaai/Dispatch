@@ -125,9 +125,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const lastUserInteractionTimeRef = useRef<number>(0);
   const lastTimelineSeekRef = useRef<number | null>(null);
 
-  const timelineDuration = Math.max(1, sourceDuration || clipEnd || (clipStart + duration), duration);
+  const isSourceMode = Boolean(sourceTimebase && (sourceDuration ?? 0) > duration + 2.0);
   const safeClipDuration = Math.max(1, duration);
-  const timelineCurrentTime = (sourceTimebase && (sourceDuration ?? 0) > duration + 2.0) ? clipTimeToSourceTime(currentTime, clipStart) : currentTime;
+  const timelineDuration = isSourceMode ? Math.max(safeClipDuration, sourceDuration || 0) : safeClipDuration;
+  const timelineCurrentTime = isSourceMode ? clipTimeToSourceTime(currentTime, clipStart) : currentTime;
 
   // Trim boundaries and the filmstrip use source time. Caption words stay clip-relative.
   const [activeTrim, setActiveTrim] = useState<{ start: number; end: number }>({
@@ -242,6 +243,21 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const scheduleSeek = (timeSec: number) => {
     lastTimelineSeekRef.current = timeSec;
     pendingSeekTimeRef.current = timeSec;
+    if (mediaElementRef?.current) {
+      const v = mediaElementRef.current;
+      const effectiveTarget = (sourceTimebase && Boolean(v.duration >= (clipEnd || 0) - 1.0))
+        ? (clipStart + timeSec)
+        : timeSec;
+      try {
+        if ('fastSeek' in v && typeof (v as any).fastSeek === 'function') {
+          (v as any).fastSeek(effectiveTarget);
+        } else {
+          v.currentTime = effectiveTarget;
+        }
+      } catch {
+        v.currentTime = effectiveTarget;
+      }
+    }
     if (!rafSeekIdRef.current) {
       rafSeekIdRef.current = requestAnimationFrame(() => {
         rafSeekIdRef.current = null;
@@ -410,7 +426,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     if (isUserDriven) {
       lastUserInteractionTimeRef.current = Date.now();
       const scrubTime = clamp(sl / pxPerSec, 0, safeDuration);
-      const clipTime = Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2));
+      const clipTime = isSourceMode
+        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2))
+        : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2));
       scheduleSeek(clipTime);
     }
   };
@@ -486,7 +504,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         rulerContentRef.current.style.transform = `translateX(${-targetScroll + halfWidth}px)`;
       }
       const scrubTime = clamp(targetScroll / pxPerSec, 0, safeDuration);
-      scheduleSeek(Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2)));
+      const clipSeekTime = isSourceMode
+        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2))
+        : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2));
+      scheduleSeek(clipSeekTime);
     } else {
       // Smooth vertical scrolling
       scrollContainerRef.current.scrollTop = canvasDragRef.current.startScrollTop - dy;
@@ -941,7 +962,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       bg: 'bg-[#2563EB]/90',
       border: 'border-[#3B82F6]',
       text: 'text-blue-100',
-      badge: 'Caption',
+      badge: undefined,
       name: (grp.words || []).map((w) => w.text || '').join(' ') || 'Caption',
     };
   };
@@ -1306,10 +1327,15 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                     className="h-10 shrink-0 border-b border-[#232832] relative p-1"
                     style={{ width: `${totalTimelineWidth}px` }}
                   >
-                    {rowGroups.map((grp) => {
-                      const left = ((sourceTimebase && (sourceDuration ?? 0) > duration + 2.0) ? (clipStart + grp.start) : grp.start) * pxPerSec;
+                    {rowGroups.map((grp, grpIdx) => {
+                      const left = (isSourceMode ? (clipStart + grp.start) : grp.start) * pxPerSec;
                       const rawDur = Math.max(0.04, grp.end - grp.start);
-                      const trueWidth = Math.max(28, rawDur * pxPerSec);
+                      const nextGrp = rowGroups[grpIdx + 1];
+                      const maxAvailableWidth = nextGrp
+                        ? Math.max(8, ((nextGrp.start - grp.start) * pxPerSec) - 2)
+                        : 9999;
+                      const naturalWidth = rawDur * pxPerSec;
+                      const trueWidth = Math.max(8, Math.min(naturalWidth, maxAvailableWidth));
                       const isSelected = selectedGroupId === grp.id;
                       const isCaption = !grp.type || grp.type === 'caption';
                       const isSpoken = isCaption && captionTimeIsActive(currentTime, grp.start, grp.end);
@@ -1319,8 +1345,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                       const isThisBlockDragging = dragSession?.groupId === grp.id;
                       const showHandles = isSelected && trueWidth >= 32;
                       const showDuration = isSelected && trueWidth >= 96;
-                      const showLabel = trueWidth >= 24;
-                      const showIcon = trueWidth >= 20;
+                      const showLabel = trueWidth >= 16;
+                      const showIcon = isCaption ? (trueWidth >= 75) : (trueWidth >= 20);
 
                       return (
                         <div

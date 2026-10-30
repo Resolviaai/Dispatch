@@ -361,6 +361,15 @@ class CameraCaptureManager(private val context: Context) {
                     currentExposureIndex = 0
                 }
 
+                if (isAeLocked) {
+                    try {
+                        setCameraAeLock(boundCamera, true)
+                        Log.i(TAG, "Hardware AE lock re-asserted on camera bind")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not re-assert AE lock on camera bind: ${e.message}")
+                    }
+                }
+
                 isBindingCamera = false
                 Log.i(TAG, "CameraX High-Resolution 1080p VideoCapture bound successfully (Lens: $lensFacingToBind).")
                 val callbacks = pendingReadyCallbacks.toList()
@@ -433,6 +442,16 @@ class CameraCaptureManager(private val context: Context) {
                 if (currentExposureIndex != 0) {
                     setExposureIndex(currentExposureIndex, null)
                 }
+                if (isAeLocked) {
+                    camera?.let { cam ->
+                        try {
+                            setCameraAeLock(cam, true)
+                            Log.i(TAG, "Hardware AE lock re-asserted on activity lifecycle bind")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not re-assert AE lock on activity bind: ${e.message}")
+                        }
+                    }
+                }
 
                 Log.i(TAG, "VideoCapture bound to Lifecycle (Lens: $currentLensFacing).")
                 if (continuation.isActive) continuation.resume(true)
@@ -493,6 +512,16 @@ class CameraCaptureManager(private val context: Context) {
                 camera?.cameraControl?.setZoomRatio(currentZoomRatio)
                 if (currentExposureIndex != 0) {
                     setExposureIndex(currentExposureIndex, null)
+                }
+                if (isAeLocked) {
+                    camera?.let { cam ->
+                        try {
+                            setCameraAeLock(cam, true)
+                            Log.i(TAG, "Hardware AE lock re-asserted on service lifecycle bind")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not re-assert AE lock on service bind: ${e.message}")
+                        }
+                    }
                 }
 
                 Log.i(TAG, "VideoCapture bound to LifecycleService (Lens: $currentLensFacing).")
