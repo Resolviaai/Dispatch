@@ -40,11 +40,31 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Native OAuth redirect URI scheme (dispatch://oauth/callback) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="dispatch" android:host="oauth" />
+            </intent-filter>
+            <!-- Web OAuth callback endpoints for GitHub Pages & Cloudflare Worker -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="resolviaai.github.io"
+                    android:pathPrefix="/Dispatch/oauth" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="dispatch-cloud.resolviaai.workers.dev"
+                    android:pathPrefix="/oauth/callback" />
             </intent-filter>
         </activity>
 

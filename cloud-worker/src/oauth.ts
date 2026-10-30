@@ -196,11 +196,21 @@ export function escapeHtml(value: string): string {
   }[ch] as string));
 }
 
-export function renderOAuthResultHtml(title: string, message: string, isError = false): Response {
+export function renderOAuthResultHtml(title: string, message: string, isError = false, provider = ""): Response {
   const accentColor = isError ? "#EF4444" : "#22C55E";
   const iconSvg = isError
     ? `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="${accentColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`
     : `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="${accentColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+
+  const status = isError ? "error" : "success";
+  const qParams = new URLSearchParams({
+    status,
+    provider: provider || "",
+    message: message || title
+  }).toString();
+
+  const directDispatchUrl = `dispatch://oauth/callback?${qParams}`;
+  const intentDispatchUrl = `intent://oauth/callback?${qParams}#Intent;scheme=dispatch;package=com.resolvia.dispatch;end`;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -268,9 +278,22 @@ export function renderOAuthResultHtml(title: string, message: string, isError = 
     <div class="icon">${iconSvg}</div>
     <h2>${escapeHtml(title)}</h2>
     <p>${escapeHtml(message)}</p>
-    <a href="intent://oauth/return#Intent;scheme=dispatch;package=com.resolvia.dispatch;end" class="btn">Return to Dispatch</a>
-    <p style="margin:14px 0 0 0;font-size:12px;">If the app does not open, switch back using your recent apps.</p>
+    <a href="${escapeHtml(directDispatchUrl)}" id="returnBtn" class="btn">Return to Dispatch</a>
+    <p style="margin:14px 0 0 0;font-size:12px;">If the app does not open automatically, tap the button above or switch back using your recent apps.</p>
   </div>
+  <script>
+    (function() {
+      setTimeout(function() {
+        try {
+          window.location.href = "${directDispatchUrl}";
+        } catch (e) {
+          try {
+            window.location.href = "${intentDispatchUrl}";
+          } catch (_) {}
+        }
+      }, 700);
+    })();
+  </script>
 </body>
 </html>`;
 

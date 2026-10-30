@@ -277,9 +277,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
       }
     };
 
+    const unsubAuth = Bridge.addAuthCallbackListener((data) => {
+      if (data.status === 'success') {
+        const provName = data.provider
+          ? (data.provider.charAt(0).toUpperCase() + data.provider.slice(1))
+          : 'Account';
+        setFeedback(data.message || `Successfully connected ${provName}!`);
+        refreshAccounts();
+        refreshCloudStorage();
+      } else if (data.status === 'error') {
+        setFeedback(data.message || data.error || 'Connection failed. Please check your account permissions and retry.');
+      } else {
+        refreshAccounts();
+        refreshCloudStorage();
+      }
+    });
+
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', handleFocus);
     return () => {
+      unsubAuth();
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', handleFocus);
     };

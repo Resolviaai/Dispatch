@@ -1,3 +1,20 @@
+export interface AuthCallbackData {
+  provider?: string;
+  status?: string;
+  code?: string;
+  state?: string;
+  error?: string;
+  message?: string;
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  account_id?: string;
+  account_name?: string;
+  raw_url?: string;
+}
+
+export type AuthCallbackListener = (data: AuthCallbackData) => void;
+
 export interface RecordingItem {
   segmentId: string;
   sessionId: string;
@@ -150,6 +167,7 @@ declare global {
 }
 
 const cameraListeners: Set<CameraEventListener> = new Set();
+const authCallbackListeners: Set<AuthCallbackListener> = new Set();
 
 if (typeof window !== 'undefined') {
   window.onDispatchCameraEvent = (type: string, data: any) => {
@@ -169,6 +187,28 @@ if (typeof window !== 'undefined') {
           listener(e.detail);
         } catch (err) {
           console.error('Camera listener error:', err);
+        }
+      });
+    }
+  }) as EventListener);
+
+  (window as any).onDispatchAuthCallback = (data: AuthCallbackData) => {
+    authCallbackListeners.forEach(listener => {
+      try {
+        listener(data);
+      } catch (e) {
+        console.error('Auth callback listener error:', e);
+      }
+    });
+  };
+
+  window.addEventListener('dispatch-auth-callback', ((e: CustomEvent) => {
+    if (e.detail) {
+      authCallbackListeners.forEach(listener => {
+        try {
+          listener(e.detail);
+        } catch (err) {
+          console.error('Auth callback listener error:', err);
         }
       });
     }
@@ -668,6 +708,17 @@ export const Bridge = {
       return true;
     }
     return false;
+  },
+
+  addAuthCallbackListener(listener: AuthCallbackListener): () => void {
+    authCallbackListeners.add(listener);
+    return () => {
+      authCallbackListeners.delete(listener);
+    };
+  },
+
+  removeAuthCallbackListener(listener: AuthCallbackListener): void {
+    authCallbackListeners.delete(listener);
   }
 };
 

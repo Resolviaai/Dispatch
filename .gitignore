@@ -38,6 +38,8 @@ storage/youtube_inbox/*
 !dispatch/web/static/**/*.ico
 !android/app/src/main/assets/**/*.png
 !android/app/src/main/assets/**/*.ico
+!site/**/*.png
+!android/app/src/main/*.png
 
 
 # Environment & credentials

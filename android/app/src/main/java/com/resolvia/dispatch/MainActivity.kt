@@ -5,6 +5,8 @@ import java.io.File
 import java.io.FileInputStream
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.net.Uri
+import org.json.JSONObject
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
@@ -414,6 +416,90 @@ class MainActivity : ComponentActivity() {
 
         // Check required permissions once views are attached to window
         checkAndRequestPermissions()
+
+        // Handle incoming deep link intent (e.g. cold start via OAuth callback)
+        handleIncomingIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        val uri: Uri = intent?.data ?: return
+        android.util.Log.i("MainActivity", "Handling deep link intent URI: $uri")
+        val scheme = uri.scheme?.lowercase() ?: ""
+        val host = uri.host?.lowercase() ?: ""
+
+        val isDispatchScheme = scheme == "dispatch" && host == "oauth"
+        val isHttpsScheme = scheme == "https" &&
+            (host == "resolviaai.github.io" || host == "dispatch-cloud.resolviaai.workers.dev") &&
+            (uri.path?.contains("/oauth") == true)
+
+        if (isDispatchScheme || isHttpsScheme) {
+            handleOAuthCallback(uri)
+        }
+    }
+
+    private fun handleOAuthCallback(uri: Uri) {
+        try {
+            val path = uri.path ?: ""
+            val provider = uri.getQueryParameter("provider")
+                ?: uri.getQueryParameter("service")
+                ?: when {
+                    path.contains("google") || path.contains("youtube") -> "youtube"
+                    path.contains("instagram") -> "instagram"
+                    path.contains("facebook") -> "facebook"
+                    path.contains("linkedin") -> "linkedin"
+                    path.contains("twitter") || path.contains("x") -> "twitter"
+                    else -> ""
+                }
+            val code = uri.getQueryParameter("code") ?: ""
+            val state = uri.getQueryParameter("state") ?: ""
+            val status = uri.getQueryParameter("status")
+                ?: if (code.isNotBlank() || uri.getQueryParameter("access_token") != null) "success"
+                else if (uri.getQueryParameter("error") != null) "error"
+                else "callback"
+            val error = uri.getQueryParameter("error")
+                ?: uri.getQueryParameter("error_description")
+                ?: ""
+            val accessToken = uri.getQueryParameter("access_token") ?: ""
+            val refreshToken = uri.getQueryParameter("refresh_token") ?: ""
+            val tokenType = uri.getQueryParameter("token_type") ?: ""
+            val accountId = uri.getQueryParameter("account_id") ?: ""
+            val accountName = uri.getQueryParameter("account_name") ?: ""
+            val message = uri.getQueryParameter("message") ?: ""
+
+            val payload = JSONObject().apply {
+                put("provider", provider)
+                put("status", status)
+                if (code.isNotBlank()) put("code", code)
+                if (state.isNotBlank()) put("state", state)
+                if (error.isNotBlank()) put("error", error)
+                if (message.isNotBlank()) put("message", message)
+                if (accessToken.isNotBlank()) put("access_token", accessToken)
+                if (refreshToken.isNotBlank()) put("refresh_token", refreshToken)
+                if (tokenType.isNotBlank()) put("token_type", tokenType)
+                if (accountId.isNotBlank()) put("account_id", accountId)
+                if (accountName.isNotBlank()) put("account_name", accountName)
+                put("raw_url", uri.toString())
+            }
+
+            android.util.Log.i("MainActivity", "Dispatching OAuth callback to bridge: $payload")
+            if (::bridge.isInitialized) {
+                bridge.dispatchAuthCallback(payload.toString())
+            } else {
+                webView.post {
+                    if (::bridge.isInitialized) {
+                        bridge.dispatchAuthCallback(payload.toString())
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to handle OAuth callback URI: ${e.message}", e)
+        }
     }
 
     override fun onResume() {

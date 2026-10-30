@@ -1130,6 +1130,37 @@ export default {
         });
       }
 
+      if ((provider === "google" || provider === "youtube") && !env.YOUTUBE_CLIENT_ID) {
+        return json(400, {
+          error: "Google / YouTube OAuth is not configured on the cloud worker (missing YOUTUBE_CLIENT_ID).",
+          unconfigured: true
+        });
+      }
+      if (provider === "instagram" && !env.INSTAGRAM_CLIENT_ID && !env.FACEBOOK_CLIENT_ID) {
+        return json(400, {
+          error: "Instagram OAuth is not configured on the cloud worker (missing INSTAGRAM_CLIENT_ID or FACEBOOK_CLIENT_ID).",
+          unconfigured: true
+        });
+      }
+      if (provider === "facebook" && !env.FACEBOOK_CLIENT_ID && !env.INSTAGRAM_CLIENT_ID) {
+        return json(400, {
+          error: "Facebook OAuth is not configured on the cloud worker (missing FACEBOOK_CLIENT_ID).",
+          unconfigured: true
+        });
+      }
+      if (provider === "linkedin" && !env.LINKEDIN_CLIENT_ID) {
+        return json(400, {
+          error: "LinkedIn OAuth is not configured on the cloud worker (missing LINKEDIN_CLIENT_ID).",
+          unconfigured: true
+        });
+      }
+      if (provider === "twitter" && !env.TWITTER_CLIENT_ID) {
+        return json(400, {
+          error: "X (Twitter) OAuth is not configured on the cloud worker (missing TWITTER_CLIENT_ID).",
+          unconfigured: true
+        });
+      }
+
       const ticket = crypto.randomUUID();
       await rpc(env, "cloud_put_oauth_state", { p_state: "ticket:" + ticket, p_user_id: user.userId });
       const targetRoute = (provider === "google" || provider === "youtube") ? "google" : provider;
@@ -1268,7 +1299,7 @@ export default {
         body: JSON.stringify({ p_user_id: uid, p_refresh_token_encrypted: enc, p_google_email: email }),
       });
 
-      return renderOAuthResultHtml("YouTube Connected", `Channel "${channelTitle}" is connected to Dispatch. You can return to the app.`);
+      return renderOAuthResultHtml("YouTube Connected", `Channel "${channelTitle}" is connected to Dispatch. You can return to the app.`, false, "youtube");
     }
 
     // 2. Instagram Start & Callback
@@ -1279,6 +1310,9 @@ export default {
         const state = crypto.randomUUID() + crypto.randomUUID();
         await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
         const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
+        if (!clientId) {
+          return renderOAuthResultHtml("Configuration Required", "Instagram / Facebook Client ID is not configured on the cloud worker.", true, "instagram");
+        }
         return Response.redirect(buildInstagramAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback", state), 302);
       } catch (err: any) {
         console.error("Instagram OAuth start error:", err);
@@ -1369,7 +1403,7 @@ export default {
         return renderOAuthResultHtml("Database Error", `Failed to save Instagram account: ${errText.slice(0, 150)}`, true);
       }
 
-      return renderOAuthResultHtml("Instagram Connected", `Account "${igUsername}" connected successfully! You can return to Dispatch.`);
+      return renderOAuthResultHtml("Instagram Connected", `Account "${igUsername}" connected successfully! You can return to Dispatch.`, false, "instagram");
     }
 
     // 3. Facebook Start & Callback
@@ -1380,6 +1414,9 @@ export default {
         const state = crypto.randomUUID() + crypto.randomUUID();
         await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
         const clientId = env.FACEBOOK_CLIENT_ID || env.INSTAGRAM_CLIENT_ID || "";
+        if (!clientId) {
+          return renderOAuthResultHtml("Configuration Required", "Facebook Client ID is not configured on the cloud worker.", true, "facebook");
+        }
         return Response.redirect(buildFacebookAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/facebook/callback", state), 302);
       } catch (err: any) {
         console.error("Facebook OAuth start error:", err);
@@ -1464,7 +1501,7 @@ export default {
         return renderOAuthResultHtml("Database Error", `Failed to save Facebook account: ${errText.slice(0, 150)}`, true);
       }
 
-      return renderOAuthResultHtml("Facebook Connected", `Page "${pageTitle}" connected successfully! You can return to Dispatch.`);
+      return renderOAuthResultHtml("Facebook Connected", `Page "${pageTitle}" connected successfully! You can return to Dispatch.`, false, "facebook");
     }
 
     // 4. LinkedIn Start & Callback
@@ -1474,7 +1511,11 @@ export default {
         if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
         const state = crypto.randomUUID() + crypto.randomUUID();
         await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
-        return Response.redirect(buildLinkedInAuthorizeUrl(env.LINKEDIN_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback", state), 302);
+        const clientId = env.LINKEDIN_CLIENT_ID || "";
+        if (!clientId) {
+          return renderOAuthResultHtml("Configuration Required", "LinkedIn Client ID is not configured on the cloud worker.", true, "linkedin");
+        }
+        return Response.redirect(buildLinkedInAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/linkedin/callback", state), 302);
       } catch (err: any) {
         console.error("LinkedIn OAuth start error:", err);
         return renderOAuthResultHtml("Connection Error", err?.message || "Failed to start LinkedIn sign-in. Please retry from Dispatch.", true);
@@ -1546,7 +1587,7 @@ export default {
         return renderOAuthResultHtml("Database Error", `Failed to save LinkedIn account: ${errText.slice(0, 150)}`, true);
       }
 
-      return renderOAuthResultHtml("LinkedIn Connected", `Profile "${profileName}" connected successfully! You can return to Dispatch.`);
+      return renderOAuthResultHtml("LinkedIn Connected", `Profile "${profileName}" connected successfully! You can return to Dispatch.`, false, "linkedin");
     }
 
     // 5. X / Twitter (OAuth 2.0 PKCE) Start & Callback
@@ -1650,7 +1691,7 @@ export default {
         return renderOAuthResultHtml("Database Error", `Failed to save X account: ${errText.slice(0, 150)}`, true);
       }
 
-      return renderOAuthResultHtml("X (Twitter) Connected", `Account "${twitterHandle}" connected successfully! You can return to Dispatch.`);
+      return renderOAuthResultHtml("X (Twitter) Connected", `Account "${twitterHandle}" connected successfully! You can return to Dispatch.`, false, "twitter");
     }
 
     // ---- Remote processing jobs (authenticated app clients, any network) ----
