@@ -1177,13 +1177,25 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
 
   // Authoritative aspect ratio determination: strictly governed by sourceOrientation (never tainted by rendered files)
   const isTarget169 = useMemo(() => {
+    // 1. Explicit native widescreen layouts ALWAYS render in 16:9 frame
+    if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
+
+    // 2. Explicit vertical layouts ALWAYS render in 9:16 frame
+    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow') return false;
+
+    // 3. For Fit + Blur and Fit + Black:
+    // If source is horizontal (landscape): we fit it into a vertical 9:16 frame with letterbox bars above/below
+    if (sourceOrientation === 'landscape') {
+      return false; // target is 9:16 vertical short-form
+    }
+
+    // If source is vertical (portrait): we fit it into a 16:9 widescreen frame with pillarbox bars left/right
+    if (sourceOrientation === 'portrait') {
+      return true; // target is 16:9 widescreen long-form
+    }
+
     if (targetAspect === '16:9') return true;
     if (targetAspect === '9:16') return false;
-    if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
-    if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow') return false;
-    const isPortraitSource = sourceOrientation === 'portrait';
-    if (isPortraitSource && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return true;
-    if (!isPortraitSource && (layoutMode === 'fit_black' || layoutMode === 'fit_blur')) return false;
     return false;
   }, [layoutMode, sourceOrientation, targetAspect]);
 
@@ -1370,9 +1382,11 @@ export const FramedVideoStage: React.FC<FramedVideoStageProps> = ({
                 setIsPlaying(false);
                 bgVideoRef.current?.pause();
               }}
-              className="absolute inset-0 z-10 w-full h-full object-contain pointer-events-none will-change-transform"
+              className={`absolute inset-0 z-10 w-full h-full pointer-events-none will-change-transform ${
+                isCrop ? 'object-cover object-center' : 'object-contain'
+              }`}
               style={{
-                transform: isCrop ? `scale(${calculatedCropScale}) translateZ(0)` : 'scale(1) translateZ(0)',
+                transform: 'scale(1) translateZ(0)',
                 transformOrigin: 'center center',
                 transition: 'transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
               }}
@@ -2602,14 +2616,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       setSourceDurationForClip({ clipId: currentClip.id, seconds: loadedDuration });
     }
     if (video) {
-      if (video.videoWidth > 0 && video.videoHeight > 0) {
+      if (video.videoWidth > 0 && video.videoHeight > 0 && isSourceEffective) {
         if (currentClip) {
-          const isLandscape = video.videoWidth > video.videoHeight * 1.1;
-          if (isLandscape && currentClip.source_orientation !== 'landscape') {
-            currentClip.source_orientation = 'landscape';
-            currentClip.available_layout_modes = DEFAULT_LANDSCAPE_MODES;
-            if (!['crop_916', 'crop_follow', 'fit_blur', 'fit_black', 'native_169', 'landscape'].includes(layoutMode)) {
-              setLayoutMode('fit_blur');
+          const isLandscape = video.videoWidth > video.videoHeight * 1.05;
+          const newOrientation = isLandscape ? 'landscape' : 'portrait';
+          if (currentClip.source_orientation !== newOrientation) {
+            currentClip.source_orientation = newOrientation;
+            currentClip.available_layout_modes = isLandscape ? DEFAULT_LANDSCAPE_MODES : DEFAULT_PORTRAIT_MODES;
+            if (isLandscape && !['crop_916', 'crop_follow', 'fit_blur', 'fit_black', 'native_169', 'landscape'].includes(layoutMode)) {
+              setLayoutMode('crop_916');
             }
           }
         }
@@ -3952,7 +3967,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               clipEnd={clipEnd}
               clipDuration={clipDuration}
               layoutMode={layoutMode}
-              sourceOrientation={currentClip.source_orientation || 'portrait'}
+              sourceOrientation={(currentClip.source_orientation || (currentClip.origin === 'youtube' || currentClip.youtube_video_id || currentClip.source_aspect_ratio === '16:9' ? 'landscape' : 'portrait'))}
               targetAspect={currentClip.target_aspect}
               isPlaying={isPlaying}
               onTogglePlay={handleTogglePlay}
@@ -4228,7 +4243,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
               // Normal Ready-to-Review Mode:
               const isLandscapeReview = currentClip.source_orientation === 'landscape'
-                || Boolean(videoRef.current && videoRef.current.videoWidth > videoRef.current.videoHeight * 1.1);
+                || currentClip.origin === 'youtube'
+                || Boolean(currentClip.youtube_video_id)
+                || currentClip.source_aspect_ratio === '16:9'
+                || Boolean(videoRef.current && isSourceTimebase && videoRef.current.videoWidth > videoRef.current.videoHeight * 1.05);
               const availableModes = (currentClip.available_layout_modes && currentClip.available_layout_modes.length > 0)
                 ? currentClip.available_layout_modes
                 : (isLandscapeReview ? DEFAULT_LANDSCAPE_MODES : DEFAULT_PORTRAIT_MODES);
@@ -4405,7 +4423,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
             clipEnd={clipEnd}
             clipDuration={clipDuration}
             layoutMode={layoutMode}
-            sourceOrientation={currentClip.source_orientation || 'portrait'}
+            sourceOrientation={(currentClip.source_orientation || (currentClip.origin === 'youtube' || currentClip.youtube_video_id || currentClip.source_aspect_ratio === '16:9' ? 'landscape' : 'portrait'))}
             targetAspect={currentClip.target_aspect}
             isPlaying={isPlaying}
             onTogglePlay={handleTogglePlay}
@@ -4755,7 +4773,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 clipEnd={clipEnd}
                 clipDuration={clipDuration}
                 layoutMode={layoutMode}
-                sourceOrientation={currentClip.source_orientation || 'portrait'}
+                sourceOrientation={(currentClip.source_orientation || (currentClip.origin === 'youtube' || currentClip.youtube_video_id || currentClip.source_aspect_ratio === '16:9' ? 'landscape' : 'portrait'))}
                 targetAspect={currentClip.target_aspect}
                 isPlaying={isPlaying}
                 onTogglePlay={handleTogglePlay}

@@ -121,15 +121,21 @@ def render_clip(
             active_segments = remap_timestamps_for_silence_cuts(segments, start_time, end_time, cuts) if has_silence_cuts else segments
             try:
                 import json
-                from dispatch.captions import group_words_into_captions, export_to_ass
+                from dispatch.captions import group_words_into_captions, export_to_ass, apply_template_to_track
                 from dispatch.captions.presets import get_default_preset_id
+                clip = db.get_clip_by_id(clip_id) if clip_id else None
+                user_tpl = db.get_default_template(user_id=clip.get("user_id") if clip else None)
+                tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+                preset_cand = tpl_captions.get("preset_id")
+                effective_preset_id = sub_opts.get("style_preset") or (preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id())
                 track = group_words_into_captions(
                     raw_segments=active_segments,
                     clip_start=start_time,
                     clip_end=start_time + eff_duration if has_silence_cuts else end_time,
                     clip_id=clip_id,
-                    preset_id=sub_opts.get("style_preset") or get_default_preset_id()
+                    preset_id=effective_preset_id
                 )
+                apply_template_to_track(track, tpl_captions)
                 export_to_ass(track, ass_path)
                 saved = db.save_clip_caption_data(
                     clip_id, json.dumps(track.to_dict()),

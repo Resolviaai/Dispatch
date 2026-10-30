@@ -94,13 +94,21 @@ def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
             if cand.exists() and cand.stat().st_size > 0:
                 return cand
 
-    # 3. Check YouTube inbox
-    clip_id_str = clip.get("id", "")
-    if clip_id_str.startswith("yt_") or (clip.get("chunk_id") and str(clip["chunk_id"]).startswith("yt_")):
-        yt_id = clip.get("chunk_id") or clip_id_str
-        clean_yt_id = str(yt_id).replace("yt_", "").strip()
-        yt_row = db.get_youtube_video(clean_yt_id)
-        if yt_row and yt_row.get("local_video_path"):
+    # 3. Check YouTube inbox by video_id, session_id, or dispatch_id
+    yt_id = clip.get("youtube_video_id")
+    sess_id = clip.get("session_id")
+    chunk_id = clip.get("chunk_id")
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        yt_row = None
+        if yt_id:
+            yt_row = cursor.execute("SELECT local_video_path FROM youtube_inbox WHERE video_id = ?", (yt_id,)).fetchone()
+        if not yt_row and sess_id:
+            yt_row = cursor.execute("SELECT local_video_path FROM youtube_inbox WHERE session_id = ?", (sess_id,)).fetchone()
+        if not yt_row and chunk_id:
+            clean_chunk = str(chunk_id).replace("yt_", "").strip()
+            yt_row = cursor.execute("SELECT local_video_path FROM youtube_inbox WHERE dispatch_id = ? OR video_id = ?", (clean_chunk, clean_chunk)).fetchone()
+        if yt_row and yt_row["local_video_path"]:
             cand = Path(yt_row["local_video_path"])
             if cand.exists() and cand.stat().st_size > 0:
                 return cand

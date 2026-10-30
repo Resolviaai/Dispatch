@@ -16,10 +16,10 @@ import ipaddress
 import urllib.parse
 import email.utils
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, Response
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, Response, Body
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -317,14 +317,14 @@ def _validate_local_network_trust(request: Request, client_host: str) -> None:
             origin_hostname = (split_origin.hostname or "").lower()
             origin_port = split_origin.port
 
-            # Allow loopback/testserver origins and local network peer origins
+            # Allow loopback/testserver origins, Android appassets, and local network peer origins
             is_valid = (
                 origin_scheme in ("http", "https")
                 and (
-                    origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver")
+                    origin_hostname in ("localhost", "127.0.0.1", "::1", "testserver", "appassets.androidplatform.net")
                     or _is_local_network_peer(origin_hostname)
                 )
-                and (origin_port in (8000, 5173, None) or origin_hostname == "testserver")
+                and (origin_port in (8000, 5173, None) or origin_hostname in ("testserver", "appassets.androidplatform.net"))
             )
             if not is_valid:
                 logger.warning("Rejected request to %s: untrusted origin '%s'", request.url.path, origin_header)
@@ -705,7 +705,24 @@ def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
                 if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
                     return cand
 
-    # 2. Check storage/incoming and storage/processing using session_id or chunk_id
+    # 2. Check YouTube inbox by video_id, session_id, or dispatch_id
+    yt_id = clip.get("youtube_video_id")
+    sess_id = clip.get("session_id")
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        yt_row = None
+        if yt_id:
+            yt_row = cursor.execute("SELECT local_video_path FROM youtube_inbox WHERE video_id = ?", (yt_id,)).fetchone()
+        if not yt_row and sess_id:
+            yt_row = cursor.execute("SELECT local_video_path FROM youtube_inbox WHERE session_id = ?", (sess_id,)).fetchone()
+        if not yt_row and chunk_id:
+            yt_row = cursor.execute("SELECT local_video_path FROM youtube_inbox WHERE dispatch_id = ? OR video_id = ?", (chunk_id, chunk_id)).fetchone()
+        if yt_row and yt_row["local_video_path"]:
+            cand = Path(yt_row["local_video_path"])
+            if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
+                return cand
+
+    # 3. Check storage/incoming and storage/processing using session_id or chunk_id
     for search_dir in (PROCESSING_DIR, INCOMING_DIR):
         if clip.get("session_id"):
             sess = clip["session_id"]
@@ -717,7 +734,7 @@ def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
                 if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
                     return cand
 
-    # 3. Fallback: if clip video_path exists, use it so preview never hard-crashes
+    # 4. Fallback: if clip video_path exists, use it so preview never hard-crashes
     if clip.get("video_path"):
         cand = Path(clip["video_path"])
         if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
@@ -797,6 +814,11 @@ def get_clip_framing_context(clip: Dict[str, Any]) -> Dict[str, Any]:
     # 2. If inconclusive or chunk dimensions missing/zero, probe source file directly
     if source_w is None or source_h is None or source_w <= 0 or source_h <= 0:
         source_path = resolve_clip_source_path(clip)
+        # CRITICAL GUARD: Never probe clip["video_path"] (rendered 9:16 output) to infer source orientation!
+        rendered_vp = clip.get("video_path")
+        if source_path and rendered_vp and str(source_path.resolve()) == str(Path(rendered_vp).resolve()):
+            source_path = None
+
         if source_path and source_path.exists():
             from dispatch.ingestion.validator import inspect_video_orientation
             info = inspect_video_orientation(source_path)
@@ -813,6 +835,13 @@ def get_clip_framing_context(clip: Dict[str, Any]) -> Dict[str, Any]:
                             conn.commit()
                     except Exception:
                         pass
+        else:
+            # Fallback for cloud/YouTube clips where raw source isn't local:
+            # YouTube imports are inherently 16:9 landscape
+            orig_info = resolve_clip_origin(clip)
+            if orig_info.get("origin") == "youtube" or orig_info.get("youtube_video_id"):
+                orientation = "landscape"
+                source_aspect = "16:9" 
 
     # 3. Dynamic options based strictly on original session orientation
     if orientation == "portrait":
@@ -1280,10 +1309,12 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
         if not out_file.exists() or out_file.stat().st_size == 0:
             raise RuntimeError("Render output file is missing or zero bytes")
 
+        thumb_path_str = str(render_res["thumbnail_path"]) if render_res.get("thumbnail_path") else None
+        thumb_name = Path(thumb_path_str).name if thumb_path_str else None
         with db.get_db_connection() as conn:
             cursor = conn.execute(
-                "UPDATE clips SET layout_mode = ?, rendered_layout_mode = ?, video_path = ?, render_stale = 0 WHERE id = ? AND range_revision = ?",
-                (target_layout, target_layout, str(out_file), clip_id, int(clip.get("range_revision") or 0))
+                "UPDATE clips SET layout_mode = ?, rendered_layout_mode = ?, video_path = ?, thumbnail_path = COALESCE(?, thumbnail_path), render_stale = 0 WHERE id = ? AND range_revision = ?",
+                (target_layout, target_layout, str(out_file), thumb_path_str, clip_id, int(clip.get("range_revision") or 0))
             )
             conn.commit()
             if cursor.rowcount != 1:
@@ -1306,6 +1337,7 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
         "available_layout_modes": updated_ctx["available_layout_modes"],
         "rendered_layout_mode": target_layout,
         "video_url": f"/clips/{out_file.name}",
+        "thumbnail_url": f"/thumbnails/{thumb_name}" if thumb_name else None,
         "is_render_stale": False
     }
 
@@ -3591,20 +3623,69 @@ async def serve_font(filename: str):
 # --- Default Editing Template Endpoints ---
 
 @app.get("/api/template/default")
+@app.get("/api/captions/templates")
+@app.get("/api/template")
 async def get_default_template_endpoint(request: Request):
     """Retrieve the current default editing template for the caller or system."""
     caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     template = db.get_default_template(user_id=caller_user_id)
     return template
 
+get_caption_template = get_default_template_endpoint
+
 
 @app.post("/api/template/default")
-async def save_default_template_endpoint(payload: Dict[str, Any], request: Request):
+@app.post("/api/captions/templates")
+@app.post("/api/template")
+async def save_default_template_endpoint(request: Request, payload: Optional[Any] = Body(None)):
     """Save or update the caller's default editing template."""
     verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    saved = db.save_default_template(payload, user_id=caller_user_id)
-    return {"status": "success", "template": saved}
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
+
+    raw_data: Any = payload
+    if raw_data is None:
+        try:
+            raw_data = await request.json()
+        except Exception:
+            try:
+                body_bytes = await request.body()
+                raw_data = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+            except Exception:
+                raw_data = {}
+
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except Exception:
+            raw_data = {}
+
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+
+    if "template" in raw_data and isinstance(raw_data["template"], dict):
+        raw_data = raw_data["template"]
+
+    default_tpl = db.DEFAULT_EDITING_TEMPLATE
+    sanitized: Dict[str, Any] = {
+        "name": str(raw_data.get("name") or "Creator Standard")[:80],
+        "framing": dict(raw_data.get("framing") or default_tpl.get("framing", {})),
+        "captions": dict(raw_data.get("captions") or default_tpl.get("captions", {})),
+        "hook": dict(raw_data.get("hook") or default_tpl.get("hook", {})),
+        "publish_mode": str(raw_data.get("publish_mode") or "private"),
+        "platform_targets": list(raw_data.get("platform_targets") or ["youtube", "instagram"]),
+        "updated_at": raw_data.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+    }
+
+    saved = db.save_default_template(sanitized, user_id=caller_user_id)
+    return {
+        "status": "success",
+        "template": saved,
+        "revision": saved.get("revision", 1),
+        "message": "Template saved successfully",
+    }
+
+save_caption_template = save_default_template_endpoint
+update_default_template = save_default_template_endpoint
 
 
 @app.get("/api/template/sample-video")

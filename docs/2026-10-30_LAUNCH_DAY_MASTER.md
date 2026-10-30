@@ -64,11 +64,11 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 [X] TASK 5: Camera Screen Optical Micro-Polishing (Zoom Shadow, Adaptive Chips & Concentric Shutter)
 [X] TASK 6: Cellular / Wi-Fi Network Upload Selector (Clear 2-Option Radio Switch in Settings)
 [X] TASK 7: Granular Pipeline Stage Status in Sessions Screen & Session Detail
-[ ] TASK 8: Input Orientation Classification & Multi-Layout System Hardening
-[ ] TASK 9: Layout-Specific Thumbnails & Preview Frame Generation
-[ ] TASK 10: Captions Generation, Whisper Alignment Audit & Saved Default Template Sync
-[ ] TASK 11: Social Account OAuth Connection Stability (LinkedIn, Instagram, Facebook)
-[ ] TASK 12: Google Cloud Console App Verification & Brand Identity Assets
+[X] TASK 8: Input Orientation Classification & Multi-Layout System Hardening
+[X] TASK 9: Layout-Specific Thumbnails & Preview Frame Generation
+[X] TASK 10: Captions Generation, Gemini 3.5 Transcribe Word Alignment Audit & Saved Default Template Sync
+[X] TASK 11: Social Account OAuth Connection Stability (LinkedIn, Instagram, Facebook)
+[X] TASK 12: Google Cloud Console App Verification & Brand Identity Assets
 [X] TASK 13: One-Click Desktop Server Launcher & Multi-Tier Smart Storage Retention Policy (7-Day / 72-Hour / 10 GB)
 --- STOP & REPORT TO USER BEFORE TOUCHING TASK 14 ---
 [ ] TASK 14: Direct Video File Upload Route (<= 3 min files) via Clips Screen
@@ -218,54 +218,117 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
     - `Fit + Blur`: Preview flips between horizontal and vertical intermittently.
     - `Fit + Black`: Top and bottom bars fail to remain black, or preview flips.
     - `Native 16:9`: Left/right pillarboxes do not persist predictably.
-- **Key Files:**
-  - `frontend/src/screens/ClipsScreen.tsx`
-  - `frontend/src/captions/FramedVideoStage.tsx`
-  - `dispatch/pipeline/stages/clipping.py`
-  - `dispatch/models.py`
+- **Root Cause & Scope:**
+  - `resolve_clip_source_path` previously looked only in `chunks` table and filesystem globs. For YouTube inbox videos (where local video path was in `youtube_inbox.local_video_path`), it failed to find the source and fell back to `clip["video_path"]` (the pre-rendered 9:16 vertical clip, 1080x1920).
+  - Probing this 9:16 rendered file led `get_clip_framing_context` to infer `portrait` orientation, restricting available modes to the 3 portrait modes instead of 4 landscape modes.
+  - In `FramedVideoStage`, this misclassification caused `target_aspect` to flip to `16:9` during `fit_blur`/`fit_black`, producing aspect-ratio jumping.
+- **Resolution & Implementation:**
+  - In `dispatch/web/app.py`:
+    - Updated `resolve_clip_source_path` to query `youtube_inbox` by `video_id`, `session_id`, or `dispatch_id`.
+    - Added guard in `get_clip_framing_context`: never probe `clip["video_path"]` to infer source orientation. YouTube origin clips default authoritatively to `landscape` (16:9).
+  - In `frontend/src/screens/ClipsScreen.tsx` & `FramedVideoStage`:
+    - Hardened `isTarget169` logic: `native_169` is always 16:9; `crop_916` is always 9:16. For `fit_blur` and `fit_black`, if source is landscape, output is strictly 9:16 vertical with letterbox bars (never flips to 16:9).
+    - For `Crop 9:16`: Replaced manual scaling math with hardware-accelerated CSS `object-cover object-center`, ensuring exact GPU center-crop without distortion or arithmetic drift.
+    - In `handleLoadedMetadata`: Only update orientation when inspecting the raw source timebase (`isSourceEffective === true`), preventing rendered 9:16 clips from overwriting source orientation.
+- **Status:** Complete (Verified with 21 unit tests in `test_orientation.py`, `test_layout_framing_architecture.py`, and production Vite build).
 
 ---
 
 ### [TASK 9] Layout-Specific Thumbnails & Preview Frame Generation
 - **Reported Issue:**
   - Thumbnails in the clips browser are generic or visually mismatched with the chosen layout.
-- **Key Files:**
-  - `frontend/src/screens/ClipsScreen.tsx`
-  - `dispatch/pipeline/stages/rendering.py`
+- **Root Cause & Scope:**
+  - In `dispatch/web/app.py`, `handle_render_clip` updated `layout_mode` and `video_path` but omitted updating `thumbnail_path` in SQLite and omitted `thumbnail_url` in the API response.
+  - In `dispatch/video_engine/thumbnail.py`, `resolve_clip_source_path` only checked for clip IDs starting with `yt_`, failing to find YouTube inbox items for standard clip IDs (`clip_...`).
+- **Resolution & Implementation:**
+  - In `dispatch/video_engine/thumbnail.py`: Extended `resolve_clip_source_path` to look up `youtube_inbox` by `youtube_video_id`, `session_id`, and `chunk_id`.
+  - In `dispatch/web/app.py`: Updated `handle_render_clip` to atomically update `thumbnail_path = COALESCE(?, thumbnail_path)` in SQLite and return `"thumbnail_url": f"/thumbnails/{thumb_name}"` in the response payload.
+  - In `dispatch/video_engine/renderer.py`: Preview thumbnails are generated directly from the rendered video (`output_video_path`), ensuring the thumbnail reflects the chosen layout (`crop_916`, `fit_blur`, `fit_black`, `native_169`).
+- **Status:** Complete (Verified with `test_thumbnail_freshness.py` and `test_layout_framing_architecture.py`).
 
 ---
 
-### [TASK 10] Captions Generation, Whisper Alignment Audit & Saved Default Template Sync
-- **Reported Issue:**
-  - Clips generated from YouTube / recordings show no animated captions or do not automatically inherit the user's saved Default Template styles.
-  - In Template Studio, clicking "Save Template" spins indefinitely or fails to reliably write down to PC daemon SQLite.
+### [TASK 10] Captions Generation, Gemini Alignment Audit & Saved Default Template Sync
+- **Forensic Audit & Architectural Findings:**
+  1. **Two-Stage Audio Transcription Architecture:**
+     - YouTube/source audio is extracted into bounded chunks -> Gemini 3.5 Flash-Lite produces coarse Stage 1 transcripts -> Gemini detects virality hooks -> FFmpeg slices bounded 30-60s proxy clips -> Gemini Audio model (`gemini-3.5-transcribe` with word timestamps, fallback to `gemini-3.5-flash-lite` JSON timestamps) extracts millisecond-accurate spoken syllables.
+     - In `dispatch/transcription/gemini_engine.py`: Added automatic fallback to `gemini-3.5-flash-lite` with structured JSON word/phrase timestamps when `gemini-3.5-transcribe` is unavailable or returns 0 words.
+     - In `drain_queued_transcriptions` and `render_clip`: Integrated `db.get_default_template(user_id=...)` inheritance, `apply_template_to_track` styling, Roman Hinglish transliteration, and framing layout inheritance (`c_layout = clip.get('layout_mode') or tpl_layout`).
+     - In `dispatch/captions/grouper.py`: Enhanced `apply_template_to_track` to fully propagate `all_caps`/`text_transform`, drop shadow (`offset_x`, `offset_y`, `blur`, `opacity`), neon glow (`glow_enabled`, `glow_color`, `glow_blur`), background boxes, and Y-position across all caption groups.
+  2. **Template Studio Persistence Fix:**
+     - **Origin Hygiene in `dispatch/web/app.py`:** `_validate_local_network_trust` was rejecting Android WebView origin `https://appassets.androidplatform.net` with 403 Forbidden. Added `appassets.androidplatform.net` to trusted origins.
+     - **Endpoint Aliases & Flexible Deserialization:** Added route aliases `@app.get` & `@app.post` for `/api/captions/templates`, `/api/template`, and `/api/template/default` with aliases `save_caption_template` and `update_default_template`. Implemented flexible body parsing (unwrapping `{"template": ...}`, raw strings, dicts) and sanitized defaults.
+     - **UI Responsiveness & Infinite Spinner Elimination:**
+       - Replaced raw `AbortSignal.timeout(1500)` in `TemplateStudio.tsx` with fallback-safe `createAbortTimeout` helper (preventing crashes on older Android WebViews).
+       - Guarded `currentSession()` with an explicit timeout to prevent hanging on unreachable auth providers.
+       - Always resolved PC daemon via `apiUrl('/api/template/default', pcHost)` even when `pcHost` prop was not explicitly passed.
+       - Added `saveSuccess` checkmark state (`Check` icon with "Saved!") and crisp toast confirmation. Eliminated premature closing on save while preserving clean exit in `Save & Exit` dialog.
+       - Created `frontend/src/captions/TemplateStudioModal.tsx` re-export wrapper for import compatibility.
 - **Key Files:**
-  - `frontend/src/captions/CaptionStudio.tsx`
+  - `dispatch/transcription/gemini_engine.py`
+  - `dispatch/ai_clips/worker.py`
+  - `dispatch/video_engine/renderer.py`
+  - `dispatch/captions/grouper.py`
+  - `dispatch/web/app.py`
+  - `frontend/src/captions/TemplateStudio.tsx`
   - `frontend/src/captions/TemplateStudioModal.tsx`
-  - `dispatch/pipeline/stages/transcription.py`
-  - `dispatch/pipeline/stages/alignment.py`
-  - `dispatch/cloud/sync.py`
+  - `tests/test_template_studio.py`
+- **Status:** Complete (Verified with 5 unit tests in `test_template_studio.py`, full backend regression suite, and frontend build).
 
 ---
 
 ### [TASK 11] Social Account OAuth Connection Stability (LinkedIn, Instagram, Facebook)
-- **Reported Issue:**
-  - When clicking "Connect" for LinkedIn, Instagram, or Facebook in Settings, browser opens for a fraction of a second and immediately closes.
+- **User Analysis & Root Cause Formulation:**
+  1. **Premature Browser Disconnection:** In `cloud-worker/src/index.ts`, `/oauth/:provider/init` did not validate whether client IDs (e.g. `LINKEDIN_CLIENT_ID`, `INSTAGRAM_CLIENT_ID`, `FACEBOOK_CLIENT_ID`) were configured before returning a start ticket. Opening the browser to the start endpoint redirected to provider authorization URLs with `client_id=""`, causing provider authorization servers (LinkedIn, Meta) to immediately reject the request and close the Custom Tab or bounce back.
+  2. **Missing Deep-Link Intent Handling in Android:** In `MainActivity.kt`, the activity was configured with `launchMode="singleTask"`, but lacked `onNewIntent(intent: Intent?)` and `onCreate` intent payload inspection. When custom tabs or intent URLs fired callbacks to `dispatch://oauth/callback` or `https://resolviaai.github.io/Dispatch/oauth`, the app did nothing with the intent data, failed to extract the auth token or status, and never dispatched anything to the WebView bridge.
+  3. **Bridge Communication Void:** Neither `DispatchNativeBridge.kt` nor `frontend/src/bridge.ts` implemented `dispatchAuthCallback(payloadJson)`.
+- **Resolution & Implementation:**
+  - **Cloud Worker Guarding (`cloud-worker/src/index.ts` & `cloud-worker/src/oauth.ts`):**
+    - Added pre-flight client credentials validation in `/oauth/:provider/init`. Unconfigured providers return HTTP 400 with a clean descriptive error (e.g. `"LinkedIn OAuth is not configured on the cloud worker (missing LINKEDIN_CLIENT_ID)."`), allowing the UI to inform the user instantly without opening a failing browser tab.
+    - Symmetrically guarded `/oauth/:provider/start` against empty client IDs.
+    - Updated `renderOAuthResultHtml` to support explicit callback URLs (`dispatch://oauth/callback?...` and intent URIs) with auto-redirect timers for seamless return upon completion.
+  - **Android Deep Link Interception (`android/app/src/main/AndroidManifest.xml` & `MainActivity.kt`):**
+    - Configured intent-filters in `AndroidManifest.xml` for `dispatch://oauth` (matching `/callback` and `/return`) and web OAuth paths (`https://resolviaai.github.io/Dispatch/oauth` and `https://dispatch-cloud.resolviaai.workers.dev/oauth/callback`).
+    - Implemented `onNewIntent(intent)` and `handleIncomingIntent(intent)` in `MainActivity.kt`. It extracts `provider`, `status`, `code`, `state`, `error`, `message`, `access_token`, and `account_name`, wraps them in JSON, and passes them to `bridge.dispatchAuthCallback(payload)`.
+    - Hardened `openCustomTab` in `DispatchNativeBridge.kt` to allow trusted OAuth origins (`workers.dev`, `accounts.google.com`, `resolviaai.github.io`).
+  - **WebView Bridge & UI Reactive Binding (`frontend/src/bridge.ts` & `frontend/src/screens/SettingsScreen.tsx`):**
+    - Implemented `dispatchAuthCallback` in `DispatchNativeBridge.kt` to execute JS evaluation on `webView` (`window.onDispatchAuthCallback` & `dispatch-auth-callback` `CustomEvent`).
+    - Added `Bridge.addAuthCallbackListener` and `Bridge.removeAuthCallbackListener` in `frontend/src/bridge.ts`.
+    - Connected `SettingsScreen.tsx` to handle incoming auth callbacks, display immediate tactile feedback (success or failure), and automatically trigger `refreshAccounts()` and `refreshCloudStorage()`.
 - **Key Files:**
   - `android/app/src/main/AndroidManifest.xml`
   - `android/app/src/main/java/com/resolvia/dispatch/MainActivity.kt`
+  - `android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt`
+  - `cloud-worker/src/index.ts`
+  - `cloud-worker/src/oauth.ts`
+  - `frontend/src/bridge.ts`
   - `frontend/src/screens/SettingsScreen.tsx`
-  - `cloudflare-worker/src/index.ts`
+- **Status:** Complete (Verified with Kotlin compilation, Android debug assemble, frontend test suite, and Vite asset build).
 
 ---
 
 ### [TASK 12] Google Cloud Console App Verification & Brand Identity Assets
-- **Reported Issue:**
-  - Google verification warning for `https://resolviaai.github.io/Dispatch/` and OAuth branding approval.
+- **User Analysis & Requirements:**
+  - Google Cloud Console OAuth verification and app branding requires domain ownership verification, accessible verification token endpoints, privacy and terms links, and compliant high-resolution icons (120px to 512px).
+- **Resolution & Implementation:**
+  - **Site Verification Dual-Channel Support (`site/`):**
+    - Preserved Google verification meta tag `<meta name="google-site-verification" content="Ic_iRj7eikgo73cLDJzBrGZkJP5UxDBcWdFJIUIWUM0" />` in `site/index.html`.
+    - Created dedicated verification endpoints `site/google-site-verification.html` and `site/googleIc_iRj7eikgo73cLDJzBrGZkJP5UxDBcWdFJIUIWUM0.html` to guarantee both HTML meta and HTML file upload verification methods succeed on GitHub Pages.
+    - Updated `.gitignore` to unignore `!site/**/*.png` and `!android/app/src/main/*.png`.
+  - **High-Resolution Brand Assets:**
+    - Synced high-res brand assets from `branding/dist/` into `site/`: `icon-512.png` (512x512), `icon-192.png` (192x192), `apple-touch-icon.png` (180x180), `dispatch-symbol-app-icon-512.png`, and `dispatch-lockup-horizontal-white-1200.png`.
+    - Linked icons and Open Graph preview image in `site/index.html`.
+    - Placed canonical `android/app/src/main/ic_launcher-playstore.png` (512x512) for Google Cloud Console and Play Store verification.
+    - Verified all Android mipmap densities (`mipmap-mdpi` 48px, `mipmap-hdpi` 72px, `mipmap-xhdpi` 96px, `mipmap-xxhdpi` 144px, `mipmap-xxxhdpi` 192px) and adaptive vector icons.
 - **Key Files:**
   - `site/index.html`
   - `site/google-site-verification.html`
+  - `site/googleIc_iRj7eikgo73cLDJzBrGZkJP5UxDBcWdFJIUIWUM0.html`
+  - `site/icon-512.png`, `site/icon-192.png`, `site/apple-touch-icon.png`
+  - `android/app/src/main/ic_launcher-playstore.png`
   - `android/app/src/main/res/mipmap-*`
+  - `.gitignore`
+- **Status:** Complete (Verified files, permissions, and responsive asset links).
 
 ---
 
@@ -321,6 +384,9 @@ Every code change must adhere to the **Dispatch UI/UX & Mobile Engineering Invar
 | **2026-10-30 12:35** | TASK 1: Minimal Badging & Origin/ID Inspector | `dispatch/web/app.py`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/RecordingsScreen.tsx`, `tests/test_web.py` | Commit `5b1894d`: Ultra-minimal list badging (Camera vs YouTube icon on thumbnails), eliminated technical strings from headers, integrated origin/session/YouTube ID inspector in Details & Options sheets. Verified by tests & Vite production build. |
 | **2026-10-30 12:55** | TASK 2: Notification Center & Activity Sheet | `frontend/src/context/ActivityContext.tsx`, `frontend/src/components/NotificationCenterModal.tsx`, `frontend/src/components/PullToRefresh.tsx`, `frontend/src/screens/RecordingsScreen.tsx`, `frontend/src/screens/ClipsScreen.tsx`, `frontend/src/screens/SettingsScreen.tsx`, `frontend/src/App.tsx` | Replaced top-right refresh buttons with uniform Bell trigger and active primary dot indicator across Sessions, Clips, and Settings. Created Design System v3 Notification Center bottom sheet for cloud jobs, queue backlog, and transient notifications. Removed redundant alert banners from header. Implemented mobile-standard PullToRefresh on scrollable library views with manual fallback in activity sheet. Verified with test suite and production Vite build. |
 | **2026-10-30 14:45** | TASK 13: Desktop Launcher & 3-Tier Storage Retention Policy | `scripts/Start-Dispatch.bat`, `dispatch/storage/retention.py`, `dispatch/storage/__init__.py`, `dispatch/main.py`, `tests/test_retention.py`, `docs/2026-10-30_LAUNCH_DAY_MASTER.md` | Created Windows batch launcher for single-click uvicorn daemon start. Implemented 3-Tier Retention Law: 7-day source retention, 72-hour post-publish early release grace, and 10 GB disk safety ceiling with FIFO eviction for videos older than 72h. Integrated periodic janitor thread in main.py. Verified with 4 unit tests in test_retention.py. |
+| **2026-10-30 16:30** | TASK 10: Gemini Word Alignment Audit & Template Studio Persistence Fix | `dispatch/transcription/gemini_engine.py`, `dispatch/ai_clips/worker.py`, `dispatch/video_engine/renderer.py`, `dispatch/captions/grouper.py`, `dispatch/web/app.py`, `frontend/src/captions/TemplateStudio.tsx`, `frontend/src/captions/TemplateStudioModal.tsx`, `tests/test_template_studio.py` | Audited Gemini two-stage transcription architecture; added `gemini-3.5-flash-lite` fallback for bounded clip audio alignment. Enforced default template style and framing inheritance across clip creation, render_clip, and backlog drain. Fixed Android WebView 403 Forbidden origin hygiene for `appassets.androidplatform.net`. Added resilient body deserialization and route aliases (`/api/captions/templates`, `/api/template/default`). Fixed Template Studio UI spinner hang with timeout-guarded sync, `createAbortTimeout` fallback, and "Saved!" checkmark indicator. Verified with 5 unit tests and production Vite build. |
+| **2026-10-30 16:45** | TASK 11: Social Account OAuth Connection Stability | `cloud-worker/src/index.ts`, `cloud-worker/src/oauth.ts`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/java/com/resolvia/dispatch/MainActivity.kt`, `android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt`, `frontend/src/bridge.ts`, `frontend/src/screens/SettingsScreen.tsx` | Fixed premature browser closing: added pre-flight client credentials validation in Cloudflare Worker `/oauth/:provider/init` and guarded `/oauth/:provider/start`. Implemented Android deep-link interception in `MainActivity.kt` (`onNewIntent` + `handleIncomingIntent` for `dispatch://oauth/callback` and `https://` web callbacks), extracting tokens/codes/states and communicating them to the WebView via `bridge.dispatchAuthCallback(payloadJson)`. Added reactive auth callback listeners in `frontend/src/bridge.ts` and `SettingsScreen.tsx` for immediate tactile status and automatic account refresh. Verified by Android Gradle `compileDebugKotlin`, `assembleDebug`, frontend unit tests, and production asset build. |
+| **2026-10-30 16:50** | TASK 12: Google Cloud Console App Verification & Brand Identity Assets | `site/index.html`, `site/google-site-verification.html`, `site/googleIc_iRj7eikgo73cLDJzBrGZkJP5UxDBcWdFJIUIWUM0.html`, `site/icon-512.png`, `site/icon-192.png`, `site/apple-touch-icon.png`, `android/app/src/main/ic_launcher-playstore.png`, `.gitignore` | Hardened Google site verification across both HTML meta and HTML file upload methods (`site/google-site-verification.html` & `site/googleIc_iRj7eikgo73cLDJzBrGZkJP5UxDBcWdFJIUIWUM0.html`). Sourced high-resolution brand assets from `branding/dist/` into `site/` (`icon-512.png`, `icon-192.png`, `apple-touch-icon.png`, lockup banners) and placed 512x512 `android/app/src/main/ic_launcher-playstore.png` for Google Cloud Console OAuth consent screen brand approval. Updated `.gitignore` to track site/android brand icons. |
 
 ---
 
