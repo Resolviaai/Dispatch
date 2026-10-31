@@ -21,8 +21,8 @@ The objective today is **zero shortcuts, zero loose ends, and hardened reliabili
 
 | Component | Target / Specification | Current Live State |
 | :--- | :--- | :--- |
-| **Android Package** | `com.resolvia.dispatch` | Version `1.7.0` (`versionCode = 68`) |
-| **Release Tag** | Monotonic SemVer Git Tag | `v1.7.0-alpha` (Commit `ba4d79c`) |
+| **Android Package** | `com.resolvia.dispatch` | Version `1.7.11` (`versionCode = 79`) |
+| **Release Tag** | Monotonic SemVer Git Tag | `v1.7.11-alpha` (Commit `56deeb5`) |
 | **Release Certificate** | Trusted keystore | SHA-256 fingerprint ends in `...3804` |
 | **Release Distribution** | GitHub Releases & `gh-pages` | Hosted at `https://resolviaai.github.io/Dispatch/` |
 | **PC Daemon API** | FastAPI / SQLite / Whisper-Free (Gemini 3.5 Transcribe & Flash Lite) / FFmpeg | `http://127.0.0.1:8000` |
@@ -303,7 +303,8 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
   - `cloud-worker/src/oauth.ts`
   - `frontend/src/bridge.ts`
   - `frontend/src/screens/SettingsScreen.tsx`
-- **Status:** Complete (Verified with Kotlin compilation, Android debug assemble, frontend test suite, and Vite asset build).
+- **Status:** Code complete (Verified with Kotlin compilation, Android debug assemble, frontend test suite, and Vite asset build).
+- **Post-release correction (2026-10-31):** The OAuth code was correct, but real Instagram/Facebook connections were still impossible because the **Meta app itself was misconfigured**: it was set up for *API setup with Instagram login* instead of *API setup with Facebook login*, `dispatch-cloud.resolviaai.workers.dev` was missing from **App Domains**, and the use case had **no content permissions** (`Invalid Scopes`). All three were fixed manually in the Meta dashboard on 2026-10-29/30; the Instagram authorize URL now reaches the Facebook consent screen. **Still open:** Facebook connect needs the “Manage everything on your Page” use case for `pages_manage_posts`, and no Facebook account has been connected end-to-end.
 
 ---
 
@@ -388,6 +389,10 @@ Every code change must adhere to the **Dispatch UI/UX & Mobile Engineering Invar
 | **2026-10-30 16:45** | TASK 11: Social Account OAuth Connection Stability | `cloud-worker/src/index.ts`, `cloud-worker/src/oauth.ts`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/java/com/resolvia/dispatch/MainActivity.kt`, `android/app/src/main/java/com/resolvia/dispatch/bridge/DispatchNativeBridge.kt`, `frontend/src/bridge.ts`, `frontend/src/screens/SettingsScreen.tsx` | Fixed premature browser closing: added pre-flight client credentials validation in Cloudflare Worker `/oauth/:provider/init` and guarded `/oauth/:provider/start`. Implemented Android deep-link interception in `MainActivity.kt` (`onNewIntent` + `handleIncomingIntent` for `dispatch://oauth/callback` and `https://` web callbacks), extracting tokens/codes/states and communicating them to the WebView via `bridge.dispatchAuthCallback(payloadJson)`. Added reactive auth callback listeners in `frontend/src/bridge.ts` and `SettingsScreen.tsx` for immediate tactile status and automatic account refresh. Verified by Android Gradle `compileDebugKotlin`, `assembleDebug`, frontend unit tests, and production asset build. |
 | **2026-10-30 16:50** | TASK 12: Google Cloud Console App Verification & Brand Identity Assets | `site/index.html`, `site/google-site-verification.html`, `site/googleIc_iRj7eikgo73cLDJzBrGZkJP5UxDBcWdFJIUIWUM0.html`, `site/icon-512.png`, `site/icon-192.png`, `site/apple-touch-icon.png`, `android/app/src/main/ic_launcher-playstore.png`, `.gitignore` | Hardened Google site verification across both HTML meta and HTML file upload methods (`site/google-site-verification.html` & `site/googleIc_iRj7eikgo73cLDJzBrGZkJP5UxDBcWdFJIUIWUM0.html`). Sourced high-resolution brand assets from `branding/dist/` into `site/` (`icon-512.png`, `icon-192.png`, `apple-touch-icon.png`, lockup banners) and placed 512x512 `android/app/src/main/ic_launcher-playstore.png` for Google Cloud Console OAuth consent screen brand approval. Updated `.gitignore` to track site/android brand icons. |
 | **2026-10-30 17:00** | RELEASE: Multi-File Monotonic SemVer Bump to v1.7.0-alpha (code 68) & APK Assembly | `android/app/build.gradle.kts`, `frontend/package.json`, `site/update.json`, `site/index.html`, `README.md`, `release-out/Dispatch.apk`, `release-out/update.json` | Executed `scripts/bump_version.ps1 1.7.0 68` and `scripts/prepare_release.ps1`. Built production release APK `Dispatch.apk` (21,242,221 bytes) signed with canonical certificate `94f778...3804` and generated `update.json`. Committed `ba4d79c` and tagged `v1.7.0-alpha`. Tasks 1–13 are 100% complete, verified, and pushed to `origin/main`. |
+| **2026-10-30 18:00 → 2026-10-31 02:21** | RELEASE LINE: v1.7.1 → v1.7.11 (codes 69–79) | `docs/CANONICAL_ARCHITECTURE.md`, `dispatch/video_engine/*`, `frontend/src/**` | 12 commits after v1.7.0: canonical clean-slice ingestion + dynamic UI framing (v1.7.5), timeline/session-dedup/publish UI fixes (v1.7.6), scrubbing + camera AE/AWB re-lock on rebind (v1.7.7), Connect-button and segmented-control polish (v1.7.8), caption cache + smart auto-reframe (v1.7.9–.10), ~500 ms Haar auto-reframe at 320 px + playback performance (v1.7.11). |
+| **2026-10-31 02:21** | RELEASE: v1.7.11-alpha (code 79) | `android/app/build.gradle.kts`, `site/update.json`, `release-out/*` | Tag `v1.7.11-alpha` at `56deeb5`. GitHub Release repaired after a 404 (assets: `Dispatch.apk` 21,244,964 bytes + `update.json`), gh-pages mirror live, emulator-verified. |
+| **2026-10-31** | META APP CORRECTION (manual, dashboard) | — | Switched the Instagram use case to “API setup with Facebook login”, added **App Domains** `dispatch-cloud.resolviaai.workers.dev`, added required content permissions (`instagram_basic`, `instagram_content_publish`, `pages_read_engagement`, `pages_show_list`, `business_management`). Instagram consent screen now reachable; Facebook Page use case still pending. |
+| **2026-10-31** | DOC SYNC & TREE HYGIENE | `docs/2026-10-30_LAUNCH_DAY_MASTER.md`, `Start-Dispatch.bat` | Version table and Task 11 correction synced to HEAD (1.7.11 / 79); removed stale root launcher duplicate (canonical copy remains at `scripts/Start-Dispatch.bat`); `v1.7.11-alpha` marked as pre-release on GitHub. |
 
 ---
 
