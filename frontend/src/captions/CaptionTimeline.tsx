@@ -543,11 +543,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       try {
 
-        if ('fastSeek' in v && typeof (v as any).fastSeek === 'function') {
-
-          (v as any).fastSeek(effectiveTarget);
-
-        } else {
+        if (!v.seeking) {
 
           v.currentTime = effectiveTarget;
 
@@ -604,6 +600,40 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     }
 
   };
+
+
+
+  useEffect(() => {
+
+    const v = mediaElementRef?.current;
+
+    if (!v) return;
+
+    const handleSeeked = () => {
+
+      if (pendingSeekTimeRef.current !== null) {
+
+        const effective = isSourceMode ? (clipStart + pendingSeekTimeRef.current) : pendingSeekTimeRef.current;
+
+        if (Math.abs(v.currentTime - effective) > 0.05 && !v.seeking) {
+
+          try {
+
+            v.currentTime = effective;
+
+          } catch {}
+
+        }
+
+      }
+
+    };
+
+    v.addEventListener('seeked', handleSeeked);
+
+    return () => v.removeEventListener('seeked', handleSeeked);
+
+  }, [mediaElementRef, isSourceMode, clipStart]);
 
 
 
@@ -1759,7 +1789,17 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const persistTrimRange = async (range: { start: number; end: number }) => {
 
-    if (!onTrimChange || !(sourceDuration && sourceDuration > 0)) return false;
+    if (!onTrimChange) return false;
+
+    const maxDur = (sourceDuration && sourceDuration > 0) ? sourceDuration : (clipEnd ?? (clipStart + duration));
+
+    const clampedRange = {
+
+      start: Math.max(0, range.start),
+
+      end: maxDur > 0 ? Math.min(maxDur, range.end) : range.end,
+
+    };
 
     const previous = { start: Math.max(0, clipStart), end: clipEnd ?? (clipStart + duration) };
 
@@ -1767,7 +1807,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     try {
 
-      const saved = await onTrimChange(range.start, range.end);
+      const saved = await onTrimChange(clampedRange.start, clampedRange.end);
 
       if (saved === false) {
 
@@ -1805,7 +1845,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     const previous = activeTrimRef.current;
 
-    const next = extendSourceRange(previous, side, delta, sourceDuration || 0);
+    const maxDur = (sourceDuration && sourceDuration > 0) ? sourceDuration : (clipEnd ?? (clipStart + duration));
+
+    const next = extendSourceRange(previous, side, delta, maxDur);
 
     if (next.start === previous.start && next.end === previous.end) return;
 
@@ -2121,7 +2163,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
           </span>
 
-          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
+          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving' || activeTrim.start <= 0.05}
 
             onClick={() => applyRangeExtension('start', -RANGE_CONTROL_STEP_SECONDS)}
 
@@ -2133,7 +2175,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
           </button>
 
-          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving'}
+          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving' || activeTrim.end >= ((sourceDuration || 0) > 0 ? sourceDuration! : (clipEnd ?? (clipStart + duration))) - 0.05}
 
             onClick={() => applyRangeExtension('end', RANGE_CONTROL_STEP_SECONDS)}
 

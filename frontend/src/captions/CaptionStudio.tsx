@@ -108,6 +108,7 @@ export interface CaptionStudioProps {
   canRedo?: boolean;
   onUndo?: () => void;
   onRedo?: () => void;
+  onSplitClip?: (splitTime: number) => void;
 }
 
 export type ToolbarCategory = 'none' | 'edit' | 'audio' | 'text' | 'overlay';
@@ -1085,6 +1086,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   canRedo: _canRedo = false,
   onUndo: _onUndo,
   onRedo: _onRedo,
+  onSplitClip,
 }) => {
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
@@ -4826,6 +4828,12 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
             icon={isMainVideoMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
             label="Volume"
             onClick={() => setActivePanel('main_volume')}
+          />
+          <ToolButton
+            icon={<Scissors size={18} />}
+            label="Split"
+            disabled={!onSplitClip || currentTime < 1.0 || currentTime > duration - 1.0}
+            onClick={() => onSplitClip?.(currentTime)}
           />
           <ToolButton
             icon={<RotateCcw size={18} />}

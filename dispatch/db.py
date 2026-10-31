@@ -10,7 +10,7 @@ import contextlib
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from dispatch.config import (
     DB_PATH, DATABASE_DIR, DEFAULT_PUBLISH_MODE,
@@ -712,12 +712,11 @@ def update_clip_trim(
         ):
             return False
 
-        clamped_start = round(float(start_time), 3)
-        clamped_end = round(float(end_time), 3)
+        clamped_start = max(0.0, round(float(start_time), 3))
+        clamped_end = min(round(float(known_source_duration), 3), round(float(end_time), 3))
         new_duration = clamped_end - clamped_start
         if (
-            clamped_start < 0
-            or clamped_end > known_source_duration
+            clamped_start >= clamped_end
             or new_duration < MIN_CLIP_DURATION
             or new_duration > MAX_CLIP_DURATION
         ):
@@ -1971,3 +1970,141 @@ def save_default_template(template_data: Dict[str, Any], user_id: Optional[str] 
             """, (template_id, user_id, revision, name, tpl_json, now, now))
         conn.commit()
         return tpl_clean
+
+
+def split_clip(
+    clip_id: str,
+    split_time: float,
+    is_source_time: bool = False,
+    user_id: Optional[str] = None
+) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Split an existing clip into two sequential clips at split_time.
+    Words in caption_data are partitioned and re-anchored to each clip's start.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        clip = cursor.fetchone()
+        if not clip:
+            return None
+        if clip["status"] != "ready_review":
+            return None
+        if user_id and clip["user_id"] and clip["user_id"] != user_id:
+            return None
+
+        orig_start = float(clip["start_time"] or 0)
+        orig_end = float(clip["end_time"] or 0)
+        if is_source_time:
+            source_split = float(split_time)
+        else:
+            source_split = orig_start + float(split_time)
+
+        # Enforce minimum 1.0 second on both sides of the split
+        min_allowed = orig_start + 1.0
+        max_allowed = orig_end - 1.0
+        if source_split < min_allowed or source_split > max_allowed:
+            return None
+
+        split_pt = round(source_split, 2)
+        clip1_duration = round(split_pt - orig_start, 2)
+        clip2_duration = round(orig_end - split_pt, 2)
+
+        # Partition captions if present
+        caption_json1 = None
+        caption_json2 = None
+        raw_captions = clip["caption_data"]
+        if raw_captions:
+            try:
+                cap_data = json.loads(raw_captions) if isinstance(raw_captions, str) else raw_captions
+                if isinstance(cap_data, dict) and "groups" in cap_data:
+                    groups1 = []
+                    groups2 = []
+                    split_offset = split_pt - orig_start
+                    for g in cap_data.get("groups", []):
+                        g_start = float(g.get("start", 0))
+                        g_end = float(g.get("end", 0))
+                        if g_end <= split_offset:
+                            groups1.append(g)
+                        elif g_start >= split_offset:
+                            new_g = dict(g)
+                            new_g["id"] = f"grp_{uuid.uuid4().hex[:8]}"
+                            new_g["start"] = max(0.0, round(g_start - split_offset, 3))
+                            new_g["end"] = max(0.0, round(g_end - split_offset, 3))
+                            if "words" in new_g and isinstance(new_g["words"], list):
+                                new_words = []
+                                for w in new_g["words"]:
+                                    nw = dict(w)
+                                    nw["id"] = f"w_{uuid.uuid4().hex[:8]}"
+                                    nw["start"] = max(0.0, round(float(w.get("start", 0)) - split_offset, 3))
+                                    nw["end"] = max(0.0, round(float(w.get("end", 0)) - split_offset, 3))
+                                    new_words.append(nw)
+                                new_g["words"] = new_words
+                            groups2.append(new_g)
+                        else:
+                            words1 = []
+                            words2 = []
+                            for w in g.get("words", []):
+                                w_mid = (float(w.get("start", 0)) + float(w.get("end", 0))) / 2.0
+                                if w_mid < split_offset:
+                                    words1.append(w)
+                                else:
+                                    nw = dict(w)
+                                    nw["id"] = f"w_{uuid.uuid4().hex[:8]}"
+                                    nw["start"] = max(0.0, round(float(w.get("start", 0)) - split_offset, 3))
+                                    nw["end"] = max(0.0, round(float(w.get("end", 0)) - split_offset, 3))
+                                    words2.append(nw)
+                            if words1:
+                                g1 = dict(g)
+                                g1["words"] = words1
+                                g1["end"] = min(g_end, split_offset)
+                                groups1.append(g1)
+                            if words2:
+                                g2 = dict(g)
+                                g2["id"] = f"grp_{uuid.uuid4().hex[:8]}"
+                                g2["words"] = words2
+                                g2["start"] = max(0.0, round(float(words2[0]["start"]), 3))
+                                g2["end"] = max(0.0, round(float(words2[-1]["end"]), 3))
+                                groups2.append(g2)
+                    cap_data1 = dict(cap_data, groups=groups1)
+                    cap_data2 = dict(cap_data, groups=groups2)
+                    caption_json1 = json.dumps(cap_data1)
+                    caption_json2 = json.dumps(cap_data2)
+            except Exception as e:
+                logger.warning("Failed to partition captions during clip split: %s", e)
+
+        # Update Clip 1
+        cursor.execute("""
+            UPDATE clips
+            SET end_time = ?, duration = ?, caption_data = COALESCE(?, caption_data),
+                range_revision = range_revision + 1, render_stale = 1
+            WHERE id = ?
+        """, (split_pt, clip1_duration, caption_json1, clip_id))
+
+        # Create Clip 2
+        new_clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        clip2_title = f"{clip['title']} (Part 2)"
+        p_start2 = max(0.0, split_pt - 4.0)
+        p_end2 = orig_end + 4.0
+
+        cursor.execute("""
+            INSERT INTO clips (
+                id, session_id, chunk_id, start_time, end_time,
+                ai_suggested_start_time, ai_suggested_end_time, range_revision, duration,
+                title, hook, description, hashtags, virality_score,
+                layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
+                padded_start, padded_end, user_id, caption_data, thumbnail_path, render_stale
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?, ?, ?, ?, 1)
+        """, (
+            new_clip_id, clip["session_id"], clip["chunk_id"], split_pt, orig_end,
+            split_pt, orig_end, clip2_duration,
+            clip2_title, clip["hook"], clip["description"], clip["hashtags"], clip["virality_score"],
+            clip["layout_mode"], clip["rendered_layout_mode"], clip["publish_mode"], clip["platform_targets"],
+            p_start2, p_end2, clip["user_id"], caption_json2, clip["thumbnail_path"]
+        ))
+        conn.commit()
+
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
+        c1 = dict(cursor.fetchone())
+        cursor.execute("SELECT * FROM clips WHERE id = ?", (new_clip_id,))
+        c2 = dict(cursor.fetchone())
+        return c1, c2

@@ -1376,28 +1376,31 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
           <>
             {/* Fit + Blur synchronized background video layer: dynamically renders blurred background for 9:16 portrait fit */}
             {layoutMode === 'fit_blur' && (
-              <video
-                ref={bgVideoRef}
-                src={activeVideoUrl}
-                muted
-                playsInline
-                preload="none"
-                aria-hidden="true"
-                onLoadedData={() => {
-                  if (videoRef.current && bgVideoRef.current) {
-                    bgVideoRef.current.currentTime = videoRef.current.currentTime;
-                    if (isPlaying) {
-                      bgVideoRef.current.play().catch(() => {});
+              <>
+                <video
+                  ref={bgVideoRef}
+                  src={activeVideoUrl}
+                  poster={poster}
+                  muted
+                  playsInline
+                  preload={isDetail ? "auto" : "metadata"}
+                  aria-hidden="true"
+                  onLoadedData={() => {
+                    if (videoRef.current && bgVideoRef.current) {
+                      bgVideoRef.current.currentTime = videoRef.current.currentTime;
+                      if (isPlaying) {
+                        bgVideoRef.current.play().catch(() => {});
+                      }
                     }
-                  }
-                }}
-                style={{
-                  transform: 'translate3d(0, 0, 0)',
-                  willChange: 'transform',
-                  contain: 'strict',
-                }}
-                className="absolute inset-0 w-full h-full object-cover filter blur-lg brightness-75 scale-110 pointer-events-none select-none z-0 transition-opacity duration-300 ease-out opacity-100"
-              />
+                  }}
+                  style={{
+                    transform: 'translate3d(0, 0, 0)',
+                    willChange: 'transform',
+                  }}
+                  className="absolute -inset-8 w-[calc(100%+4rem)] h-[calc(100%+4rem)] object-cover filter blur-3xl brightness-95 scale-125 pointer-events-none select-none z-0 transition-opacity duration-300 ease-out opacity-90"
+                />
+                <div className="absolute inset-0 bg-black/25 pointer-events-none z-1" />
+              </>
             )}
 
             {/* Primary foreground video layer: pure native framing (Crop 9:16 -> object-cover; Fit -> object-contain) */}
@@ -3147,6 +3150,39 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
   };
 
+  const handleSplitClip = async (splitTime: number) => {
+    if (offlineReadOnly) {
+      setFeedback('Reconnect to split clip.');
+      return;
+    }
+    if (!currentClip) return;
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/split`, pcHost), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ split_time: splitTime, is_source_time: false }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setReadyClips((prev) => {
+          const idx = prev.findIndex((c) => c.id === currentClip.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next.splice(idx, 1, data.clip1, data.clip2);
+            return next;
+          }
+          return [data.clip1, data.clip2, ...prev];
+        });
+        setFeedback('Clip split successfully into 2 parts.');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setFeedback(err.detail || 'Failed to split clip.');
+      }
+    } catch {
+      setFeedback('Network error splitting clip.');
+    }
+  };
+
   const handleTrimChange = async (sourceStart: number, sourceEnd: number): Promise<boolean> => {
     if (offlineReadOnly) {
       setFeedback('Reconnect to change clip trim.');
@@ -3158,8 +3194,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       return false;
     }
     if (!(await handleSaveCaptions())) return false;
-    const newStart = Number(sourceStart.toFixed(2));
-    const newEnd = Number(sourceEnd.toFixed(2));
+    const maxDur = timelineSourceDuration > 0 ? timelineSourceDuration : (currentClip.end_time || 40);
+    const newStart = Math.max(0, Number(sourceStart.toFixed(2)));
+    const newEnd = Math.min(maxDur, Number(sourceEnd.toFixed(2)));
     videoRef.current?.pause();
     bgVideoRef.current?.pause();
     setIsPlaying(false);
@@ -4365,11 +4402,13 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     }]
                   : [];
               const isClipPublished = Boolean(
-                isStatusPublished &&
-                (publications.length > 0 || currentClip.published_at)
+                isStatusPublished ||
+                Boolean(currentClip.published_at) ||
+                publications.some((p) => Boolean(p.remote_id || p.remote_url || p.published_at))
               );
+              const hasActiveUploads = publications.length === 0 || !publications.some((p) => Boolean(p.remote_id || p.remote_url || p.published_at));
               const isClipPublishing = Boolean(
-                currentClip.status === 'approved' && !isClipPublished
+                currentClip.status === 'approved' && !isClipPublished && hasActiveUploads
               );
               const primaryPublication = publications.find((p) => p.platform.startsWith('youtube'))
                 || publications[0];
@@ -5000,6 +5039,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     track={visibleCaptionTrack}
                     currentTime={currentTime}
                     duration={duration || currentClip.duration || 40}
+                    hideTrimControls={true}
                     sourceDuration={timelineSourceDuration}
                     sourceTimebase={isSourceTimebase}
                     timeMode={isSourceTimebase ? 'source' : 'clip'}
@@ -5049,6 +5089,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     setCaptionTrack(updated, commit);
                     setSaveStatus('unsaved');
                   }}
+                  onSplitClip={handleSplitClip}
                   onLayoutChange={handleLayoutChange}
                   onSeek={handleSeek}
                   onPreviewAnimation={handlePreviewAnimation}

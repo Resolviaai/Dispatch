@@ -492,6 +492,11 @@ class TrimClipRequest(BaseModel):
     range_revision: Optional[int] = None
 
 
+class SplitClipRequest(BaseModel):
+    split_time: float
+    is_source_time: Optional[bool] = False
+
+
 class LayoutModeRequest(BaseModel):
     layout_mode: str
     crop_anchor_x: Optional[float] = None
@@ -1459,6 +1464,34 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
         "padded_start": updated.get("padded_start"),
         "padded_end": updated.get("padded_end"),
         "is_render_stale": clip_render_is_stale(updated),
+    }
+
+
+@app.post("/api/clips/{clip_id}/split")
+@_serialize_clip_mutation
+async def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Request):
+    """Split an existing clip into two sequential clips at the playhead."""
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
+    result = db.split_clip(
+        clip_id,
+        payload.split_time,
+        is_source_time=payload.is_source_time or False,
+        user_id=caller_user_id
+    )
+    if not result:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot split clip at this time (split must leave at least 1.0s on both sides)."
+        )
+    clip1, clip2 = result
+    populate_clip_media_urls(clip1)
+    populate_clip_media_urls(clip2)
+    return {
+        "status": "success",
+        "clip1": clip1,
+        "clip2": clip2,
+        "split_time": payload.split_time
     }
 
 

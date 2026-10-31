@@ -567,7 +567,11 @@ def check_and_finalize_clip(clip_id: str, video_path: Path):
         cursor.execute("SELECT status FROM publishing_outbox WHERE clip_id = ?", (clip_id,))
         statuses = [row["status"] for row in cursor.fetchall()]
 
-        if statuses and all(s == "published" for s in statuses):
+        terminal_states = {"published", "failed", "blocked_needs_auth", "reconciliation_required"}
+        all_settled = statuses and all(s in terminal_states for s in statuses)
+        any_published = any(s == "published" for s in statuses)
+
+        if all_settled and any_published:
             cursor.execute("""
                 UPDATE clips 
                 SET status = 'published', published_at = CURRENT_TIMESTAMP 
@@ -575,12 +579,11 @@ def check_and_finalize_clip(clip_id: str, video_path: Path):
             """, (clip_id,))
             if cursor.rowcount == 1:
                 conn.commit()
-                logger.info("All platform uploads confirmed for clip %s. Clip marked published (media preserved).", clip_id)
+                logger.info("Platform uploads finished for clip %s (with at least 1 published). Clip marked published.", clip_id)
             else:
                 conn.commit()
                 logger.info(
-                    "All platform uploads confirmed for clip %s, but clip is no longer approved "
-                    "(rejected or finalized already); status left untouched.", clip_id
+                    "Platform uploads finished for clip %s, but clip is no longer approved; status left untouched.", clip_id
                 )
 
 
