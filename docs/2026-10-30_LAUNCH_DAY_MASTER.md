@@ -21,8 +21,8 @@ The objective today is **zero shortcuts, zero loose ends, and hardened reliabili
 
 | Component | Target / Specification | Current Live State |
 | :--- | :--- | :--- |
-| **Android Package** | `com.resolvia.dispatch` | Version `1.7.11` (`versionCode = 79`) |
-| **Release Tag** | Monotonic SemVer Git Tag | `v1.7.11-alpha` (Commit `56deeb5`) |
+| **Android Package** | `com.resolvia.dispatch` | Version `1.7.15` (`versionCode = 83`) |
+| **Release Tag** | Monotonic SemVer Git Tag | `v1.7.15-alpha` (Commit `c4de00d`) |
 | **Release Certificate** | Trusted keystore | SHA-256 fingerprint ends in `...3804` |
 | **Release Distribution** | GitHub Releases & `gh-pages` | Hosted at `https://resolviaai.github.io/Dispatch/` |
 | **PC Daemon API** | FastAPI / SQLite / Whisper-Free (Gemini 3.5 Transcribe & Flash Lite) / FFmpeg | `http://127.0.0.1:8000` |
@@ -71,7 +71,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 [X] TASK 12: Google Cloud Console App Verification & Brand Identity Assets
 [X] TASK 13: One-Click Desktop Server Launcher & Multi-Tier Smart Storage Retention Policy (7-Day / 72-Hour / 10 GB)
 --- STOP & REPORT TO USER BEFORE TOUCHING TASK 14 ---
-[ ] TASK 14: Direct Video File Upload Route (<= 3 min files) via Clips Screen
+[X] TASK 14: Direct Video File Upload Route (<= 3 min files) via Clips Screen
 ```
 
 ---
@@ -350,7 +350,7 @@ The backlog reflects the exact 14 tasks arranged in user-specified execution seq
 
 ---
 
-### [TASK 14] Direct Video File Upload Route (Future Route C, <= 3 Minutes)
+### [TASK 14] Direct Video File Upload Route (Route C, <= 3 Minutes) — SHIPPED in v1.7.15
 - **Planned Feature:**
   - Direct video upload button inside Clips screen modal for files up to 3 minutes.
   - *Execution Boundary:* Only to be planned and implemented after Tasks 1-13 are 100% verified and user gives explicit signoff.
@@ -392,6 +392,7 @@ Every code change must adhere to the **Dispatch UI/UX & Mobile Engineering Invar
 | **2026-10-30 18:00 → 2026-10-31 02:21** | RELEASE LINE: v1.7.1 → v1.7.11 (codes 69–79) | `docs/CANONICAL_ARCHITECTURE.md`, `dispatch/video_engine/*`, `frontend/src/**` | 12 commits after v1.7.0: canonical clean-slice ingestion + dynamic UI framing (v1.7.5), timeline/session-dedup/publish UI fixes (v1.7.6), scrubbing + camera AE/AWB re-lock on rebind (v1.7.7), Connect-button and segmented-control polish (v1.7.8), caption cache + smart auto-reframe (v1.7.9–.10), ~500 ms Haar auto-reframe at 320 px + playback performance (v1.7.11). |
 | **2026-10-31 02:21** | RELEASE: v1.7.11-alpha (code 79) | `android/app/build.gradle.kts`, `site/update.json`, `release-out/*` | Tag `v1.7.11-alpha` at `56deeb5`. GitHub Release repaired after a 404 (assets: `Dispatch.apk` 21,244,964 bytes + `update.json`), gh-pages mirror live, emulator-verified. |
 | **2026-10-31** | META APP CORRECTION (manual, dashboard) | — | Switched the Instagram use case to “API setup with Facebook login”, added **App Domains** `dispatch-cloud.resolviaai.workers.dev`, added required content permissions (`instagram_basic`, `instagram_content_publish`, `pages_read_engagement`, `pages_show_list`, `business_management`). Instagram consent screen now reachable; Facebook Page use case still pending. |
+| **2026-11-01 02:00** | TASK 14 + 1.7.13–1.7.15 RELEASE | `cloud-worker/src/index.ts`, `dispatch/direct_ingest.py`, `dispatch/ai_clips/worker.py`, `frontend/src/screens/ClipsScreen.tsx`, migration 0025 | Route C direct uploads shipped: reserve → PUT → complete → `/jobs/direct`, PC claims + ffprobe-validates the 180s cap and renders one full-length captioned clip. Clips UI adds Choose Video File with duration check/progress. Published clips now delete via the cloud command path (no more 409). Releases 1.7.13 (81), 1.7.14 (82: outbox finalize + CapCut split + AQ. Gemini keys), 1.7.15 (83). |
 | **2026-10-31** | DOC SYNC & TREE HYGIENE | `docs/2026-10-30_LAUNCH_DAY_MASTER.md`, `Start-Dispatch.bat` | Version table and Task 11 correction synced to HEAD (1.7.11 / 79); removed stale root launcher duplicate (canonical copy remains at `scripts/Start-Dispatch.bat`); `v1.7.11-alpha` marked as pre-release on GitHub. |
 
 ---
