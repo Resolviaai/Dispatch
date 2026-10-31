@@ -749,25 +749,34 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             </div>
 
             <div>
-              {/* Instagram — one row per connected account, like YouTube channels */}
+              {/* Instagram — one row per account (account name first, like YouTube) */}
               {instagramAccounts.length > 0 ? (
-                instagramAccounts.map((acc) => (
-                  <div key={acc.id} className="py-3 flex items-center justify-between gap-3 text-sm">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <AccountAvatar src={acc.avatar_url} fallback={<InstagramIcon />} />
-                      <div className="min-w-0">
-                        <p className="font-medium text-text-main truncate">Instagram Reels</p>
-                        <p className="text-xs text-text-muted truncate">{acc.account_name}</p>
+                <>
+                  {instagramAccounts.map((acc) => (
+                    <div key={acc.id} className="py-3 flex items-center justify-between gap-3 text-sm">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <AccountAvatar src={acc.avatar_url} fallback={<InstagramIcon />} />
+                        <div className="min-w-0">
+                          <p className="font-medium text-text-main truncate">{acc.account_name}</p>
+                          <p className="text-xs text-text-muted truncate">Instagram Reels</p>
+                        </div>
                       </div>
+                      <button
+                        onClick={() => handleDisconnectAccount(acc)}
+                        className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
+                      >
+                        Disconnect
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleDisconnectAccount(acc)}
-                      className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                ))
+                  ))}
+                  <button
+                    onClick={() => handleConnectProvider('instagram')}
+                    className="w-full min-h-[44px] mt-1 mb-2 py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                  >
+                    <Plus size={15} />
+                    <span>Connect Another Instagram Account</span>
+                  </button>
+                </>
               ) : (
                 <div className="py-3 flex items-center justify-between gap-3 text-sm">
                   <div className="flex items-center gap-2.5 min-w-0">
@@ -785,14 +794,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                   </button>
                 </div>
               )}
-
-              <button
-                onClick={() => handleConnectProvider('instagram')}
-                className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
-              >
-                <Plus size={15} />
-                <span>{instagramAccounts.length > 0 ? 'Connect Another Instagram Account' : 'Connect Instagram'}</span>
-              </button>
 
               {/* Facebook */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">
