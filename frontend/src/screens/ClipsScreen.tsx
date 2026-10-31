@@ -3709,6 +3709,11 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }
       map.get(sessKey)!.push(clip);
     });
+    // Timeline order within a session: split segments must read as one continuous
+    // source sequence (CapCut model), so sort by source start_time, not creation time.
+    map.forEach((clipsInSession) => {
+      clipsInSession.sort((a, b) => (a.start_time ?? 0) - (b.start_time ?? 0));
+    });
     return Array.from(map.entries());
   }, [filteredClips]);
 
@@ -5089,7 +5094,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     setCaptionTrack(updated, commit);
                     setSaveStatus('unsaved');
                   }}
-                  onSplitClip={handleSplitClip}
+                  onSplitClip={(t) => handleSplitClip(isSourceTimebase ? t - (currentClip.start_time || 0) : t)}
+                  splitClipTime={isSourceTimebase ? currentTime - (currentClip.start_time || 0) : currentTime}
                   onLayoutChange={handleLayoutChange}
                   onSeek={handleSeek}
                   onPreviewAnimation={handlePreviewAnimation}

@@ -109,6 +109,8 @@ export interface CaptionStudioProps {
   onUndo?: () => void;
   onRedo?: () => void;
   onSplitClip?: (splitTime: number) => void;
+  /** Playhead position in CLIP-relative seconds (0 = clip start). Falls back to currentTime when omitted. */
+  splitClipTime?: number;
 }
 
 export type ToolbarCategory = 'none' | 'edit' | 'audio' | 'text' | 'overlay';
@@ -1087,6 +1089,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   onUndo: _onUndo,
   onRedo: _onRedo,
   onSplitClip,
+  splitClipTime,
 }) => {
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
@@ -4832,8 +4835,8 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
           <ToolButton
             icon={<Scissors size={18} />}
             label="Split"
-            disabled={!onSplitClip || currentTime < 1.0 || currentTime > duration - 1.0}
-            onClick={() => onSplitClip?.(currentTime)}
+            disabled={!onSplitClip || (splitClipTime ?? currentTime) < 1.0 || (splitClipTime ?? currentTime) > duration - 1.0}
+            onClick={() => onSplitClip?.(splitClipTime ?? currentTime)}
           />
           <ToolButton
             icon={<RotateCcw size={18} />}

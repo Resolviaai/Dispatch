@@ -178,6 +178,7 @@ def _processing_deadline_exceeded(job: Dict[str, Any]) -> bool:
             )
             conn.commit()
         logger.warning("Processing job %s exceeded the deadline; moved to reconciliation", job["id"])
+        check_and_finalize_clip(job["clip_id"], Path(job.get("video_path") or f"storage/clips/{job['clip_id']}.mp4"))
         return True
     return False
 
@@ -266,6 +267,7 @@ def _process_outbox_queue_internal() -> int:
                                         SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP
                                         WHERE id = ?
                                     """, (f"YouTube processing {st}: {items[0].get('status', {}).get('rejectionReason', 'unknown')}", pjob["id"]))
+                                check_and_finalize_clip(pjob["clip_id"], Path(pjob.get("video_path") or f"storage/clips/{pjob['clip_id']}.mp4"))
                     except Exception as q_err:
                         logger.warning("Failed checking processing status for job %s: %s", pjob["id"], q_err)
                         with db.get_db_connection() as conn:
@@ -310,6 +312,7 @@ def _process_outbox_queue_internal() -> int:
                         last_error = 'Job already has confirmed remote_id; reconciliation required before retry'
                     WHERE id = ?
                 """, (job_id,))
+            check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
             continue
 
         if not video_path or not video_path.exists():
@@ -339,6 +342,7 @@ def _process_outbox_queue_internal() -> int:
                     "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
                     (err_msg, job_id)
                 )
+            check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
             continue
 
         # Atomically claim job as uploading
@@ -482,6 +486,7 @@ def _process_outbox_queue_internal() -> int:
                         "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
                         (err_msg, job_id)
                     )
+                check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
                 continue
 
             # Update job record with actual provider status
@@ -515,6 +520,7 @@ def _process_outbox_queue_internal() -> int:
                         last_error = ?
                     WHERE id = ?
                 """, (str(pe), job_id))
+            check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
 
         except Exception as e:
             err_str = str(e)
@@ -528,22 +534,24 @@ def _process_outbox_queue_internal() -> int:
                     # CRITICAL FORENSIC FIX: Even on the FIRST ambiguous timeout/disconnect, NEVER blindly republish!
                     # Move immediately to reconciliation_required to prevent duplicate posts.
                     conn.execute("""
-                        UPDATE publishing_outbox 
+                        UPDATE publishing_outbox
                         SET status = 'reconciliation_required',
                             attempt_count = ?,
                             updated_at = CURRENT_TIMESTAMP,
                             last_error = ?
                         WHERE id = ?
                     """, (new_attempts, f"Ambiguous remote error (reconciliation required before retry): {err_str}", job_id))
+                    check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
                 elif new_attempts >= 5:
                     conn.execute("""
-                        UPDATE publishing_outbox 
+                        UPDATE publishing_outbox
                         SET status = 'failed',
                             attempt_count = ?,
                             updated_at = CURRENT_TIMESTAMP,
                             last_error = ?
                         WHERE id = ?
                     """, (new_attempts, err_str, job_id))
+                    check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
                 else:
                     # Exponential backoff for definitive non-ambiguous transient errors: 30s, 60s, 120s, 240s...
                     delay_seconds = min(3600, 30 * (2 ** (new_attempts - 1)))

@@ -2080,9 +2080,10 @@ def split_clip(
             WHERE id = ?
         """, (split_pt, clip1_duration, caption_json1, clip_id))
 
-        # Create Clip 2
+        # Create Clip 2 (CapCut semantics: both segments are the same source media,
+        # just divided — no artificial "(Part 2)" renaming; ordering conveys sequence)
         new_clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        clip2_title = f"{clip['title']} (Part 2)"
+        clip2_title = clip["title"]
         p_start2 = max(0.0, split_pt - 4.0)
         p_end2 = orig_end + 4.0
 
