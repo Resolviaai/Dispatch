@@ -380,8 +380,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     if (!cleanKey) return;
 
     setGeminiError(null);
-    if (!cleanKey.startsWith('AIza')) {
-      setGeminiError('Invalid format: Gemini API key must start with AIza...');
+    // Google issues two key formats: legacy "AIzaSy..." and the newer "AQ.Ab8..." (AI Studio 2025+)
+    if (!cleanKey.startsWith('AIza') && !cleanKey.startsWith('AQ.')) {
+      setGeminiError('Invalid format: Gemini API key must start with AIza... or AQ....');
       return;
     }
     if (cleanKey.length < 30) {
@@ -930,7 +931,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 type="password"
                 value={geminiKeyInput}
                 onChange={(e) => setGeminiKeyInput(e.target.value)}
-                placeholder="AIzaSy..."
+                placeholder="AIzaSy… or AQ.…"
                 className="w-full min-h-[44px] rounded-xl bg-surface-2 border border-border px-3 text-sm font-mono text-text-main outline-none focus:border-primary"
               />
               {geminiError && (
