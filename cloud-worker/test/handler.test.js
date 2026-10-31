@@ -51,6 +51,8 @@ function env() {
     TWITTER_CLIENT_ID: "tw-client-id",
     INSTAGRAM_CLIENT_ID: "ig-client",
     INSTAGRAM_CLIENT_SECRET: "ig-secret",
+    INSTAGRAM_LOGIN_CLIENT_ID: "ig-login-client",
+    INSTAGRAM_LOGIN_CLIENT_SECRET: "ig-login-secret",
     FACEBOOK_CLIENT_ID: "fb-client",
     FACEBOOK_CLIENT_SECRET: "fb-secret",
     LINKEDIN_CLIENT_ID: "li-client",
@@ -1616,6 +1618,26 @@ function mockMetaTokenExchange(accessToken = "short-token") {
   });
 }
 
+function mockInstagramLogin() {
+  supabase.set("api.instagram.com/oauth/access_token", {
+    method: "POST",
+    fn: () => ({ body: { access_token: "short-token", user_id: 17841400000000000 } }),
+  });
+  supabase.set("graph.instagram.com/access_token", {
+    fn: () => ({ body: { access_token: "long-token", expires_in: 5184000 } }),
+  });
+  supabase.set("graph.instagram.com/v21.0/me", {
+    fn: () => ({
+      body: {
+        user_id: "17841400000000000",
+        username: "creator",
+        account_type: "CREATOR",
+        profile_picture_url: "https://img.test/ig.jpg",
+      },
+    }),
+  });
+}
+
 test("oauth callback surfaces the provider's error and consumes the state", async () => {
   let consumed = null;
   mockConsentState(USER_A, (body) => { consumed = body; });
@@ -1629,21 +1651,9 @@ test("oauth callback surfaces the provider's error and consumes the state", asyn
   assert.equal(consumed?.p_state, "st-1");
 });
 
-test("instagram callback stores the linked professional account", async () => {
+test("instagram callback stores the Instagram-Login account", async () => {
   mockConsentState();
-  mockMetaTokenExchange();
-  supabase.set("graph.facebook.com/v21.0/me/accounts", {
-    fn: () => ({
-      body: {
-        data: [{
-          id: "page-1",
-          name: "Page One",
-          access_token: "page-token",
-          instagram_business_account: { id: "ig-1", username: "creator", profile_picture_url: "https://img.test/ig.jpg" },
-        }],
-      },
-    }),
-  });
+  mockInstagramLogin();
   let stored = null;
   supabase.set("/rpc/cloud_store_connected_account", {
     method: "POST",
@@ -1653,22 +1663,26 @@ test("instagram callback stores the linked professional account", async () => {
   assert.equal(res.status, 200);
   assert.match(await res.text(), /Instagram Connected/);
   assert.equal(stored?.p_provider, "instagram");
-  assert.equal(stored?.p_account_id, "ig-1");
+  assert.equal(stored?.p_account_id, "17841400000000000");
   assert.equal(stored?.p_account_name, "@creator");
+  assert.equal(stored?.p_metadata?.auth_mode, "instagram_login");
   assert.ok(stored?.p_credentials_encrypted);
 });
 
-test("instagram callback refuses to store an account without a linked professional profile", async () => {
+test("instagram callback fails clearly when the profile cannot be read", async () => {
   mockConsentState();
-  mockMetaTokenExchange();
-  supabase.set("graph.facebook.com/v21.0/me/accounts", {
-    fn: () => ({ body: { data: [{ id: "page-1", name: "Page One", access_token: "page-token" }] } }),
+  supabase.set("api.instagram.com/oauth/access_token", {
+    method: "POST",
+    fn: () => ({ body: { access_token: "short-token" } }),
+  });
+  supabase.set("graph.instagram.com/v21.0/me", {
+    fn: () => ({ status: 400, body: { error: { message: "Invalid OAuth access token" } } }),
   });
   let stored = false;
   supabase.set("/rpc/cloud_store_connected_account", { method: "POST", fn: () => { stored = true; return { body: "row-1" }; } });
   const res = await worker.fetch(new Request("https://w.test/oauth/instagram/callback?code=abc&state=st-3"), env());
   assert.equal(res.status, 400);
-  assert.match(await res.text(), /Instagram Not Ready/);
+  assert.match(await res.text(), /Instagram Auth Failed/);
   assert.equal(stored, false);
 });
 
@@ -1684,11 +1698,12 @@ test("facebook callback refuses to store a connection without a Page", async () 
   assert.equal(stored, false);
 });
 
-test("authorize URLs request exactly the approved scope sets", async () => {
-  const { buildInstagramAuthorizeUrl, buildFacebookAuthorizeUrl } = await import("../src/oauth.ts");
-  const ig = new URL(buildInstagramAuthorizeUrl("id", "https://w.test/cb", "st"));
+test("instagram authorize URL targets Instagram Login with the two business scopes", async () => {
+  const { buildInstagramLoginAuthorizeUrl, buildFacebookAuthorizeUrl } = await import("../src/oauth.ts");
+  const ig = new URL(buildInstagramLoginAuthorizeUrl("ig-app-id", "https://w.test/cb", "st"));
+  assert.equal(`${ig.origin}${ig.pathname}`, "https://www.instagram.com/oauth/authorize");
   assert.deepEqual(ig.searchParams.get("scope").split(","), [
-    "instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement",
+    "instagram_business_basic", "instagram_business_content_publish",
   ]);
   const fb = new URL(buildFacebookAuthorizeUrl("id", "https://w.test/cb", "st"));
   assert.deepEqual(fb.searchParams.get("scope").split(","), [

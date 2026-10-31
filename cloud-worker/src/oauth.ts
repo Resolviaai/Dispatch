@@ -22,6 +22,8 @@ export interface OAuthEnv extends Record<string, unknown> {
   OAUTH_REDIRECT_URI: string; // https://<worker>/oauth/google/callback
   INSTAGRAM_CLIENT_ID?: string;
   INSTAGRAM_CLIENT_SECRET?: string;
+  INSTAGRAM_LOGIN_CLIENT_ID?: string;
+  INSTAGRAM_LOGIN_CLIENT_SECRET?: string;
   FACEBOOK_CLIENT_ID?: string;
   FACEBOOK_CLIENT_SECRET?: string;
   LINKEDIN_CLIENT_ID?: string;
@@ -140,15 +142,24 @@ export function buildAuthorizeUrl(clientId: string, redirectUri: string, state: 
   return `${GOOGLE_AUTH}?${q.toString()}`;
 }
 
-export function buildInstagramAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {
+/**
+ * Instagram API with Instagram Login: the user signs in with Instagram itself.
+ * No Facebook account, no Facebook Page, and no Page permissions are involved.
+ */
+export const INSTAGRAM_LOGIN_SCOPES = [
+  "instagram_business_basic",
+  "instagram_business_content_publish",
+] as const;
+
+export function buildInstagramLoginAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement",
+    scope: INSTAGRAM_LOGIN_SCOPES.join(","),
     state,
   });
-  return `https://www.facebook.com/v21.0/dialog/oauth?${q.toString()}`;
+  return `https://www.instagram.com/oauth/authorize?${q.toString()}`;
 }
 
 export function buildFacebookAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {

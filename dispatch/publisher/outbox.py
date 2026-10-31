@@ -437,7 +437,8 @@ def _process_outbox_queue_internal() -> int:
                     video_path=video_path,
                     caption=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}",
                     access_token=ig_token,
-                    ig_user_id=ig_uid
+                    ig_user_id=ig_uid,
+                    api_base=account_creds.get("api_base") if account_creds else None
                 )
             elif platform == "linkedin":
                 li_token = account_creds.get("access_token") if account_creds else None

@@ -12,7 +12,7 @@ import {
   encryptToken,
   decryptToken,
   buildAuthorizeUrl,
-  buildInstagramAuthorizeUrl,
+  buildInstagramLoginAuthorizeUrl,
   buildFacebookAuthorizeUrl,
   buildLinkedInAuthorizeUrl,
   buildTwitterAuthorizeUrl,
@@ -41,6 +41,8 @@ export interface Env {
   SITE_ORIGIN: string;  // e.g. https://resolviaai.github.io — CORS-pinned admin origin
   INSTAGRAM_CLIENT_ID?: string;
   INSTAGRAM_CLIENT_SECRET?: string;
+  INSTAGRAM_LOGIN_CLIENT_ID?: string;
+  INSTAGRAM_LOGIN_CLIENT_SECRET?: string;
   FACEBOOK_CLIENT_ID?: string;
   FACEBOOK_CLIENT_SECRET?: string;
   LINKEDIN_CLIENT_ID?: string;
@@ -466,6 +468,66 @@ export function isPcWorkerAuth(env: Env, request: Request): boolean {
   const auth = request.headers.get("Authorization") ?? "";
   if (!auth.startsWith("Bearer ") || !env.DISPATCH_WORKER_TOKEN) return false;
   return timingSafeEqual(auth.slice(7), env.DISPATCH_WORKER_TOKEN);
+}
+
+/**
+ * Long-lived Instagram tokens expire after 60 days unless refreshed. Refresh
+ * every instagram_login connection older than 30 days so publishing never
+ * silently stops; failures are logged and retried on the next cron tick.
+ */
+async function refreshInstagramLoginTokens(env: Env): Promise<void> {
+  const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+  const listRes = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/connected_accounts?provider=eq.instagram&select=id,credentials_encrypted`,
+    { headers: svc }
+  );
+  if (!listRes.ok) {
+    console.error("Instagram token refresh: could not list accounts", listRes.status);
+    return;
+  }
+  const rows = await listRes.json() as Array<{ id: string; credentials_encrypted: string }>;
+  const refreshAfterMs = 30 * 24 * 60 * 60 * 1000;
+  for (const row of rows) {
+    try {
+      const raw = await decryptToken(env.TOKEN_VAULT_KEY, row.credentials_encrypted);
+      if (!raw.startsWith("{")) continue;
+      const creds = JSON.parse(raw) as Record<string, unknown>;
+      if (creds.auth_mode !== "instagram_login" || typeof creds.access_token !== "string") continue;
+      const lastRefresh = Date.parse(
+        (creds.token_refreshed_at as string) || (creds.token_obtained_at as string) || ""
+      );
+      if (Number.isFinite(lastRefresh) && Date.now() - lastRefresh < refreshAfterMs) continue;
+
+      const refreshRes = await fetch("https://graph.instagram.com/refresh_access_token?" + new URLSearchParams({
+        grant_type: "ig_refresh_token",
+        access_token: creds.access_token,
+      }));
+      if (!refreshRes.ok) {
+        console.error("Instagram token refresh failed for", row.id, refreshRes.status);
+        continue;
+      }
+      const refreshed = await refreshRes.json() as { access_token?: string; expires_in?: number };
+      if (!refreshed.access_token) continue;
+
+      const now = new Date();
+      const updated = {
+        ...creds,
+        access_token: refreshed.access_token,
+        token_refreshed_at: now.toISOString(),
+        token_expires_at: new Date(now.getTime() + (refreshed.expires_in ?? 5184000) * 1000).toISOString(),
+      };
+      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(updated));
+      const patchRes = await fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${row.id}`, {
+        method: "PATCH",
+        headers: { ...svc, "content-type": "application/json" },
+        body: JSON.stringify({ credentials_encrypted: enc }),
+      });
+      if (!patchRes.ok) console.error("Instagram token refresh: could not persist", row.id, patchRes.status);
+      else console.log("Instagram token refreshed for", row.id);
+    } catch (err) {
+      console.error("Instagram token refresh error:", err instanceof Error ? err.message : "unknown error");
+    }
+  }
 }
 
 // ---------- routes ----------
@@ -1136,9 +1198,9 @@ export default {
           unconfigured: true
         });
       }
-      if (provider === "instagram" && !env.INSTAGRAM_CLIENT_ID && !env.FACEBOOK_CLIENT_ID) {
+      if (provider === "instagram" && !env.INSTAGRAM_LOGIN_CLIENT_ID) {
         return json(400, {
-          error: "Instagram OAuth is not configured on the cloud worker (missing INSTAGRAM_CLIENT_ID or FACEBOOK_CLIENT_ID).",
+          error: "Instagram OAuth is not configured on the cloud worker (missing INSTAGRAM_LOGIN_CLIENT_ID).",
           unconfigured: true
         });
       }
@@ -1329,18 +1391,20 @@ export default {
       return renderOAuthResultHtml("YouTube Connected", `Channel "${channelTitle}" is connected to Dispatch. You can return to the app.`, false, "youtube");
     }
 
-    // 2. Instagram Start & Callback
+    // 2. Instagram Start & Callback — Instagram API with Instagram Login.
+    // The user signs in with Instagram itself; no Facebook account or Page is
+    // involved, so the Facebook app's role/review gating does not apply.
     if (url.pathname === "/oauth/instagram/start" && request.method === "GET") {
       try {
         const uid = await resolveOAuthUser();
         if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization ticket expired or already used. Please retry from Dispatch Settings.", true);
         const state = crypto.randomUUID() + crypto.randomUUID();
         await rpc(env, "cloud_put_oauth_state", { p_state: state, p_user_id: uid });
-        const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
+        const clientId = env.INSTAGRAM_LOGIN_CLIENT_ID || "";
         if (!clientId) {
-          return renderOAuthResultHtml("Configuration Required", "Instagram / Facebook Client ID is not configured on the cloud worker.", true, "instagram");
+          return renderOAuthResultHtml("Configuration Required", "Instagram login is not configured on the cloud worker (missing INSTAGRAM_LOGIN_CLIENT_ID).", true, "instagram");
         }
-        return Response.redirect(buildInstagramAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback", state), 302);
+        return Response.redirect(buildInstagramLoginAuthorizeUrl(clientId, "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback", state), 302);
       } catch (err: any) {
         console.error("Instagram OAuth start error:", err);
         return renderOAuthResultHtml("Connection Error", err?.message || "Failed to start Instagram sign-in. Please retry from Dispatch.", true);
@@ -1355,80 +1419,70 @@ export default {
       const uid = await consumeOAuthState(state);
       if (!uid) return renderOAuthResultHtml("Session Expired", "Authorization session expired or was already used. Please retry from Dispatch.", true);
 
-      const clientId = env.INSTAGRAM_CLIENT_ID || env.FACEBOOK_CLIENT_ID || "";
-      const clientSecret = env.INSTAGRAM_CLIENT_SECRET || env.FACEBOOK_CLIENT_SECRET || "";
+      const clientId = env.INSTAGRAM_LOGIN_CLIENT_ID || "";
+      const clientSecret = env.INSTAGRAM_LOGIN_CLIENT_SECRET || "";
+      if (!clientId || !clientSecret) {
+        return renderOAuthResultHtml("Configuration Required", "Instagram login is not configured on the cloud worker.", true, "instagram");
+      }
       const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/instagram/callback";
 
-      const tokRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
-        client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, code
-      }));
-      const tok = await tokRes.json() as Record<string, unknown>;
+      const tokRes = await fetch("https://api.instagram.com/oauth/access_token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: clientId, client_secret: clientSecret, grant_type: "authorization_code", redirect_uri: redirectUri, code,
+        }),
+      });
+      const tok = await tokRes.json() as { access_token?: string; user_id?: number | string; error_message?: string };
       if (!tokRes.ok || !tok.access_token) {
-        return renderOAuthResultHtml("Instagram Auth Failed", `Token exchange failed: ${JSON.stringify(tok).slice(0, 100)}`, true);
+        return renderOAuthResultHtml("Instagram Auth Failed", `Token exchange failed: ${(tok.error_message || JSON.stringify(tok)).slice(0, 100)}`, true, "instagram");
       }
 
-      // Exchange short-lived token for 60-day long-lived token
-      let longToken = tok.access_token as string;
+      // Exchange the short-lived token for the 60-day long-lived token. A worker
+      // cron refreshes it every 30 days, so the connection does not lapse.
+      let longToken = tok.access_token;
+      let expiresIn = 3600;
       try {
-        const longRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
-          grant_type: "fb_exchange_token", client_id: clientId, client_secret: clientSecret, fb_exchange_token: longToken
+        const longRes = await fetch("https://graph.instagram.com/access_token?" + new URLSearchParams({
+          grant_type: "ig_exchange_token", client_secret: clientSecret, access_token: longToken,
         }));
         if (longRes.ok) {
-          const longData = await longRes.json() as Record<string, unknown>;
-          if (longData.access_token) longToken = longData.access_token as string;
-        }
-      } catch { /* fallback to shortToken */ }
-
-      // A usable Instagram destination requires a Professional account linked to
-      // a Facebook Page: publishing Reels uses the Page token. Storing "me" or an
-      // arbitrary Page instead would create a connection that can never publish.
-      let igAccount: {
-        id: string;
-        username: string;
-        avatar: string | null;
-        pageId: string;
-        pageAccessToken: string | null;
-      } | null = null;
-      let pagesReadable = true;
-      try {
-        const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${longToken}`);
-        pagesReadable = pagesRes.ok;
-        if (pagesRes.ok) {
-          const pagesData = await pagesRes.json() as { data?: Array<{ id: string; name: string; access_token?: string; instagram_business_account?: { id: string; username: string; profile_picture_url?: string } }> };
-          const found = (pagesData.data || []).find(p => p.instagram_business_account?.id);
-          if (found && found.instagram_business_account) {
-            igAccount = {
-              id: found.instagram_business_account.id,
-              username: "@" + found.instagram_business_account.username,
-              avatar: found.instagram_business_account.profile_picture_url || null,
-              pageId: found.id,
-              pageAccessToken: found.access_token || null,
-            };
+          const longData = await longRes.json() as { access_token?: string; expires_in?: number };
+          if (longData.access_token) {
+            longToken = longData.access_token;
+            if (typeof longData.expires_in === "number") expiresIn = longData.expires_in;
           }
         }
-      } catch (err) {
-        pagesReadable = false;
-        console.error("Instagram page lookup failed:", err instanceof Error ? err.message : "unknown error");
-      }
+      } catch { /* keep the short-lived token; the refresh cron can still extend it */ }
 
-      if (!pagesReadable) {
-        return renderOAuthResultHtml("Instagram Unavailable", "Facebook did not return your Pages. Please retry in a moment.", true, "instagram");
-      }
-      if (!igAccount) {
+      const meRes = await fetch(`https://graph.instagram.com/v21.0/me?` + new URLSearchParams({
+        fields: "user_id,username,account_type,profile_picture_url",
+        access_token: longToken,
+      }));
+      const me = await meRes.json() as {
+        user_id?: string; id?: string; username?: string; account_type?: string;
+        profile_picture_url?: string; error?: { message?: string };
+      };
+      const igUserId = me.user_id || me.id || (tok.user_id != null ? String(tok.user_id) : "");
+      if (!meRes.ok || !igUserId || !me.username) {
         return renderOAuthResultHtml(
-          "Instagram Not Ready",
-          "No Instagram Professional account is linked to a Facebook Page for this login. Switch the Instagram account to Professional (Business or Creator), link it to a Facebook Page you manage, then retry.",
+          "Instagram Auth Failed",
+          `Could not read the Instagram profile: ${(me.error?.message || "unknown error").slice(0, 120)}`,
           true,
           "instagram"
         );
       }
 
+      const issuedAt = new Date();
       const credPayload = {
-        access_token: igAccount.pageAccessToken || longToken,
-        user_access_token: longToken,
-        page_id: igAccount.pageId,
-        ig_user_id: igAccount.id,
-        account_id: igAccount.id
+        access_token: longToken,
+        ig_user_id: igUserId,
+        username: "@" + me.username,
+        account_type: me.account_type || "",
+        auth_mode: "instagram_login",
+        api_base: "https://graph.instagram.com/v21.0",
+        token_obtained_at: issuedAt.toISOString(),
+        token_expires_at: new Date(issuedAt.getTime() + expiresIn * 1000).toISOString(),
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
@@ -1436,18 +1490,18 @@ export default {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
-          p_user_id: uid, p_provider: "instagram", p_account_id: igAccount.id, p_account_name: igAccount.username,
-          p_account_email: null, p_avatar_url: igAccount.avatar, p_credentials_encrypted: enc,
-          p_metadata: { ig_user_id: igAccount.id, page_id: igAccount.pageId, username: igAccount.username },
+          p_user_id: uid, p_provider: "instagram", p_account_id: igUserId, p_account_name: "@" + me.username,
+          p_account_email: null, p_avatar_url: me.profile_picture_url || null, p_credentials_encrypted: enc,
+          p_metadata: { ig_user_id: igUserId, username: "@" + me.username, auth_mode: "instagram_login", account_type: me.account_type || "" },
         }),
       });
       if (!storeRes.ok) {
         const errText = await storeRes.text().catch(() => "");
         console.error("Failed to store Instagram account:", storeRes.status, errText);
-        return renderOAuthResultHtml("Database Error", `Failed to save Instagram account: ${errText.slice(0, 150)}`, true);
+        return renderOAuthResultHtml("Database Error", `Failed to save Instagram account: ${errText.slice(0, 150)}`, true, "instagram");
       }
 
-      return renderOAuthResultHtml("Instagram Connected", `Account "${igAccount.username}" connected successfully! You can return to Dispatch.`, false, "instagram");
+      return renderOAuthResultHtml("Instagram Connected", `Account "@${me.username}" connected successfully! You can return to Dispatch.`, false, "instagram");
     }
 
     // 3. Facebook Start & Callback
@@ -3048,5 +3102,6 @@ export default {
     // Scheduled cleanup (see [triggers] in wrangler.toml): abandoned staging,
     // promotion leftovers, and the staging-watch sweep run unattended.
     ctx.waitUntil(runCleanup(env).then((r) => console.log(`scheduled cleanup: ${r.status}`)));
+    ctx.waitUntil(refreshInstagramLoginTokens(env));
   },
 };

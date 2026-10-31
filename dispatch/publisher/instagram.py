@@ -16,24 +16,29 @@ def upload_instagram_reel(
     video_path: Path,
     caption: str,
     access_token: Optional[str] = None,
-    ig_user_id: Optional[str] = None
+    ig_user_id: Optional[str] = None,
+    api_base: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Upload video to Instagram Reels via Instagram Graph API.
+    """Upload video to Instagram Reels via the Instagram Graph API.
     
     Args:
         video_path: Local path to .mp4 video file.
         caption: Caption text with hashtags.
-        access_token: Instagram Graph API User Access Token.
-        ig_user_id: Instagram Business/Creator Account ID.
+        access_token: Instagram user access token.
+        ig_user_id: Instagram Professional account ID.
+        api_base: API host for this connection. Instagram-Login credentials
+            carry ``https://graph.instagram.com/v21.0``; legacy Facebook-Login
+            credentials fall back to the Facebook Graph host.
         
     Returns:
         Dict with status, remote_id, and url.
     """
     token = access_token or os.getenv("INSTAGRAM_ACCESS_TOKEN")
     user_id = ig_user_id or os.getenv("INSTAGRAM_USER_ID")
+    base_url = (api_base or os.getenv("INSTAGRAM_API_BASE") or GRAPH_BASE_URL).rstrip("/")
 
     if not token or not user_id:
-        raise PermissionError("Instagram Graph API credentials missing (INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID).")
+        raise PermissionError("Instagram API credentials missing (access token and account id).")
 
     if not video_path.exists():
         raise FileNotFoundError(f"Video file missing: {video_path}")
@@ -44,7 +49,7 @@ def upload_instagram_reel(
         logger.info("Initiating Instagram Reels container creation for %s (%d bytes)", user_id, file_size)
 
         # Step 1: Create Resumable Media Container
-        container_url = f"{GRAPH_BASE_URL}/{user_id}/media"
+        container_url = f"{base_url}/{user_id}/media"
         params = {
             "media_type": "REELS",
             "upload_type": "resumable",
@@ -74,7 +79,7 @@ def upload_instagram_reel(
 
         # Step 3: Poll Container Processing Status
         logger.info("Polling container %s processing status...", container_id)
-        status_url = f"{GRAPH_BASE_URL}/{container_id}"
+        status_url = f"{base_url}/{container_id}"
         is_ready = False
         for _ in range(24):  # Up to 2 minutes (24 * 5s)
             status_res = requests.get(
@@ -97,7 +102,7 @@ def upload_instagram_reel(
 
         # Step 4: Publish Container
         logger.info("Publishing container %s to Instagram Reels...", container_id)
-        publish_url = f"{GRAPH_BASE_URL}/{user_id}/media_publish"
+        publish_url = f"{base_url}/{user_id}/media_publish"
         pub_res = requests.post(publish_url, data={"creation_id": container_id, "access_token": token}, timeout=30)
         pub_res.raise_for_status()
         media_id = pub_res.json().get("id", container_id)
@@ -106,7 +111,7 @@ def upload_instagram_reel(
         permalink = f"https://www.instagram.com/reel/{media_id}"
         try:
             p_res = requests.get(
-                f"{GRAPH_BASE_URL}/{media_id}",
+                f"{base_url}/{media_id}",
                 params={"fields": "permalink", "access_token": token},
                 timeout=10
             )
