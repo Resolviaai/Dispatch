@@ -151,6 +151,11 @@ try {
         Copy-Item (Join-Path $siteDir "terms.html") (Join-Path $wtSiteDir "terms.html") -Force
     }
 
+    if (Test-Path (Join-Path $siteDir "data-deletion.html")) {
+        Copy-Item (Join-Path $siteDir "data-deletion.html") (Join-Path $tempWorktree "data-deletion.html") -Force
+        Copy-Item (Join-Path $siteDir "data-deletion.html") (Join-Path $wtSiteDir "data-deletion.html") -Force
+    }
+
     Write-Host "== 4. Committing and pushing gh-pages =="
     Push-Location $tempWorktree
     try {
