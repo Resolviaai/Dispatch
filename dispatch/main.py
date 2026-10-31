@@ -177,7 +177,14 @@ def start_dispatch(run_web: bool = True):
             from dispatch.youtube_connections import RemoteJobPoller
             from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
             _catcher = YouTubeInboxCatcher()
-            _poller = RemoteJobPoller(ingest_video=_catcher.ingest_video)
+            _direct_handler = None
+            try:
+                from dispatch.direct_ingest import process_direct_job
+                _direct_handler = process_direct_job
+                logger.info("Direct upload pickup handler active (Route C, source='direct')")
+            except Exception as dl_err:
+                logger.warning("Direct upload pickup unavailable on this PC: %s", dl_err)
+            _poller = RemoteJobPoller(ingest_video=_catcher.ingest_video, direct_handler=_direct_handler)
             threading.Thread(target=_poller.run_forever, daemon=True,
                              name="dispatch-remote-jobs").start()
             logger.info("Remote processing job poller active (claims queued jobs from the cloud)")

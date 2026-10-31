@@ -90,6 +90,56 @@ class TestRemoteJobs(unittest.TestCase):
         finish_calls = [c for c in rpc.call_args_list if c.args[0] == "cloud_finish_job"]
         self.assertEqual(finish_calls[0].args[1]["p_status"], "failed")
 
+    def test_claim_parses_direct_job_fields(self):
+        def fake_rpc(action, params):
+            if action == "cloud_claim_job":
+                return [{
+                    "job_id": "jd1", "user_id": "u1", "youtube_url": None,
+                    "source": "direct", "upload_object_id": "obj-1", "source_title": "My Vlog",
+                }]
+            return None
+
+        with patch.object(yc, "_supabase_rpc", side_effect=fake_rpc):
+            job = yc.claim_remote_job("owner-pc-1")
+            self.assertEqual(job.source, "direct")
+            self.assertEqual(job.upload_object_id, "obj-1")
+            self.assertEqual(job.source_title, "My Vlog")
+
+    def test_direct_job_routes_to_direct_handler(self):
+        downloads = []
+        youtube_calls = []
+
+        def direct_handler(job):
+            downloads.append(job.upload_object_id)
+            return {"status": "DOWNLOADED", "video_id": f"dir_{job.upload_object_id}"}
+
+        with patch.object(yc, "_supabase_rpc", return_value=[]) as rpc, \
+             patch.object(
+                 yc, "claim_remote_job",
+                 return_value=yc.RemoteJob("jd9", "u9", "", source="direct", upload_object_id="obj-9"),
+             ):
+            poller = yc.RemoteJobPoller(
+                ingest_video=lambda url, **kw: youtube_calls.append(url) or {"status": "FAILED"},
+                direct_handler=direct_handler,
+            )
+            poller._process(yc.claim_remote_job("w"))
+        self.assertEqual(downloads, ["obj-9"])
+        self.assertEqual(youtube_calls, [])
+        finish_calls = [c for c in rpc.call_args_list if c.args[0] == "cloud_finish_job"]
+        self.assertEqual(finish_calls[0].args[1]["p_status"], "done")
+        self.assertEqual(finish_calls[0].args[1]["p_video_id"], "dir_obj-9")
+
+    def test_without_direct_handler_the_direct_job_fails_loudly(self):
+        with patch.object(yc, "_supabase_rpc", return_value=[]) as rpc, \
+             patch.object(
+                 yc, "claim_remote_job",
+                 return_value=yc.RemoteJob("jd7", "u7", "", source="direct", upload_object_id="obj-7"),
+             ):
+            poller = yc.RemoteJobPoller(ingest_video=lambda url: {"status": "FAILED"})
+            poller._process(yc.claim_remote_job("w"))
+        finish_calls = [c for c in rpc.call_args_list if c.args[0] == "cloud_finish_job"]
+        self.assertEqual(finish_calls[0].args[1]["p_status"], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()

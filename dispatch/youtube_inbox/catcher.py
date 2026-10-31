@@ -548,6 +548,89 @@ class YouTubeInboxCatcher:
             "verified": True
         }
 
+    def ingest_direct_video(
+        self,
+        video_id: str,
+        local_path: Path,
+        title: str = "Direct upload",
+        user_id: Optional[str] = None,
+        source_file_size: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Route C (direct upload): validate an ALREADY-DOWNLOADED local file and
+        register it in youtube_inbox at DOWNLOADED.
+
+        No yt-dlp, no privacy gate, no single-flight lock (the caller owns the
+        well-named `dir_<object_id>` file; direct_ingest.process_direct_job is the
+        only producer and the poller is single-threaded). Contract mirrors the
+        tail of _ingest_video_locked: probe with ffprobe, enforce the 3-minute
+        direct-upload cap, persist metadata + local path, transition DOWNLOADED.
+        On violation the file is removed and RuntimeError raised so the caller
+        marks the remote job failed.
+        """
+        from dispatch.ingestion.validator import probe_video
+
+        path = Path(local_path)
+
+        def _fail(msg: str) -> None:
+            db.update_youtube_video(video_id, status="FAILED", last_error=msg)
+            logger.error("Direct ingestion failed for %s: %s", video_id, msg)
+
+        if not path.exists() or path.stat().st_size <= 0:
+            _fail("Direct video file missing or empty on disk")
+            raise RuntimeError("Direct video file missing or empty on disk")
+
+        # Validate BEFORE touching the inbox row: a corrupt file never registers.
+        is_valid, meta, err = probe_video(path)
+        if not is_valid:
+            path.unlink(missing_ok=True)
+            _fail(f"Media validation failed for {path.name}: {err}")
+            raise RuntimeError(f"Media validation failed for direct video: {err}")
+
+        total_duration = float(meta.get("duration", 0.0) or 0.0)
+        if total_duration <= 0.0:
+            path.unlink(missing_ok=True)
+            _fail("Direct video has no resolvable duration (corrupt stream?)")
+            raise RuntimeError("Direct video has no resolvable duration")
+
+        if total_duration > 180.5:
+            keep = f"{total_duration:.1f}"
+            path.unlink(missing_ok=True)
+            msg = (
+                f"Direct video is {keep}s — over the 3-minute (180.5s) direct-upload "
+                "limit. Trim the video to 3 minutes and re-upload."
+            )
+            _fail(msg)
+            raise RuntimeError(msg)
+
+        # Register idempotently (row may exist in re-claim paths: then just refresh it).
+        existing = db.get_youtube_video(video_id)
+        if existing is None:
+            db.register_youtube_video(
+                video_id=video_id,
+                title=title,
+                duration=total_duration,
+                source_file_size=source_file_size,
+                user_id=user_id,
+            )
+        db.update_youtube_video(
+            video_id,
+            status="DOWNLOADED",
+            local_video_path=str(path),
+            duration=total_duration,
+        )
+
+        logger.info(
+            "Direct ingestion SUCCESS for %s -> DOWNLOADED (%.1fs, %dx%d, title=%s)",
+            video_id, total_duration, meta.get("width", 0), meta.get("height", 0), title
+        )
+        return {
+            "video_id": video_id,
+            "status": "DOWNLOADED",
+            "local_video_path": str(path),
+            "metadata": meta,
+            "verified": True
+        }
+
     def process_video(
         self,
         url_or_id: str,

@@ -130,7 +130,11 @@ class HighlightWorker:
                         continue
 
                 try:
-                    result = self.process_video_highlights(video_id)
+                    if video_id.startswith("dir_"):
+                        # Route C (direct): no AI highlight selection; one whole-video clip.
+                        result = self._process_direct_whole_video(video_id)
+                    else:
+                        result = self.process_video_highlights(video_id)
                     if result:
                         processed.append(result)
                 except Exception as e:
@@ -188,7 +192,11 @@ class HighlightWorker:
                     except Exception:
                         pass
 
-                    self._render_clips_for_video(video_id, clip_ids, segments, src_path, session_id=session_id, api_key=active_render_key)
+                    self._render_clips_for_video(
+                        video_id, clip_ids, segments, src_path,
+                        session_id=session_id, api_key=active_render_key,
+                        preserve_full_range=video_id.startswith("dir_"),
+                    )
                     # Verify rendered outputs exist on disk before marking COMPLETED
                     if clip_ids:
                         all_rendered = True
@@ -393,9 +401,15 @@ class HighlightWorker:
         segments: List[Dict[str, Any]],
         source_video_path: Optional[Path],
         session_id: Optional[str] = None,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        preserve_full_range: bool = False,
     ):
-        """Render candidate clips with Stage 2 precision transcription and FFmpeg."""
+        """Render candidate clips with Stage 2 precision transcription and FFmpeg.
+
+        preserve_full_range=True (Route C direct uploads) skips the Stage 2
+        speech-snap trim so the delivered clip keeps the exact uploaded window;
+        word-level caption timing is still computed from the same Stage 2 words.
+        """
         if not saved_ids:
             return
 
@@ -466,30 +480,35 @@ class HighlightWorker:
 
                 words = stage2_res.get("words", [])
                 if words:
-                    # 2.2 Word-Snap: tight cut to millisecond start and end of spoken syllables
-                    speech_start = eff_p_start + stage2_res.get("speech_start", 0.0)
-                    speech_end = eff_p_start + stage2_res.get("speech_end", eff_c_end - eff_p_start)
-                    snapped_start = max(eff_p_start, round(speech_start - 0.2, 2))
-                    snapped_end = min(eff_p_end, round(speech_end + 0.3, 2))
-                    range_trimmed = db.update_clip_trim(
-                        clip_id, snapped_start, snapped_end,
-                        expected_range_revision=range_revision,
-                    )
-                    if range_trimmed:
-                        eff_c_start = snapped_start
-                        eff_c_end = snapped_end
-                    latest = db.get_clip_by_id(clip_id)
-                    if not latest or abs(float(latest["start_time"]) - eff_c_start) > 0.01 or abs(float(latest["end_time"]) - eff_c_end) > 0.01:
-                        logger.info("Skipping stale Stage 2 result for %s after its range changed", clip_id)
-                        if temp_cleanup and temp_cleanup.exists():
-                            temp_cleanup.unlink(missing_ok=True)
-                        continue
-                    range_revision = int(latest.get("range_revision") or 0)
-                    if not range_trimmed:
-                        logger.info(
-                            "Keeping original clip range for %s because the speech-tightened range "
-                            "is outside source or product limits.", clip_id
+                    if preserve_full_range:
+                        # Route C direct upload: keep the exact uploaded window — the
+                        # speech-snap trim (autocut) stays a manual client action.
+                        logger.info("Preserving full range for direct clip %s (no speech-snap trim)", clip_id)
+                    else:
+                        # 2.2 Word-Snap: tight cut to millisecond start and end of spoken syllables
+                        speech_start = eff_p_start + stage2_res.get("speech_start", 0.0)
+                        speech_end = eff_p_start + stage2_res.get("speech_end", eff_c_end - eff_p_start)
+                        snapped_start = max(eff_p_start, round(speech_start - 0.2, 2))
+                        snapped_end = min(eff_p_end, round(speech_end + 0.3, 2))
+                        range_trimmed = db.update_clip_trim(
+                            clip_id, snapped_start, snapped_end,
+                            expected_range_revision=range_revision,
                         )
+                        if range_trimmed:
+                            eff_c_start = snapped_start
+                            eff_c_end = snapped_end
+                        latest = db.get_clip_by_id(clip_id)
+                        if not latest or abs(float(latest["start_time"]) - eff_c_start) > 0.01 or abs(float(latest["end_time"]) - eff_c_end) > 0.01:
+                            logger.info("Skipping stale Stage 2 result for %s after its range changed", clip_id)
+                            if temp_cleanup and temp_cleanup.exists():
+                                temp_cleanup.unlink(missing_ok=True)
+                            continue
+                        range_revision = int(latest.get("range_revision") or 0)
+                        if not range_trimmed:
+                            logger.info(
+                                "Keeping original clip range for %s because the speech-tightened range "
+                                "is outside source or product limits.", clip_id
+                            )
 
                     # 5.1 Word-by-Word Caption Data Mapping
                     clean_words = []
@@ -673,6 +692,76 @@ class HighlightWorker:
                     temp_cleanup.unlink(missing_ok=True)
                 except Exception:
                     pass
+
+    def _process_direct_whole_video(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Route C (source='direct', dir_* ids): NO AI highlight selection.
+
+        The entire uploaded video becomes exactly ONE 'ready_review' clip spanning
+        the full source; captions are attached by the normal render stage. Heavier
+        autocut processing is deliberately a manual client action.
+        """
+        item = db.get_youtube_video(video_id)
+        if not item:
+            logger.warning("Direct video %s not found in inbox. Skipping.", video_id)
+            return None
+
+        if item.get("status") not in ("TRANSCRIBED",):
+            logger.info(
+                "Direct video %s in status '%s'; expected TRANSCRIBED. Skipping.",
+                video_id, item.get("status"),
+            )
+            return None
+
+        chunk_id, session_id, _segments, duration = self._resolve_chunk_and_transcript(video_id, item)
+
+        # Authoritative duration comes from the real file, never a client claim.
+        local_path_str = item.get("local_video_path")
+        if local_path_str:
+            from dispatch.ingestion.validator import probe_video
+            vid_path = Path(local_path_str)
+            if vid_path.exists() and vid_path.stat().st_size > 0:
+                is_valid, meta, _ = probe_video(vid_path)
+                if is_valid and float(meta.get("duration", 0.0) or 0.0) > 0:
+                    duration = float(meta["duration"])
+        if not duration or duration <= 0:
+            logger.error("Direct video %s has no resolvable duration; cannot define the full clip", video_id)
+            db.update_youtube_video(video_id=video_id, status="FAILED", last_error="Direct clip duration unresolvable")
+            return None
+
+        db.update_youtube_video(video_id=video_id, status="ANALYZING")
+        logger.info("Transitioned direct video %s to ANALYZING (single-clip path)", video_id)
+        try:
+            from dispatch.youtube_connections import update_job_stage_by_video_id
+            update_job_stage_by_video_id(video_id, "analyzing")
+        except Exception:
+            pass
+
+        title = str(item.get("title") or "").strip() or "Direct upload"
+        clip_defs = [{
+            "title": title,
+            "start_time": 0.0,
+            "end_time": duration,
+            "duration": duration,
+            "padded_start": 0.0,
+            "padded_end": duration,
+        }]
+        clip_ids = db.save_clip_definitions(
+            chunk_id=chunk_id,
+            session_id=session_id,
+            video_id=video_id,
+            clip_defs=clip_defs,
+            user_id=item.get("user_id"),
+        )
+        logger.info(
+            "Direct video %s -> single whole-video clip %s (%.1fs, no AI highlight selection)",
+            video_id, clip_ids, duration,
+        )
+        return {
+            "video_id": video_id,
+            "status": "CLIPS_DEFINED",
+            "clips_count": len(clip_ids),
+            "model_used": None
+        }
 
     def process_video_highlights(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Run Pillar 3 highlight analysis pipeline for a single video.

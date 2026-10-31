@@ -144,7 +144,11 @@ class TranscriptionWorker:
         """Transition DOWNLOADED item into WAITING_FOR_TRANSCRIPT and probe captions immediately."""
         video_id = item["video_id"]
         now_dt = datetime.now(timezone.utc)
-        deadline_dt = now_dt + timedelta(seconds=self.caption_wait_seconds)
+        # Route C (direct uploads, dir_* ids): there IS no YouTube caption track to
+        # wait for — the deadline is now, so the whisper fallback runs immediately
+        # when the Stage 1 Gemini fast path is unavailable.
+        wait_seconds = 0 if video_id.startswith("dir_") else self.caption_wait_seconds
+        deadline_dt = now_dt + timedelta(seconds=wait_seconds)
         next_probe_dt = now_dt + timedelta(seconds=self.caption_reprobe_seconds)
 
         now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -153,7 +157,7 @@ class TranscriptionWorker:
 
         logger.info(
             "Video %s: Entering WAITING_FOR_TRANSCRIPT (Deadline: %s, Wait window: %ds, Reprobe: %ds)",
-            video_id, deadline_str, self.caption_wait_seconds, self.caption_reprobe_seconds
+            video_id, deadline_str, wait_seconds, self.caption_reprobe_seconds
         )
         try:
             from dispatch.youtube_connections import update_job_stage_by_video_id
@@ -252,8 +256,9 @@ class TranscriptionWorker:
         now_dt = datetime.now(timezone.utc)
         remaining = (deadline_dt - now_dt).total_seconds()
 
-        # 1. Attempt to fetch YouTube captions only if probe is due
-        if is_probe_due:
+        # 1. Attempt to fetch YouTube captions only if probe is due.
+        # Route C (dir_* direct uploads): no YouTube source exists; never probe.
+        if is_probe_due and not video_id.startswith("dir_"):
             logger.info("Caption probe is due for %s. Probing YouTube captions...", video_id)
             segments = None
             try:

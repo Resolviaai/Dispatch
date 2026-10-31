@@ -41,6 +41,7 @@ import {
   Cloud,
   Plus,
   Bell,
+  Upload,
 } from 'lucide-react';
 import { useActivity } from '../context/ActivityContext';
 import { NotificationCenterModal } from '../components/NotificationCenterModal';
@@ -1548,6 +1549,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isCloudMode, setIsCloudMode] = useState<boolean>(false);
   const [remoteJobs, setRemoteJobs] = useState<Array<{ id: string; youtube_url: string; status: string; last_error?: string; created_at?: string }>>([]);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
+  const [directUploadPhase, setDirectUploadPhase] = useState<'idle' | 'checking' | 'uploading' | 'submitting'>('idle');
+  const [directUploadPct, setDirectUploadPct] = useState(0);
+  const [directUploadError, setDirectUploadError] = useState<string | null>(null);
+  const directFileInputRef = useRef<HTMLInputElement | null>(null);
   const [submitUrlInput, setSubmitUrlInput] = useState<string>('');
   const [isSubmittingJob, setIsSubmittingJob] = useState<boolean>(false);
   const [showingCachedClips, setShowingCachedClips] = useState<boolean>(false);
@@ -2156,6 +2161,116 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (clipsFetchPendingRef.current) {
       clipsFetchPendingRef.current = false;
       void fetchClips();
+    }
+  };
+
+  /**
+   * Route C: upload an <=3-minute MP4 straight to Dispatch Cloud, then queue a
+   * direct processing job. The PC claims it later; uploading works with the PC off.
+   * The 3-minute limit mirrors the PC's hard cap so we fail before any bytes move.
+   */
+  const handleDirectUpload = async (file: File) => {
+    setDirectUploadError(null);
+    const isMp4 = file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
+    if (!isMp4) {
+      setDirectUploadError('Upload an MP4 video — other formats are not supported.');
+      return;
+    }
+    if (file.size <= 0) {
+      setDirectUploadError('That file is empty.');
+      return;
+    }
+
+    setDirectUploadPhase('checking');
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const durationSec = await new Promise<number>((resolve, reject) => {
+        const probe = document.createElement('video');
+        probe.preload = 'metadata';
+        probe.onloadedmetadata = () => resolve(probe.duration || 0);
+        probe.onerror = () => reject(new Error('Could not read this video.'));
+        probe.src = objectUrl;
+      });
+      if (!Number.isFinite(durationSec) || durationSec <= 0) throw new Error('Could not read the video duration.');
+      if (durationSec > 180.5) throw new Error('Videos can be at most 3 minutes long.');
+    } catch (err) {
+      URL.revokeObjectURL(objectUrl);
+      setDirectUploadPhase('idle');
+      setDirectUploadError(err instanceof Error ? err.message : 'Could not read this video.');
+      return;
+    }
+    URL.revokeObjectURL(objectUrl);
+
+    const session = await currentSession().catch(() => null);
+    const token = session?.access_token;
+    if (!token) {
+      setDirectUploadPhase('idle');
+      setDirectUploadError('Sign in to upload a video.');
+      return;
+    }
+
+    try {
+      setDirectUploadPhase('uploading');
+      setDirectUploadPct(0);
+      const reserveRes = await fetch(`${WORKER_BASE}/reserve`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'clip_video',
+          mime_type: 'video/mp4',
+          expected_bytes: file.size,
+          client_token: crypto.randomUUID(),
+        }),
+      });
+      const reserve = await reserveRes.json().catch(() => null);
+      if (!reserveRes.ok || !reserve?.upload_url || !reserve?.media_object_id) {
+        throw new Error(reserve?.error || `Upload could not start (HTTP ${reserveRes.status}).`);
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', reserve.upload_url);
+        xhr.setRequestHeader('Content-Type', 'video/mp4');
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) setDirectUploadPct(Math.round((event.loaded / event.total) * 100));
+        };
+        xhr.onload = () =>
+          xhr.status >= 200 && xhr.status < 300
+            ? resolve()
+            : reject(new Error(`Upload failed (HTTP ${xhr.status}).`));
+        xhr.onerror = () => reject(new Error('Upload failed — check your connection.'));
+        xhr.send(file);
+      });
+
+      setDirectUploadPhase('submitting');
+      const completeRes = await fetch(`${WORKER_BASE}/complete`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation_id: reserve.reservation_id }),
+      });
+      const complete = await completeRes.json().catch(() => null);
+      if (!completeRes.ok || !complete?.object_id) {
+        throw new Error(complete?.error || `Upload could not be finalized (HTTP ${completeRes.status}).`);
+      }
+
+      const jobRes = await fetch(`${WORKER_BASE}/jobs/direct`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ media_object_id: complete.object_id, title: file.name.replace(/\.mp4$/i, '') }),
+      });
+      const job = await jobRes.json().catch(() => null);
+      if (!jobRes.ok || !job?.job_id) {
+        throw new Error(job?.error || `Processing could not be queued (HTTP ${jobRes.status}).`);
+      }
+
+      setDirectUploadPhase('idle');
+      setDirectUploadPct(0);
+      setShowSubmitModal(false);
+      setFeedback('Video uploaded. Your PC will process it into clips.');
+      void fetchClips();
+    } catch (err) {
+      setDirectUploadPhase('idle');
+      setDirectUploadError(err instanceof Error ? err.message : 'Upload failed.');
     }
   };
 
@@ -3622,6 +3737,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
     if (!clipToReject || isSubmitting) return;
     const clip = clipToReject;
+    // Published clips are refused by the PC's review-reject guard (409). Delete
+    // them through the cloud command path instead: media is kept for the 24h undo
+    // window, then local + R2 copies are purged. The platform post is untouched.
+    if (clip.status === 'published') {
+      setClipToReject(null);
+      setIsMoreModalOpen(false);
+      await performCloudReject(clip);
+      return;
+    }
     if (isCloudMode) {
       setClipToReject(null);
       setIsMoreModalOpen(false);
@@ -3769,7 +3893,12 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           <div className="flex items-center gap-1 -mr-2">
             <button
               type="button"
-              onClick={() => setShowSubmitModal(true)}
+              onClick={() => {
+                setDirectUploadError(null);
+                setDirectUploadPhase('idle');
+                setDirectUploadPct(0);
+                setShowSubmitModal(true);
+              }}
               disabled={offlineReadOnly}
               aria-label="Process YouTube Video"
               className="w-11 h-11 rounded-full flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all disabled:opacity-40"
@@ -4194,6 +4323,48 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 <Plus size={15} />
                 <span>{isSubmittingJob ? 'Submitting…' : 'Submit'}</span>
               </button>
+            </div>
+
+            <div className="pt-3 border-t border-border space-y-2">
+              <p className="text-xs text-text-secondary leading-relaxed">
+                Or upload an MP4 video (max 3 minutes). It uploads to Dispatch Cloud right away — your PC processes it when it is online.
+              </p>
+              <input
+                ref={directFileInputRef}
+                type="file"
+                accept="video/mp4,video/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) void handleDirectUpload(file);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => directFileInputRef.current?.click()}
+                disabled={directUploadPhase !== 'idle'}
+                className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-60"
+              >
+                <Upload size={15} />
+                <span>
+                  {directUploadPhase === 'checking'
+                    ? 'Checking video…'
+                    : directUploadPhase === 'uploading'
+                      ? `Uploading ${directUploadPct}%`
+                      : directUploadPhase === 'submitting'
+                        ? 'Queueing…'
+                        : 'Choose Video File'}
+                </span>
+              </button>
+              {directUploadPhase === 'uploading' && (
+                <div className="h-1 rounded-full bg-surface-3 overflow-hidden">
+                  <div className="h-full bg-primary transition-all" style={{ width: `${directUploadPct}%` }} />
+                </div>
+              )}
+              {directUploadError && (
+                <p className="text-xs text-danger leading-relaxed">{directUploadError}</p>
+              )}
             </div>
           </div>
         </div>
@@ -5670,7 +5841,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 className="w-full min-h-[44px] px-3 rounded-xl chip-danger border flex items-center justify-center gap-2 text-sm font-semibold hover:opacity-85 active:scale-[0.98] transition-all"
               >
                 <Trash2 size={14} />
-                <span>Reject Clip</span>
+                <span>{currentClip.status === 'published' ? 'Delete Published Clip' : 'Reject Clip'}</span>
               </button>
             </div>
           </div>
@@ -5703,12 +5874,16 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             </div>
             <div className="min-w-0 flex-1">
               <h3 className="text-base font-semibold tracking-tight text-text-main leading-tight">
-                Reject clip?
+                {clipToReject.status === 'published' ? 'Delete published clip?' : 'Reject clip?'}
               </h3>
               <p className="text-sm text-text-secondary mt-1 leading-snug line-clamp-2">
                 {clipToReject.title || clipToReject.hook || 'Selected clip'}
               </p>
-              <p className="text-xs text-status-danger mt-1.5 leading-snug">Permanently deletes its video and thumbnail.</p>
+              <p className="text-xs text-status-danger mt-1.5 leading-snug">
+                {clipToReject.status === 'published'
+                  ? 'Removed from Dispatch; its cloud media is freed within 24h. The post on YouTube/Instagram stays online.'
+                  : 'Permanently deletes its video and thumbnail.'}
+              </p>
             </div>
           </div>
 
@@ -5732,7 +5907,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               ) : (
                 <Trash2 size={14} />
               )}
-              <span>{isSubmitting ? 'Deleting…' : 'Reject'}</span>
+              <span>{isSubmitting ? 'Deleting…' : clipToReject.status === 'published' ? 'Delete' : 'Reject'}</span>
             </button>
           </div>
         </div>

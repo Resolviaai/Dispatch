@@ -183,10 +183,21 @@ def get_account_credentials(
 
 
 class RemoteJob:
-    def __init__(self, job_id: str, user_id: str, youtube_url: str):
+    def __init__(
+        self,
+        job_id: str,
+        user_id: str,
+        youtube_url: str,
+        source: str = "youtube",
+        upload_object_id: str = "",
+        source_title: str = "",
+    ):
         self.job_id = job_id
         self.user_id = user_id
         self.youtube_url = youtube_url
+        self.source = source or "youtube"
+        self.upload_object_id = upload_object_id or ""
+        self.source_title = source_title or ""
 
 
 def claim_remote_job(worker_id: str) -> Optional[RemoteJob]:
@@ -196,7 +207,14 @@ def claim_remote_job(worker_id: str) -> Optional[RemoteJob]:
     if not arr:
         return None
     row = arr[0]
-    return RemoteJob(row["job_id"], row["user_id"], row["youtube_url"])
+    return RemoteJob(
+        row["job_id"],
+        row["user_id"],
+        row.get("youtube_url") or "",
+        source=row.get("source") or "youtube",
+        upload_object_id=row.get("upload_object_id") or "",
+        source_title=row.get("source_title") or "",
+    )
 
 
 def update_remote_job_stage(job_id: str, stage: str, video_id: str = "") -> None:
@@ -250,8 +268,18 @@ class RemoteJobPoller:
     pipeline (visibility gate included). Failures are recorded on the job,
     never silently dropped; a claimed job that crashes is marked failed."""
 
-    def __init__(self, ingest_video, worker_id: str = "owner-pc-1", interval_seconds: int = 30):
+    def __init__(
+        self,
+        ingest_video,
+        direct_handler=None,
+        worker_id: str = "owner-pc-1",
+        interval_seconds: int = 30,
+    ):
         self.ingest_video = ingest_video
+        # Direct-route handler (Route C): downloads a user-uploaded R2 object and
+        # registers it in the inbox. Optional for backward compatibility; a queued
+        # direct job without a handler fails loudly instead of being swallowed.
+        self.direct_handler = direct_handler
         self.worker_id = worker_id
         self.interval_seconds = interval_seconds
         self._stop = False
@@ -278,7 +306,12 @@ class RemoteJobPoller:
     def _process(self, job: RemoteJob) -> None:
         try:
             update_remote_job_stage(job.job_id, "downloading")
-            result = self.ingest_video(job.youtube_url, user_id=job.user_id)
+            if (getattr(job, "source", "youtube") or "youtube") == "direct":
+                if self.direct_handler is None:
+                    raise RuntimeError("direct job claimed but no direct handler configured on this PC")
+                result = self.direct_handler(job)
+            else:
+                result = self.ingest_video(job.youtube_url, user_id=job.user_id)
             status = result.get("status", "FAILED")
             vid = result.get("video_id", "")
             if status in ("DOWNLOADED", "WAITING_FOR_YOUTUBE_PROCESSING", "WAITING_FOR_VISIBILITY_CHECK"):

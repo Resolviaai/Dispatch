@@ -1869,7 +1869,7 @@ export default {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
       const res = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,youtube_url,status,stage,video_id,last_error,created_at&order=created_at.desc&limit=20`,
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,youtube_url,status,stage,video_id,last_error,created_at,source,upload_object_id,source_title&order=created_at.desc&limit=20`,
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
       if (!res.ok) return json(502, { error: `status failed: ${res.status}` });
       return json(200, { jobs: await res.json() });
@@ -1877,14 +1877,26 @@ export default {
     if (url.pathname === "/jobs/cancel" && request.method === "POST") {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
-      const body = await request.json().catch(() => ({})) as { video_id?: string; url?: string };
+      const body = await request.json().catch(() => ({})) as { video_id?: string; url?: string; media_object_id?: string };
+      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+      // Direct jobs: cancel by the uploaded object they reference. The PATCH
+      // re-asserts status=queued + source=direct so a job already claimed by the
+      // PC is left alone instead of corrupting an in-flight download.
+      if (typeof body.media_object_id === "string" && UUID_RE.test(body.media_object_id)) {
+        const patchRes = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&source=eq.direct&upload_object_id=eq.${body.media_object_id}`,
+          { method: "PATCH", headers: { ...svc, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify({ status: "cancelled" }) });
+        if (!patchRes.ok) return json(502, { error: `cancel failed: ${patchRes.status}` });
+        const patched = await patchRes.json() as unknown;
+        const cancelled = Array.isArray(patched) ? (patched as Array<unknown>).length : 0;
+        return json(200, { cancelled });
+      }
       let videoId = typeof body.video_id === "string" ? body.video_id.trim() : "";
       if (!videoId && typeof body.url === "string") {
         const m = body.url.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[?&#/]|$)/);
         if (m) videoId = m[1];
       }
       if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return json(400, { error: "invalid video id" });
-      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
       // Fetch this user's queued rows first and match canonically, so the cancel
       // can never hit another user's job and cannot wildcard over unrelated URLs.
       const listRes = await fetch(
@@ -1907,6 +1919,32 @@ export default {
       const patched = await patchRes.json() as unknown;
       const cancelled = Array.isArray(patched) ? (patched as Array<unknown>).length : 0;
       return json(200, { cancelled });
+    }
+
+    // ---- Direct video uploads (Route C): submit a staged clip_video object for
+    // processing. The row is created only after /complete, so a queued direct job
+    // always references a fully-uploaded, quota-accounted R2 object.
+    if (url.pathname === "/jobs/direct" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const body = await readJson<{ media_object_id?: string; title?: string }>(request);
+      if (!body?.media_object_id || !UUID_RE.test(body.media_object_id)) {
+        return json(400, { error: "media_object_id required" });
+      }
+      const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : null;
+      try {
+        const row = await rpc<{ id: string; status: string }>(env, "cloud_submit_direct_job", {
+          p_user_id: user.userId,
+          p_media_object_id: body.media_object_id,
+          p_title: title,
+        });
+        if (!row?.id) return json(502, { error: "submit returned no job" });
+        return json(200, { job_id: row.id, status: row.status ?? "queued", source: "direct" });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const status = msg.includes("SUBMIT_DIRECT: unknown") ? 404 : 502;
+        return json(status, { error: msg });
+      }
     }
 
     // ---- Cloud Clips (authenticated clients on any network / cellular) ----
