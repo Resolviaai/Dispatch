@@ -52,6 +52,7 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;font-
       <li><strong>Account Information:</strong> Your email address and account ID when you authenticate via Supabase.</li>
       <li><strong>Video and Audio Content:</strong> Videos recorded through the Dispatch camera or submitted for processing. Video chunks are uploaded to your authorized cloud storage (e.g. Cloudflare R2) and/or your connected YouTube account.</li>
       <li><strong>Third-Party Platform Tokens:</strong> When you connect YouTube, Google OAuth tokens (access tokens and refresh tokens) are securely encrypted and stored in our cloud token vault to enable direct video uploads and publishing on your behalf.</li>
+      <li><strong>Facebook &amp; Instagram (Meta) Data:</strong> When you connect a Facebook Page or an Instagram Professional account, we store the Page ID and name, the Instagram account ID, username and profile picture URL, and the Page/user access tokens issued by Meta. We never receive your Facebook or Instagram password.</li>
     </ul>
 
     <h2>2. Google API Services & YouTube Data</h2>
@@ -72,7 +73,23 @@ footer{border-top:1px solid var(--border);padding:32px 0;text-align:center;font-
     <h2>5. Data Security</h2>
     <p>All authentication credentials and API tokens are encrypted at rest using AES-256-GCM. All communication between the mobile application, cloud workers, and third-party APIs uses TLS/HTTPS encryption.</p>
 
-    <h2>6. Contact Us</h2>
+    <h2>6. Facebook &amp; Instagram (Meta) Platform Data</h2>
+    <p>Dispatch lets you publish clips to a Facebook Page and to an Instagram Professional account linked to that Page. We request only the Meta permissions needed to identify those assets and publish to them:</p>
+    <ul>
+      <li><code>public_profile</code> — identifies the Facebook account you authorize.</li>
+      <li><code>pages_show_list</code> and <code>pages_read_engagement</code> — list the Pages you manage and read basic Page information.</li>
+      <li><code>pages_manage_posts</code> — publishes Reels to your Page.</li>
+      <li><code>instagram_basic</code> and <code>instagram_content_publish</code> — identifies the Instagram Professional account linked to your Page and publishes Reels to it.</li>
+    </ul>
+    <p>We store the Page and Instagram identifiers, display names, avatar URLs, and the access tokens issued by Meta. Tokens are encrypted at rest with AES-256-GCM and are used only to perform the publishing actions you request. We do not post, message, or modify anything on your behalf beyond the clip you explicitly publish.</p>
+    <p>We do not sell Meta data, do not share it with advertisers, and do not use it to train generalized AI models. Meta data is retained only while your account remains connected.</p>
+    <p>Our use of Meta Platform data complies with the <a href="https://developers.facebook.com/terms/" target="_blank" rel="noopener">Meta Platform Terms</a> and the <a href="https://developers.facebook.com/devpolicy/" target="_blank" rel="noopener">Meta Developer Policies</a>.</p>
+
+    <h2>7. Data Deletion &amp; Retention</h2>
+    <p>You can disconnect any platform at any time in Dispatch under <strong>Settings &rarr; Connected Accounts &rarr; Disconnect</strong>, which deletes the stored tokens for that platform. To delete your Dispatch account and the data associated with it, follow the instructions on our <a href="data-deletion.html">Data Deletion page</a> or email <a href="mailto:resolviaai@gmail.com?subject=Dispatch%20data%20deletion%20request">resolviaai@gmail.com</a>.</p>
+    <p>We complete verified deletion requests within 30 days. Content you have already published to YouTube, Facebook, or Instagram is not removed from those platforms by deleting your Dispatch account — remove it in the respective platform's settings.</p>
+
+    <h2>8. Contact Us</h2>
     <p>If you have any questions about this Privacy Policy or your personal data, contact us at <a href="mailto:resolviaai@gmail.com">resolviaai@gmail.com</a> or open an issue on our <a href="https://github.com/Resolviaai/Dispatch" target="_blank" rel="noopener">GitHub repository</a>.</p>
   </div>
 </main>
