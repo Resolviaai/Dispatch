@@ -30,6 +30,8 @@ import {
 
 import { CaptionTrack, CaptionGroup, Word } from './types';
 
+import { FilmstripData, filmstripFrameBox } from './filmstrip';
+
 import {
 
   beginTrimPointer,
@@ -54,7 +56,10 @@ import {
 
 
 
+export type TimelineTimeMode = 'source' | 'clip';
+
 interface CaptionTimelineProps {
+  timeMode?: TimelineTimeMode;
 
   track: CaptionTrack | null;
 
@@ -68,7 +73,7 @@ interface CaptionTimelineProps {
 
   isPlaying: boolean;
 
-  filmstripFrames?: string[];
+  filmstrip?: FilmstripData | null;
 
   mediaElementRef?: React.RefObject<HTMLVideoElement>;
 
@@ -126,6 +131,8 @@ function formatTimeRuler(sec: number): string {
 
 interface DragSession {
 
+  pointerId?: number;
+
   type: 'move' | 'trim-start' | 'trim-end';
 
   groupId: string;
@@ -168,7 +175,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   isPlaying,
 
-  filmstripFrames = [],
+  filmstrip = null,
 
   mediaElementRef,
 
@@ -184,6 +191,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   sourceTimebase = true,
 
+  timeMode,
+
   onTrimChange,
 
   onPreviewContext,
@@ -195,6 +204,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   onSelectVideo,
 
   onUpdateGroup,
+
+  onSplitGroup,
 
   hideTrimControls = false,
 
@@ -252,7 +263,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
 
 
-  const isSourceMode = Boolean(sourceTimebase && (sourceDuration ?? 0) > duration + 2.0);
+  const effectiveTimeMode: TimelineTimeMode = timeMode ?? (sourceTimebase && (sourceDuration ?? 0) > duration + 2.0 ? 'source' : 'clip');
+  const isSourceMode = effectiveTimeMode === 'source';
 
   const safeClipDuration = Math.max(1, duration);
 
@@ -676,13 +688,23 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       if (scrollEl) {
 
-        let cur = clipStart + currentTimeRef.current;
+        let cur = isSourceMode ? (clipStart + currentTimeRef.current) : currentTimeRef.current;
 
         if (v && !v.paused) {
 
           const raw = v.currentTime;
 
-          cur = sourceTimebase ? raw : clipStart + raw;
+          const isVideoSourceLoaded = Boolean(v.duration && v.duration >= (clipEnd || 0) - 1.0 && (clipEnd || 0) > 0);
+
+          if (isSourceMode) {
+
+            cur = isVideoSourceLoaded ? raw : (clipStart + raw);
+
+          } else {
+
+            cur = isVideoSourceLoaded ? Math.max(0, raw - clipStart) : raw;
+
+          }
 
         }
 
@@ -1158,6 +1180,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     setDragSession({
 
+      pointerId: e.pointerId,
+
       type,
 
       groupId: grp.id,
@@ -1199,6 +1223,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const handleBlockPointerMove = (e: React.PointerEvent) => {
 
     if (!dragSession || !onUpdateGroup) return;
+
+    if (dragSession.pointerId !== undefined && e.pointerId !== dragSession.pointerId) return;
 
     e.stopPropagation();
 
@@ -1611,6 +1637,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
 
   const handleBlockPointerCancel = (e: React.PointerEvent) => {
+
+    if (dragSession && dragSession.pointerId !== undefined && e.pointerId !== dragSession.pointerId) return;
 
     setSnapGuideTime(null);
 
@@ -2264,7 +2292,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             onPointerUp={handleCanvasPointerUp}
 
-            onPointerCancel={handleCanvasPointerUp}
+            onPointerCancel={handleCanvasPointerCancel}
 
             onClick={(e) => {
 
@@ -2364,7 +2392,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             onPointerUp={handleCanvasPointerUp}
 
-            onPointerCancel={handleCanvasPointerUp}
+            onPointerCancel={handleCanvasPointerCancel}
 
             onClick={(e) => {
 
@@ -2470,35 +2498,71 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                     <div className="w-full h-full rounded bg-[#090C0F] border border-[#232832]/60 flex items-center overflow-hidden relative">
 
-                      {filmstripFrames.length > 0 ? (
+                      {(() => {
 
-                        filmstripFrames.map((frameUrl, idx) => (
+                        if (filmstrip && filmstrip.frames.length > 0) {
 
-                          <div
+                          return filmstrip.frames.map((frame, idx) => {
 
-                            key={idx}
+                            const box = filmstripFrameBox(frame, filmstrip, { pxPerSec, clipStart, isSourceMode });
 
-                            className="flex-1 h-full border-r border-black/50 overflow-hidden bg-cover bg-center"
+                            if (!box) return null;
 
-                            style={{ backgroundImage: `url(${frameUrl})` }}
+                            // Time-anchored slot: absolute geometry from the shared plan — never stretched.
 
-                          />
+                            return (
 
-                        ))
+                              <div
 
-                      ) : (
+                                key={`${idx}-${frame.t}`}
 
-                        <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
+                                className="absolute top-0 bottom-0 overflow-hidden"
 
-                          {Array.from({ length: 8 }).map((_, i) => (
+                                style={{ left: `${box.left}px`, width: `${box.width}px` }}
 
-                            <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
+                              >
 
-                          ))}
+                                <img
 
-                        </div>
+                                  src={frame.url}
 
-                      )}
+                                  alt=""
+
+                                  loading="eager"
+
+                                  decoding="async"
+
+                                  draggable={false}
+
+                                  className="h-full w-full object-cover object-center pointer-events-none select-none"
+
+                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+
+                                />
+
+                              </div>
+
+                            );
+
+                          });
+
+                        }
+
+                        return (
+
+                          <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
+
+                            {Array.from({ length: 8 }).map((_, i) => (
+
+                              <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
+
+                            ))}
+
+                          </div>
+
+                        );
+
+                      })()}
 
 
 

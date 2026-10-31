@@ -4,6 +4,7 @@ automatic regeneration, atomic generation, cache invalidation, sub-second
 fingerprinting, concurrency serialization, and HTTP headers.
 """
 import concurrent.futures
+import math
 import os
 import subprocess
 import time
@@ -278,18 +279,20 @@ class TestThumbnailFreshness(unittest.TestCase):
 
         client = TestClient(app)
 
-        # 1. Versioned request (?v=...) -> public, max-age=86400
+        # 1. Versioned request (?v=...) -> public, max-age=604800, immutable
         res_v = client.get(f"/clips/{clip_thumb.name}?v={thumb_v}")
         self.assertEqual(res_v.status_code, 200)
         self.assertIn("public", res_v.headers.get("cache-control", ""))
-        self.assertIn("max-age=86400", res_v.headers.get("cache-control", ""))
+        self.assertIn("max-age=604800", res_v.headers.get("cache-control", ""))
+        self.assertIn("immutable", res_v.headers.get("cache-control", ""))
         etag = res_v.headers.get("etag")
         self.assertIsNotNone(etag)
 
-        # 2. Unversioned request -> no-cache, must-revalidate
+        # 2. Unversioned request -> bounded cache, then ETag revalidation
         res_unv = client.get(f"/clips/{clip_thumb.name}")
         self.assertEqual(res_unv.status_code, 200)
-        self.assertIn("no-cache", res_unv.headers.get("cache-control", ""))
+        self.assertIn("max-age=3600", res_unv.headers.get("cache-control", ""))
+        self.assertIn("stale-while-revalidate", res_unv.headers.get("cache-control", ""))
 
         # 3. Conditional GET with If-None-Match -> 304 Not Modified
         res_cond = client.get(f"/clips/{clip_thumb.name}", headers={"If-None-Match": etag})
@@ -340,63 +343,153 @@ class TestThumbnailFreshness(unittest.TestCase):
         if clip_meta.exists():
             clip_meta.unlink()
 
-    def test_08_filmstrip_freshness_detection_and_regeneration(self):
-        """Filmstrip frames must regenerate and return fresh ?v= parameters when video changes."""
+    def test_08_filmstrip_time_anchored_contract(self):
+        """Filmstrip payload is time-anchored and plan-consistent, and any
+        artifact drift (stray files, changed video, changed duration) forces a
+        full atomic regeneration instead of serving mixed frames."""
         clip_id = db.save_clip(
             session_id=None,
             chunk_id=None,
             start_time=0.0,
             end_time=2.0,
-            title="Filmstrip Freshness Test",
+            title="Filmstrip Contract Test",
             hook="Hook",
             description="Desc",
             hashtags="#Test",
             virality_score=80,
-            layout_mode="fit_blur"
+            layout_mode="fit_blur",
+            duration=2.0,
         )
         clip_vid = CLIPS_DIR / f"{clip_id}.mp4"
+        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
+        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
+        cache_dir = CLIPS_DIR / "filmstrip_cache" / clip_id
 
         clip_vid.write_bytes(self.test_video_path.read_bytes())
         t0 = time.time() - 30.0
         os.utime(str(clip_vid), (t0, t0))
-
-        clip_thumb = CLIPS_DIR / f"{clip_id}.jpg"
-        clip_meta = CLIPS_DIR / f"{clip_id}.jpg.meta"
         db.update_clip_media(clip_id=clip_id, video_path=str(clip_vid), thumbnail_path=str(clip_thumb))
 
         client = TestClient(app)
 
-        # 1. Fetch filmstrip for the first time
-        res1 = client.get(f"/api/clips/{clip_id}/filmstrip")
-        self.assertEqual(res1.status_code, 200)
-        frames1 = res1.json().get("frames", [])
-        self.assertGreaterEqual(len(frames1), 1)
-        self.assertIn("?v=", frames1[0])
+        try:
+            # 1. Fresh generation -> plan-consistent, time-anchored payload
+            res1 = client.get(f"/api/clips/{clip_id}/filmstrip")
+            self.assertEqual(res1.status_code, 200)
+            body1 = res1.json()
+            self.assertEqual(body1["duration"], 2.0)
+            self.assertAlmostEqual(body1["interval"], 0.25, places=6)
+            self.assertEqual(body1["count"], 8)
+            self.assertTrue(body1["scope"] == "render" or body1["scope"] == "source")
+            self.assertGreaterEqual(len(body1["frames"]), 1)
+            for idx, frame in enumerate(body1["frames"]):
+                self.assertAlmostEqual(frame["t"], idx * 0.25, places=6)
+                self.assertIn(f"/clips/filmstrip_cache/{clip_id}/", frame["url"])
+                self.assertIn("?v=", frame["url"])
+                self.assertTrue(frame["url"].split("?")[0].rsplit("/", 1)[-1].endswith(".jpg"))
 
-        # 2. Modify video to newer timestamp
-        t_mod = time.time() + 10.0
-        os.utime(str(clip_vid), (t_mod, t_mod))
+            # Every declared frame file exists inside the single artifact dir
+            self.assertTrue((cache_dir / "manifest.json").exists())
+            manifest = (cache_dir / "manifest.json").read_text(encoding="utf-8")
+            import json as _json
+            m1 = _json.loads(manifest)
+            self.assertEqual(m1["count"], 8)
 
-        # 3. Fetch filmstrip again: should detect stale frames and re-extract with updated ?v=
-        res2 = client.get(f"/api/clips/{clip_id}/filmstrip")
-        self.assertEqual(res2.status_code, 200)
-        frames2 = res2.json().get("frames", [])
-        self.assertGreaterEqual(len(frames2), 1)
+            # 2. Unchanged video -> cache hit (identical payload, no regen)
+            res2 = client.get(f"/api/clips/{clip_id}/filmstrip")
+            body2 = res2.json()
+            self.assertEqual(body1["frames"], body2["frames"])
 
-        # Clean up frames
-        for i in range(12):
-            for ext in (".jpg", ".jpg.meta"):
-                fpath = CLIPS_DIR / f"{clip_id}_frame_{i}{ext}"
-                if fpath.exists():
-                    try:
-                        fpath.unlink()
-                    except Exception:
-                        pass
-        clip_vid.unlink()
-        if clip_thumb.exists():
-            clip_thumb.unlink()
-        if clip_meta.exists():
-            clip_meta.unlink()
+            # 3. Simulate a leftover artifact from an older generation: a stray
+            #    frame file that the manifest never declared. The invariant
+            #    check must force regeneration and the stray file must vanish.
+            stray = cache_dir / "f09.jpg"
+            stray.write_bytes(clip_vid.read_bytes())
+            res3 = client.get(f"/api/clips/{clip_id}/filmstrip")
+            self.assertEqual(res3.status_code, 200)
+            body3 = res3.json()
+            urls3 = {f["url"].split("?")[0].rsplit("/", 1)[-1] for f in body3["frames"]}
+            self.assertNotIn("f09.jpg", urls3)
+            self.assertFalse(stray.exists(), "Stray frame from an older artifact must not survive regeneration")
+
+            # 4. Video content replaced -> fingerprint -> full regeneration
+            clip_vid.write_bytes(self.test_video_alt_path.read_bytes())
+            t_mod = time.time() + 10.0
+            os.utime(str(clip_vid), (t_mod, t_mod))
+            res4 = client.get(f"/api/clips/{clip_id}/filmstrip")
+            self.assertEqual(res4.status_code, 200)
+            body4 = res4.json()
+            self.assertEqual(body4["count"], 8)
+            self.assertEqual(body4["duration"], 2.0)
+            with open(cache_dir / "manifest.json", encoding="utf-8") as fh:
+                m4 = _json.loads(fh.read())
+            self.assertNotEqual(m1["video_fingerprint"], m4["video_fingerprint"],
+                                "Video replacement must invalidate the manifest fingerprint")
+
+            # 5. Legacy flat-frame naming from the old implementation must be
+            #    swept after regeneration, never returned again.
+            legacy_leftover = CLIPS_DIR / f"{clip_id}_frame_3.jpg"
+            legacy_leftover.write_bytes(b"stale-era frame")
+            res5 = client.get(f"/api/clips/{clip_id}/filmstrip")
+            self.assertEqual(res5.status_code, 200)
+            self.assertFalse(legacy_leftover.exists(),
+                             "Legacy flat frames must be swept; only the artifact directory is authoritative")
+            urls5 = {f["url"].split("?")[0].rsplit("/", 1)[-1] for f in res5.json()["frames"]}
+            self.assertFalse(any(name.endswith(f"{clip_id}_frame_3.jpg") for name in urls5))
+        finally:
+            # Artifact + legacy cleanup for the following tests
+            for legacy in CLIPS_DIR.glob(f"{clip_id}_frame_*.jpg*"):
+                try:
+                    legacy.unlink()
+                except Exception:
+                    pass
+            import shutil as _shutil
+            _shutil.rmtree(str(cache_dir), ignore_errors=True)
+            clip_vid.unlink()
+            if clip_thumb.exists():
+                clip_thumb.unlink()
+            if clip_meta.exists():
+                clip_meta.unlink()
+
+    def test_09_filmstrip_plan_math(self):
+        """The single shared sampling plan: proportional count, exact interval
+        coverage, clamped budget, and rejection of invalid durations."""
+        from dispatch.video_engine.filmstrip import FILMSTRIP_MAX_COUNT, FILMSTRIP_MIN_COUNT, plan_filmstrip
+
+        # Short clip hits the minimum slot budget with exact coverage
+        interval, count = plan_filmstrip(2.0)
+        self.assertEqual(count, FILMSTRIP_MIN_COUNT)
+        self.assertAlmostEqual(interval * count, 2.0, places=9)
+
+        # Long clip is clamped to the max budget while still covering fully
+        interval, count = plan_filmstrip(80.0)
+        self.assertEqual(count, FILMSTRIP_MAX_COUNT)
+        self.assertAlmostEqual(interval, 5.0, places=9)
+        self.assertAlmostEqual(interval * count, 80.0, places=9)
+
+        # Mid-duration clip projects one slot per ~2.5 seconds
+        interval, count = plan_filmstrip(10.0)
+        self.assertEqual(count, max(FILMSTRIP_MIN_COUNT, min(FILMSTRIP_MAX_COUNT, int(math.ceil(10.0 / 2.5)))))
+        self.assertAlmostEqual(interval, 10.0 / count, places=9)
+
+        # Invalid durations are rejected by the plan, never guessed
+        for bad in (0.0, -1.0, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                plan_filmstrip(bad)
+
+    def test_10_filmstrip_sample_axis_coordinates(self):
+        """Sampling must address the ACTIVE video's own coordinate system:
+        rendered videos are sampled locally; raw sources are sampled at
+        clip.start_time + slot, identical to thumbnail behavior."""
+        from dispatch.video_engine.filmstrip import sample_axis_times
+
+        # Rendered scope: slot centers in local time, offset ignored
+        times = sample_axis_times("render", 25.0, 1.0, 4)
+        self.assertEqual(times, [0.5, 1.5, 2.5, 3.5])
+
+        # Source scope: slot centers offset by the clip window start
+        times = sample_axis_times("source", 120.0, 1.0, 4)
+        self.assertEqual(times, [120.5, 121.5, 122.5, 123.5])
 
     def test_09_same_second_replacement_and_preserved_timestamp_detection(self):
         """Verify that fingerprinting and nanoseconds detect replacements even with identical integer timestamps."""

@@ -51,11 +51,12 @@ import { CaptionTimeline } from '../captions/CaptionTimeline';
 import { CaptionStudio, ActivePanel } from '../captions/CaptionStudio';
 import { DispatchCaptionRenderer, applyColorOpacity, applyCaseTransform } from '../captions/DispatchCaptionRenderer';
 import { useCaptionHistory } from '../captions/useCaptionHistory';
-import { preserveWordTimingsOnEdit } from '../captions/timingPreservation';
+import { preserveWordTimingsOnEdit, splitCaptionGroupAtTime } from '../captions/timingPreservation';
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
+import { FilmstripData, normalizeFilmstripPayload, thumbnailFallbackFilmstrip } from '../captions/filmstrip';
 import { ConnectedAccount, listConnectedAccounts, WORKER_BASE } from '../accounts/accountsService';
 import { currentSession } from '../auth/supabase';
 import {
@@ -1573,7 +1574,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [duration, setDuration] = useState<number>(0);
   const [isSourceTimebase, setIsSourceTimebase] = useState<boolean>(true);
   const [sourceDurationForClip, setSourceDurationForClip] = useState<{ clipId: string; seconds: number } | null>(null);
-  const [filmstripFrames, setFilmstripFrames] = useState<string[]>([]);
+  const [filmstripData, setFilmstripData] = useState<FilmstripData | null>(null);
   const filmstripReqIdRef = useRef<number>(0);
   const [mainVideoVolume, setMainVideoVolume] = useState<number>(100);
   const [isMainVideoMuted, setIsMainVideoMuted] = useState<boolean>(false);
@@ -2243,7 +2244,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       setDuration(0);
       setCurrentTime(0);
       setIsPlaying(false);
-      setFilmstripFrames([]);
+      setFilmstripData(null);
       return;
     }
 
@@ -2254,7 +2255,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setSelectedGroupId(null);
     setCurrentTime(0);
     setIsPlaying(false);
-    setFilmstripFrames([]);
+    setFilmstripData(null);
 
     // Populate active clip draft metadata
     setTitleDraft(currentClip.title || '');
@@ -2409,11 +2410,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     // Defer heavy filmstrip frame extraction so active video stream and captions have top network priority
     const reqId = ++filmstripReqIdRef.current;
+    // Immediate honest fallback: one thumbnail spanning the clip while the
+    // time-anchored strip is deferred/regenerating server-side.
     if (currentClip.thumbnail_url) {
       const tUrl = currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost);
-      setFilmstripFrames([tUrl]);
+      const fallbackDuration = currentClip.duration || Math.max(0, (currentClip.end_time || 0) - (currentClip.start_time || 0));
+      setFilmstripData(thumbnailFallbackFilmstrip(tUrl, fallbackDuration));
     } else {
-      setFilmstripFrames([]);
+      setFilmstripData(null);
     }
     if (offlineReadOnly) {
       return () => {
@@ -2430,9 +2434,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         fetch(apiUrl(`/api/clips/${currentClip.id}/filmstrip`, pcHost), { headers: getAuthHeaders(), signal: controller.signal })
           .then((res) => (res.ok ? res.json() : null))
           .then((fsData) => {
-            if (reqId === filmstripReqIdRef.current && fsData && Array.isArray(fsData.frames) && fsData.frames.length > 0) {
-              setFilmstripFrames(fsData.frames.map((f: string) => (f.startsWith('http') ? f : apiUrl(f, pcHost))));
-            }
+            if (reqId !== filmstripReqIdRef.current || !fsData) return;
+            const parsed = normalizeFilmstripPayload(fsData);
+            if (!parsed) return;
+            setFilmstripData({
+              ...parsed,
+              frames: parsed.frames.map((frame) => ({
+                ...frame,
+                url: frame.url.startsWith('http') ? frame.url : apiUrl(frame.url, pcHost),
+              })),
+            });
           })
           .catch(() => { });
       }, 700);
@@ -3026,6 +3037,23 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }),
     };
     setCaptionTrack(updatedTrack, commitToHistory);
+    setSaveStatus('unsaved');
+  };
+
+  // Split Caption Group at Split Time
+  const handleSplitGroup = (groupId: string, splitTime: number) => {
+    if (!captionTrack) return;
+    const grp = captionTrack.groups?.find((g) => g.id === groupId);
+    if (!grp) return;
+    const splitResult = splitCaptionGroupAtTime(grp, splitTime);
+    if (!splitResult) return;
+    const [first, second] = splitResult;
+    const updatedTrack = {
+      ...captionTrack,
+      groups: captionTrack.groups.flatMap((g) => (g.id === groupId ? [first, second] : [g])),
+    };
+    setCaptionTrack(updatedTrack, true);
+    setSelectedGroupId(second.id);
     setSaveStatus('unsaved');
   };
 
@@ -4970,10 +4998,11 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     duration={duration || currentClip.duration || 40}
                     sourceDuration={timelineSourceDuration}
                     sourceTimebase={isSourceTimebase}
+                    timeMode={isSourceTimebase ? 'source' : 'clip'}
                     selectedGroupId={selectedGroupId}
                     isVideoSelected={isVideoSelected}
                     isPlaying={isPlaying}
-                    filmstripFrames={filmstripFrames}
+                    filmstrip={filmstripData}
                     mediaElementRef={videoRef}
                     clipStart={currentClip.start_time}
                     clipEnd={currentClip.end_time}
@@ -4988,6 +5017,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                       setSelectedGroupId(null);
                     }}
                     onUpdateGroup={handleUpdateGroup}
+                    onSplitGroup={handleSplitGroup}
                   />
               </div>
 

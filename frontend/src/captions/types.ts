@@ -120,6 +120,7 @@ export interface CaptionGroup {
   id: string;
   start: number;
   end: number;
+  text?: string;
   words: Word[];
   layout?: LayoutConfig;
   style?: StyleConfig;

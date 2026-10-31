@@ -1824,6 +1824,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     if (nextGroup.start > currentGroup.end + 3.0) return;
 
     const merged = mergeAdjacentCaptionGroups(currentGroup, nextGroup);
+    if (!merged) return;
 
     onUpdateTrack({
       ...track,

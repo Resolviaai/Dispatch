@@ -124,74 +124,184 @@ export function preserveWordTimingsOnEdit(
   return result;
 }
 
+let _splitIdCounter = 0;
+
 /**
- * Split a caption group at splitTime while preserving authentic word timestamps.
+ * Generate a monotonic, collision-resistant group ID for split operations.
+ */
+export function generateCollisionResistantGroupId(prefix: string = 'grp'): string {
+  _splitIdCounter = (_splitIdCounter + 1) % 100000;
+  const timePart = Date.now().toString(36);
+  const randPart = Math.random().toString(36).slice(2, 7);
+  const seqPart = _splitIdCounter.toString(36);
+  return `${prefix}_${timePart}_${randPart}_${seqPart}`;
+}
+
+/**
+ * Split a caption or layer group at splitTime preserving authentic word timestamps.
+ *
+ * Invariants:
+ * 1. Reject NaN, non-finite, out-of-range, and edge splits (< 0.05s from boundary).
+ * 2. For captions with words: snaps to the nearest safe boundary between words.
+ *    Words are NEVER chopped in half or have their timestamps altered.
+ * 3. Never produces an empty word list on either segment.
+ * 4. Deep-clones styling, animation, layout, and role metadata onto both segments.
+ * 5. Generates a collision-resistant unique ID for the new segment.
+ * 6. Performs post-split validation before returning: invalid results return null.
  */
 export function splitCaptionGroupAtTime(
   group: CaptionGroup,
   splitTime: number
 ): [CaptionGroup, CaptionGroup] | null {
-  if (splitTime <= group.start + 0.1 || splitTime >= group.end - 0.1) {
+  if (!group || typeof splitTime !== 'number' || !Number.isFinite(splitTime)) {
     return null;
   }
 
-  const words = group.words || [];
-  const leftWords: Word[] = [];
-  const rightWords: Word[] = [];
+  const duration = group.end - group.start;
+  if (!Number.isFinite(duration) || duration < 0.2) {
+    return null;
+  }
 
-  words.forEach((w) => {
-    const mid = (w.start + w.end) / 2;
-    if (mid <= splitTime) {
-      leftWords.push({
-        ...w,
-        end: Math.min(w.end, splitTime),
-      });
-    } else {
-      rightWords.push({
-        ...w,
-        start: Math.max(w.start, splitTime),
-      });
+  // Reject edge splits too close to group boundaries
+  if (splitTime <= group.start + 0.05 || splitTime >= group.end - 0.05) {
+    return null;
+  }
+
+  const words = Array.isArray(group.words) ? group.words : [];
+  const isCaptionWithWords = (group.type === 'caption' || !group.type) && words.length > 0;
+
+  let leftWords: Word[] = [];
+  let rightWords: Word[] = [];
+  let effectiveSplitTime = splitTime;
+
+  if (isCaptionWithWords) {
+    // A spoken caption must have at least 2 words to be split into two valid caption segments
+    if (words.length < 2) {
+      return null;
     }
-  });
+
+    // Find the closest safe boundary between adjacent words
+    let bestBoundaryIndex = 0;
+    let minDistance = Infinity;
+
+    for (let i = 0; i < words.length - 1; i++) {
+      const prevWord = words[i];
+      const nextWord = words[i + 1];
+      const boundaryTime = (prevWord.end + nextWord.start) / 2;
+      const dist = Math.abs(splitTime - boundaryTime);
+      if (dist < minDistance) {
+        minDistance = dist;
+        bestBoundaryIndex = i;
+      }
+    }
+
+    const prevWord = words[bestBoundaryIndex];
+    const nextWord = words[bestBoundaryIndex + 1];
+
+    // Compute boundary time between words
+    let boundaryMid = (prevWord.end + nextWord.start) / 2;
+    if (boundaryMid < prevWord.end) boundaryMid = prevWord.end;
+    if (boundaryMid > nextWord.start) boundaryMid = nextWord.start;
+
+    effectiveSplitTime = Number(boundaryMid.toFixed(3));
+
+    // In case boundary falls right on edge
+    if (effectiveSplitTime <= group.start + 0.02 || effectiveSplitTime >= group.end - 0.02) {
+      effectiveSplitTime = Number(((group.start + group.end) / 2).toFixed(3));
+    }
+
+    leftWords = words.slice(0, bestBoundaryIndex + 1).map((w) => ({ ...w }));
+    rightWords = words.slice(bestBoundaryIndex + 1).map((w) => ({ ...w }));
+
+    if (leftWords.length === 0 || rightWords.length === 0) {
+      return null;
+    }
+  }
+
+  const leftEnd = Number(Math.max(group.start + 0.05, effectiveSplitTime).toFixed(3));
+  const rightStart = Number(Math.min(group.end - 0.05, effectiveSplitTime).toFixed(3));
+
+  if (leftEnd <= group.start || rightStart >= group.end) {
+    return null;
+  }
+
+  const leftText = isCaptionWithWords
+    ? leftWords.map((w) => w.text).join(' ')
+    : (group.text || '');
+
+  const rightText = isCaptionWithWords
+    ? rightWords.map((w) => w.text).join(' ')
+    : (group.text || '');
 
   const leftGroup: CaptionGroup = {
-    ...group,
+    ...JSON.parse(JSON.stringify(group)),
     id: group.id,
     start: group.start,
-    end: splitTime,
+    end: leftEnd,
+    text: leftText,
     words: leftWords,
   };
 
   const rightGroup: CaptionGroup = {
-    ...group,
-    id: `grp_${Date.now()}_split`,
-    start: splitTime,
+    ...JSON.parse(JSON.stringify(group)),
+    id: generateCollisionResistantGroupId('grp'),
+    start: rightStart,
     end: group.end,
+    text: rightText,
     words: rightWords,
   };
+
+  // Final sanity validation: neither segment may have degenerate bounds
+  if (leftGroup.end <= leftGroup.start || rightGroup.end <= rightGroup.start) {
+    return null;
+  }
+  if (isCaptionWithWords && (!leftGroup.words?.length || !rightGroup.words?.length)) {
+    return null;
+  }
 
   return [leftGroup, rightGroup];
 }
 
 /**
- * Merge two adjacent caption groups into one, preserving all authentic word timestamps.
+ * Merge two adjacent caption groups into one, preserving all authentic word timestamps,
+ * combined text, and styling.
  */
 export function mergeAdjacentCaptionGroups(
   groupA: CaptionGroup,
   groupB: CaptionGroup
-): CaptionGroup {
+): CaptionGroup | null {
+  if (!groupA || !groupB) return null;
+
   const first = groupA.start <= groupB.start ? groupA : groupB;
   const second = groupA.start <= groupB.start ? groupB : groupA;
 
-  const combinedWords = [...(first.words || []), ...(second.words || [])].sort(
-    (a, b) => a.start - b.start
-  );
+  // Type compatibility check
+  const typeA = first.type || 'caption';
+  const typeB = second.type || 'caption';
+  if (typeA !== typeB) {
+    return null;
+  }
+
+  // Adjacency check: gap cannot exceed 1.5s of silence, and second cannot be behind first
+  const gap = second.start - first.end;
+  if (gap > 1.5 || gap < -0.1) {
+    return null;
+  }
+
+  const combinedWords = [...(first.words || []), ...(second.words || [])]
+    .map((w) => ({ ...w }))
+    .sort((a, b) => a.start - b.start);
+
+  const combinedText = combinedWords.length > 0
+    ? combinedWords.map((w) => w.text).join(' ')
+    : `${first.text || ''} ${second.text || ''}`.trim();
 
   return {
-    ...first,
+    ...JSON.parse(JSON.stringify(first)),
     id: first.id,
     start: Math.min(first.start, second.start),
     end: Math.max(first.end, second.end),
+    text: combinedText,
     words: combinedWords,
   };
 }

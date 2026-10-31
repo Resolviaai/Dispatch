@@ -1,9 +1,41 @@
 import { AnimationConfig, CaptionGroup, CaptionTrack, LayerType, LayoutConfig, StyleConfig, Word } from './types';
 
-function getSavedTemplate(): { style?: Partial<StyleConfig>; layout?: Partial<LayoutConfig>; anim?: Partial<AnimationConfig> } {
+export function getSavedTemplateStorageKey(userId?: string): string {
+  if (userId && typeof userId === 'string' && userId.trim()) {
+    return `dispatch_default_template_${userId.trim()}`;
+  }
   if (typeof localStorage !== 'undefined') {
     try {
-      const raw = localStorage.getItem('dispatch_default_template');
+      const activeUser = localStorage.getItem('dispatch_active_user_id') || localStorage.getItem('sb_user_id');
+      if (activeUser && activeUser.trim()) {
+        return `dispatch_default_template_${activeUser.trim()}`;
+      }
+    } catch {}
+  }
+  return 'dispatch_default_template';
+}
+
+export function saveDefaultTemplate(template: unknown, userId?: string): void {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const key = getSavedTemplateStorageKey(userId);
+      const val = typeof template === 'string' ? template : JSON.stringify(template);
+      localStorage.setItem(key, val);
+      if (key !== 'dispatch_default_template') {
+        localStorage.setItem('dispatch_default_template', val);
+      }
+    } catch {}
+  }
+}
+
+export function getSavedTemplate(userId?: string): { style?: Partial<StyleConfig>; layout?: Partial<LayoutConfig>; anim?: Partial<AnimationConfig> } {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const key = getSavedTemplateStorageKey(userId);
+      let raw = localStorage.getItem(key);
+      if (!raw && key !== 'dispatch_default_template') {
+        raw = localStorage.getItem('dispatch_default_template');
+      }
       if (raw) {
         const parsed = JSON.parse(raw);
         const c = parsed?.captions || parsed?.template?.captions || parsed?.default_style;
@@ -106,23 +138,26 @@ export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: nu
     max_lines: rawLayout.max_lines ?? 2,
   };
 
+  const rawEnterType = rawAnimation.entrance_animation || rawAnimation.enter?.type || tplAnim.enter?.type || (tplAnim as any).entrance_animation;
+  const enterType = rawEnterType === 'scale_up' ? 'pop' : (rawEnterType || 'pop');
+
   const default_animation: AnimationConfig = {
-    type: rawAnimation.type || 'pop',
-    duration_ms: rawAnimation.duration_ms || 120,
-    active_scale: rawAnimation.active_scale || 1.15,
-    easing: rawAnimation.easing || 'ease_out',
+    type: rawAnimation.type || tplAnim.type || 'pop',
+    duration_ms: rawAnimation.duration_ms || tplAnim.duration_ms || 120,
+    active_scale: rawAnimation.active_scale || tplAnim.active_scale || 1.15,
+    easing: rawAnimation.easing || tplAnim.easing || 'ease_out',
     enter: {
-      type: rawAnimation.entrance_animation || rawAnimation.enter?.type === 'scale_up' ? 'pop' : (rawAnimation.enter?.type || 'pop'),
-      duration_ms: 200,
+      type: enterType,
+      duration_ms: rawAnimation.enter?.duration_ms || tplAnim.enter?.duration_ms || 200,
     },
     active_word: {
-      type: rawAnimation.active_word_effect || rawAnimation.active_word?.type || 'pop',
-      active_scale: 1.15,
-      duration_ms: 120,
+      type: rawAnimation.active_word_effect || rawAnimation.active_word?.type || tplAnim.active_word?.type || 'pop',
+      active_scale: rawAnimation.active_scale || tplAnim.active_scale || 1.15,
+      duration_ms: rawAnimation.active_word?.duration_ms || tplAnim.active_word?.duration_ms || 120,
     },
     exit: {
-      type: rawAnimation.exit_animation || rawAnimation.exit?.type || 'none',
-      duration_ms: 150,
+      type: rawAnimation.exit_animation || rawAnimation.exit?.type || tplAnim.exit?.type || 'none',
+      duration_ms: rawAnimation.exit?.duration_ms || tplAnim.exit?.duration_ms || 150,
     },
   };
 

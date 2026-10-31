@@ -15,7 +15,8 @@ import {
   Camera,
   MoreVertical,
   Check,
-  Bell
+  Bell,
+  Server
 } from 'lucide-react';
 import { Bridge, RecordingItem, apiUrl, getAuthHeaders } from '../bridge';
 import { WORKER_BASE } from '../accounts/accountsService';
@@ -395,6 +396,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     if (lanOnline) {
       setPcStatus({ online: true, checking: false, isCloudMode: false });
     } else {
+      // Badge must never be hostage to the cloud lookup: settle LAN verdict
+      // first (≤2s probe), then refine isCloudMode in the background.
+      setPcStatus(prev => ({ online: false, checking: false, isCloudMode: prev.isCloudMode }));
       const sess = await currentSession().catch(() => null);
       setPcStatus({ online: false, checking: false, isCloudMode: !!sess?.access_token });
     }
@@ -1447,21 +1451,36 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
                 Sessions
               </h1>
-              {pcStatus.online ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold tracking-wide">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  PC Online
-                </span>
-              ) : pcStatus.isCloudMode ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primary/15 border border-primary/30 text-primary text-[11px] font-medium">
-                  <span className="w-2 h-2 rounded-full bg-primary" />
-                  Cloud Active
+              {/* Server status — one state only: green "Online" when the PC
+                  answers the health check, quiet neutral "Offline" (tap to
+                  retry) when it doesn't. Nothing while checking. */}
+              {pcStatus.checking ? null : pcStatus.online ? (
+                <span
+                  className="inline-flex items-center gap-1.5 leading-none"
+                  title="Server online — clips can process and publish"
+                  aria-label="Server online"
+                >
+                  <Server size={13} strokeWidth={1.5} className="text-status-success animate-pulse" />
+                  <span className="text-xs font-medium text-status-success">Online</span>
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-2 border border-border text-text-muted text-[11px]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
-                  PC Offline
-                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    checkPcStudio();
+                    showToast('Checking PC status…');
+                  }}
+                  className="inline-flex items-center gap-1.5 leading-none p-3.5 -m-3.5 rounded-lg text-text-muted hover:text-text-secondary active:scale-[0.98] active:bg-transparent transition-all focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary"
+                  title={pcStatus.isCloudMode
+                    ? 'Server offline — recordings still upload to the cloud, clips wait for your PC. Tap to retry.'
+                    : 'Start Dispatch on your computer to process clips. Tap to retry.'}
+                  aria-label={pcStatus.isCloudMode
+                    ? 'Server offline — clips wait for your PC. Tap to retry.'
+                    : 'Server offline — start Dispatch on your computer to process clips. Tap to retry.'}
+                >
+                  <Server size={13} strokeWidth={1.5} className="shrink-0" />
+                  <span className="text-xs font-medium">Offline</span>
+                </button>
               )}
             </div>
             <p className="text-xs text-text-muted tabular-nums truncate flex items-center gap-1.5">

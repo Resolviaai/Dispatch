@@ -31,6 +31,7 @@ import {
 } from './types';
 import { CaptionStudio, ActivePanel } from './CaptionStudio';
 import { CaptionTimeline } from './CaptionTimeline';
+import { FilmstripData, normalizeFilmstripPayload } from './filmstrip';
 import { useCaptionHistory } from './useCaptionHistory';
 import { applySectionStylesToTrack } from './applyToAll';
 import {
@@ -183,7 +184,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(10.0);
 
-  const [filmstripFrames, setFilmstripFrames] = useState<string[]>([]);
+  const [filmstripData, setFilmstripData] = useState<FilmstripData | null>(null);
 
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [isVideoSelected, setIsVideoSelected] = useState(false);
@@ -649,8 +650,8 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     const generateFilmstrip = async () => {
       try {
         const v = document.createElement('video');
-        v.src = sampleVideoUrl;
         v.crossOrigin = 'anonymous';
+        v.src = sampleVideoUrl;
         v.muted = true;
         v.preload = 'auto';
 
@@ -674,15 +675,35 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           const seekTime = Math.max(0.05, (i / (count - 1)) * (dur - 0.2));
           v.currentTime = seekTime;
           await new Promise<void>((resolve) => {
-            v.onseeked = () => resolve();
-            setTimeout(() => resolve(), 300);
+            let settled = false;
+            const onSeeked = () => {
+              if (settled) return;
+              settled = true;
+              v.removeEventListener('seeked', onSeeked);
+              resolve();
+            };
+            v.addEventListener('seeked', onSeeked, { once: true });
+            setTimeout(() => {
+              if (settled) return;
+              settled = true;
+              v.removeEventListener('seeked', onSeeked);
+              resolve();
+            }, 1000);
           });
           ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
           frames.push(canvas.toDataURL('image/jpeg', 0.65));
         }
 
-        if (!isCancelled && frames.length > 0) {
-          setFilmstripFrames(frames);
+        if (!isCancelled && frames.length > 0 && dur > 0) {
+          // Same canvas frames, unified time-anchored contract: slot t = i * interval.
+          setFilmstripData(normalizeFilmstripPayload({
+            duration: dur,
+            interval: dur / count,
+            count,
+            scope: 'none',
+            source_start: 0,
+            frames: frames.map((url, i) => ({ url, t: (i * dur) / count })),
+          }));
         }
       } catch {
         // graceful fallback to placeholder
@@ -1044,7 +1065,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
                 isVideoSelected={isVideoSelected}
                 clipStart={0}
                 clipEnd={videoDuration}
-                filmstripFrames={filmstripFrames}
+                filmstrip={filmstripData}
                 mediaElementRef={videoRef}
                 sourceTimebase={false}
                 hideTrimControls={true}
