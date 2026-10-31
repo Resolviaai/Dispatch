@@ -591,5 +591,49 @@ class TestThumbnailFreshness(unittest.TestCase):
             clip_meta.unlink()
 
 
+    def test_12_filmstrip_source_start_invalidation(self):
+        """When source_start changes (e.g. user shifts clip window in raw video),
+        is_manifest_current must judge the cache stale and trigger regeneration."""
+        from dispatch.video_engine.filmstrip import is_manifest_current
+
+        manifest = {
+            "version": 2,
+            "video_fingerprint": "fp123",
+            "video_mtime_ns": 1000,
+            "duration": 10.0,
+            "interval": 2.5,
+            "count": 8,
+            "scope": "source",
+            "source_start": 10.0,
+            "frames": [],
+        }
+
+        # Different source_start -> immediately False
+        self.assertFalse(is_manifest_current(
+            manifest,
+            cache_dir=CLIPS_DIR,
+            video_fingerprint="fp123",
+            video_mtime_ns=1000,
+            duration=10.0,
+            interval=2.5,
+            count=8,
+            scope="source",
+            source_start=20.0,
+        ))
+
+        # Different scope -> immediately False
+        self.assertFalse(is_manifest_current(
+            manifest,
+            cache_dir=CLIPS_DIR,
+            video_fingerprint="fp123",
+            video_mtime_ns=1000,
+            duration=10.0,
+            interval=2.5,
+            count=8,
+            scope="render",
+            source_start=10.0,
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()

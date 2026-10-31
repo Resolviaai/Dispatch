@@ -76,8 +76,10 @@ export function normalizeFilmstripPayload(
     ? data.clip_id
     : (typeof data.clipId === 'string' ? data.clipId : '');
 
-  if (validation?.expectedClipId && clipId && clipId !== validation.expectedClipId) {
-    return null;
+  if (validation?.expectedClipId) {
+    if (!clipId || clipId !== validation.expectedClipId) {
+      return null;
+    }
   }
 
   // 3. Scope and source start
@@ -114,8 +116,8 @@ export function normalizeFilmstripPayload(
       continue;
     }
 
-    // Frames must be in strictly ascending chronological order
-    if (t < prevT) {
+    // Frames must be in strictly ascending chronological order (no duplicate timestamps)
+    if (t <= prevT) {
       continue;
     }
     prevT = t;

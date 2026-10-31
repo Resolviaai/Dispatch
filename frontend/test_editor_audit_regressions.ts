@@ -324,4 +324,151 @@ assert.equal(lastBox.left, 75);
 assert.equal(lastBox.width, 18, 'Partial slot width is 18px (does not overhang beyond 9.3s)');
 console.log('  ✓ Contiguous rounding verified across all zoom levels with exact partial slot geometry\n');
 
-console.log('🎉 ALL 8 DISPATCH EDITOR AUDIT REGRESSION TESTS PASSED 100%!');
+// =========================================================================
+// TEST 9: Split Edge Boundary & Word Desync Prevention
+// =========================================================================
+console.log('Test 9: Split boundary strictly prevents word desync and rejects edge boundaries...');
+const testWords: Word[] = [
+  { id: 'w1', text: 'First', start: 1.0, end: 1.2, confidence: 1.0 },
+  { id: 'w2', text: 'Second', start: 1.3, end: 1.6, confidence: 1.0 },
+];
+const tightGroup: CaptionGroup = {
+  id: 'tight_grp',
+  start: 1.0,
+  end: 1.7,
+  text: 'First Second',
+  words: testWords,
+  type: 'caption',
+};
+
+// Edge split near start (< 0.05s) must be rejected, not moved to midpoint!
+const edgeNearStart = splitCaptionGroupAtTime(tightGroup, 1.03);
+assert.equal(edgeNearStart, null, 'Strictly rejects edge split near start');
+
+// Edge split near end (< 0.05s) must be rejected!
+const edgeNearEnd = splitCaptionGroupAtTime(tightGroup, 1.68);
+assert.equal(edgeNearEnd, null, 'Strictly rejects edge split near end');
+
+// Valid mid split
+const validSplit = splitCaptionGroupAtTime(tightGroup, 1.25);
+assert.ok(validSplit, 'Valid mid split succeeds');
+const [vLeft, vRight] = validSplit;
+assert.ok(vLeft.words?.every((w) => w.start >= vLeft.start - 0.02 && w.end <= vLeft.end + 0.02), 'Left words strictly within left group');
+assert.ok(vRight.words?.every((w) => w.start >= vRight.start - 0.02 && w.end <= vRight.end + 0.02), 'Right words strictly within right group');
+console.log('  ✓ Words guaranteed within boundaries without midpoint drift\n');
+
+// =========================================================================
+// TEST 10: Merge Style Overrides Preservation
+// =========================================================================
+console.log('Test 10: Merge preserves word styles via style_override when groups have differing styles...');
+const styledGroup1: CaptionGroup = {
+  id: 'g1',
+  start: 1.0,
+  end: 2.0,
+  text: 'Yellow text',
+  type: 'caption',
+  style: { primary_color: '#FFFF00', highlight_color: '#FF0000', font_weight: '700' },
+  words: [
+    { id: 'gw1', text: 'Yellow', start: 1.0, end: 1.4, confidence: 1.0 },
+    { id: 'gw2', text: 'text', start: 1.5, end: 1.9, confidence: 1.0 },
+  ],
+};
+const styledGroup2: CaptionGroup = {
+  id: 'g2',
+  start: 2.1,
+  end: 3.0,
+  text: 'Cyan text',
+  type: 'caption',
+  style: { primary_color: '#00FFFF', highlight_color: '#0000FF', font_weight: '900' },
+  words: [
+    { id: 'gw3', text: 'Cyan', start: 2.1, end: 2.5, confidence: 1.0 },
+    { id: 'gw4', text: 'text', start: 2.6, end: 2.9, confidence: 1.0 },
+  ],
+};
+
+const mergedStyled = mergeAdjacentCaptionGroups(styledGroup1, styledGroup2);
+assert.ok(mergedStyled, 'Merge succeeds');
+assert.equal(mergedStyled.words?.length, 4);
+// First group words retain original colors
+assert.equal(mergedStyled.words?.[0].style_override, undefined);
+// Second group words receive style_overrides reflecting styledGroup2's distinct styling
+assert.equal(mergedStyled.words?.[2].style_override?.color, '#00FFFF');
+assert.equal(mergedStyled.words?.[2].style_override?.highlight_color, '#0000FF');
+assert.equal(mergedStyled.words?.[2].style_override?.font_weight, '900');
+console.log('  ✓ Style overrides attached to incoming words preserving unique group styling\n');
+
+// =========================================================================
+// TEST 11: Template Isolation Between Accounts
+// =========================================================================
+console.log('Test 11: Template storage strictly isolates user accounts without shared fallback leakage...');
+const userAlpha = 'user_alpha_999';
+const userBeta = 'user_beta_888';
+// Clear any legacy default
+(globalThis as any).localStorage.removeItem('dispatch_default_template');
+
+saveDefaultTemplate({
+  captions: {
+    font_family: 'Impact',
+    font_size: 60,
+    primary_color: '#FF0055',
+  },
+}, userAlpha);
+
+// userAlpha has saved template
+const tplAlpha = getSavedTemplate(userAlpha);
+assert.equal(tplAlpha.style?.font_family, 'Impact');
+
+// Legacy default template must NOT have been written
+assert.equal((globalThis as any).localStorage.getItem('dispatch_default_template'), null);
+
+// userBeta must NOT receive userAlpha's template
+const tplBeta = getSavedTemplate(userBeta);
+assert.equal(tplBeta.style?.font_family, undefined);
+
+// normalizeCaptionTrack with userBeta gets standard default font, NOT userAlpha's Impact
+const trackBeta = normalizeCaptionTrack({
+  default_style: { font_family: 'Montserrat' },
+  groups: [],
+}, 'clip_beta', 10, userBeta);
+assert.equal(trackBeta.default_style?.font_family, 'Montserrat');
+
+const trackAlpha = normalizeCaptionTrack({
+  default_style: { font_family: 'Montserrat' },
+  groups: [],
+}, 'clip_alpha', 10, userAlpha);
+assert.equal(trackAlpha.default_style?.font_family, 'Impact');
+console.log('  ✓ Cross-account template isolation verified 100%\n');
+
+// =========================================================================
+// TEST 12: Filmstrip Duplicate Timestamp & Ownership Rejection
+// =========================================================================
+console.log('Test 12: Filmstrip drops duplicate timestamps and rejects empty clipId when expected...');
+const stripWithDuplicates = normalizeFilmstripPayload({
+  clip_id: 'clip_dups',
+  duration: 10,
+  interval: 2,
+  count: 3,
+  scope: 'render',
+  frames: [
+    { url: '/f1.jpg', t: 0 },
+    { url: '/f1_dup.jpg', t: 0 }, // Duplicate t=0
+    { url: '/f2.jpg', t: 2 },
+    { url: '/f2_dup.jpg', t: 2 }, // Duplicate t=2
+    { url: '/f3.jpg', t: 4 },
+  ],
+});
+assert.ok(stripWithDuplicates);
+assert.equal(stripWithDuplicates.frames.length, 3, 'Duplicate timestamp frames cleanly dropped');
+assert.equal(stripWithDuplicates.frames[0].t, 0);
+assert.equal(stripWithDuplicates.frames[1].t, 2);
+assert.equal(stripWithDuplicates.frames[2].t, 4);
+
+// Missing clipId rejected when expectedClipId is provided
+const stripMissingId = normalizeFilmstripPayload(
+  { duration: 10, interval: 2, frames: [{ url: '/f.jpg', t: 0 }] },
+  { expectedClipId: 'required_clip_id' }
+);
+assert.equal(stripMissingId, null, 'Rejects payload with missing clipId when expectedClipId is specified');
+console.log('  ✓ Duplicate timestamps and missing clipId validation verified\n');
+
+console.log('🎉 ALL 12 DISPATCH EDITOR AUDIT REGRESSION TESTS PASSED 100%!');

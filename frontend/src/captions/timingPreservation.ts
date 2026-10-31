@@ -195,31 +195,43 @@ export function splitCaptionGroupAtTime(
       }
     }
 
-    const prevWord = words[bestBoundaryIndex];
-    const nextWord = words[bestBoundaryIndex + 1];
-
-    // Compute boundary time between words
-    let boundaryMid = (prevWord.end + nextWord.start) / 2;
-    if (boundaryMid < prevWord.end) boundaryMid = prevWord.end;
-    if (boundaryMid > nextWord.start) boundaryMid = nextWord.start;
-
-    effectiveSplitTime = Number(boundaryMid.toFixed(3));
-
-    // In case boundary falls right on edge
-    if (effectiveSplitTime <= group.start + 0.02 || effectiveSplitTime >= group.end - 0.02) {
-      effectiveSplitTime = Number(((group.start + group.end) / 2).toFixed(3));
-    }
-
     leftWords = words.slice(0, bestBoundaryIndex + 1).map((w) => ({ ...w }));
     rightWords = words.slice(bestBoundaryIndex + 1).map((w) => ({ ...w }));
 
     if (leftWords.length === 0 || rightWords.length === 0) {
       return null;
     }
+
+    const lastLeft = leftWords[leftWords.length - 1];
+    const firstRight = rightWords[0];
+
+    // Split boundary MUST fall cleanly between the two word sets
+    let boundaryMid: number;
+    if (lastLeft.end <= firstRight.start) {
+      boundaryMid = (lastLeft.end + firstRight.start) / 2;
+    } else {
+      boundaryMid = lastLeft.end;
+    }
+    boundaryMid = Number(boundaryMid.toFixed(3));
+
+    // Strictly reject edge splits too close to group boundaries without moving the boundary!
+    if (boundaryMid <= group.start + 0.05 || boundaryMid >= group.end - 0.05) {
+      return null;
+    }
+
+    effectiveSplitTime = boundaryMid;
+
+    // Strict validation: verify that all left words are inside [group.start, boundaryMid]
+    // and all right words are inside [boundaryMid, group.end]
+    const leftInside = leftWords.every((w) => w.start >= group.start - 0.02 && w.end <= boundaryMid + 0.02);
+    const rightInside = rightWords.every((w) => w.start >= boundaryMid - 0.02 && w.end <= group.end + 0.02);
+    if (!leftInside || !rightInside) {
+      return null;
+    }
   }
 
-  const leftEnd = Number(Math.max(group.start + 0.05, effectiveSplitTime).toFixed(3));
-  const rightStart = Number(Math.min(group.end - 0.05, effectiveSplitTime).toFixed(3));
+  const leftEnd = isCaptionWithWords ? effectiveSplitTime : Number(Math.max(group.start + 0.05, splitTime).toFixed(3));
+  const rightStart = isCaptionWithWords ? effectiveSplitTime : Number(Math.min(group.end - 0.05, splitTime).toFixed(3));
 
   if (leftEnd <= group.start || rightStart >= group.end) {
     return null;
@@ -288,9 +300,28 @@ export function mergeAdjacentCaptionGroups(
     return null;
   }
 
-  const combinedWords = [...(first.words || []), ...(second.words || [])]
-    .map((w) => ({ ...w }))
-    .sort((a, b) => a.start - b.start);
+  const combinedWords = [
+    ...(first.words || []).map((w) => ({ ...w })),
+    ...(second.words || []).map((w) => {
+      const copy = { ...w };
+      if (second.style) {
+        const overrides = { ...(copy.style_override || {}) };
+        if (second.style.primary_color && second.style.primary_color !== first.style?.primary_color) {
+          overrides.color = overrides.color || second.style.primary_color;
+        }
+        if (second.style.highlight_color && second.style.highlight_color !== first.style?.highlight_color) {
+          overrides.highlight_color = overrides.highlight_color || second.style.highlight_color;
+        }
+        if (second.style.font_weight && second.style.font_weight !== first.style?.font_weight) {
+          overrides.font_weight = overrides.font_weight || second.style.font_weight;
+        }
+        if (Object.keys(overrides).length > 0) {
+          copy.style_override = overrides;
+        }
+      }
+      return copy;
+    }),
+  ].sort((a, b) => a.start - b.start);
 
   const combinedText = combinedWords.length > 0
     ? combinedWords.map((w) => w.text).join(' ')

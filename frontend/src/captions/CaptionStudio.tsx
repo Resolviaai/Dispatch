@@ -1820,8 +1820,8 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     if (currIdx < 0 || currIdx >= sorted.length - 1) return;
 
     const nextGroup = sorted[currIdx + 1];
-    // Adjacency check: within 3 seconds
-    if (nextGroup.start > currentGroup.end + 3.0) return;
+    // Adjacency check: within 1.5 seconds (aligned with mergeAdjacentCaptionGroups)
+    if (nextGroup.start > currentGroup.end + 1.5) return;
 
     const merged = mergeAdjacentCaptionGroups(currentGroup, nextGroup);
     if (!merged) return;

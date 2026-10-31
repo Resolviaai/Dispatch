@@ -118,6 +118,8 @@ def is_manifest_current(
     duration: float,
     interval: float,
     count: int,
+    scope: str = "none",
+    source_start: float = 0.0,
 ) -> bool:
     """True only when the cache artifact is byte-for-byte plan-consistent.
 
@@ -141,6 +143,11 @@ def is_manifest_current(
             return False
         if int(manifest.get("count", -1)) != int(count):
             return False
+        if manifest.get("scope") != scope:
+            return False
+        if scope == "source":
+            if abs(float(manifest.get("source_start", -999.0)) - source_start) > 1e-4:
+                return False
     except (TypeError, ValueError):
         return False
 
@@ -418,6 +425,14 @@ def load_filmstrip_payload(clip: Dict[str, Any], clip_id: str) -> Dict[str, Any]
     interval, count = plan_filmstrip(duration)
     cache_dir = filmstrip_dir(clip_id)
 
+    is_rendered = bool(
+        clip.get("video_path")
+        and Path(clip["video_path"]).exists()
+        and Path(clip["video_path"]) == active_video
+    ) or (duration > 0 and active_video == CLIPS_DIR / f"{clip_id}.mp4")
+    scope = "render" if is_rendered else "source"
+    source_start = 0.0 if is_rendered else float(clip.get("start_time") or 0.0)
+
     lock = get_filmstrip_thread_lock(clip_id)
     with lock:
         manifest = read_manifest_directory(cache_dir)
@@ -429,6 +444,8 @@ def load_filmstrip_payload(clip: Dict[str, Any], clip_id: str) -> Dict[str, Any]
             duration=duration,
             interval=interval,
             count=count,
+            scope=scope,
+            source_start=source_start,
         ):
             regenerated = False
         else:

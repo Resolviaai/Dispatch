@@ -21,7 +21,8 @@ export function saveDefaultTemplate(template: unknown, userId?: string): void {
       const key = getSavedTemplateStorageKey(userId);
       const val = typeof template === 'string' ? template : JSON.stringify(template);
       localStorage.setItem(key, val);
-      if (key !== 'dispatch_default_template') {
+      // Only set legacy fallback if no userId was provided to prevent cross-account template leaks
+      if (!userId && key === 'dispatch_default_template') {
         localStorage.setItem('dispatch_default_template', val);
       }
     } catch {}
@@ -33,7 +34,8 @@ export function getSavedTemplate(userId?: string): { style?: Partial<StyleConfig
     try {
       const key = getSavedTemplateStorageKey(userId);
       let raw = localStorage.getItem(key);
-      if (!raw && key !== 'dispatch_default_template') {
+      // Strictly isolate templates: do NOT fall back to shared legacy template if userId is present
+      if (!raw && !userId && key === 'dispatch_default_template') {
         raw = localStorage.getItem('dispatch_default_template');
       }
       if (raw) {
@@ -82,13 +84,14 @@ export function getSavedTemplate(userId?: string): { style?: Partial<StyleConfig
   return {};
 }
 
-export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: number): CaptionTrack {
+export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: number, userId?: string): CaptionTrack {
   const source = raw && typeof raw === 'object' ? raw as Record<string, any> : {};
+  const effectiveUserId = (userId && typeof userId === 'string') ? userId : (source.user_id as string | undefined);
   const rawStyle = source.default_style || {};
   const rawLayout = source.default_layout || {};
   const rawAnimation = source.default_animation || {};
 
-  const savedTpl = getSavedTemplate();
+  const savedTpl = getSavedTemplate(effectiveUserId);
   const tplStyle = savedTpl.style || {};
   const tplLayout = savedTpl.layout || {};
   const tplAnim = savedTpl.anim || {};

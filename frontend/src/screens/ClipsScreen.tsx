@@ -2435,7 +2435,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           .then((res) => (res.ok ? res.json() : null))
           .then((fsData) => {
             if (reqId !== filmstripReqIdRef.current || !fsData) return;
-            const parsed = normalizeFilmstripPayload(fsData);
+            const parsed = normalizeFilmstripPayload(fsData, {
+              expectedClipId: currentClip.id,
+              expectedDuration: currentClip.duration,
+              expectedClipStart: currentClip.start_time,
+            });
             if (!parsed) return;
             setFilmstripData({
               ...parsed,

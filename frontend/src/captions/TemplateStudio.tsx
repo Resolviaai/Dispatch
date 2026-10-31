@@ -674,11 +674,13 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
           if (isCancelled) return;
           const seekTime = Math.max(0.05, (i / (count - 1)) * (dur - 0.2));
           v.currentTime = seekTime;
+          let seekSuccess = false;
           await new Promise<void>((resolve) => {
             let settled = false;
             const onSeeked = () => {
               if (settled) return;
               settled = true;
+              seekSuccess = true;
               v.removeEventListener('seeked', onSeeked);
               resolve();
             };
@@ -686,10 +688,12 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
             setTimeout(() => {
               if (settled) return;
               settled = true;
+              seekSuccess = false;
               v.removeEventListener('seeked', onSeeked);
               resolve();
             }, 1000);
           });
+          if (!seekSuccess) continue;
           ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
           frames.push(canvas.toDataURL('image/jpeg', 0.65));
         }

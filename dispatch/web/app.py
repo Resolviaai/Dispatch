@@ -2398,15 +2398,7 @@ async def upload_web_recording(request: Request, file: UploadFile = File(...)):
         "-vframes", "1", "-q:v", "2", str(thumb_path)
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # Extract filmstrip frames for the timeline
-    for i in range(8):
-        t = (i + 0.5) * (duration / 8)
-        frame_name = f"{clip_id}_frame_{i}.jpg"
-        subprocess.run([
-            "ffmpeg", "-y", "-ss", str(round(t, 3)), "-i", str(clip_video_path),
-            "-frames:v", "1", "-q:v", "3", "-vf", "scale=160:-1",
-            str(CLIPS_DIR / frame_name)
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 
     # Initial layout mode: portrait -> native_916, landscape -> crop_916
     initial_layout = "native_916" if orientation == "portrait" else "crop_916"

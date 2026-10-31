@@ -26,6 +26,8 @@ import {
 
   Magnet,
 
+  Scissors,
+
 } from 'lucide-react';
 
 import { CaptionTrack, CaptionGroup, Word } from './types';
@@ -272,6 +274,35 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const timelineCurrentTime = isSourceMode ? clipTimeToSourceTime(currentTime, clipStart) : currentTime;
 
+  // Split group handler & keyboard shortcut
+  const selectedGroup = track?.groups?.find((g) => g.id === selectedGroupId);
+  const canSplit = Boolean(
+    onSplitGroup &&
+    selectedGroup &&
+    currentTime > selectedGroup.start + 0.05 &&
+    currentTime < selectedGroup.end - 0.05
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 's' || e.key === 'S') {
+        const tag = (document.activeElement?.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || (document.activeElement as HTMLElement)?.isContentEditable) {
+          return;
+        }
+        if (!selectedGroupId || !onSplitGroup) return;
+        const currentGroup = track?.groups?.find((g) => g.id === selectedGroupId);
+        if (!currentGroup) return;
+        if (currentTime > currentGroup.start + 0.05 && currentTime < currentGroup.end - 0.05) {
+          e.preventDefault();
+          onSplitGroup(selectedGroupId, currentTime);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedGroupId, onSplitGroup, track?.groups, currentTime]);
+
 
 
   // Trim boundaries and the filmstrip use source time. Caption words stay clip-relative.
@@ -504,7 +535,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       const v = mediaElementRef.current;
 
-      const effectiveTarget = (sourceTimebase && Boolean(v.duration >= (clipEnd || 0) - 1.0))
+      const effectiveTarget = isSourceMode
 
         ? (clipStart + timeSec)
 
@@ -692,19 +723,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
         if (v && !v.paused) {
 
-          const raw = v.currentTime;
-
-          const isVideoSourceLoaded = Boolean(v.duration && v.duration >= (clipEnd || 0) - 1.0 && (clipEnd || 0) > 0);
-
-          if (isSourceMode) {
-
-            cur = isVideoSourceLoaded ? raw : (clipStart + raw);
-
-          } else {
-
-            cur = isVideoSourceLoaded ? Math.max(0, raw - clipStart) : raw;
-
-          }
+          cur = v.currentTime;
 
         }
 
@@ -1610,6 +1629,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const handleBlockPointerUp = (e: React.PointerEvent) => {
 
+    if (dragSession && dragSession.pointerId !== undefined && e.pointerId !== dragSession.pointerId) {
+
+      return;
+
+    }
+
     setSnapGuideTime(null);
 
     if (!dragSession?.isVerticalScroll && latestBlockPatchRef.current && onUpdateGroup) {
@@ -2152,6 +2177,20 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
           )}
 
+          {onSplitGroup && selectedGroup && (
+            <button
+              type="button"
+              disabled={!canSplit}
+              onClick={() => canSplit && onSplitGroup?.(selectedGroup.id, currentTime)}
+              className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium disabled:opacity-40 active:scale-95 transition-all shrink-0 flex items-center gap-1"
+              title={canSplit ? `Split group at ${currentTime.toFixed(2)}s (S)` : 'Place playhead inside selection to split'}
+              aria-label="Split selected group at playhead"
+            >
+              <Scissors size={10} />
+              <span>Split</span>
+            </button>
+          )}
+
           {trimSaveState && (
 
             <span role="status" className={`text-[10px] shrink-0 ${trimSaveState === 'error' ? 'text-red-400' : 'text-text-muted'}`}>
@@ -2294,6 +2333,18 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             onPointerCancel={handleCanvasPointerCancel}
 
+            onTouchCancel={() => {
+
+              lastUserInteractionTimeRef.current = Date.now();
+
+              setIsScrubbing(false);
+
+              canvasDragRef.current = null;
+
+              cancelSeek();
+
+            }}
+
             onClick={(e) => {
 
               const isInteractive = (e.target as HTMLElement).closest('[data-layer-block="true"], [data-video-track="true"], button, input, [data-handle]');
@@ -2383,6 +2434,18 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
               lastUserInteractionTimeRef.current = Date.now();
 
               setIsScrubbing(false);
+
+            }}
+
+            onTouchCancel={() => {
+
+              lastUserInteractionTimeRef.current = Date.now();
+
+              setIsScrubbing(false);
+
+              canvasDragRef.current = null;
+
+              cancelSeek();
 
             }}
 
@@ -2908,6 +2971,21 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                               </span>
 
+                            )}
+
+                            {isSelected && canSplit && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSplitGroup?.(grp.id, currentTime);
+                                }}
+                                className="w-4 h-4 rounded bg-white/20 hover:bg-white/40 active:bg-white text-white flex items-center justify-center shrink-0 ml-1 transition-colors"
+                                title={`Split at playhead ${currentTime.toFixed(2)}s (S)`}
+                                aria-label="Split layer at playhead"
+                              >
+                                <Scissors size={9} />
+                              </button>
                             )}
 
                           </div>
