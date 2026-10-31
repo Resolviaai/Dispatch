@@ -1220,6 +1220,32 @@ export default {
       return user ? user.userId : null;
     }
 
+    /**
+     * Providers report a refused/aborted consent by redirecting back with
+     * `error` instead of `code`. Consume the single-use state (the attempt is
+     * finished, so it must not be replayable) and show the provider's own
+     * reason — otherwise the page claims the code is missing and the real
+     * cause is lost.
+     */
+    async function rejectProviderError(providerLabel: string): Promise<Response> {
+      const state = url.searchParams.get("state") ?? "";
+      if (state) await consumeOAuthState(state);
+      const providerError = url.searchParams.get("error") ?? "";
+      const reason = (
+        url.searchParams.get("error_description")
+        || url.searchParams.get("error_reason")
+        || providerError
+      ).slice(0, 200);
+      console.warn(`OAuth ${providerLabel} consent failed: ${providerError || "unknown"}`);
+      return renderOAuthResultHtml(
+        "Sign-in Not Completed",
+        reason
+          ? `${providerLabel} did not grant access: ${reason}`
+          : `${providerLabel} did not grant access. Please retry from Dispatch Settings.`,
+        true
+      );
+    }
+
     // 1. Google / YouTube Start & Callback
     if (url.pathname === "/oauth/google/start" && request.method === "GET") {
       try {
@@ -1235,6 +1261,7 @@ export default {
     }
 
     if (url.pathname === "/oauth/google/callback" && request.method === "GET") {
+      if (url.searchParams.get("error")) return await rejectProviderError("Google");
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
@@ -1321,6 +1348,7 @@ export default {
     }
 
     if (url.pathname === "/oauth/instagram/callback" && request.method === "GET") {
+      if (url.searchParams.get("error")) return await rejectProviderError("Instagram");
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
@@ -1351,40 +1379,56 @@ export default {
         }
       } catch { /* fallback to shortToken */ }
 
-      // Fetch Instagram accounts linked to user's Facebook pages
-      let igUserId = "me";
-      let igUsername = "Instagram User";
-      let igAvatar: string | null = null;
-      let pageId: string | null = null;
-      let pageAccessToken: string | null = null;
-
+      // A usable Instagram destination requires a Professional account linked to
+      // a Facebook Page: publishing Reels uses the Page token. Storing "me" or an
+      // arbitrary Page instead would create a connection that can never publish.
+      let igAccount: {
+        id: string;
+        username: string;
+        avatar: string | null;
+        pageId: string;
+        pageAccessToken: string | null;
+      } | null = null;
+      let pagesReadable = true;
       try {
         const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${longToken}`);
+        pagesReadable = pagesRes.ok;
         if (pagesRes.ok) {
           const pagesData = await pagesRes.json() as { data?: Array<{ id: string; name: string; access_token?: string; instagram_business_account?: { id: string; username: string; profile_picture_url?: string } }> };
           const found = (pagesData.data || []).find(p => p.instagram_business_account?.id);
           if (found && found.instagram_business_account) {
-            igUserId = found.instagram_business_account.id;
-            igUsername = "@" + found.instagram_business_account.username;
-            igAvatar = found.instagram_business_account.profile_picture_url || null;
-            pageId = found.id;
-            pageAccessToken = found.access_token || null;
-          } else if (pagesData.data && pagesData.data.length > 0) {
-            const first = pagesData.data[0];
-            pageId = first.id;
-            igUserId = first.id;
-            igUsername = first.name;
-            pageAccessToken = first.access_token || null;
+            igAccount = {
+              id: found.instagram_business_account.id,
+              username: "@" + found.instagram_business_account.username,
+              avatar: found.instagram_business_account.profile_picture_url || null,
+              pageId: found.id,
+              pageAccessToken: found.access_token || null,
+            };
           }
         }
-      } catch { /* use defaults */ }
+      } catch (err) {
+        pagesReadable = false;
+        console.error("Instagram page lookup failed:", err instanceof Error ? err.message : "unknown error");
+      }
+
+      if (!pagesReadable) {
+        return renderOAuthResultHtml("Instagram Unavailable", "Facebook did not return your Pages. Please retry in a moment.", true, "instagram");
+      }
+      if (!igAccount) {
+        return renderOAuthResultHtml(
+          "Instagram Not Ready",
+          "No Instagram Professional account is linked to a Facebook Page for this login. Switch the Instagram account to Professional (Business or Creator), link it to a Facebook Page you manage, then retry.",
+          true,
+          "instagram"
+        );
+      }
 
       const credPayload = {
-        access_token: pageAccessToken || longToken,
+        access_token: igAccount.pageAccessToken || longToken,
         user_access_token: longToken,
-        page_id: pageId,
-        ig_user_id: igUserId,
-        account_id: igUserId
+        page_id: igAccount.pageId,
+        ig_user_id: igAccount.id,
+        account_id: igAccount.id
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
@@ -1392,9 +1436,9 @@ export default {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
-          p_user_id: uid, p_provider: "instagram", p_account_id: igUserId, p_account_name: igUsername,
-          p_account_email: null, p_avatar_url: igAvatar, p_credentials_encrypted: enc,
-          p_metadata: { ig_user_id: igUserId, page_id: pageId, username: igUsername },
+          p_user_id: uid, p_provider: "instagram", p_account_id: igAccount.id, p_account_name: igAccount.username,
+          p_account_email: null, p_avatar_url: igAccount.avatar, p_credentials_encrypted: enc,
+          p_metadata: { ig_user_id: igAccount.id, page_id: igAccount.pageId, username: igAccount.username },
         }),
       });
       if (!storeRes.ok) {
@@ -1403,7 +1447,7 @@ export default {
         return renderOAuthResultHtml("Database Error", `Failed to save Instagram account: ${errText.slice(0, 150)}`, true);
       }
 
-      return renderOAuthResultHtml("Instagram Connected", `Account "${igUsername}" connected successfully! You can return to Dispatch.`, false, "instagram");
+      return renderOAuthResultHtml("Instagram Connected", `Account "${igAccount.username}" connected successfully! You can return to Dispatch.`, false, "instagram");
     }
 
     // 3. Facebook Start & Callback
@@ -1425,6 +1469,7 @@ export default {
     }
 
     if (url.pathname === "/oauth/facebook/callback" && request.method === "GET") {
+      if (url.searchParams.get("error")) return await rejectProviderError("Facebook");
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
@@ -1454,12 +1499,13 @@ export default {
         }
       } catch { /* fallback */ }
 
-      let pageId = "me";
-      let pageTitle = "Facebook Page";
-      let pageAccessToken: string | null = null;
-      let pageAvatar: string | null = null;
+      // Dispatch publishes Reels to a Facebook Page, so a Page (with its Page
+      // token) is mandatory. A "me"-fallback connection would be dead on arrival.
+      let page: { id: string; title: string; accessToken: string | null; avatar: string | null } | null = null;
+      let pagesReadable = true;
       try {
         const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,picture{url}&access_token=${longToken}`);
+        pagesReadable = pagesRes.ok;
         if (pagesRes.ok) {
           const pagesData = await pagesRes.json() as {
             data?: Array<{
@@ -1470,19 +1516,36 @@ export default {
             }>;
           };
           if (pagesData.data && pagesData.data.length > 0) {
-            pageId = pagesData.data[0].id;
-            pageTitle = pagesData.data[0].name;
-            pageAccessToken = pagesData.data[0].access_token || null;
-            pageAvatar = pagesData.data[0].picture?.data?.url || null;
+            page = {
+              id: pagesData.data[0].id,
+              title: pagesData.data[0].name,
+              accessToken: pagesData.data[0].access_token || null,
+              avatar: pagesData.data[0].picture?.data?.url || null,
+            };
           }
         }
-      } catch { /* fallback */ }
+      } catch (err) {
+        pagesReadable = false;
+        console.error("Facebook page lookup failed:", err instanceof Error ? err.message : "unknown error");
+      }
+
+      if (!pagesReadable) {
+        return renderOAuthResultHtml("Facebook Unavailable", "Facebook did not return your Pages. Please retry in a moment.", true, "facebook");
+      }
+      if (!page) {
+        return renderOAuthResultHtml(
+          "Facebook Page Required",
+          "No Facebook Page is available for this login. Dispatch publishes Reels to a Page — make sure you admin a Page, then retry.",
+          true,
+          "facebook"
+        );
+      }
 
       const credPayload = {
-        access_token: pageAccessToken || longToken,
+        access_token: page.accessToken || longToken,
         user_access_token: longToken,
-        page_id: pageId,
-        account_id: pageId
+        page_id: page.id,
+        account_id: page.id
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
@@ -1490,9 +1553,9 @@ export default {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
-          p_user_id: uid, p_provider: "facebook", p_account_id: pageId, p_account_name: pageTitle,
-          p_account_email: null, p_avatar_url: pageAvatar, p_credentials_encrypted: enc,
-          p_metadata: { page_id: pageId, title: pageTitle },
+          p_user_id: uid, p_provider: "facebook", p_account_id: page.id, p_account_name: page.title,
+          p_account_email: null, p_avatar_url: page.avatar, p_credentials_encrypted: enc,
+          p_metadata: { page_id: page.id, title: page.title },
         }),
       });
       if (!storeRes.ok) {
@@ -1501,7 +1564,7 @@ export default {
         return renderOAuthResultHtml("Database Error", `Failed to save Facebook account: ${errText.slice(0, 150)}`, true);
       }
 
-      return renderOAuthResultHtml("Facebook Connected", `Page "${pageTitle}" connected successfully! You can return to Dispatch.`, false, "facebook");
+      return renderOAuthResultHtml("Facebook Connected", `Page "${page.title}" connected successfully! You can return to Dispatch.`, false, "facebook");
     }
 
     // 4. LinkedIn Start & Callback
@@ -1523,6 +1586,7 @@ export default {
     }
 
     if (url.pathname === "/oauth/linkedin/callback" && request.method === "GET") {
+      if (url.searchParams.get("error")) return await rejectProviderError("LinkedIn");
       const code = url.searchParams.get("code") ?? "";
       const state = url.searchParams.get("state") ?? "";
       if (!code || !state) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);
@@ -1611,6 +1675,7 @@ export default {
     }
 
     if (url.pathname === "/oauth/twitter/callback" && request.method === "GET") {
+      if (url.searchParams.get("error")) return await rejectProviderError("X (Twitter)");
       const code = url.searchParams.get("code") ?? "";
       const stateParam = url.searchParams.get("state") ?? "";
       if (!code || !stateParam) return renderOAuthResultHtml("Missing Code/State", "Authorization code or state was missing.", true);

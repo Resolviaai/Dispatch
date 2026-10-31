@@ -49,6 +49,12 @@ function env() {
     TOKEN_VAULT_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     YOUTUBE_CLIENT_ID: "yt-client-id",
     TWITTER_CLIENT_ID: "tw-client-id",
+    INSTAGRAM_CLIENT_ID: "ig-client",
+    INSTAGRAM_CLIENT_SECRET: "ig-secret",
+    FACEBOOK_CLIENT_ID: "fb-client",
+    FACEBOOK_CLIENT_SECRET: "fb-secret",
+    LINKEDIN_CLIENT_ID: "li-client",
+    LINKEDIN_CLIENT_SECRET: "li-secret",
   };
 }
 const pcHeaders = (uid = USER_A) => ({ "Authorization": "Bearer pc-token", "X-Dispatch-User-Id": uid, "content-type": "application/json" });
@@ -1590,6 +1596,104 @@ test("/youtube/videos/delete returns 409 when the caller has no linked YouTube a
   });
   const res = await post("/youtube/videos/delete", { video_id: "abc123def45" });
   assert.equal(res.status, 409);
+});
+
+// ---- Social OAuth callback contracts (Instagram / Facebook) ----
+
+function mockConsentState(uid = USER_A, onConsume = () => {}) {
+  supabase.set("/rpc/cloud_consume_oauth_state", {
+    method: "POST",
+    fn: (_url, init) => {
+      onConsume(JSON.parse(init.body));
+      return { body: uid };
+    },
+  });
+}
+
+function mockMetaTokenExchange(accessToken = "short-token") {
+  supabase.set("graph.facebook.com/v21.0/oauth/access_token", {
+    fn: () => ({ body: { access_token: accessToken } }),
+  });
+}
+
+test("oauth callback surfaces the provider's error and consumes the state", async () => {
+  let consumed = null;
+  mockConsentState(USER_A, (body) => { consumed = body; });
+  const res = await worker.fetch(new Request(
+    "https://w.test/oauth/instagram/callback?error=access_denied&error_reason=user_denied&error_description=Permissions%20error&state=st-1"
+  ), env());
+  assert.equal(res.status, 400);
+  const html = await res.text();
+  assert.match(html, /Sign-in Not Completed/);
+  assert.match(html, /Permissions error/);
+  assert.equal(consumed?.p_state, "st-1");
+});
+
+test("instagram callback stores the linked professional account", async () => {
+  mockConsentState();
+  mockMetaTokenExchange();
+  supabase.set("graph.facebook.com/v21.0/me/accounts", {
+    fn: () => ({
+      body: {
+        data: [{
+          id: "page-1",
+          name: "Page One",
+          access_token: "page-token",
+          instagram_business_account: { id: "ig-1", username: "creator", profile_picture_url: "https://img.test/ig.jpg" },
+        }],
+      },
+    }),
+  });
+  let stored = null;
+  supabase.set("/rpc/cloud_store_connected_account", {
+    method: "POST",
+    fn: (_url, init) => { stored = JSON.parse(init.body); return { body: "row-1" }; },
+  });
+  const res = await worker.fetch(new Request("https://w.test/oauth/instagram/callback?code=abc&state=st-2"), env());
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Instagram Connected/);
+  assert.equal(stored?.p_provider, "instagram");
+  assert.equal(stored?.p_account_id, "ig-1");
+  assert.equal(stored?.p_account_name, "@creator");
+  assert.ok(stored?.p_credentials_encrypted);
+});
+
+test("instagram callback refuses to store an account without a linked professional profile", async () => {
+  mockConsentState();
+  mockMetaTokenExchange();
+  supabase.set("graph.facebook.com/v21.0/me/accounts", {
+    fn: () => ({ body: { data: [{ id: "page-1", name: "Page One", access_token: "page-token" }] } }),
+  });
+  let stored = false;
+  supabase.set("/rpc/cloud_store_connected_account", { method: "POST", fn: () => { stored = true; return { body: "row-1" }; } });
+  const res = await worker.fetch(new Request("https://w.test/oauth/instagram/callback?code=abc&state=st-3"), env());
+  assert.equal(res.status, 400);
+  assert.match(await res.text(), /Instagram Not Ready/);
+  assert.equal(stored, false);
+});
+
+test("facebook callback refuses to store a connection without a Page", async () => {
+  mockConsentState();
+  mockMetaTokenExchange();
+  supabase.set("graph.facebook.com/v21.0/me/accounts", { fn: () => ({ body: { data: [] } }) });
+  let stored = false;
+  supabase.set("/rpc/cloud_store_connected_account", { method: "POST", fn: () => { stored = true; return { body: "row-1" }; } });
+  const res = await worker.fetch(new Request("https://w.test/oauth/facebook/callback?code=abc&state=st-4"), env());
+  assert.equal(res.status, 400);
+  assert.match(await res.text(), /Facebook Page Required/);
+  assert.equal(stored, false);
+});
+
+test("authorize URLs request exactly the approved scope sets", async () => {
+  const { buildInstagramAuthorizeUrl, buildFacebookAuthorizeUrl } = await import("../src/oauth.ts");
+  const ig = new URL(buildInstagramAuthorizeUrl("id", "https://w.test/cb", "st"));
+  assert.deepEqual(ig.searchParams.get("scope").split(","), [
+    "instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement",
+  ]);
+  const fb = new URL(buildFacebookAuthorizeUrl("id", "https://w.test/cb", "st"));
+  assert.deepEqual(fb.searchParams.get("scope").split(","), [
+    "pages_show_list", "pages_read_engagement", "pages_manage_posts",
+  ]);
 });
 
 
