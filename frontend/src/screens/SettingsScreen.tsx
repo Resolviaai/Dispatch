@@ -489,7 +489,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const facebookAccounts = accounts.filter(a => a.provider === 'facebook');
   const linkedinAccount = accounts.find(a => a.provider === 'linkedin');
   const twitterAccount = accounts.find(a => a.provider === 'twitter');
-  const instagramAccount = instagramAccounts[0] ?? null;
   const facebookAccount = facebookAccounts[0] ?? null;
 
   // Global Activity & Notification Center
@@ -750,36 +749,50 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
             </div>
 
             <div>
-              {/* Instagram */}
-              <div className="py-3 flex items-center justify-between gap-3 text-sm">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <AccountAvatar
-                    src={instagramAccount?.avatar_url}
-                    fallback={<InstagramIcon />}
-                  />
-                  <div className="min-w-0">
-                    <p className="font-medium text-text-main truncate">Instagram Reels</p>
-                    <p className="text-xs text-text-muted truncate">
-                      {instagramAccount ? instagramAccount.account_name : 'Not connected'}
-                    </p>
+              {/* Instagram — one row per connected account, like YouTube channels */}
+              {instagramAccounts.length > 0 ? (
+                instagramAccounts.map((acc) => (
+                  <div key={acc.id} className="py-3 flex items-center justify-between gap-3 text-sm">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <AccountAvatar src={acc.avatar_url} fallback={<InstagramIcon />} />
+                      <div className="min-w-0">
+                        <p className="font-medium text-text-main truncate">Instagram Reels</p>
+                        <p className="text-xs text-text-muted truncate">{acc.account_name}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDisconnectAccount(acc)}
+                      className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
+                    >
+                      Disconnect
+                    </button>
                   </div>
-                </div>
-                {instagramAccount ? (
-                  <button
-                    onClick={() => handleDisconnectAccount(instagramAccount)}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
-                  >
-                    Disconnect
-                  </button>
-                ) : (
+                ))
+              ) : (
+                <div className="py-3 flex items-center justify-between gap-3 text-sm">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <AccountAvatar fallback={<InstagramIcon />} />
+                    <div className="min-w-0">
+                      <p className="font-medium text-text-main truncate">Instagram Reels</p>
+                      <p className="text-xs text-text-muted truncate">Not connected</p>
+                    </div>
+                  </div>
                   <button
                     onClick={() => handleConnectProvider('instagram')}
                     className="min-h-[44px] px-3.5 rounded-lg bg-surface-3 hover:bg-surface-2 border border-white/[0.05] text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
                   >
                     Connect
                   </button>
-                )}
-              </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => handleConnectProvider('instagram')}
+                className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <Plus size={15} />
+                <span>{instagramAccounts.length > 0 ? 'Connect Another Instagram Account' : 'Connect Instagram'}</span>
+              </button>
 
               {/* Facebook */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">
