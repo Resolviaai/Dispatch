@@ -7,7 +7,7 @@
           "https://appassets.androidplatform.net",
           "https://resolviaai.github.io"
         ],
-        "methods": ["GET", "HEAD"],
+        "methods": ["GET", "HEAD", "PUT"],
         "headers": ["*"]
       },
       "exposeHeaders": ["ETag", "Content-Type", "Content-Length", "Content-Range"],
