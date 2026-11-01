@@ -1770,3 +1770,31 @@ test("cloud file delete queues the PC command for a clip-backed object", async (
   assert.equal(enqueued?.p_kind, "reject");
   assert.equal(enqueued?.p_local_clip_id, "clip_local_1");
 });
+
+test("GET /media pages past one 1000-row page so the list matches the storage meter", async () => {
+  supabase.set("/auth/v1/user", { method: "GET", fn: () => ({ body: { id: USER_A, email: "a@test.com" } }) });
+  const page = (offset, n) => Array.from({ length: n }, (_, i) => ({
+    id: `m-${offset + i}`,
+    kind: "edit_window",
+    byte_count: 1_000_000,
+    created_at: "2026-11-01T00:00:00Z",
+    clip_id: null,
+  }));
+  const offsets = [];
+  supabase.set("media_objects?user_id=eq.", {
+    method: "GET",
+    fn: (url) => {
+      const offset = Number(new URL(url).searchParams.get("offset") || 0);
+      offsets.push(offset);
+      return { body: page(offset, offset === 0 ? 1000 : 156) };
+    },
+  });
+  const res = await worker.fetch(new Request("https://w.test/media", {
+    headers: { Authorization: "Bearer any-token" },
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(offsets.length, 2, "must keep fetching until a short page");
+  assert.equal(body.items.length, 1156, "one capped page made 156 objects look like 100");
+  assert.equal(body.total_bytes, 1156 * 1_000_000);
+});

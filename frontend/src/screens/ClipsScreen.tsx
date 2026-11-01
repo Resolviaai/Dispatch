@@ -2007,6 +2007,33 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     return cacheHydrationRef.current;
   };
 
+  // The Rejected bucket is cloud-owned (restore is a worker call), so PC Mode
+  // must not blank it. Clearing it made the tab flicker between counts
+  // depending on which backend answered the last poll.
+  const fetchRejectedFromCloud = async (generation: number) => {
+    try {
+      const session = await currentSession();
+      const token = session?.access_token ||
+        (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (!token) return;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(`${WORKER_BASE}/clips?limit=100&offset=0`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: controller.signal,
+        cache: 'no-store',
+      }).catch(() => null);
+      clearTimeout(timeoutId);
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      if (clipFetchGenerationRef.current !== generation || !componentMountedRef.current) return;
+      const rj = Array.isArray(data.rejected) ? data.rejected : [];
+      setRejectedClips(rj.filter((clip: RejectedCloudClip) => !(clip as any).retention_expired));
+    } catch {
+      // Secondary to the review queue; leave whatever is already displayed.
+    }
+  };
+
   // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
     await ensureClipsCacheHydrated();
@@ -2047,7 +2074,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           if (clipFetchGenerationRef.current === generation) {
             setReadyClips(rList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
             setApprovedClips(aList.map((clip: ClipItem) => stabilizeMediaUrls(clip)).filter((clip: ClipItem) => !hiddenIds.has(clip.id)));
-            setRejectedClips([]);
+            void fetchRejectedFromCloud(generation);
             if (data.queue_stats) {
               setQueueStats(data.queue_stats);
             }

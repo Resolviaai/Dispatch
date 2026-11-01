@@ -359,8 +359,13 @@ def push_window_transcript(clip_id: str, clip: Optional[Dict[str, Any]] = None, 
         return "failed"
 
 
-def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> bool:
-    """Sync a single clip and its video proxy / edit window to Supabase and R2."""
+def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, status_only: bool = False) -> bool:
+    """Sync a single clip and its video proxy / edit window to Supabase and R2.
+
+    ``status_only`` refreshes the ``clips_cloud`` row (metadata + status) and
+    stops there. Used when a clip leaves the reviewable set: the cloud must be
+    told, but re-staging bytes for a clip nobody will approve is waste.
+    """
     if not get_worker_token():
         logger.debug("Cloud credentials missing; skipping cloud sync for clip %s", clip_id)
         return False
@@ -485,6 +490,10 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
     except Exception as e:
         logger.error("Network error upserting clips_cloud for %s: %s", clip_id, e)
         return False
+
+    if status_only:
+        logger.info("Cloud status for clip %s synced as %s (no media staging).", clip_id, status)
+        return True
 
     caption_words = extract_source_words(clip)
 
@@ -706,17 +715,29 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None) -> b
 
 
 def sync_all_clips_to_cloud():
-    """Scan local SQLite for ready/approved clips and synchronize missing items to cloud."""
+    """Scan local SQLite and reconcile every clip this PC owns to the cloud.
+
+    Rejected rows are included deliberately: a clip rejected on the PC (from the
+    dashboard or from the phone while the PC was reachable) must not stay
+    ``ready_review`` in ``clips_cloud``, or the phone resurrects it the first
+    time it falls back to Cloud Mode.
+    """
     try:
         with db.get_db_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM clips WHERE status IN ('ready_review', 'published', 'approved')"
+                "SELECT * FROM clips WHERE status IN "
+                "('ready_review', 'published', 'approved', 'rejected')"
             ).fetchall()
 
         logger.info("Starting background cloud sync for %d local clips...", len(rows))
         for r in rows:
             clip_dict = dict(r)
-            sync_clip_to_cloud(clip_dict["id"], clip_dict)
+            # Only rejected rows skip staging; ready/approved/published still
+            # need their proxy uploaded so the phone can play them.
+            sync_clip_to_cloud(
+                clip_dict["id"], clip_dict,
+                status_only=clip_dict.get("status") == "rejected",
+            )
     except Exception as e:
         logger.error("Error in sync_all_clips_to_cloud: %s", e)
 

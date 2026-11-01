@@ -2417,11 +2417,22 @@ export default {
       // and status of the clip each one backs (if any).
       if (request.method === "GET" && url.pathname === "/media") {
         const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
-        const listRes = await fetch(
-          `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&select=id,kind,byte_count,created_at,clip_id&order=created_at.desc&limit=100`,
-          { headers: svc });
-        if (!listRes.ok) return json(502, { error: `media list failed: ${listRes.status}` });
-        const rows = await listRes.json() as Array<{ id: string; kind: string; byte_count: number | null; created_at: string; clip_id: string | null }>;
+        // The meter sums every active row, so the list must too: a single capped
+        // page made 156 objects look like 100 and the bytes never added up.
+        const pageSize = 1000;
+        const maxPages = 10;
+        const rows: Array<{ id: string; kind: string; byte_count: number | null; created_at: string; clip_id: string | null }> = [];
+        let truncated = false;
+        for (let page = 0; page < maxPages; page++) {
+          const listRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&select=id,kind,byte_count,created_at,clip_id&order=created_at.desc&limit=${pageSize}&offset=${page * pageSize}`,
+            { headers: svc });
+          if (!listRes.ok) return json(502, { error: `media list failed: ${listRes.status}` });
+          const batch = await listRes.json() as typeof rows;
+          rows.push(...batch);
+          if (batch.length < pageSize) break;
+          if (page === maxPages - 1) truncated = true;
+        }
         const clipIds = Array.from(new Set(rows.map(r => r.clip_id).filter((v): v is string => Boolean(v))));
         let clipsById: Record<string, { title: string | null; local_clip_id: string; status: string }> = {};
         if (clipIds.length > 0) {
@@ -2434,6 +2445,8 @@ export default {
           }
         }
         return json(200, {
+          total_bytes: rows.reduce((sum, r) => sum + (r.byte_count ?? 0), 0),
+          truncated: truncated || undefined,
           items: rows.map(r => ({
             id: r.id,
             kind: r.kind,

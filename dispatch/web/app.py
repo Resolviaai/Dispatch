@@ -1480,6 +1480,18 @@ async def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Re
         user_id=caller_user_id
     )
     if not result:
+        # One 400 for four different causes made every split failure look like an
+        # edge-distance problem. Name the real one.
+        existing = db.get_clip_by_id(clip_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Clip not found on this PC")
+        if caller_user_id and existing.get("user_id") != caller_user_id:
+            raise HTTPException(status_code=403, detail="This clip belongs to another account")
+        if existing.get("status") != "ready_review":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Clip is {existing.get('status')}, not ready for review, so it cannot be split.",
+            )
         raise HTTPException(
             status_code=400,
             detail="Cannot split clip at this time (split must leave at least 1.0s on both sides)."
@@ -1718,6 +1730,10 @@ async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Requ
         )
     if not db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected"):
         raise HTTPException(status_code=409, detail="Clip could not be rejected in its current state")
+    # The cloud row must follow the local one. Without this the phone keeps
+    # listing the clip as ready_review whenever it falls back to Cloud Mode.
+    from dispatch.cloud.sync import sync_clip_to_cloud
+    await asyncio.to_thread(sync_clip_to_cloud, clip_id, None, True)
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
 
 

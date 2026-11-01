@@ -18,7 +18,9 @@ import android.view.View
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -94,6 +96,34 @@ class MainActivity : ComponentActivity() {
                 cameraCaptureManager.setAudioEnabled(true)
             }
             initCameraLifecycle()
+        }
+    }
+
+    /**
+     * The WebView cannot open a file picker on its own: without this the
+     * "Choose Video File" button in the upload sheet is a silent no-op.
+     */
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        val callback = filePathCallback ?: return@registerForActivityResult
+        filePathCallback = null
+        callback.onReceiveValue(if (uri != null) arrayOf(uri) else null)
+    }
+
+    private fun openFileChooser(params: FileChooserParams?): Boolean {
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = params?.onReceiveValue
+        return try {
+            fileChooserLauncher.launch("video/*")
+            true
+        } catch (e: Exception) {
+            filePathCallback?.onReceiveValue(null)
+            filePathCallback = null
+            Toast.makeText(this, "No video picker available on this device.", Toast.LENGTH_SHORT).show()
+            false
         }
     }
 
@@ -325,6 +355,12 @@ class MainActivity : ComponentActivity() {
             }
 
             webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    view: WebView,
+                    callback: ValueCallback<Array<Uri>>,
+                    params: FileChooserParams
+                ): Boolean = openFileChooser(params)
+
                 override fun onPermissionRequest(request: PermissionRequest) {
                     // 1) Origin gate: the local app shell owns the camera and
                     // microphone; any foreign origin gets no device grants.

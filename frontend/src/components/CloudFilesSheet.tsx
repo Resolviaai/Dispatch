@@ -38,6 +38,7 @@ export const CloudFilesSheet: React.FC<CloudFilesSheetProps> = ({
   onChanged,
 }) => {
   const [items, setItems] = useState<CloudFileItem[]>([]);
+  const [totalBytes, setTotalBytes] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -56,6 +57,7 @@ export const CloudFilesSheet: React.FC<CloudFilesSheetProps> = ({
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || `Could not load cloud files (HTTP ${res.status}).`);
       setItems(Array.isArray(data?.items) ? data.items : []);
+      setTotalBytes(Number.isFinite(Number(data?.total_bytes)) ? Number(data.total_bytes) : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load cloud files.');
     } finally {
@@ -107,6 +109,7 @@ export const CloudFilesSheet: React.FC<CloudFilesSheetProps> = ({
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || `Delete failed (HTTP ${res.status}).`);
       setItems(prev => prev.filter(row => row.id !== item.id));
+      setTotalBytes(prev => (prev == null ? prev : Math.max(0, prev - (item.size || 0))));
       setConfirmId(null);
       onChanged?.();
     } catch (e) {
@@ -131,7 +134,9 @@ export const CloudFilesSheet: React.FC<CloudFilesSheetProps> = ({
           <div className="flex items-center gap-2">
             <Cloud size={16} className="text-text-muted" />
             <h3 className="text-sm font-semibold tracking-tight text-text-main">Cloud files</h3>
-            <span className="text-[11px] text-text-muted tabular-nums font-mono">{items.length}</span>
+            <span className="text-[11px] text-text-muted tabular-nums font-mono">
+              {items.length}{totalBytes != null ? ` · ${formatSize(totalBytes)}` : ''}
+            </span>
           </div>
           <div className="flex items-center gap-1 -mr-2">
             <button

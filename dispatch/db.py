@@ -712,6 +712,13 @@ def update_clip_trim(
         ):
             return False
 
+        # Refuse ranges that fall outside the source instead of silently
+        # rewriting them: clamping a -1s start to 0 would move the user's cut
+        # point without telling them. 10 ms absorbs frame-rate rounding.
+        tolerance = 0.01
+        if float(start_time) < -tolerance or float(end_time) > float(known_source_duration) + tolerance:
+            return False
+
         clamped_start = max(0.0, round(float(start_time), 3))
         clamped_end = min(round(float(known_source_duration), 3), round(float(end_time), 3))
         new_duration = clamped_end - clamped_start
