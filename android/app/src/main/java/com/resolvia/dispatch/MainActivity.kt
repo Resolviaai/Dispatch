@@ -105,8 +105,11 @@ class MainActivity : ComponentActivity() {
      */
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
+    // OpenDocument, not GetContent: the photo picker only exposes MediaStore,
+    // so a recording sitting in Downloads, Drive or a Files provider could not
+    // be uploaded at all.
     private val fileChooserLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
+        ActivityResultContracts.OpenDocument()
     ) { uri ->
         val callback = filePathCallback ?: return@registerForActivityResult
         filePathCallback = null
@@ -119,7 +122,7 @@ class MainActivity : ComponentActivity() {
         filePathCallback?.onReceiveValue(null)
         filePathCallback = callback
         return try {
-            fileChooserLauncher.launch("video/*")
+            fileChooserLauncher.launch(arrayOf("video/*"))
             true
         } catch (e: Exception) {
             filePathCallback = null

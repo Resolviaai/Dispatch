@@ -1493,6 +1493,20 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
   );
 });
 
+/**
+ * `crypto.randomUUID` exists only in secure contexts, and the app shell is
+ * served over http://appassets.androidplatform.net — on-device it is
+ * undefined. `getRandomValues` is available everywhere.
+ */
+function idempotencyToken(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   pcHost,
   isMobileFrame = true,
@@ -2246,7 +2260,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           kind: 'clip_video',
           mime_type: 'video/mp4',
           expected_bytes: file.size,
-          client_token: crypto.randomUUID(),
+          client_token: idempotencyToken(),
         }),
       });
       const reserve = await reserveRes.json().catch(() => null);
