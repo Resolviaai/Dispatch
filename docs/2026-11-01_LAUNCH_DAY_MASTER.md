@@ -107,3 +107,33 @@ Every code change must adhere to the Dispatch UI/UX & Mobile Engineering Invaria
 ---
 
 *End of Active Master Tracker. Next entry to be appended upon completion of the next task.*
+
+---
+
+## 8. Planned Feature — Segment Timeline (v1.8.0)
+
+**Goal:** a non-destructive editing timeline (CapCut model): multiple kept ranges per clip, split at the playhead, select/delete/ripple, per-edge trim, undo/redo, continuous preview.
+
+**Why:** a single `start_time`/`end_time` pair cannot represent "keep 0–12 s and 17–30 s, drop the pause". Today a Split creates two independent review clips instead.
+
+### Design
+
+- **Data:** `clips.segments_json` — `[[start,end], …]` source-relative kept ranges; `segments_revision` for CAS. `NULL` = legacy single range (unchanged behavior).
+- **API:** `PUT /api/clips/{id}/segments` with `{segments, base_revision}`. Validate: non-overlapping, sorted, inside source, each ≥ 0.1 s, total ≥ `MIN_CLIP_DURATION`. Split/delete/ripple are client-side array edits persisted once.
+- **Render:** concatenate kept ranges with FFmpeg concat into the final MP4; thumbnail from the first kept frame; `range_revision`/`is_render_stale` unchanged.
+- **Captions:** re-anchor word timings onto the concatenated timeline; drop words inside removed ranges; preserve word-level precision.
+- **Player:** preview plays kept ranges continuously (seek across gaps); split uses the clip-relative playhead clock (fixed in 1.7.20).
+- **Undo/redo:** extend the existing caption history to the segment array; one Save persists.
+- **Compatibility:** legacy clips keep the single range; publishing still consumes the rendered output.
+
+### Acceptance criteria
+1. Split at the playhead cuts at that frame (≤1 frame error at 30 fps) in both source and rendered playback.
+2. Split → split → select → delete → ripple on a 30 s clip with a 5 s pause yields a 25 s render.
+3. A 2 s intermediate piece is valid; the 5 s minimum applies only to the saved clip total.
+4. Undo restores the previous segment list and preview.
+5. Legacy clips render and publish identically after migration.
+
+### Tests
+Segment math (split/delete/ripple/trim), concat render output duration, caption re-anchoring, CAS conflict, legacy fallback.
+
+**Status:** Not started — spec ready.
