@@ -1035,6 +1035,93 @@ def import_cloud_captions_for_clip(clip_id: str) -> int:
         return 0
 
 
+def import_cloud_timelines_for_clips(user_ids: Optional[List[str]] = None) -> int:
+    """Cloud-to-PC project document & timeline reconciliation: pull phone edits
+    saved in the cloud while PC was offline and apply them under monotonic revision guard.
+    Returns the number of timeline documents applied.
+    """
+    token = get_worker_token()
+    if not token:
+        return 0
+    if not user_ids:
+        user_ids = _resolve_drain_user_ids()
+
+    applied = 0
+    for user_id in user_ids:
+        try:
+            res = requests.get(
+                f"{_worker_base()}/sync/pc/timeline",
+                headers=_cloud_headers(token, user_id),
+                timeout=15,
+            )
+            if not res.ok:
+                logger.warning("cloud timeline fetch failed for %s: HTTP %s", user_id, res.status_code)
+                continue
+            body = res.json() if res.text else {}
+            items = body.get("timelines", []) if isinstance(body, dict) else []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                local_clip_id = str(item.get("clip_id") or "")
+                if not local_clip_id:
+                    continue
+                outcome = db.import_cloud_timeline_data(local_clip_id, item, expected_user_id=user_id)
+                if outcome == "applied":
+                    applied += 1
+        except Exception as e:
+            logger.error("import_cloud_timelines_for_clips(%s) failed: %s", user_id, e)
+    return applied
+
+
+def import_cloud_timeline_for_clip(clip_id: str) -> int:
+    """Pre-render sweep reconciliation for a specific clip."""
+    try:
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            return 0
+        owner = str(clip.get("user_id") or "").strip()
+        if owner:
+            return import_cloud_timelines_for_clips([owner])
+        return import_cloud_timelines_for_clips(None)
+    except Exception as e:
+        logger.error("import_cloud_timeline_for_clip(%s) failed: %s", clip_id, e)
+        return 0
+
+
+def report_render_complete_to_cloud(
+    clip_id: str,
+    rendered_fingerprint: str,
+    duration: float,
+    r2_key: Optional[str] = None,
+) -> bool:
+    """Notify Cloudflare Worker that headless PC has rendered the clip with rendered_fingerprint."""
+    token = get_worker_token()
+    if not token:
+        return False
+    try:
+        clip = db.get_clip_by_id(clip_id)
+        owner = str(clip.get("user_id") or "").strip() if clip else None
+        res = requests.post(
+            f"{_worker_base()}/sync/pc/render-complete",
+            headers=_cloud_headers(token, owner),
+            json={
+                "clip_id": clip_id,
+                "rendered_fingerprint": rendered_fingerprint,
+                "duration": duration,
+                "r2_key": r2_key or f"outputs/{clip_id}/{rendered_fingerprint}.mp4",
+            },
+            timeout=15,
+        )
+        if res.ok:
+            logger.info("Reported render-complete to cloud for clip %s (fp: %s)", clip_id, rendered_fingerprint[:12])
+            return True
+        logger.warning("report_render_complete_to_cloud failed: HTTP %s (%s)", res.status_code, res.text)
+        return False
+    except Exception as e:
+        logger.error("report_render_complete_to_cloud(%s) failed: %s", clip_id, e)
+        return False
+
+
 def sync_cloud_template_for_user(worker_url: str, worker_token: str, user_id: str) -> bool:
     """Fetch user's default editing template from Cloud and persist to local SQLite."""
     try:
@@ -1080,6 +1167,10 @@ def drain_clip_commands(limit: int = 25, user_ids: Optional[List[str]] = None) -
             import_cloud_captions_for_clips([user_id])
         except Exception as e:
             logger.error("cloud caption reconciliation for %s failed: %s", user_id, e)
+        try:
+            import_cloud_timelines_for_clips([user_id])
+        except Exception as e:
+            logger.error("cloud timeline reconciliation for %s failed: %s", user_id, e)
         try:
             sync_cloud_template_for_user(worker_url, worker_token, user_id)
         except Exception as e:

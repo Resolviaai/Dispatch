@@ -1470,41 +1470,14 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
 @app.post("/api/clips/{clip_id}/split")
 @_serialize_clip_mutation
 async def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Request):
-    """Split an existing clip into two sequential clips at the playhead."""
+    """Legacy row-split endpoint is retired in Stage 2.
+    Single-library-card segment timeline editing must be performed via mobile."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
-    result = db.split_clip(
-        clip_id,
-        payload.split_time,
-        is_source_time=payload.is_source_time or False,
-        user_id=caller_user_id
+    raise HTTPException(
+        status_code=410,
+        detail="POST /api/clips/{id}/split is retired. Use mobile timeline editing (POST /clips/{id}/timeline)."
     )
-    if not result:
-        # One 400 for four different causes made every split failure look like an
-        # edge-distance problem. Name the real one.
-        existing = db.get_clip_by_id(clip_id)
-        if not existing:
-            raise HTTPException(status_code=404, detail="Clip not found on this PC")
-        if caller_user_id and existing.get("user_id") != caller_user_id:
-            raise HTTPException(status_code=403, detail="This clip belongs to another account")
-        if existing.get("status") != "ready_review":
-            raise HTTPException(
-                status_code=409,
-                detail=f"Clip is {existing.get('status')}, not ready for review, so it cannot be split.",
-            )
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot split clip at this time (split must leave at least 1.0s on both sides)."
-        )
-    clip1, clip2 = result
-    populate_clip_media_urls(clip1)
-    populate_clip_media_urls(clip2)
-    return {
-        "status": "success",
-        "clip1": clip1,
-        "clip2": clip2,
-        "split_time": payload.split_time
-    }
 
 
 @app.post("/api/clips/{clip_id}/approve")

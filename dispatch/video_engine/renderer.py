@@ -46,6 +46,12 @@ def render_clip(
     if not source_video.exists():
         raise FileNotFoundError(f"Source video not found: {source_video}")
 
+    try:
+        from dispatch.cloud.sync import import_cloud_timeline_for_clip
+        import_cloud_timeline_for_clip(clip_id)
+    except Exception as e:
+        logger.debug("Pre-render timeline sweep for clip %s: %s", clip_id, e)
+
     clip_at_start = db.get_clip_by_id(clip_id)
     render_range_revision = expected_range_revision
     if render_range_revision is None and clip_at_start:
@@ -65,11 +71,30 @@ def render_clip(
     # approved render share the same clip-relative timeline.
     sub_opts = subtitle_options or {}
     crop_anchor_x = sub_opts.get("crop_anchor_x") if sub_opts.get("crop_anchor_x") is not None else (clip_at_start.get("crop_anchor_x") if clip_at_start else None)
-    if sub_opts.get("preserve_timing"):
+    
+    p_doc = None
+    timeline_spans = []
+    if clip_at_start and clip_at_start.get("project_document"):
+        try:
+            raw_doc = clip_at_start["project_document"]
+            p_doc = json.loads(raw_doc) if isinstance(raw_doc, str) else raw_doc
+            doc_segs = p_doc.get("timeline", {}).get("segments", []) if isinstance(p_doc, dict) else []
+            if doc_segs:
+                from dispatch.segments import canonical_media_spans
+                timeline_spans = canonical_media_spans([[float(s["source_start"]), float(s["source_end"])] for s in doc_segs])
+        except Exception as e:
+            logger.debug("Could not parse project_document segments for clip %s: %s", clip_id, e)
+
+    if timeline_spans:
+        eff_duration = sum(e - s for s, e in timeline_spans)
+        cuts = []
+        has_silence_cuts = False
+    elif sub_opts.get("preserve_timing"):
         eff_duration, cuts = max(0.0, end_time - start_time), []
+        has_silence_cuts = False
     else:
         eff_duration, cuts = analyze_silence_gaps(start_time, end_time, segments)
-    has_silence_cuts = bool(cuts)
+        has_silence_cuts = bool(cuts)
 
     output_video_path = CLIPS_DIR / f"{clip_id}.mp4"
     output_thumb_path = CLIPS_DIR / f"{clip_id}.jpg"
@@ -171,9 +196,14 @@ def render_clip(
             )
 
     # 3. Construct FFmpeg command
-    keep_intervals = build_silence_keep_intervals(start_time, end_time, cuts) if has_silence_cuts else []
+    if timeline_spans and len(timeline_spans) > 1:
+        keep_intervals = timeline_spans
+    elif has_silence_cuts:
+        keep_intervals = build_silence_keep_intervals(start_time, end_time, cuts)
+    else:
+        keep_intervals = []
 
-    if has_silence_cuts and len(keep_intervals) > 1:
+    if len(keep_intervals) > 1:
         # Complex filter: trim and concatenate speech blocks, then apply framing and subtitles
         trim_filters = []
         concat_in = []
@@ -318,7 +348,27 @@ def render_clip(
         except Exception:
             pass
 
-    # 6. Update DB with verified rendered layout
+    # 6. Compute canonical fingerprints & update DB atomically
+    from dispatch.segments import (
+        canonical_media_spans,
+        compute_media_fingerprint,
+        compute_render_fingerprint,
+        round_ms,
+    )
+    source_asset_id = str(clip_at_start.get("source_chunk_id") or clip_at_start.get("chunk_id") or clip_id) if clip_at_start else clip_id
+    spans_to_hash = keep_intervals if keep_intervals else [(round_ms(start_time), round_ms(end_time))]
+    media_fp = compute_media_fingerprint(source_asset_id, spans_to_hash)
+    eff_crop = float(crop_anchor_x if crop_anchor_x is not None else 0.5)
+    layers_to_hash = p_doc.get("tracks", []) if p_doc else []
+    computed_render_fp = compute_render_fingerprint(media_fp, layout_mode, eff_crop, layers=layers_to_hash)
+
+    db.record_render_completion(
+        clip_id=clip_id,
+        rendered_fingerprint=computed_render_fp,
+        video_path=str(output_video_path),
+        thumbnail_path=str(output_thumb_path) if output_thumb_path.exists() else None,
+    )
+
     media_updated = db.update_clip_media(
         clip_id=clip_id,
         video_path=str(output_video_path),
@@ -329,13 +379,25 @@ def render_clip(
     if render_range_revision is not None and not media_updated:
         raise RuntimeError("Clip range changed during rendering; obsolete media was not installed")
 
-    logger.info("Successfully rendered clip %s -> %s (duration: %.2fs)", clip_id, output_video_path.name, actual_duration)
+    try:
+        from dispatch.cloud.sync import report_render_complete_to_cloud
+        report_render_complete_to_cloud(
+            clip_id=clip_id,
+            rendered_fingerprint=computed_render_fp,
+            duration=actual_duration,
+        )
+    except Exception as e:
+        logger.debug("Failed reporting render complete to cloud: %s", e)
+
+    logger.info("Successfully rendered clip %s -> %s (fp: %s, duration: %.2fs)",
+                clip_id, output_video_path.name, computed_render_fp[:12], actual_duration)
 
     return {
         "clip_id": clip_id,
         "video_path": output_video_path,
         "thumbnail_path": output_thumb_path if output_thumb_path.exists() else None,
-        "duration": actual_duration
+        "duration": actual_duration,
+        "render_fingerprint": computed_render_fp,
     }
 
 

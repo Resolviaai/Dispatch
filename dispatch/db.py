@@ -1369,6 +1369,167 @@ def import_cloud_caption_data(
         return "applied"
 
 
+def import_cloud_timeline_data(
+    clip_id: str,
+    timeline_data: Dict[str, Any],
+    expected_user_id: Optional[str] = None,
+) -> str:
+    """Cloud-to-PC timeline reconciliation ('applied' | 'stale' | 'unknown' | 'denied' | 'invalid').
+
+    Applies an offline phone timeline edit only when its cloud segments_revision is
+    STRICTLY newer than the locally recorded one (monotonic authority).
+    Preserves fresh render if rendered_fingerprint matches incoming render_fingerprint
+    (split-only cut invariance).
+    """
+    if not isinstance(timeline_data, dict):
+        return "invalid"
+    try:
+        cloud_rev = int(timeline_data.get("segments_revision") or 0)
+    except Exception:
+        return "invalid"
+    if cloud_rev <= 0:
+        return "invalid"
+
+    doc = timeline_data.get("project_document")
+    if not doc:
+        return "invalid"
+    if isinstance(doc, str):
+        try:
+            doc_obj = json.loads(doc)
+            doc_str = doc
+        except Exception:
+            return "invalid"
+    elif isinstance(doc, dict):
+        doc_obj = doc
+        doc_str = json.dumps(doc, ensure_ascii=False)
+    else:
+        return "invalid"
+
+    active_rev = int(timeline_data.get("active_state_revision") or cloud_rev)
+    redo_stack = timeline_data.get("redo_stack") or []
+    redo_str = json.dumps(redo_stack) if not isinstance(redo_stack, str) else redo_stack
+    can_undo = 1 if timeline_data.get("can_undo") else 0
+    can_redo = 1 if timeline_data.get("can_redo") else 0
+    media_fp = str(timeline_data.get("media_fingerprint") or "")
+    render_fp = str(timeline_data.get("render_fingerprint") or "")
+    kept_dur = float(timeline_data.get("kept_duration") or 0.0)
+    op_id = str(timeline_data.get("operation_id") or f"cloud-rev-{cloud_rev}")
+    action_type = str(timeline_data.get("action_type") or "cloud_sync")
+    author = str(timeline_data.get("author") or "mobile")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, segments_revision, active_state_revision, rendered_fingerprint FROM clips WHERE id = ?",
+            (clip_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return "unknown"
+        clip = dict(row)
+        if _ownership_denied(clip, expected_user_id):
+            logger.warning(
+                "Cloud timeline import for clip %s denied: clip owner %s != cloud owner %s",
+                clip_id, clip["user_id"], expected_user_id,
+            )
+            return "denied"
+
+        local_rev = int(clip.get("segments_revision") or 0)
+        if cloud_rev < local_rev:
+            return "stale"
+        if cloud_rev == local_rev and int(clip.get("active_state_revision") or 0) == active_rev:
+            return "stale"
+
+        _adopt_owner(cursor, clip_id, expected_user_id)
+
+        # Check render freshness against rendered_fingerprint
+        local_rendered_fp = clip.get("rendered_fingerprint")
+        render_stale = 0 if (local_rendered_fp and local_rendered_fp == render_fp) else 1
+
+        # Project caption track if captions track exists
+        caption_json = None
+        for trk in doc_obj.get("tracks", []):
+            if isinstance(trk, dict) and trk.get("kind") == "captions":
+                caption_json = json.dumps(trk, ensure_ascii=False)
+                break
+
+        cursor.execute("""
+            UPDATE clips
+            SET project_document = ?,
+                segments_revision = ?,
+                active_state_revision = ?,
+                redo_stack = ?,
+                can_undo = ?,
+                can_redo = ?,
+                media_fingerprint = ?,
+                render_fingerprint = ?,
+                kept_duration = ?,
+                render_stale = ?,
+                caption_data = COALESCE(?, caption_data)
+            WHERE id = ?
+        """, (
+            doc_str,
+            cloud_rev,
+            active_rev,
+            redo_str,
+            can_undo,
+            can_redo,
+            media_fp,
+            render_fp,
+            kept_dur,
+            render_stale,
+            caption_json,
+            clip_id,
+        ))
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO clip_revisions (
+                id, clip_id, revision, active_state_revision, redo_stack,
+                operation_id, project_document, media_fingerprint, render_fingerprint,
+                action_type, author
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(uuid.uuid4()), clip_id, cloud_rev, active_rev, redo_str,
+            op_id, doc_str, media_fp, render_fp, action_type, author,
+        ))
+
+        conn.commit()
+        logger.info(
+            "Imported cloud timeline revision %d (active: %d, render_stale: %d) for clip %s",
+            cloud_rev, active_rev, render_stale, clip_id,
+        )
+        return "applied"
+
+
+def record_render_completion(
+    clip_id: str,
+    rendered_fingerprint: str,
+    video_path: str,
+    thumbnail_path: Optional[str] = None,
+) -> bool:
+    """Record successfully rendered media file on PC.
+    Sets rendered_fingerprint and clears render_stale.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT render_fingerprint FROM clips WHERE id = ?", (clip_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        cursor.execute("""
+            UPDATE clips
+            SET rendered_fingerprint = ?,
+                render_fingerprint = COALESCE(render_fingerprint, ?),
+                render_stale = 0,
+                video_path = ?,
+                thumbnail_path = COALESCE(?, thumbnail_path),
+                last_render_error = NULL
+            WHERE id = ?
+        """, (rendered_fingerprint, rendered_fingerprint, video_path, thumbnail_path, clip_id))
+        conn.commit()
+        return True
+
+
 def cleanup_expired_published_clips(retention_days: int = 7) -> int:
     """Purge heavy local rendered MP4 files for published clips older than retention_days.
     Strictly PRESERVES thumbnail_path, remote_url, and clip metadata so creator still
