@@ -2101,14 +2101,14 @@ def split_clip(
                 id, session_id, chunk_id, start_time, end_time,
                 ai_suggested_start_time, ai_suggested_end_time, range_revision, duration,
                 title, hook, description, hashtags, virality_score,
-                layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
+                layout_mode, crop_anchor_x, rendered_layout_mode, status, publish_mode, platform_targets,
                 padded_start, padded_end, user_id, caption_data, thumbnail_path, render_stale
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?, ?, ?, ?, 1)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?, ?, ?, ?, 1)
         """, (
             new_clip_id, clip["session_id"], clip["chunk_id"], split_pt, orig_end,
             split_pt, orig_end, clip2_duration,
             clip2_title, clip["hook"], clip["description"], clip["hashtags"], clip["virality_score"],
-            clip["layout_mode"], clip["rendered_layout_mode"], clip["publish_mode"], clip["platform_targets"],
+            clip["layout_mode"], clip.get("crop_anchor_x") or 0.5, clip["rendered_layout_mode"], clip["publish_mode"], clip["platform_targets"],
             p_start2, p_end2, clip["user_id"], caption_json2, clip["thumbnail_path"]
         ))
         conn.commit()

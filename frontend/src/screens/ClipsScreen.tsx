@@ -3320,16 +3320,23 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       });
       if (res.ok) {
         const data = await res.json();
+        const stableClip1 = stabilizeMediaUrls(data.clip1);
+        const stableClip2 = stabilizeMediaUrls(data.clip2);
         setReadyClips((prev) => {
           const idx = prev.findIndex((c) => c.id === currentClip.id);
           if (idx >= 0) {
             const next = [...prev];
-            next.splice(idx, 1, data.clip1, data.clip2);
+            next.splice(idx, 1, stableClip1, stableClip2);
             return next;
           }
-          return [data.clip1, data.clip2, ...prev];
+          return [stableClip1, stableClip2, ...prev];
         });
-        setFeedback('Clip split successfully into 2 parts.');
+        // CapCut editing model: automatically advance selection to the newly created second segment at 00:00
+        setSelectedClipId(stableClip2.id);
+        setCurrentTime(0);
+        setSaveStatus('saved');
+        setFeedback(`Split clip at ${splitTime.toFixed(1)}s into 2 parts.`);
+        void fetchClips();
       } else {
         const err = await res.json().catch(() => ({}));
         setFeedback(err.detail || 'Failed to split clip.');
@@ -5308,6 +5315,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   }}
                   onSplitClip={(t) => handleSplitClip(t)}
                   splitClipTime={currentTime}
+                  onFeedback={setFeedback}
                   onLayoutChange={handleLayoutChange}
                   onSeek={handleSeek}
                   onPreviewAnimation={handlePreviewAnimation}
@@ -5343,6 +5351,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   setCaptionTrack(updated, commit);
                   setSaveStatus('unsaved');
                 }}
+                onSplitClip={(t) => handleSplitClip(t)}
+                splitClipTime={currentTime}
+                onFeedback={setFeedback}
                 onLayoutChange={handleLayoutChange}
                 onSeek={handleSeek}
                 onPreviewAnimation={handlePreviewAnimation}

@@ -111,6 +111,7 @@ export interface CaptionStudioProps {
   onSplitClip?: (splitTime: number) => void;
   /** Playhead position in CLIP-relative seconds (0 = clip start). Falls back to currentTime when omitted. */
   splitClipTime?: number;
+  onFeedback?: (msg: string) => void;
 }
 
 export type ToolbarCategory = 'none' | 'edit' | 'audio' | 'text' | 'overlay';
@@ -1090,6 +1091,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   onRedo: _onRedo,
   onSplitClip,
   splitClipTime,
+  onFeedback,
 }) => {
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
@@ -1799,19 +1801,66 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     }
   };
 
-  // Split layer at playhead preserving authentic word timestamps
+  // Split layer or underlying video at playhead (CapCut semantics)
   const handleSplit = () => {
-    if (!track || !currentGroup) return;
-    const splitTime = Number(currentTimeRef.current.toFixed(2));
-    const splitResult = splitCaptionGroupAtTime(currentGroup, splitTime);
-    if (!splitResult) return;
+    const splitTime = Number((splitClipTime ?? currentTimeRef.current).toFixed(2));
+    const currentPlayhead = Number(currentTimeRef.current.toFixed(2));
 
-    const [firstGroup, secondGroup] = splitResult;
-    onUpdateTrack({
-      ...track,
-      groups: track.groups.flatMap((g) => (g.id === currentGroup.id ? [firstGroup, secondGroup] : [g])),
-    }, true);
-    onSelectGroup?.(secondGroup.id);
+    // 1. If currently selected text/overlay group covers the playhead, split it
+    if (track && currentGroup) {
+      const splitResult = splitCaptionGroupAtTime(currentGroup, currentPlayhead);
+      if (splitResult) {
+        const [firstGroup, secondGroup] = splitResult;
+        onUpdateTrack({
+          ...track,
+          groups: track.groups.flatMap((g) => (g.id === currentGroup.id ? [firstGroup, secondGroup] : [g])),
+        }, true);
+        onSelectGroup?.(secondGroup.id);
+        onFeedback?.('Split text segment at playhead.');
+        return;
+      }
+    }
+
+    // 2. If any other group on the active track covers the playhead, auto-target and split it
+    if (track && Array.isArray(track.groups)) {
+      const overlapping = track.groups.find(
+        (g) => currentPlayhead > g.start + 0.05 && currentPlayhead < g.end - 0.05
+      );
+      if (overlapping) {
+        const splitResult = splitCaptionGroupAtTime(overlapping, currentPlayhead);
+        if (splitResult) {
+          const [firstGroup, secondGroup] = splitResult;
+          onUpdateTrack({
+            ...track,
+            groups: track.groups.flatMap((g) => (g.id === overlapping.id ? [firstGroup, secondGroup] : [g])),
+          }, true);
+          onSelectGroup?.(secondGroup.id);
+          onFeedback?.('Split text segment at playhead.');
+          return;
+        }
+      }
+    }
+
+    // 3. Fallback: split the underlying video clip at the playhead
+    if (onSplitClip && splitTime >= 1.0 && splitTime <= duration - 1.0) {
+      onSplitClip(splitTime);
+      return;
+    }
+
+    // 4. Actionable feedback if split cannot proceed
+    if (splitTime < 1.0 || splitTime > duration - 1.0) {
+      const msg = `Cannot split within 1.0s of the clip start or end (${splitTime.toFixed(1)}s / ${duration.toFixed(1)}s).`;
+      if (onFeedback) onFeedback(msg);
+      else alert(msg);
+    } else if (currentGroup) {
+      const msg = `To split this text segment, move playhead inside it (${currentGroup.start.toFixed(1)}s – ${currentGroup.end.toFixed(1)}s).`;
+      if (onFeedback) onFeedback(msg);
+      else alert(msg);
+    } else {
+      const msg = 'Move playhead over a clip or text segment to split.';
+      if (onFeedback) onFeedback(msg);
+      else alert(msg);
+    }
   };
 
   // Merge selected group with adjacent segment of compatible type
@@ -4703,7 +4752,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
           <ToolButton
             icon={<Scissors size={18} />}
             label="Split"
-            disabled={!isTextLayerSelected}
+            disabled={!isTextLayerSelected && !onSplitClip}
             onClick={handleSplit}
           />
           <ToolButton

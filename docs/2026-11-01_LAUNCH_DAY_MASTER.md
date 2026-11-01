@@ -116,6 +116,17 @@ Every code change must adhere to the Dispatch UI/UX & Mobile Engineering Invaria
 
 **Why:** a single `start_time`/`end_time` pair cannot represent "keep 0–12 s and 17–30 s, drop the pause". Today a Split creates two independent review clips instead.
 
+### Interaction contract (this is the behaviour that must ship)
+
+Owner-stated requirement, 1 Nov — CapCut semantics, not "one cut = one new clip":
+
+1. **Split never creates a clip.** One card in the library, one row in `clips`, before and after any number of cuts. The row-split endpoint is retired, not kept in parallel — its only caller is the Studio (`ClipsScreen.handleSplitClip`).
+2. **A cut is visible on the timeline.** Splitting once shows two pieces; splitting twice shows three, in order, as distinct blocks with a visible boundary at each cut.
+3. **Every piece has its own two trim edges.** Trimming the right edge of piece 1 must not move piece 2, and trimming the left edge of piece 3 must not move piece 2.
+4. **Deleting a middle piece closes the gap without joining.** A | B | C with B deleted becomes A | C: two separate pieces, adjacent, no blank between them, and A and C must not fuse into one range. They stay independently trimmable, which is why the representation is an ordered list of kept ranges rather than a merged union.
+5. **A lone split changes nothing on export.** Two adjacent kept ranges render identically to the uncut range, so cutting is safe to do while thinking.
+6. **Undo/redo steps through cut, trim and delete**, and the preview follows.
+
 ### Design
 
 - **Data:** `clips.segments_json` — `[[start,end], …]` source-relative kept ranges; `segments_revision` for CAS. `NULL` = legacy single range (unchanged behavior).
@@ -132,6 +143,8 @@ Every code change must adhere to the Dispatch UI/UX & Mobile Engineering Invaria
 3. A 2 s intermediate piece is valid; the 5 s minimum applies only to the saved clip total.
 4. Undo restores the previous segment list and preview.
 5. Legacy clips render and publish identically after migration.
+6. **The library card count is unchanged by any number of splits, trims or deletes** — no split may insert a `clips` row. Asserted by a test that splits twice and counts rows.
+7. **Delete-middle leaves two separate pieces with no gap**: `[[0,3],[6,29]]` after removing the middle of three, and trimming piece 2's left edge afterwards must not move piece 1's end.
 
 ### Tests
 Segment math (split/delete/ripple/trim), concat render output duration, caption re-anchoring, CAS conflict, legacy fallback.
