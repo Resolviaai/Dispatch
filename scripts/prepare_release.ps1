@@ -94,9 +94,28 @@ Write-Host "== 1. Web bundle =="
 # step silently releases an APK built from an older UI than the source tree.
 # Driven through node directly: PowerShell's call operator mangles the npm.cmd
 # shim under a "Program Files" path and npm then reports "Unknown command: pm".
+# The cwd must be the frontend directory — passing it as Vite's positional root
+# instead leaves PostCSS unable to resolve tailwind.config.js, and the build
+# "succeeds" while emitting an 11 kB stylesheet instead of 76 kB: an unstyled app.
 $frontend = Join-Path $root "frontend"
-& node (Join-Path $frontend "node_modules\vite\bin\vite.js") build $frontend
-if ($LASTEXITCODE -ne 0) { throw "FATAL: frontend build failed; refusing to package a stale WebView bundle." }
+Push-Location $frontend
+try {
+    & node "node_modules\vite\bin\vite.js" build
+    $bundleExit = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+if ($bundleExit -ne 0) { throw "FATAL: frontend build failed; refusing to package a stale WebView bundle." }
+
+# A Tailwind resolution failure still exits 0, so assert the artifact instead of
+# the exit code: the generated stylesheet is ~76 kB, a raw one is ~11 kB.
+$bundleCss = Get-ChildItem -Path (Join-Path $root "android\app\src\main\assets\web\assets") -Filter *.css -ErrorAction SilentlyContinue |
+    Sort-Object Length -Descending | Select-Object -First 1
+if (-not $bundleCss -or $bundleCss.Length -lt 50000) {
+    $actual = if ($bundleCss) { "$([math]::Round($bundleCss.Length / 1kB)) kB" } else { "missing" }
+    throw "FATAL: WebView stylesheet is $actual — Tailwind did not run. Refusing to package an unstyled app."
+}
+Write-Host "   stylesheet=$($bundleCss.Name) $([math]::Round($bundleCss.Length / 1kB)) kB"
 
 Write-Host "== 2. assembleRelease =="
 & $gradle -p (Join-Path $root "android") ":app:assembleRelease" "--console=plain" -q
