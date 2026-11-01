@@ -2418,10 +2418,10 @@ export default {
       if (request.method === "GET" && url.pathname === "/media") {
         const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
         const listRes = await fetch(
-          `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&kind=eq.clip_video&select=id,byte_count,created_at,clip_id&order=created_at.desc&limit=100`,
+          `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&select=id,kind,byte_count,created_at,clip_id&order=created_at.desc&limit=100`,
           { headers: svc });
         if (!listRes.ok) return json(502, { error: `media list failed: ${listRes.status}` });
-        const rows = await listRes.json() as Array<{ id: string; byte_count: number | null; created_at: string; clip_id: string | null }>;
+        const rows = await listRes.json() as Array<{ id: string; kind: string; byte_count: number | null; created_at: string; clip_id: string | null }>;
         const clipIds = Array.from(new Set(rows.map(r => r.clip_id).filter((v): v is string => Boolean(v))));
         let clipsById: Record<string, { title: string | null; local_clip_id: string; status: string }> = {};
         if (clipIds.length > 0) {
@@ -2436,6 +2436,7 @@ export default {
         return json(200, {
           items: rows.map(r => ({
             id: r.id,
+            kind: r.kind,
             size: r.byte_count ?? 0,
             created_at: r.created_at,
             clip_id: r.clip_id,

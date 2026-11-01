@@ -1999,10 +1999,11 @@ def split_clip(
         else:
             source_split = orig_start + float(split_time)
 
-        # One duration rule: both resulting clips must meet MIN_CLIP_DURATION,
-        # the same minimum the trim/approval paths enforce.
-        min_allowed = orig_start + MIN_CLIP_DURATION
-        max_allowed = orig_end - MIN_CLIP_DURATION
+        # Intermediate edit pieces may be short (a 2s piece must be legal for
+        # later delete/ripple); the 5s minimum applies to the saved clip total,
+        # enforced at approval. Keep 1s per side to avoid zero-length fragments.
+        min_allowed = orig_start + 1.0
+        max_allowed = orig_end - 1.0
         if source_split < min_allowed or source_split > max_allowed:
             return None
 

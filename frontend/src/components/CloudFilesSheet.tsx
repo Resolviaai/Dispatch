@@ -4,6 +4,7 @@ import { WORKER_BASE } from '../accounts/accountsService';
 
 export interface CloudFileItem {
   id: string;
+  kind: string;
   size: number;
   created_at: string;
   clip_id: string | null;
@@ -167,10 +168,10 @@ export const CloudFilesSheet: React.FC<CloudFilesSheetProps> = ({
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-text-main truncate">
-                    {item.title || 'Untitled clip'}
+                    {item.title || (item.kind === 'thumbnail' ? 'Thumbnail' : item.kind === 'edit_window' ? 'Edit window' : 'Untitled clip')}
                   </p>
                   <p className="text-[11px] text-text-muted tabular-nums mt-0.5">
-                    {formatSize(item.size)}
+                    {item.kind} · {formatSize(item.size)}
                     {item.created_at ? ` · ${formatDate(item.created_at)}` : ''}
                     {item.clip_status ? ` · ${item.clip_status}` : ''}
                   </p>
