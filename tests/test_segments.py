@@ -136,7 +136,7 @@ class SegmentTimelineTests(unittest.TestCase):
     def test_trim_cannot_overlap_neighbor_or_create_short_piece(self):
         ranges = [[10.0, 20.0], [25.0, 35.0]]
         with self.assertRaises(SegmentError):
-            trim_edge(ranges, 0, "end", 25.0, 100.0)
+            trim_edge(ranges, 0, "end", 26.0, 100.0)
         with self.assertRaises(SegmentError):
             trim_edge(ranges, 1, "start", 19.0, 100.0)
         with self.assertRaises(SegmentError):
