@@ -343,3 +343,211 @@ export function normalizeEdlDocument(document: unknown): EdlV1 {
     ranges,
   } as EdlV1;
 }
+
+
+/** Canonical half-up millisecond rounding. Matches Python and PostgreSQL. */
+export function roundMs(seconds: unknown): number {
+  const val = finiteNumber(seconds, "seconds");
+  return Math.floor(val * 1000.0 + 0.5) / 1000.0;
+}
+
+/** Merges contiguous adjacent intervals into continuous source spans at 1ms precision. */
+export function canonicalMediaSpans(ranges: unknown, sourceDuration?: number): TimeRange[] {
+  let normalized: TimeRange[];
+  if (sourceDuration !== undefined) {
+    normalized = normalizeRanges(ranges, sourceDuration);
+  } else {
+    if (!Array.isArray(ranges)) throw new TimelineError("ranges must be an array of [start, end] pairs");
+    normalized = ranges.map((item, idx) => {
+      if (!Array.isArray(item) || item.length !== 2) {
+        throw new TimelineError(`range at index ${idx} must be a [start, end] pair`);
+      }
+      const s = roundMs(item[0]);
+      const e = roundMs(item[1]);
+      if (s < 0 || e <= s) {
+        throw new TimelineError(`invalid segment bounds: [${s}, ${e}]`);
+      }
+      return [s, e] as TimeRange;
+    });
+  }
+
+  if (normalized.length === 0) return [];
+
+  const sorted = [...normalized].sort((a, b) => a[0] - b[0]);
+  const merged: TimeRange[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const [s, e] = sorted[i];
+    const prev = merged[merged.length - 1];
+    if (s < prev[1] - TIME_EPSILON) {
+      throw new TimelineError(`overlapping segments detected: [${prev[0]}, ${prev[1]}] and [${s}, ${e}]`);
+    } else if (Math.abs(s - prev[1]) <= 1e-6) {
+      prev[1] = e;
+    } else {
+      merged.push([s, e]);
+    }
+  }
+
+  return merged.map(([s, e]) => [roundMs(s), roundMs(e)]);
+}
+
+/** Canonical string representation of contiguous spans e.g. [10.000-30.000]. */
+export function canonicalSpansStr(ranges: unknown, sourceDuration?: number): string {
+  const spans = canonicalMediaSpans(ranges, sourceDuration);
+  return "[" + spans.map(([s, e]) => `${s.toFixed(3)}-${e.toFixed(3)}`).join(",") + "]";
+}
+
+/** Fast, zero-dependency synchronous SHA-256 implementation. */
+export function sha256Hex(ascii: string): string {
+  function rightRotate(value: number, amount: number): number {
+    return (value >>> amount) | (value << (32 - amount));
+  }
+  const mathPow = Math.pow;
+  const maxWord = mathPow(2, 32);
+  let i = 0;
+  let j = 0;
+  let result = "";
+  const words: number[] = [];
+  const asciiBitLength = ascii.length * 8;
+  let hash: number[] = [];
+  const k: number[] = [];
+  let primeCounter = 0;
+
+  const isComposite: Record<number, number> = {};
+  for (let candidate = 2; primeCounter < 64; candidate++) {
+    if (!isComposite[candidate]) {
+      for (i = 0; i < 313; i += candidate) {
+        isComposite[i] = candidate;
+      }
+      hash[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;
+      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+    }
+  }
+
+  ascii += "\x80";
+  while ((ascii.length % 64) - 56) ascii += "\x00";
+  for (i = 0; i < ascii.length; i++) {
+    j = ascii.charCodeAt(i);
+    words[i >> 2] |= j << (((3 - i) % 4) * 8);
+  }
+  words[words.length] = (asciiBitLength / maxWord) | 0;
+  words[words.length] = asciiBitLength;
+
+  for (j = 0; j < words.length; ) {
+    const w = words.slice(j, (j += 16));
+    const oldHash = hash;
+    hash = hash.slice(0, 8);
+
+    for (i = 0; i < 64; i++) {
+      const w15 = w[i - 15];
+      const w2 = w[i - 2];
+      const s0 = rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3);
+      const s1 = rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10);
+      const ch = (hash[4] & hash[5]) ^ (~hash[4] & hash[6]);
+      const maj = (hash[0] & hash[1]) ^ (hash[0] & hash[2]) ^ (hash[1] & hash[2]);
+      const temp1 =
+        hash[7] +
+        (rightRotate(hash[4], 6) ^ rightRotate(hash[4], 11) ^ rightRotate(hash[4], 25)) +
+        ch +
+        k[i] +
+        (w[i] =
+          i < 16
+            ? w[i]
+            : (w[i - 16] + s0 + w[i - 7] + s1) | 0);
+      const temp2 =
+        (rightRotate(hash[0], 2) ^ rightRotate(hash[0], 13) ^ rightRotate(hash[0], 22)) + maj;
+
+      hash = [(temp1 + temp2) | 0, hash[0], hash[1], hash[2], (hash[3] + temp1) | 0, hash[4], hash[5], hash[6]];
+    }
+
+    for (i = 0; i < 8; i++) {
+      hash[i] = (hash[i] + oldHash[i]) | 0;
+    }
+  }
+
+  for (i = 0; i < 8; i++) {
+    for (j = 3; j + 1; j--) {
+      const b = (hash[i] >> (j * 8)) & 255;
+      result += (b < 16 ? "0" : "") + b.toString(16);
+    }
+  }
+  return result;
+}
+
+/** Computes canonical media_fingerprint from source asset ID and canonical spans. */
+export function computeMediaFingerprint(sourceAssetId: string, ranges: unknown, sourceDuration?: number): string {
+  if (typeof sourceAssetId !== "string" || !sourceAssetId.trim()) {
+    throw new TimelineError("sourceAssetId must be a non-empty string");
+  }
+  const spansStr = canonicalSpansStr(ranges, sourceDuration);
+  const payload = `v1:media:${sourceAssetId.trim()}:${spansStr}`;
+  return sha256Hex(payload);
+}
+
+/** Computes canonical render_fingerprint incorporating media identity, layout, crop, and all layers. */
+export function computeRenderFingerprint(
+  mediaFingerprint: string,
+  layoutMode: string,
+  cropAnchorX: number,
+  layers?: unknown[],
+  settings?: Record<string, unknown>,
+): string {
+  if (typeof mediaFingerprint !== "string" || mediaFingerprint.length !== 64) {
+    throw new TimelineError("mediaFingerprint must be a valid 64-character SHA-256 hex string");
+  }
+  const layout = layoutMode ? String(layoutMode).trim() : "portrait_9_16";
+  const cropStr = roundMs(cropAnchorX).toFixed(3);
+
+  const layersClean = Array.isArray(layers) ? layers : [];
+  // Stable JSON stringification with sorted keys
+  function canonicalStringify(obj: unknown): string {
+    if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+    if (Array.isArray(obj)) return "[" + obj.map(canonicalStringify).join(",") + "]";
+    const keys = Object.keys(obj as Record<string, unknown>).sort();
+    return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalStringify((obj as Record<string, unknown>)[k])).join(",") + "}";
+  }
+
+  const layersStr = canonicalStringify(layersClean);
+  const layersHash = sha256Hex(layersStr);
+
+  const settingsClean = settings && typeof settings === "object" ? settings : {};
+  let payload = `v1:render:${mediaFingerprint}:${layout}:${cropStr}:${layersHash}`;
+  if (Object.keys(settingsClean).length > 0) {
+    const settingsStr = canonicalStringify(settingsClean);
+    const settingsHash = sha256Hex(settingsStr);
+    payload += `:${settingsHash}`;
+  }
+  return sha256Hex(payload);
+}
+
+/** Slices a layer interval across a deleted gap, preserving source timestamps. */
+export function fragmentLayerInterval(layerInterval: [number, number], deletedGap: [number, number]): TimeRange[] {
+  if (!Array.isArray(layerInterval) || layerInterval.length !== 2 || !Array.isArray(deletedGap) || deletedGap.length !== 2) {
+    throw new TimelineError("layerInterval and deletedGap must be [start, end] pairs");
+  }
+  const ls = roundMs(layerInterval[0]);
+  const le = roundMs(layerInterval[1]);
+  const gs = roundMs(deletedGap[0]);
+  const ge = roundMs(deletedGap[1]);
+  if (ls >= le || gs >= ge) {
+    throw new TimelineError("intervals must have start < end");
+  }
+
+  if (le <= gs) return [[ls, le]];
+  if (ls >= ge) return [[ls, le]];
+  if (ls >= gs && le <= ge) return [];
+  if (ls < gs && le <= ge) return [[ls, gs]];
+  if (ls >= gs && le > ge) return [[ge, le]];
+  if (ls < gs && le > ge) return [[ls, gs], [ge, le]];
+  return [];
+}
+
+/** Maps C2 proxy playback time to C3 master source seconds. */
+export function c2ToC3Time(proxyTime: number, windowStart: number): number {
+  return roundMs(roundMs(proxyTime) + roundMs(windowStart));
+}
+
+/** Maps C3 master source seconds to C2 proxy playback time. */
+export function c3ToC2Time(sourceTime: number, windowStart: number): number {
+  return roundMs(roundMs(sourceTime) - roundMs(windowStart));
+}

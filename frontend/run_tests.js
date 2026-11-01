@@ -18,6 +18,7 @@ async function run() {
     await server.ssrLoadModule('/frontend/test_studio_render_path.js');
     await server.ssrLoadModule('/frontend/test_clip_timeline_interactions.js');
     await server.ssrLoadModule('/frontend/test_timeline_engine.ts');
+    await server.ssrLoadModule('/frontend/test_fingerprints.ts');
     await server.ssrLoadModule('/frontend/test_filmstrip_contract.js');
     await server.ssrLoadModule('/frontend/test_editor_audit_regressions.ts');
     await server.ssrLoadModule('/frontend/test_update_service.js');

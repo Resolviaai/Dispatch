@@ -407,7 +407,52 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN last_render_error TEXT;")
         if "crop_anchor_x" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN crop_anchor_x REAL DEFAULT 0.5;")
+        if "project_document" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN project_document TEXT;")
+        if "segments_json" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN segments_json TEXT;")
+        if "kept_duration" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN kept_duration REAL;")
+        if "segments_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN segments_revision INTEGER NOT NULL DEFAULT 0;")
+        if "active_state_revision" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN active_state_revision INTEGER NOT NULL DEFAULT 0;")
+        if "redo_stack" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN redo_stack TEXT NOT NULL DEFAULT '[]';")
+        if "can_undo" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN can_undo INTEGER NOT NULL DEFAULT 0;")
+        if "can_redo" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN can_redo INTEGER NOT NULL DEFAULT 0;")
+        if "media_fingerprint" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN media_fingerprint TEXT;")
+        if "render_fingerprint" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN render_fingerprint TEXT;")
+        if "rendered_fingerprint" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN rendered_fingerprint TEXT;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS clip_revisions (
+                id TEXT PRIMARY KEY,
+                clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+                revision INTEGER NOT NULL,
+                log_parent_revision INTEGER,
+                state_parent_revision INTEGER,
+                active_state_revision INTEGER NOT NULL,
+                redo_stack TEXT NOT NULL DEFAULT '[]',
+                operation_id TEXT NOT NULL,
+                project_document TEXT NOT NULL,
+                media_fingerprint TEXT NOT NULL,
+                render_fingerprint TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                action_metadata TEXT,
+                author TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (clip_id, revision),
+                UNIQUE (clip_id, operation_id)
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_revisions_lookup ON clip_revisions (clip_id, revision DESC);")
+
 
         # Suggestions are immutable candidate metadata. Legacy selected ranges
         # are the only safe backfill source; never rewrite their active bounds.

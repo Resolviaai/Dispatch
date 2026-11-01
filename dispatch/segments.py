@@ -292,3 +292,126 @@ def normalize_edl_document(document: Any) -> Dict[str, Any]:
     result["source_duration"] = source_duration
     result["ranges"] = [[start, end] for start, end in ranges]
     return result
+
+
+def round_ms(seconds: Any) -> float:
+    """Canonical half-up millisecond rounding: math.floor(x * 1000.0 + 0.5) / 1000.0.
+
+    Guarantees cross-language identical results across Python, TypeScript, and PostgreSQL.
+    """
+    val = _finite_number(seconds, "seconds")
+    return math.floor(val * 1000.0 + 0.5) / 1000.0
+
+
+def canonical_media_spans(ranges: Any, source_duration: Optional[float] = None) -> List[TimeRange]:
+    """Merges contiguous adjacent intervals into continuous source spans at 1ms precision."""
+    if source_duration is not None:
+        normalized = normalize_ranges(ranges, source_duration)
+    else:
+        if not isinstance(ranges, Sequence) or isinstance(ranges, (str, bytes)):
+            raise SegmentError("ranges must be a list of [start, end] pairs")
+        normalized = []
+        for item in ranges:
+            if not isinstance(item, Sequence) or isinstance(item, (str, bytes)) or len(item) != 2:
+                raise SegmentError("range element must be a [start, end] pair")
+            s = round_ms(item[0])
+            e = round_ms(item[1])
+            if s < 0 or e <= s:
+                raise SegmentError(f"invalid segment bounds: [{s}, {e}]")
+            normalized.append((s, e))
+
+    if not normalized:
+        return []
+
+    sorted_ranges = sorted(normalized, key=lambda x: x[0])
+    merged: List[TimeRange] = [sorted_ranges[0]]
+    for s, e in sorted_ranges[1:]:
+        prev_s, prev_e = merged[-1]
+        if s < prev_e - _TIME_EPSILON:
+            raise SegmentError(f"overlapping segments detected: [{prev_s}, {prev_e}] and [{s}, {e}]")
+        elif abs(s - prev_e) <= 1e-6:
+            merged[-1] = (prev_s, e)
+        else:
+            merged.append((s, e))
+    return [(round_ms(s), round_ms(e)) for s, e in merged]
+
+
+def canonical_spans_str(ranges: Any, source_duration: Optional[float] = None) -> str:
+    """Canonical string representation of contiguous spans e.g. [10.000-30.000]."""
+    spans = canonical_media_spans(ranges, source_duration)
+    return "[" + ",".join(f"{s:.3f}-{e:.3f}" for s, e in spans) + "]"
+
+
+def compute_media_fingerprint(source_asset_id: str, ranges: Any, source_duration: Optional[float] = None) -> str:
+    """Computes canonical media_fingerprint from source asset ID and canonical spans."""
+    import hashlib
+
+    if not isinstance(source_asset_id, str) or not source_asset_id.strip():
+        raise SegmentError("source_asset_id must be a non-empty string")
+    spans_str = canonical_spans_str(ranges, source_duration)
+    payload = f"v1:media:{source_asset_id.strip()}:{spans_str}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compute_render_fingerprint(
+    media_fingerprint: str,
+    layout_mode: str,
+    crop_anchor_x: float,
+    layers: Optional[Sequence[Dict[str, Any]]] = None,
+    settings: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Computes canonical render_fingerprint incorporating media identity, layout, crop, and all layers."""
+    import hashlib
+    import json
+
+    if not isinstance(media_fingerprint, str) or len(media_fingerprint) != 64:
+        raise SegmentError("media_fingerprint must be a valid 64-character SHA-256 hex string")
+    layout = str(layout_mode).strip() if layout_mode else "portrait_9_16"
+    crop_str = f"{round_ms(crop_anchor_x):.3f}"
+
+    layers_clean = list(layers) if layers is not None else []
+    layers_str = json.dumps(layers_clean, sort_keys=True, separators=(",", ":"))
+    layers_hash = hashlib.sha256(layers_str.encode("utf-8")).hexdigest()
+
+    settings_clean = dict(settings) if settings is not None else {}
+    settings_str = json.dumps(settings_clean, sort_keys=True, separators=(",", ":"))
+    settings_hash = hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
+
+    payload = f"v1:render:{media_fingerprint}:{layout}:{crop_str}:{layers_hash}"
+    if settings_clean:
+        payload += f":{settings_hash}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def fragment_layer_interval(layer_interval: Sequence[float], deleted_gap: Sequence[float]) -> List[TimeRange]:
+    """Slices a layer interval across a deleted gap, preserving source timestamps."""
+    if len(layer_interval) != 2 or len(deleted_gap) != 2:
+        raise SegmentError("layer_interval and deleted_gap must be [start, end] pairs")
+    ls, le = round_ms(layer_interval[0]), round_ms(layer_interval[1])
+    gs, ge = round_ms(deleted_gap[0]), round_ms(deleted_gap[1])
+    if ls >= le or gs >= ge:
+        raise SegmentError("intervals must have start < end")
+
+    if le <= gs:
+        return [(ls, le)]
+    if ls >= ge:
+        return [(ls, le)]
+    if ls >= gs and le <= ge:
+        return []
+    if ls < gs and le <= ge:
+        return [(ls, gs)]
+    if ls >= gs and le > ge:
+        return [(ge, le)]
+    if ls < gs and le > ge:
+        return [(ls, gs), (ge, le)]
+    return []
+
+
+def c2_to_c3_time(proxy_time: float, window_start: float) -> float:
+    """Maps C2 proxy playback time to C3 master source seconds."""
+    return round_ms(round_ms(proxy_time) + round_ms(window_start))
+
+
+def c3_to_c2_time(source_time: float, window_start: float) -> float:
+    """Maps C3 master source seconds to C2 proxy playback time."""
+    return round_ms(round_ms(source_time) - round_ms(window_start))
