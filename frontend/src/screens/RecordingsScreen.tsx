@@ -1359,12 +1359,23 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         body: JSON.stringify({ video_id: videoId })
       });
       const body = res.ok
-        ? await res.json().catch(() => ({} as { deleted?: boolean }))
-        : {} as { deleted?: boolean };
+        ? await res.json().catch(() => ({} as { deleted?: boolean; error?: string }))
+        : {} as { deleted?: boolean; error?: string };
       if (body.deleted) return 'Session deleted. The YouTube copy was removed too.';
-      return 'Session deleted, but the YouTube copy could not be removed.';
+      // The session is already gone locally; report WHY the channel copy stayed
+      // instead of the same opaque line for every failure.
+      const reason = (body as { error?: string }).error || (res.ok ? '' : `http_${res.status}`);
+      if (reason === 'youtube_http_403') {
+        return 'Session deleted. YouTube refused the copy delete: the connected channel does not own that video. Remove it in YouTube Studio.';
+      }
+      if (reason === 'account disconnected') {
+        return 'Session deleted. Reconnect YouTube in Settings to remove the leftover copy.';
+      }
+      return reason
+        ? `Session deleted. YouTube copy not removed (${reason}).`
+        : 'Session deleted, but the YouTube copy could not be removed.';
     } catch {
-      return 'Session deleted, but the YouTube copy could not be removed.';
+      return 'Session deleted. YouTube copy not removed (network).';
     }
   };
 
