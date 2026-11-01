@@ -88,12 +88,19 @@ if ($ExpectedCommit -ne "") {
 if (-not (Test-Path $meta)) { throw "FATAL: android/keystore.properties missing - release signing not configured." }
 if (-not ($env:JAVA_HOME)) { throw "FATAL: set JAVA_HOME to JDK 17 first." }
 
-Write-Host "== 1. assembleRelease =="
+Write-Host "== 1. Web bundle =="
+# The WebView ships the frontend from android/app/src/main/assets/web, which is
+# Vite's outDir. Gradle packages whatever is committed there, so skipping this
+# step silently releases an APK built from an older UI than the source tree.
+& npm --prefix (Join-Path $root "frontend") run build
+if ($LASTEXITCODE -ne 0) { throw "FATAL: frontend build failed; refusing to package a stale WebView bundle." }
+
+Write-Host "== 2. assembleRelease =="
 & $gradle -p (Join-Path $root "android") ":app:assembleRelease" "--console=plain" -q
 if ($LASTEXITCODE -ne 0) { throw "FATAL: assembleRelease failed." }
 if (-not (Test-Path $apkOut)) { throw "FATAL: APK not found at $apkOut" }
 
-Write-Host "== 2. identity verification (package, version, signature) =="
+Write-Host "== 3. identity verification (package, version, signature) =="
 # Select build-tools by NUMERIC version order (lexicographic ordering ranks
 # "9.0.0" above "35.0.0" once two-digit versions appear).
 $buildToolsRoot = Join-Path $env:LOCALAPPDATA "Android\Sdk\build-tools"
@@ -134,7 +141,7 @@ Write-Host "   cert sha256=$fp"
 if ([int]$gradleCode -ne $versionCode) { throw "FATAL: gradle versionCode $gradleCode != APK versionCode $versionCode" }
 if ($gradleVersionName -ne $versionName) { throw "FATAL: gradle versionName $gradleVersionName != APK versionName $versionName" }
 
-Write-Host "== 3. update.json from the actual APK =="
+Write-Host "== 4. update.json from the actual APK =="
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $apkDest = Join-Path $outDir "Dispatch.apk"
 Copy-Item $apkOut $apkDest -Force
@@ -161,7 +168,7 @@ if ([int]$writtenManifest.versionCode -ne [int]$versionCode -or
     throw "FATAL: written update.json does not match the built APK; refusing to hand off a corrupt manifest."
 }
 
-Write-Host "== 4. candidate artifacts in release-out/ =="
+Write-Host "== 5. candidate artifacts in release-out/ =="
 Get-ChildItem $outDir | Format-Table Name, Length
 Write-Host "DONE. Review, then attach BOTH files to GitHub release '$Tag' manually."
 Write-Host "Signer certificate (compare with previous release): $fp"
