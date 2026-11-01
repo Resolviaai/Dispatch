@@ -113,15 +113,17 @@ class MainActivity : ComponentActivity() {
         callback.onReceiveValue(if (uri != null) arrayOf(uri) else null)
     }
 
-    private fun openFileChooser(params: FileChooserParams?): Boolean {
+    private fun openFileChooser(callback: ValueCallback<Array<Uri>>): Boolean {
+        // A second request supersedes the first; the WebView leaks its pending
+        // upload slot unless the abandoned callback is released with null.
         filePathCallback?.onReceiveValue(null)
-        filePathCallback = params?.onReceiveValue
+        filePathCallback = callback
         return try {
             fileChooserLauncher.launch("video/*")
             true
         } catch (e: Exception) {
-            filePathCallback?.onReceiveValue(null)
             filePathCallback = null
+            callback.onReceiveValue(null)
             Toast.makeText(this, "No video picker available on this device.", Toast.LENGTH_SHORT).show()
             false
         }
@@ -359,7 +361,7 @@ class MainActivity : ComponentActivity() {
                     view: WebView,
                     callback: ValueCallback<Array<Uri>>,
                     params: FileChooserParams
-                ): Boolean = openFileChooser(params)
+                ): Boolean = openFileChooser(callback)
 
                 override fun onPermissionRequest(request: PermissionRequest) {
                     // 1) Origin gate: the local app shell owns the camera and
