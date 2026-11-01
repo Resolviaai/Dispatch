@@ -220,7 +220,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
         </section>
 
         {/* Transcript Segments List */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2.5 divide-y divide-border/30">
+        <div className="flex-1 overflow-y-auto p-3 space-y-2.5 divide-y divide-white/[0.06]">
           {captionGroups.map((grp) => {
             const isSelected = selectedGroupId === grp.id;
             const isPlayingNow = currentTime >= grp.start && currentTime <= grp.end;

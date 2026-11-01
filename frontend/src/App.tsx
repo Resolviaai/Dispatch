@@ -327,9 +327,9 @@ export const App: React.FC = () => {
         >
           {/* MOBILE HARDWARE NOTCH & STATUS BAR (Only shown in PC desktop browser preview, hidden on Android device) */}
           {isMobileFrame && !isNative && (
-            <div className="shrink-0 h-9 px-5 flex items-center justify-between text-xs text-text-secondary select-none z-30 bg-surface-100/90 border-b border-border/40 backdrop-blur">
+            <div className="shrink-0 h-9 px-5 flex items-center justify-between text-xs text-text-secondary select-none z-30 bg-surface-100/90 border-b border-white/[0.06] backdrop-blur">
               <span className="font-semibold text-text-main tabular-nums">{timeStr || '12:00'}</span>
-              <div className="w-20 h-3.5 rounded-full bg-canvas mx-auto hidden md:block border border-border/40" />
+              <div className="w-20 h-3.5 rounded-full bg-canvas mx-auto hidden md:block border border-white/[0.06]" />
               <div className="flex items-center gap-1.5">
                 <Wifi size={13} className="text-text-secondary" />
                 <Battery size={15} className="text-success" />

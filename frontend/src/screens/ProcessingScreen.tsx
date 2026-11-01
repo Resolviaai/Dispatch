@@ -224,11 +224,11 @@ export const ProcessingScreen: React.FC<ProcessingScreenProps> = ({ pcHost }) =>
                 </div>
 
                 <div className="space-y-1.5 pt-1">
-                  <div className="p-2.5 rounded-lg bg-surface-100/60 border border-border/40 flex items-center justify-between text-xs font-mono tabular-nums text-text-main">
+                  <div className="p-2.5 rounded-lg bg-surface-100/60 border border-white/[0.06] flex items-center justify-between text-xs font-mono tabular-nums text-text-main">
                     <span className="truncate pr-2">Clip 1: Hook on autonomous loops</span>
                     <span className="text-text-muted shrink-0">0:24</span>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-surface-100/60 border border-border/40 flex items-center justify-between text-xs font-mono tabular-nums text-text-main">
+                  <div className="p-2.5 rounded-lg bg-surface-100/60 border border-white/[0.06] flex items-center justify-between text-xs font-mono tabular-nums text-text-main">
                     <span className="truncate pr-2">Clip 2: Why raw data matters</span>
                     <span className="text-text-muted shrink-0">0:18</span>
                   </div>

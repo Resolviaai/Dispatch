@@ -1223,7 +1223,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 </div>
 
                 {/* Live stage caption card */}
-                <div className="p-2.5 rounded-lg bg-surface-1 border border-border/60 flex items-center gap-2.5 text-xs text-text-secondary">
+                <div className="p-2.5 rounded-lg bg-surface-1 border border-white/[0.06] flex items-center gap-2.5 text-xs text-text-secondary">
                   <RotateCw size={13} className="text-primary animate-spin shrink-0" />
                   <div className="min-w-0 flex-1">
                     <p className="text-text-main font-medium truncate">{stageInfo.label}</p>

@@ -115,7 +115,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
 
         <div className="flex-1 overflow-y-auto">
           {/* Status: one line, only what is happening now. */}
-          <div className="py-2.5 border-t border-border flex items-center gap-2 text-xs">
+          <div className="py-2.5 flex items-center gap-2 text-xs">
             {activeJobs.length > 0 ? (
               <>
                 <RotateCw size={13} className="text-primary animate-spin shrink-0" />
@@ -150,7 +150,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
           )}
 
           {uniqueNotifications.length > 0 && (
-            <section className="pt-2 border-t border-border">
+            <section className="pt-3">
               <div className="flex items-center justify-between py-1.5">
                 <span className="text-xs text-text-muted">Recent</span>
                 <button
@@ -168,7 +168,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                 return (
                   <div
                     key={notif.id}
-                    className="flex items-start gap-2.5 py-2 border-t border-border/60"
+                    className="flex items-start gap-2.5 py-2"
                   >
                     {isError ? (
                       <AlertCircle size={13} className="text-danger shrink-0 mt-0.5" />
@@ -201,14 +201,14 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
           )}
 
           {finishedJobs.length > 0 && (
-            <section className="pt-2 border-t border-border">
+            <section className="pt-3">
               <div className="py-1.5 text-xs text-text-muted">History</div>
               {finishedJobs.map((job) => {
                 const failed = job.status === 'failed';
                 return (
                   <div
                     key={job.id}
-                    className="flex items-center justify-between gap-2 py-2 border-t border-border/60 text-xs"
+                    className="flex items-center justify-between gap-2 py-2 text-xs"
                   >
                     <span className="text-text-secondary truncate">{jobTitle(job)}</span>
                     <span className="flex items-center gap-2 shrink-0">
@@ -232,7 +232,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
           )}
         </div>
 
-        <div className="pt-2 mt-1 border-t border-border shrink-0">
+        <div className="pt-2 mt-1 border-t border-white/[0.06] shrink-0">
           <button
             type="button"
             onClick={onClose}

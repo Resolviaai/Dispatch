@@ -668,7 +668,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
 
             {youtubeAccounts.length > 0 ? (
-              <div className="divide-y divide-border/60">
+              <div className="divide-y divide-white/[0.06]">
                 {youtubeAccounts.map((acc) => {
                   const isSourceVault = acc.metadata?.is_source_vault !== false;
                   const isPublisher = acc.metadata?.is_publisher !== false;
