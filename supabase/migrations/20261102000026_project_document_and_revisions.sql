@@ -36,7 +36,7 @@ create table if not exists public.clip_revisions (
     media_fingerprint text not null,
     render_fingerprint text not null,
     action_type text not null check (
-        action_type in ('initial', 'split', 'trim_left', 'trim_right', 'delete_piece', 'ripple', 'undo', 'redo', 'reset_ai')
+        action_type in ('initial', 'split', 'trim_left', 'trim_right', 'trim_edge', 'delete_piece', 'ripple', 'undo', 'redo', 'reset_ai')
     ),
     action_metadata jsonb,
     author text not null check (author in ('mobile', 'pc', 'ai', 'system')),

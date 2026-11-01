@@ -645,6 +645,331 @@ async function presign(env: Env, method: "PUT" | "GET", key: string, mime?: stri
   return signed.url.toString(); // bearer-capable short-lived URL; never persisted or logged
 }
 
+/**
+ * Drain queued social publishing jobs directly from Cloudflare Worker without PC dependency.
+ * Supports YouTube Shorts (OAuth resumable upload) and Meta/Instagram Reels via R2 presigned URLs.
+ */
+export async function drainPublishingQueue(env: Env): Promise<{ processed: number; succeeded: number; failed: number }> {
+  const svc = {
+    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    "Content-Type": "application/json",
+  };
+
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+
+  try {
+    const queueRes = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/publishing_jobs?status=eq.queued&order=created_at.asc&limit=5`,
+      { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+    );
+    if (!queueRes.ok) return { processed: 0, succeeded: 0, failed: 0 };
+    const queuedJobs = (await queueRes.json()) as Array<{
+      id: string;
+      user_id: string;
+      clip_id: string;
+      title: string;
+      description?: string;
+      platforms: string[];
+      publish_mode: "private" | "unlisted" | "public";
+      r2_key?: string | null;
+      rendered_fingerprint?: string | null;
+      platform_results?: Record<string, unknown>;
+    }>;
+
+    if (!Array.isArray(queuedJobs) || queuedJobs.length === 0) {
+      return { processed: 0, succeeded: 0, failed: 0 };
+    }
+
+    for (const job of queuedJobs) {
+      const claimRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(job.id)}&status=eq.queued`,
+        {
+          method: "PATCH",
+          headers: svc,
+          body: JSON.stringify({ status: "processing", updated_at: new Date().toISOString() }),
+        }
+      );
+      if (!claimRes.ok) continue;
+
+      processed++;
+      const results: Record<string, unknown> = { ...(job.platform_results || {}) };
+      let anySuccess = false;
+      let lastErrorMessage: string | null = null;
+
+      try {
+        let r2Key = job.r2_key;
+        if (!r2Key) {
+          const mediaRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${job.user_id}&status=eq.active&clip_id=eq.${encodeURIComponent(job.clip_id)}&order=created_at.desc&limit=1`,
+            { headers: svc }
+          );
+          if (mediaRes.ok) {
+            const mediaRows = (await mediaRes.json()) as Array<{ final_key?: string | null }>;
+            if (mediaRows.length > 0 && mediaRows[0].final_key) {
+              r2Key = mediaRows[0].final_key;
+            }
+          }
+        }
+
+        if (!r2Key) {
+          throw new Error("No R2 video object key found for publishing job");
+        }
+
+        const r2Object = await env.BUCKET.get(r2Key);
+        if (!r2Object) {
+          throw new Error(`R2 video object not found for key: ${r2Key}`);
+        }
+
+        const videoBytes = await r2Object.arrayBuffer();
+        if (videoBytes.byteLength === 0) {
+          throw new Error("R2 video object is empty (0 bytes)");
+        }
+
+        const platforms = Array.isArray(job.platforms) ? job.platforms : ["youtube"];
+
+        for (const platform of platforms) {
+          const normPlatform = platform.toLowerCase().trim();
+
+          if (normPlatform === "youtube") {
+            try {
+              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=eq.youtube&select=id,account_id&limit=1`;
+              const accRes = await fetch(accUrl, { headers: svc });
+              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string }>) : [];
+              const accountId = accRows.length > 0 ? (accRows[0].account_id || accRows[0].id) : null;
+
+              if (!accountId) {
+                results.youtube = { status: "skipped_no_account", error: "No connected YouTube account found" };
+                continue;
+              }
+
+              const accessToken = await getUserYouTubeAccessToken(env, accountId, job.user_id, { requireSourceVault: false });
+              if (!accessToken) {
+                results.youtube = { status: "failed", error: "Could not refresh YouTube OAuth access token" };
+                continue;
+              }
+
+              const initRes = await fetch(
+                "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json; charset=UTF-8",
+                    "X-Upload-Content-Type": "video/mp4",
+                    "X-Upload-Content-Length": String(videoBytes.byteLength),
+                  },
+                  body: JSON.stringify({
+                    snippet: {
+                      title: job.title.slice(0, 100),
+                      description: (job.description || "").slice(0, 5000),
+                      categoryId: "22",
+                    },
+                    status: {
+                      privacyStatus: ["private", "unlisted", "public"].includes(job.publish_mode) ? job.publish_mode : "private",
+                      selfDeclaredMadeForKids: false,
+                    },
+                  }),
+                }
+              );
+
+              if (!initRes.ok) {
+                const errText = await initRes.text().catch(() => "");
+                throw new Error(`YouTube resumable session init failed (${initRes.status}): ${errText.slice(0, 200)}`);
+              }
+
+              const uploadUrl = initRes.headers.get("Location") || initRes.headers.get("location");
+              if (!uploadUrl) {
+                throw new Error("YouTube API did not return resumable upload Location header");
+              }
+
+              const uploadRes = await fetch(uploadUrl, {
+                method: "PUT",
+                headers: {
+                  "Content-Type": "video/mp4",
+                  "Content-Length": String(videoBytes.byteLength),
+                },
+                body: videoBytes,
+              });
+
+              if (!uploadRes.ok) {
+                const errText = await uploadRes.text().catch(() => "");
+                throw new Error(`YouTube video upload failed (${uploadRes.status}): ${errText.slice(0, 200)}`);
+              }
+
+              const ytResult = (await uploadRes.json()) as { id?: string };
+              const videoId = ytResult.id;
+              if (!videoId) {
+                throw new Error("YouTube video uploaded but no video ID returned");
+              }
+
+              const remoteUrl = `https://youtube.com/shorts/${videoId}`;
+              results.youtube = {
+                status: "published",
+                remote_id: videoId,
+                remote_url: remoteUrl,
+                published_at: new Date().toISOString(),
+              };
+              anySuccess = true;
+
+              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
+                method: "POST",
+                headers: svc,
+                body: JSON.stringify({
+                  user_id: job.user_id,
+                  clip_id: job.clip_id,
+                  platform: "youtube",
+                  account_id: accountId,
+                  remote_id: videoId,
+                  remote_url: remoteUrl,
+                  status: "published",
+                  publish_mode: job.publish_mode,
+                  published_at: new Date().toISOString(),
+                }),
+              }).catch(() => {});
+            } catch (ytErr) {
+              const msg = ytErr instanceof Error ? ytErr.message : String(ytErr);
+              results.youtube = { status: "failed", error: msg };
+              lastErrorMessage = msg;
+            }
+          } else if (normPlatform === "instagram") {
+            try {
+              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=in.(instagram,meta)&select=id,account_id&limit=1`;
+              const accRes = await fetch(accUrl, { headers: svc });
+              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string }>) : [];
+              const accountId = accRows.length > 0 ? (accRows[0].account_id || accRows[0].id) : null;
+
+              if (!accountId) {
+                results.instagram = { status: "skipped_no_account", error: "No connected Instagram account found" };
+                continue;
+              }
+
+              const metaCred = await loadMetaGraphToken(env, job.user_id, accountId);
+              if (!metaCred?.token) {
+                results.instagram = { status: "failed", error: "Could not load Meta graph token" };
+                continue;
+              }
+
+              const presignedVideoUrl = await presign(env, "GET", r2Key);
+              const igUserId = typeof metaCred.payload.page_id === "string" ? metaCred.payload.page_id : (typeof metaCred.payload.user_id === "string" ? metaCred.payload.user_id : accountId);
+
+              const containerRes = await fetch(
+                `https://graph.facebook.com/v21.0/${encodeURIComponent(igUserId)}/media`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    media_type: "REELS",
+                    video_url: presignedVideoUrl,
+                    caption: job.title.slice(0, 1000),
+                    access_token: metaCred.token,
+                  }),
+                }
+              );
+
+              if (!containerRes.ok) {
+                const errText = await containerRes.text().catch(() => "");
+                throw new Error(`Instagram container creation failed: ${errText.slice(0, 200)}`);
+              }
+
+              const containerData = (await containerRes.json()) as { id?: string };
+              const creationId = containerData.id;
+              if (!creationId) throw new Error("No creation ID from Instagram media API");
+
+              const publishRes = await fetch(
+                `https://graph.facebook.com/v21.0/${encodeURIComponent(igUserId)}/media_publish`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    creation_id: creationId,
+                    access_token: metaCred.token,
+                  }),
+                }
+              );
+
+              if (!publishRes.ok) {
+                const errText = await publishRes.text().catch(() => "");
+                throw new Error(`Instagram media publish failed: ${errText.slice(0, 200)}`);
+              }
+
+              const pubData = (await publishRes.json()) as { id?: string };
+              const igMediaId = pubData.id || creationId;
+              results.instagram = {
+                status: "published",
+                remote_id: igMediaId,
+                published_at: new Date().toISOString(),
+              };
+              anySuccess = true;
+
+              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
+                method: "POST",
+                headers: svc,
+                body: JSON.stringify({
+                  user_id: job.user_id,
+                  clip_id: job.clip_id,
+                  platform: "instagram",
+                  account_id: accountId,
+                  remote_id: igMediaId,
+                  status: "published",
+                  publish_mode: job.publish_mode,
+                  published_at: new Date().toISOString(),
+                }),
+              }).catch(() => {});
+            } catch (igErr) {
+              const msg = igErr instanceof Error ? igErr.message : String(igErr);
+              results.instagram = { status: "failed", error: msg };
+              lastErrorMessage = msg;
+            }
+          } else {
+            results[normPlatform] = { status: "skipped_unsupported", platform: normPlatform };
+          }
+        }
+
+        const finalStatus = anySuccess ? "published" : "failed";
+        await fetch(
+          `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(job.id)}`,
+          {
+            method: "PATCH",
+            headers: svc,
+            body: JSON.stringify({
+              status: finalStatus,
+              platform_results: results,
+              last_error: anySuccess ? null : (lastErrorMessage || "All publishing targets failed"),
+              completed_at: anySuccess ? new Date().toISOString() : null,
+              updated_at: new Date().toISOString(),
+            }),
+          }
+        );
+
+        if (anySuccess) succeeded++;
+        else failed++;
+      } catch (jobErr) {
+        const errorStr = jobErr instanceof Error ? jobErr.message : String(jobErr);
+        await fetch(
+          `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(job.id)}`,
+          {
+            method: "PATCH",
+            headers: svc,
+            body: JSON.stringify({
+              status: "failed",
+              last_error: errorStr,
+              updated_at: new Date().toISOString(),
+            }),
+          }
+        ).catch(() => {});
+        failed++;
+      }
+    }
+  } catch (drainErr) {
+    console.error("drainPublishingQueue encountered error:", drainErr);
+  }
+
+  return { processed, succeeded, failed };
+}
+
 async function readJson<T>(request: Request): Promise<T | null> {
   try { return (await request.json()) as T; } catch { return null; }
 }
@@ -789,7 +1114,7 @@ async function runCleanup(env: Env): Promise<Response> {
 
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     try {
       const url = new URL(request.url);
     const reqOrigin = request.headers.get("Origin") || "*";
@@ -2892,6 +3217,7 @@ export default {
           });
 
           const job = Array.isArray(rows) && rows.length > 0 ? (rows[0] as { id: string; status: string }) : null;
+          ctx?.waitUntil(drainPublishingQueue(env));
           return json(200, {
             ok: true,
             job_id: job?.id,
@@ -2917,6 +3243,81 @@ export default {
           return json(200, { ok: true, clip_id: targetClipId, jobs: Array.isArray(rows) ? rows : [] });
         } catch (e) {
           return json(502, { error: `publish status fetch failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Source video staging URL: returns presigned GET URL for phone to download source video
+      // if not available locally, enabling true phone-only editing and rendering.
+      if (request.method === "GET" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/source-url")) {
+        const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/source-url".length));
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        try {
+          const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+          let mediaObj: { id: string; final_key: string | null; byte_count: number | null; mime_type: string } | null = null;
+          const directRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&clip_id=eq.${encodeURIComponent(localClipId)}&order=created_at.desc&limit=1`,
+            { headers: svc }
+          );
+          if (directRes.ok) {
+            const rows = (await directRes.json()) as typeof mediaObj[];
+            if (rows && rows.length > 0 && rows[0].final_key) {
+              mediaObj = rows[0];
+            }
+          }
+
+          if (!mediaObj) {
+            const clipRes = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(id.eq.${encodeURIComponent(localClipId)},local_clip_id.eq.${encodeURIComponent(localClipId)})&select=id,media_object_id&limit=1`,
+              { headers: svc }
+            );
+            if (clipRes.ok) {
+              const clipRows = (await clipRes.json()) as Array<{ id: string; media_object_id: string | null }>;
+              if (clipRows && clipRows.length > 0) {
+                const clipRow = clipRows[0];
+                if (clipRow.media_object_id) {
+                  const moRes = await fetch(
+                    `${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${clipRow.media_object_id}&status=eq.active&select=id,final_key,byte_count,mime_type&limit=1`,
+                    { headers: svc }
+                  );
+                  if (moRes.ok) {
+                    const moRows = (await moRes.json()) as typeof mediaObj[];
+                    if (moRows && moRows.length > 0 && moRows[0].final_key) {
+                      mediaObj = moRows[0];
+                    }
+                  }
+                }
+                if (!mediaObj && clipRow.id) {
+                  const moRes = await fetch(
+                    `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&clip_id=eq.${clipRow.id}&order=created_at.desc&limit=1`,
+                    { headers: svc }
+                  );
+                  if (moRes.ok) {
+                    const moRows = (await moRes.json()) as typeof mediaObj[];
+                    if (moRows && moRows.length > 0 && moRows[0].final_key) {
+                      mediaObj = moRows[0];
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if (!mediaObj || !mediaObj.final_key) {
+            return json(404, { error: "source media not found in cloud storage" });
+          }
+
+          const presignedGet = await presign(env, "GET", mediaObj.final_key);
+          return json(200, {
+            ok: true,
+            clip_id: localClipId,
+            media_object_id: mediaObj.id,
+            source_url: presignedGet,
+            byte_count: mediaObj.byte_count,
+            mime_type: mediaObj.mime_type,
+            expires_in: PRESIGN_EXPIRES,
+          });
+        } catch (e) {
+          return json(502, { error: `failed to generate source url: ${e instanceof Error ? e.message : e}` });
         }
       }
 
@@ -3775,5 +4176,6 @@ export default {
     // promotion leftovers, and the staging-watch sweep run unattended.
     ctx.waitUntil(runCleanup(env).then((r) => console.log(`scheduled cleanup: ${r.status}`)));
     ctx.waitUntil(refreshInstagramLoginTokens(env));
+    ctx.waitUntil(drainPublishingQueue(env));
   },
 };

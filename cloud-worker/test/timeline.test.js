@@ -65,3 +65,24 @@ test("validateTimelineSegments rejects invalid durations and overlaps", () => {
   assert.equal(valid.valid, true);
   assert.equal(valid.keptDuration, 19.0);
 });
+
+test("drainPublishingQueue handles empty queue gracefully", async () => {
+  const { drainPublishingQueue } = await import("../src/index.ts");
+  const mockEnv = {
+    SUPABASE_URL: "https://mock.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY: "mock-key",
+    BUCKET: {
+      get: async () => null,
+    },
+  };
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    const res = await drainPublishingQueue(mockEnv);
+    assert.equal(res.processed, 0);
+    assert.equal(res.succeeded, 0);
+    assert.equal(res.failed, 0);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

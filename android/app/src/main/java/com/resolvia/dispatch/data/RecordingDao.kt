@@ -137,7 +137,7 @@ interface RecordingDao {
     @Query("SELECT * FROM render_jobs WHERE clipId = :clipId ORDER BY createdAt DESC LIMIT 1")
     suspend fun getLatestRenderJobForClip(clipId: String): RenderJobEntity?
 
-    @Query("SELECT * FROM render_jobs WHERE status IN ('QUEUED', 'RENDERING') ORDER BY createdAt ASC")
+    @Query("SELECT * FROM render_jobs WHERE status IN ('QUEUED', 'RENDERING', 'UPLOADING') ORDER BY createdAt ASC")
     suspend fun getPendingRenderJobs(): List<RenderJobEntity>
 
     @Query("UPDATE render_jobs SET status = :status, progressPercent = :progress, updatedAt = :updatedAt WHERE jobId = :jobId")

@@ -209,12 +209,18 @@ class AndroidClipRenderer(
 
             val effectsBuilder = ImmutableList.builder<androidx.media3.common.Effect>()
 
-            // 9:16 Presentation scale to fit
+            // 9:16 Presentation scale to fit or crop depending on layoutMode
+            val presentationLayout = if (request.layoutMode.contains("crop", ignoreCase = true) || request.layoutMode.contains("portrait_9_16", ignoreCase = true)) {
+                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
+            } else {
+                Presentation.LAYOUT_SCALE_TO_FIT
+            }
+
             effectsBuilder.add(
                 Presentation.createForWidthAndHeight(
                     targetWidth,
                     targetHeight,
-                    Presentation.LAYOUT_SCALE_TO_FIT
+                    presentationLayout
                 )
             )
 
@@ -231,14 +237,14 @@ class AndroidClipRenderer(
                         textSize = (if (is720p) 26f else 40f) * context.resources.displayMetrics.scaledDensity
                         typeface = Typeface.DEFAULT_BOLD
                         isAntiAlias = true
-                        textAlign = Paint.Align.CENTER
+                        textAlign = Paint.Align.LEFT
                     }
                     private val highlightPaint = Paint().apply {
                         color = Color.rgb(255, 230, 0) // Punchy yellow highlight
                         textSize = (if (is720p) 26f else 40f) * context.resources.displayMetrics.scaledDensity
                         typeface = Typeface.DEFAULT_BOLD
                         isAntiAlias = true
-                        textAlign = Paint.Align.CENTER
+                        textAlign = Paint.Align.LEFT
                     }
 
                     override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
@@ -247,22 +253,23 @@ class AndroidClipRenderer(
                             timelineSeconds >= g.start && timelineSeconds <= g.end
                         } ?: return
 
-                        val fullText = activeGroup.words.joinToString(" ") { it.text }
-                        if (fullText.isEmpty()) return
+                        if (activeGroup.words.isEmpty()) return
 
                         val centerX = canvas.width / 2f
                         val centerY = canvas.height * 0.78f // 78% down screen
 
-                        // Measure background rect
-                        val textWidth = textPaint.measureText(fullText)
+                        val spaceWidth = textPaint.measureText(" ")
+                        val wordWidths = activeGroup.words.map { textPaint.measureText(it.text) }
+                        val totalWordsWidth = wordWidths.sum()
+                        val totalWidth = totalWordsWidth + (activeGroup.words.size - 1).coerceAtLeast(0) * spaceWidth
+
                         val fontMetrics = textPaint.fontMetrics
-                        val textHeight = fontMetrics.bottom - fontMetrics.top
                         val paddingX = 24f
                         val paddingY = 16f
                         val rect = RectF(
-                            centerX - (textWidth / 2f) - paddingX,
+                            centerX - (totalWidth / 2f) - paddingX,
                             centerY + fontMetrics.top - paddingY,
-                            centerX + (textWidth / 2f) + paddingX,
+                            centerX + (totalWidth / 2f) + paddingX,
                             centerY + fontMetrics.bottom + paddingY
                         )
 
@@ -270,16 +277,15 @@ class AndroidClipRenderer(
                             canvas.drawRoundRect(rect, 16f, 16f, bgPaint)
                         }
 
-                        // Check active word for karaoke highlight
-                        val activeWord = activeGroup.words.firstOrNull { w ->
-                            timelineSeconds >= w.start && timelineSeconds <= w.end
-                        }
+                        // Draw word-by-word with frame-accurate highlight on the word active at timestamp T
+                        var currentX = centerX - (totalWidth / 2f)
+                        for (i in activeGroup.words.indices) {
+                            val word = activeGroup.words[i]
+                            val isWordActive = timelineSeconds >= word.start && timelineSeconds <= word.end
+                            val paintToUse = if (isWordActive) highlightPaint else textPaint
 
-                        if (activeWord == null) {
-                            canvas.drawText(fullText, centerX, centerY, textPaint)
-                        } else {
-                            // Draw karaoke highlighted text
-                            canvas.drawText(fullText, centerX, centerY, highlightPaint)
+                            canvas.drawText(word.text, currentX, centerY, paintToUse)
+                            currentX += wordWidths[i] + spaceWidth
                         }
                     }
                 }

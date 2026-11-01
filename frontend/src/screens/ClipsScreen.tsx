@@ -2638,6 +2638,26 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       : (currentClip.source_duration || 0))
     : 0;
 
+  const activeSegments = useMemo(() => {
+    if (!currentClip) return [];
+    try {
+      const existingDoc = (currentClip as any).project_document;
+      const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+      const rawSegments = parsedDoc?.timeline?.segments;
+      if (Array.isArray(rawSegments) && rawSegments.length > 0) {
+        return rawSegments.map((s: any, idx: number) => ({
+          id: s.id || `seg_${idx + 1}`,
+          start: Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+          end: Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+          index: idx,
+        }));
+      }
+    } catch {
+      // Ignore parse failure
+    }
+    return [];
+  }, [currentClip]);
+
   // 3. Playback Controls & Dual-Layer Video Sync with Adaptive Timebase Mapping
   const handleTogglePlay = () => {
     const video = videoRef.current;
@@ -5464,6 +5484,32 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               </button>
             </div>
           </div>
+
+          {activeSegments.length > 1 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto py-1.5 px-3 bg-[#0d0f12] border-b border-border z-20 shrink-0">
+              <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider shrink-0">Pieces ({activeSegments.length}):</span>
+              {activeSegments.map((seg) => (
+                <div
+                  key={seg.id || seg.index}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-200 border border-border text-[11px] text-text-secondary shrink-0 shadow-sm"
+                >
+                  <span className="font-mono tabular-nums">{seg.start.toFixed(1)}s&nbsp;–&nbsp;{seg.end.toFixed(1)}s</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeletePiece(seg.index);
+                    }}
+                    className="w-4 h-4 rounded-full hover:bg-destructive/20 hover:text-destructive flex items-center justify-center text-text-muted active:scale-90 transition-all"
+                    title={`Delete piece ${seg.index + 1}`}
+                    aria-label={`Delete piece ${seg.index + 1}`}
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {activePanel === 'none' ? (
             <>
