@@ -1798,3 +1798,66 @@ test("GET /media pages past one 1000-row page so the list matches the storage me
   assert.equal(body.items.length, 1156, "one capped page made 156 objects look like 100");
   assert.equal(body.total_bytes, 1156 * 1_000_000);
 });
+
+const OLD_MEDIA = "55555555-5555-5555-5555-555555555555";
+const WINDOW_ID = "66666666-6666-6666-6666-666666666666";
+
+// Shared stubs for the window-reuse path. `holders` controls whether some other
+// live window still points at the previous proxy.
+function stubReusePath(holders) {
+  const calls = { marked: [], confirmed: [], repointed: [] };
+  supabase.set("/rest/v1/clips_cloud?user_id=eq.", { method: "GET", fn: () => ({ body: [{ id: "cloud-1" }] }) });
+  supabase.set("/rest/v1/edit_windows?id=eq.", {
+    method: "GET",
+    fn: (url) => (url.includes("select=media_object_id")
+      ? { body: [{ media_object_id: OLD_MEDIA }] }
+      : { body: [{ id: WINDOW_ID }] }),
+  });
+  supabase.set("/rest/v1/edit_windows?media_object_id=eq.", { method: "GET", fn: () => ({ body: holders }) });
+  supabase.set("/rest/v1/edit_windows", {
+    method: "PATCH",
+    fn: (_u, init) => { calls.repointed.push(JSON.parse(init.body).media_object_id); return { body: [] }; },
+  });
+  supabase.set("/rest/v1/media_objects?id=eq.", {
+    method: "GET",
+    fn: () => ({ body: [{ id: OLD_MEDIA, user_id: USER_A, status: "active", kind: "edit_window", staging_key: null, final_key: `final/${USER_A}/${OLD_MEDIA}` }] }),
+  });
+  supabase.set("/rpc/cloud_mark_deletion", { method: "POST", fn: () => { calls.marked.push("mark"); return { body: null }; } });
+  supabase.set("/rpc/cloud_confirm_deletion", { method: "POST", fn: () => { calls.confirmed.push("confirm"); return { body: null }; } });
+  return calls;
+}
+
+async function reuseWindow(mediaId) {
+  return worker.fetch(new Request("https://w.test/sync/pc/windows", {
+    method: "POST",
+    headers: pcHeaders(USER_A),
+    body: JSON.stringify({
+      local_clip_id: "clip-1", media_object_id: mediaId, window_id: WINDOW_ID,
+      window_start: 0, window_end: 10,
+    }),
+  }), env());
+}
+
+test("reusing an edit window reclaims the proxy it replaced", async () => {
+  const calls = stubReusePath([]);
+  bucket.objects.set(`final/${USER_A}/${OLD_MEDIA}`, { size: 1 });
+
+  const res = await reuseWindow(MEDIA);
+  assert.equal(res.status, 200);
+  // Guard against a vacuous pass: the window must really have been re-pointed.
+  assert.deepEqual(calls.repointed, [MEDIA], "window must point at the new proxy");
+  assert.equal(calls.marked.length, 1, "previous proxy must be marked for deletion");
+  assert.equal(calls.confirmed.length, 1, "previous proxy deletion must be confirmed");
+  assert.ok(bucket.deleted.includes(`final/${USER_A}/${OLD_MEDIA}`), bucket.deleted);
+});
+
+test("a proxy still referenced by another live window is never reclaimed", async () => {
+  const calls = stubReusePath([{ id: WINDOW_ID }]);
+  bucket.objects.set(`final/${USER_A}/${OLD_MEDIA}`, { size: 1 });
+
+  const res = await reuseWindow(MEDIA);
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.repointed, [MEDIA], "re-point still happens");
+  assert.equal(calls.marked.length, 0, "shared proxy must survive");
+  assert.deepEqual(bucket.deleted, []);
+});

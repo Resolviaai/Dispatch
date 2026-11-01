@@ -3036,6 +3036,13 @@ export default {
             if (!linkRes.ok) return json(502, { error: `media link failed: ${linkRes.status}` });
             // Reused windows must point at the NEW proxy when the render changed.
             if (reused) {
+              const beforeRes = await fetch(
+                `${env.SUPABASE_URL}/rest/v1/edit_windows?id=eq.${encodeURIComponent(windowId)}&select=media_object_id`,
+                { headers: svc }
+              );
+              const beforeRows = beforeRes.ok ? (await beforeRes.json() as Array<{ media_object_id: string | null }>) : [];
+              const previousMediaId = beforeRows[0]?.media_object_id ?? null;
+
               const reusePatch = await fetch(
                 `${env.SUPABASE_URL}/rest/v1/edit_windows?id=eq.${encodeURIComponent(windowId)}&user_id=eq.${userId}`,
                 {
@@ -3045,6 +3052,34 @@ export default {
                 }
               );
               if (!reusePatch.ok) return json(502, { error: `window media replacement failed: ${reusePatch.status}` });
+
+              // The bytes this window used to own would otherwise stay
+              // status='active' forever and keep counting against the quota:
+              // one five-second clip accumulated 37 superseded proxies and
+              // 1.2 GB. Reclaim only when no other live window still points at
+              // the same object, and only for edit_window proxies, so a wrong
+              // guess costs a re-stage rather than an unplayable clip.
+              if (previousMediaId && previousMediaId !== mediaObjectId) {
+                try {
+                  const holdersRes = await fetch(
+                    `${env.SUPABASE_URL}/rest/v1/edit_windows?media_object_id=eq.${encodeURIComponent(previousMediaId)}&status=eq.ready&id=neq.${encodeURIComponent(windowId)}&select=id&limit=1`,
+                    { headers: svc }
+                  );
+                  const holders = holdersRes.ok ? (await holdersRes.json() as Array<{ id: string }>) : [];
+                  if (!Array.isArray(holders) || holders.length === 0) {
+                    const old = await selectOne<MediaObj>(env, "media_objects", previousMediaId, "id,user_id,status,kind,staging_key,final_key");
+                    if (old && old.user_id === userId && old.kind === "edit_window"
+                        && old.status !== "deleted" && old.status !== "deletion_pending") {
+                      await rpc(env, "cloud_mark_deletion", { p_media_id: previousMediaId });
+                      if (old.final_key) await env.BUCKET.delete(old.final_key);
+                      if (old.staging_key) await env.BUCKET.delete(old.staging_key).catch(() => {});
+                      await rpc(env, "cloud_confirm_deletion", { p_media_id: previousMediaId });
+                    }
+                  }
+                } catch {
+                  // Reclamation is cleanup, never a reason to fail a sync.
+                }
+              }
             }
             if (windowId && words.length > 0) {
               if (body?.only_if_missing === true) {
