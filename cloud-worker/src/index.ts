@@ -2413,6 +2413,77 @@ export default {
         return json(200, { url: await presign(env, "GET", obj.final_key as string), expires_in: PRESIGN_EXPIRES });
       }
 
+      // Cloud storage manager: the user's active video objects, with the title
+      // and status of the clip each one backs (if any).
+      if (request.method === "GET" && url.pathname === "/media") {
+        const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+        const listRes = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&kind=eq.clip_video&select=id,byte_count,created_at,clip_id&order=created_at.desc&limit=100`,
+          { headers: svc });
+        if (!listRes.ok) return json(502, { error: `media list failed: ${listRes.status}` });
+        const rows = await listRes.json() as Array<{ id: string; byte_count: number | null; created_at: string; clip_id: string | null }>;
+        const clipIds = Array.from(new Set(rows.map(r => r.clip_id).filter((v): v is string => Boolean(v))));
+        let clipsById: Record<string, { title: string | null; local_clip_id: string; status: string }> = {};
+        if (clipIds.length > 0) {
+          const clipRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?id=in.(${clipIds.map(encodeURIComponent).join(",")})&select=id,title,local_clip_id,status`,
+            { headers: svc });
+          if (clipRes.ok) {
+            const clips = await clipRes.json() as Array<{ id: string; title: string | null; local_clip_id: string; status: string }>;
+            clipsById = Object.fromEntries(clips.map(c => [c.id, { title: c.title, local_clip_id: c.local_clip_id, status: c.status }]));
+          }
+        }
+        return json(200, {
+          items: rows.map(r => ({
+            id: r.id,
+            size: r.byte_count ?? 0,
+            created_at: r.created_at,
+            clip_id: r.clip_id,
+            local_clip_id: r.clip_id ? clipsById[r.clip_id]?.local_clip_id ?? null : null,
+            title: r.clip_id ? clipsById[r.clip_id]?.title ?? null : null,
+            clip_status: r.clip_id ? clipsById[r.clip_id]?.status ?? null : null,
+          })),
+        });
+      }
+
+      // Delete one cloud file. Clip-backed objects go through the durable PC
+      // command (the PC owns the clip and would re-sync it otherwise); bare
+      // objects are removed from R2 + the DB immediately. Platform posts are
+      // never touched by this endpoint.
+      const mediaDeleteMatch = url.pathname.match(/^\/media\/([0-9a-f-]{36})\/delete$/i);
+      if (request.method === "POST" && mediaDeleteMatch) {
+        const mediaId = mediaDeleteMatch[1];
+        const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+        const obj = await selectOne<{ id: string; user_id: string; status: string; clip_id: string | null; final_key: string | null; staging_key: string | null }>(
+          env, "media_objects", mediaId, "id,user_id,status,clip_id,final_key,staging_key");
+        if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
+        if (obj.status !== "active") return json(409, { error: `media not active (${obj.status})` });
+        if (obj.clip_id) {
+          const clip = await selectOne<{ local_clip_id: string; status: string }>(env, "clips_cloud", obj.clip_id, "local_clip_id,status");
+          if (!clip?.local_clip_id) return json(404, { error: "clip not found" });
+          if (clip.status === "rejected") return json(200, { queued: true, already: true });
+          try {
+            const queued = await rpc<{ command_id: string; state: string; purge_after: string | null }>(env, "cloud_enqueue_clip_command", {
+              p_user_id: userId,
+              p_local_clip_id: clip.local_clip_id,
+              p_kind: "reject",
+              p_payload: { reason: "Deleted from cloud storage" },
+            });
+            return json(200, { queued: true, state: queued?.state ?? "pending", purge_after: queued?.purge_after ?? null });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            return json(502, { error: `failed to queue delete: ${msg}` });
+          }
+        }
+        for (const key of [obj.final_key, obj.staging_key]) {
+          if (key) await env.BUCKET.delete(key);
+        }
+        const delRes = await fetch(`${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${mediaId}&user_id=eq.${userId}`, {
+          method: "DELETE", headers: svc });
+        if (!delRes.ok) return json(502, { error: `media row delete failed: ${delRes.status}` });
+        return json(200, { deleted: true });
+      }
+
       // Cloud caption editing: persist an edited offline caption track so it can
       // be reloaded cloud-side without the PC, and so laptops sync it later.
       // Conflict-safe: the save carries the revision it was prepared against;

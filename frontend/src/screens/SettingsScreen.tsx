@@ -26,9 +26,11 @@ import {
   AlertCircle,
   CheckCircle2,
   Bell,
+  ChevronRight,
 } from 'lucide-react';
 import { useActivity } from '../context/ActivityContext';
 import { NotificationCenterModal } from '../components/NotificationCenterModal';
+import { CloudFilesSheet } from '../components/CloudFilesSheet';
 import { TemplateStudio } from '../captions/TemplateStudio';
 import { checkAppUpdate, ReleaseManifest } from '../update/updateService';
 import { Bridge, StorageInfo, apiUrl, getAuthHeaders } from '../bridge';
@@ -158,6 +160,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [defaultLens, setDefaultLens] = useState<'back' | 'front'>(() => getDefaultLensPref());
   const [accountEmail, setAccountEmail] = useState('');
   const [jwtToken, setJwtToken] = useState<string | null>(null);
+  const [showCloudFiles, setShowCloudFiles] = useState(false);
   const [isTemplateEditorOpen, setIsTemplateEditorOpen] = useState(false);
 
   useEffect(() => {
@@ -1055,17 +1058,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
           {/* Cloud Storage (Per-Account Quota) */}
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setShowCloudFiles(true)}
+              disabled={!jwtToken}
+              title="View and delete cloud files"
+              className="w-full flex items-center justify-between text-left active:scale-[0.99] transition-all disabled:opacity-60"
+            >
               <span className="flex items-center gap-1.5 text-xs text-text-secondary">
                 <Cloud size={13} className="text-text-muted" />
                 Cloud storage
               </span>
-              <span className="text-[11px] font-mono tabular-nums text-text-muted">
-                {cloudStorage
-                  ? <>{cloudStorage.freeGb.toFixed(1)}&nbsp;GB free / {cloudStorage.quotaGb.toFixed(1)}&nbsp;GB</>
-                  : isLoadingCloudStorage ? 'Loading…' : accountEmail ? '2.0&nbsp;GB quota' : 'Sign in required'}
+              <span className="flex items-center gap-0.5">
+                <span className="text-[11px] font-mono tabular-nums text-text-muted">
+                  {cloudStorage
+                    ? <>{cloudStorage.freeGb.toFixed(1)}&nbsp;GB free / {cloudStorage.quotaGb.toFixed(1)}&nbsp;GB</>
+                    : isLoadingCloudStorage ? 'Loading…' : accountEmail ? '2.0&nbsp;GB quota' : 'Sign in required'}
+                </span>
+                <ChevronRight size={14} className="text-text-muted" />
               </span>
-            </div>
+            </button>
 
             {cloudStorage ? (
               <>
@@ -1213,6 +1225,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
       <NotificationCenterModal
         isOpen={isNotificationCenterOpen}
         onClose={closeNotificationCenter}
+      />
+
+      <CloudFilesSheet
+        isOpen={showCloudFiles}
+        onClose={() => setShowCloudFiles(false)}
+        jwtToken={jwtToken}
+        onChanged={refreshCloudStorage}
       />
     </div>
   );

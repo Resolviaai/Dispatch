@@ -1712,3 +1712,61 @@ test("instagram authorize URL targets Instagram Login with the two business scop
 });
 
 
+
+// ---- Cloud storage manager ----
+
+test("cloud files list joins each object to its clip title", async () => {
+  supabase.set("media_objects?user_id=eq.", {
+    fn: () => ({ body: [{ id: MEDIA, byte_count: 1234, created_at: "2026-11-01T00:00:00Z", clip_id: "clip-uuid" }] }),
+  });
+  supabase.set("clips_cloud?id=in.", {
+    fn: () => ({ body: [{ id: "clip-uuid", title: "My clip", local_clip_id: "clip_local_1", status: "ready" }] }),
+  });
+  const res = await worker.fetch(new Request("https://w.test/media", { headers: pcHeaders() }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.items.length, 1);
+  assert.equal(body.items[0].title, "My clip");
+  assert.equal(body.items[0].local_clip_id, "clip_local_1");
+  assert.equal(body.items[0].size, 1234);
+});
+
+test("cloud file delete removes an unlinked object immediately", async () => {
+  bucket.objects.set("final/a", { size: 10 });
+  supabase.set("media_objects?id=eq.", {
+    fn: (_url, init) => init?.method === "DELETE"
+      ? { body: null }
+      : { body: [{ id: MEDIA, user_id: USER_A, status: "active", clip_id: null, final_key: "final/a", staging_key: null }] },
+  });
+  const res = await worker.fetch(new Request(`https://w.test/media/${MEDIA}/delete`, {
+    method: "POST", headers: pcHeaders(), body: "{}",
+  }), env());
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).deleted, true);
+  assert.ok(bucket.deleted.includes("final/a"));
+});
+
+test("cloud file delete queues the PC command for a clip-backed object", async () => {
+  supabase.set("media_objects?id=eq.", {
+    fn: () => ({ body: [{ id: MEDIA, user_id: USER_A, status: "active", clip_id: "clip-uuid", final_key: "final/a", staging_key: null }] }),
+  });
+  supabase.set("clips_cloud?id=eq.", {
+    fn: () => ({ body: [{ local_clip_id: "clip_local_1", status: "ready" }] }),
+  });
+  let enqueued = null;
+  supabase.set("/rpc/cloud_enqueue_clip_command", {
+    method: "POST",
+    fn: (_url, init) => {
+      enqueued = JSON.parse(init.body);
+      return { body: [{ command_id: "cmd-1", state: "pending", purge_after: "2026-11-02T00:00:00Z" }] };
+    },
+  });
+  const res = await worker.fetch(new Request(`https://w.test/media/${MEDIA}/delete`, {
+    method: "POST", headers: pcHeaders(), body: "{}",
+  }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.queued, true);
+  assert.equal(enqueued?.p_kind, "reject");
+  assert.equal(enqueued?.p_local_clip_id, "clip_local_1");
+});
