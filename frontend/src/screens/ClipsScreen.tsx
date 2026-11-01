@@ -4297,7 +4297,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               </button>
             </div>
             <p className="text-xs text-text-secondary leading-relaxed">
-              Paste a YouTube video link. Dispatch Cloud will extract speech, select best highlights, and render ready-to-publish short clips.
+              Paste a YouTube link to create clips.
             </p>
             <input
               type="url"
@@ -4327,7 +4327,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
             <div className="pt-3 border-t border-border space-y-2">
               <p className="text-xs text-text-secondary leading-relaxed">
-                Or upload an MP4 video (max 3 minutes). It uploads to Dispatch Cloud right away — your PC processes it when it is online.
+                Or upload an MP4 (up to 3 min).
               </p>
               <input
                 ref={directFileInputRef}

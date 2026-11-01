@@ -2,14 +2,10 @@ import React from 'react';
 import {
   X,
   Bell,
-  Cloud,
-  Layers,
   RotateCw,
   CheckCircle2,
   AlertCircle,
-  Clock,
   Trash2,
-  ExternalLink,
 } from 'lucide-react';
 import { useActivity, CloudJobItem } from '../context/ActivityContext';
 
@@ -17,6 +13,22 @@ interface NotificationCenterModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRefreshAll?: () => Promise<void> | void;
+}
+
+function relativeTime(iso?: string): string {
+  if (!iso) return '';
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (sec < 60) return 'now';
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
+  return `${Math.floor(sec / 86400)}d`;
+}
+
+function jobTitle(job: CloudJobItem): string {
+  if (job.source_title) return job.source_title;
+  return job.youtube_url ? 'YouTube video' : 'Processing job';
 }
 
 export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = ({
@@ -45,12 +57,21 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
   };
 
   const activeJobs = cloudJobs.filter(
-    (j) => j.status === 'queued' || j.status === 'claimed' || j.status === 'processing'
+    (job) => job.status === 'queued' || job.status === 'claimed' || job.status === 'processing'
   );
-  const completedJobs = cloudJobs.filter(
-    (j) => j.status === 'completed' || j.status === 'done'
-  );
-  const failedJobs = cloudJobs.filter((j) => j.status === 'failed');
+  const finishedJobs = cloudJobs
+    .filter((job) => job.status === 'completed' || job.status === 'done' || job.status === 'failed')
+    .slice(0, 5);
+
+  // The same confirmation can be pushed more than once; show each message once.
+  const uniqueNotifications = notifications
+    .filter((notif, index, list) => list.findIndex((other) => other.text === notif.text) === index)
+    .slice(0, 4);
+
+  const queued = queueStats?.queued_count ?? 0;
+  const quotaUsed = queueStats?.daily_quota_used ?? 0;
+  const quotaMax = queueStats?.daily_quota_max ?? 10;
+  const hasQueueInfo = queued > 0 || quotaUsed > 0;
 
   return (
     <div
@@ -59,35 +80,25 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-canvas border border-border p-4 pb-8 sm:pb-4 space-y-4 shadow-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 duration-200"
+        className="w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-canvas border border-border p-4 pb-8 sm:pb-4 shadow-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 duration-200"
       >
-        {/* Mobile Sheet Drag Handle */}
         <div className="w-10 h-1 rounded-full bg-surface-300/60 mx-auto -mt-1 mb-1 sm:hidden shrink-0" />
 
-        {/* Modal Header */}
-        <div className="flex items-center justify-between pb-2 border-b border-border/70 shrink-0">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
-              <Bell size={16} />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold tracking-tight text-text-main flex items-center gap-2">
-                <span>Activity &amp; Notifications</span>
-                {activeJobsCount > 0 && (
-                  <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                )}
-              </h3>
-              <p className="text-[11px] text-text-muted">Background pipelines, queue &amp; confirmations</p>
-            </div>
+        <div className="flex items-center justify-between pb-2 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Bell size={16} className="text-text-muted shrink-0" />
+            <h3 className="text-sm font-semibold tracking-tight text-text-main">Activity</h3>
+            {activeJobsCount > 0 && (
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+            )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 -mr-2">
             <button
               type="button"
               onClick={handleManualRefresh}
               disabled={isRefreshing}
-              aria-label="Refresh Activity"
-              className="w-9 h-9 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
-              title="Refresh status"
+              aria-label="Refresh activity"
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
             >
               <RotateCw size={15} className={isRefreshing ? 'animate-spin text-primary' : ''} />
             </button>
@@ -95,213 +106,137 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="w-9 h-9 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
+              className="w-11 h-11 rounded-full flex items-center justify-center text-text-muted hover:text-text-main hover:bg-surface-2 active:scale-[0.95] transition-all"
             >
               <X size={16} />
             </button>
           </div>
         </div>
 
-        {/* Scrollable Content Body */}
-        <div className="flex-1 overflow-y-auto space-y-4 pr-1 -mr-1">
-
-          {/* 1. ACTIVE CLOUD RENDERING / ANALYSIS JOBS */}
-          <section className="space-y-2">
-            <div className="flex items-center justify-between text-[11px] uppercase tracking-wider font-semibold text-text-secondary">
-              <span className="flex items-center gap-1.5">
-                <Cloud size={13} className="text-primary" />
-                Cloud Processing Jobs
-              </span>
-              <span className="font-mono text-xs tabular-nums text-text-muted">
-                {activeJobs.length} active
-              </span>
-            </div>
-
+        <div className="flex-1 overflow-y-auto">
+          {/* Status: one line, only what is happening now. */}
+          <div className="py-2.5 border-t border-border flex items-center gap-2 text-xs">
             {activeJobs.length > 0 ? (
-              <div className="space-y-2">
-                {activeJobs.map((job) => (
-                  <div
-                    key={job.id}
-                    className="p-3 rounded-xl bg-primary-soft/40 border border-primary/25 space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-text-main truncate max-w-[240px]">
-                        {job.youtube_url || job.id}
-                      </span>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/20 text-primary text-[10px] font-semibold uppercase tracking-wider shrink-0">
-                        <RotateCw size={10} className="animate-spin" />
-                        {job.status === 'claimed' ? 'Processing' : 'Queued'}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-text-secondary flex items-center gap-1.5">
-                      <Clock size={11} className="text-primary" />
-                      <span>Analyzing speech &amp; AI highlights…</span>
-                      {job.stage && <span className="font-mono text-[10px] opacity-75">({job.stage})</span>}
-                    </p>
-                  </div>
-                ))}
-              </div>
+              <>
+                <RotateCw size={13} className="text-primary animate-spin shrink-0" />
+                <span className="text-text-main font-medium">
+                  {activeJobs.length} processing
+                </span>
+              </>
             ) : (
-              <div className="p-3 rounded-xl bg-surface-2 border border-border text-xs text-text-muted flex items-center gap-2">
-                <CheckCircle2 size={14} className="text-status-success shrink-0" />
-                <span>No active cloud rendering jobs in progress.</span>
-              </div>
+              <>
+                <CheckCircle2 size={13} className="text-status-success shrink-0" />
+                <span className="text-text-muted">Nothing running</span>
+              </>
             )}
-          </section>
+            {hasQueueInfo && (
+              <span className="text-text-muted tabular-nums font-mono ml-auto">
+                {queued} queued · {quotaUsed}/{quotaMax} today
+              </span>
+            )}
+          </div>
 
-          {/* 2. DAILY CLOUD QUEUE BACKLOG STATUS */}
-          {queueStats && (
-            <section className="space-y-2">
-              <div className="flex items-center justify-between text-[11px] uppercase tracking-wider font-semibold text-text-secondary">
-                <span className="flex items-center gap-1.5">
-                  <Layers size={13} className="text-status-warning" />
-                  Cloud Queue Backlog
-                </span>
-                <span className="font-mono text-xs tabular-nums text-text-muted">
-                  Quota {queueStats.daily_quota_used}/{queueStats.daily_quota_max}
-                </span>
-              </div>
-
-              <div className="p-3 rounded-xl bg-surface-2 border border-border space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-secondary">Pending in Backlog:</span>
-                  <span className="font-mono font-semibold tabular-nums text-text-main">
-                    {queueStats.queued_count} item{queueStats.queued_count === 1 ? '' : 's'}
+          {activeJobs.length > 0 && (
+            <div className="pb-2 space-y-1">
+              {activeJobs.slice(0, 3).map((job) => (
+                <div key={job.id} className="flex items-center justify-between gap-2 text-xs py-0.5">
+                  <span className="text-text-secondary truncate">{jobTitle(job)}</span>
+                  <span className="text-text-muted text-[10px] font-mono tabular-nums shrink-0">
+                    {job.stage || (job.status === 'claimed' ? 'processing' : 'queued')}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-secondary">Daily Allowance:</span>
-                  <span className="font-mono tabular-nums text-text-muted">
-                    {queueStats.daily_quota_used} used of {queueStats.daily_quota_max}
-                  </span>
-                </div>
-                <div className="pt-1 border-t border-border/50 text-[11px] text-text-muted flex items-center justify-between">
-                  <span>Auto-drains at midnight UTC</span>
-                  {queueStats.quota_date && <span className="font-mono">{queueStats.quota_date}</span>}
-                </div>
-              </div>
-            </section>
+              ))}
+            </div>
           )}
 
-          {/* 3. RECENT ACTIVITY & SYSTEM CONFIRMATIONS */}
-          <section className="space-y-2">
-            <div className="flex items-center justify-between text-[11px] uppercase tracking-wider font-semibold text-text-secondary">
-              <span className="flex items-center gap-1.5">
-                <Bell size={13} className="text-text-muted" />
-                Recent Confirmations
-              </span>
-              {notifications.length > 0 && (
+          {uniqueNotifications.length > 0 && (
+            <section className="pt-2 border-t border-border">
+              <div className="flex items-center justify-between py-1.5">
+                <span className="text-xs text-text-muted">Recent</span>
                 <button
                   type="button"
                   onClick={clearAllNotifications}
-                  className="text-[11px] text-text-muted hover:text-text-main flex items-center gap-1 transition-colors"
+                  className="text-xs text-text-muted hover:text-text-main flex items-center gap-1 transition-colors active:scale-[0.98]"
                 >
                   <Trash2 size={11} />
-                  Clear all
+                  Clear
                 </button>
-              )}
-            </div>
-
-            {notifications.length > 0 ? (
-              <div className="space-y-1.5">
-                {notifications.map((notif) => {
-                  const isError = notif.type === 'error';
-                  const isWarning = notif.type === 'warning';
-                  const isSuccess = notif.type === 'success';
-
-                  return (
-                    <div
-                      key={notif.id}
-                      className={`p-2.5 rounded-xl border flex items-start justify-between gap-2.5 transition-all ${
-                        isError
-                          ? 'bg-rose-500/10 border-rose-500/25 text-rose-300'
-                          : isWarning
-                          ? 'bg-amber-500/10 border-amber-500/25 text-amber-300'
-                          : isSuccess
-                          ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
-                          : 'bg-surface-2 border-border text-text-main'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2 min-w-0">
-                        {isError ? (
-                          <AlertCircle size={14} className="text-danger shrink-0 mt-0.5" />
-                        ) : isWarning ? (
-                          <AlertCircle size={14} className="text-status-warning shrink-0 mt-0.5" />
-                        ) : (
-                          <CheckCircle2 size={14} className="text-status-success shrink-0 mt-0.5" />
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium leading-tight text-text-main break-words">
-                            {notif.text}
-                          </p>
-                          <span className="text-[10px] text-text-muted tabular-nums mt-0.5 block">
-                            {new Date(notif.timestamp).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => dismissNotification(notif.id)}
-                        className="text-text-muted hover:text-text-main p-1 rounded-lg shrink-0"
-                        aria-label="Dismiss"
-                      >
-                        <X size={12} />
-                      </button>
+              </div>
+              {uniqueNotifications.map((notif) => {
+                const isError = notif.type === 'error';
+                const isWarning = notif.type === 'warning';
+                return (
+                  <div
+                    key={notif.id}
+                    className="flex items-start gap-2.5 py-2 border-t border-border/60"
+                  >
+                    {isError ? (
+                      <AlertCircle size={13} className="text-danger shrink-0 mt-0.5" />
+                    ) : isWarning ? (
+                      <AlertCircle size={13} className="text-status-warning shrink-0 mt-0.5" />
+                    ) : (
+                      <CheckCircle2 size={13} className="text-status-success shrink-0 mt-0.5" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-text-main leading-snug break-words">{notif.text}</p>
+                      <span className="text-[10px] text-text-muted tabular-nums">
+                        {new Date(notif.timestamp).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="p-3 rounded-xl bg-surface-2 border border-border text-xs text-text-muted text-center py-5">
-                No recent confirmations or alerts.
-              </div>
-            )}
-          </section>
-
-          {/* 4. COMPLETED OR FAILED JOBS HISTORY (Compact list if any) */}
-          {(completedJobs.length > 0 || failedJobs.length > 0) && (
-            <section className="space-y-1.5 pt-1">
-              <div className="text-[11px] uppercase tracking-wider font-semibold text-text-secondary">
-                Job History
-              </div>
-              <div className="space-y-1 max-h-36 overflow-y-auto">
-                {failedJobs.map((job) => (
-                  <div
-                    key={job.id}
-                    className="p-2 rounded-lg bg-surface-2 border border-rose-500/20 text-xs flex items-center justify-between gap-2"
-                  >
-                    <span className="truncate text-text-secondary text-[11px]">
-                      {job.youtube_url || job.id}
-                    </span>
-                    <span className="text-[10px] text-danger font-medium shrink-0">Failed</span>
+                    <button
+                      type="button"
+                      onClick={() => dismissNotification(notif.id)}
+                      className="w-8 h-8 -my-1 rounded-lg flex items-center justify-center text-text-muted hover:text-text-main shrink-0 active:scale-[0.95] transition-all"
+                      aria-label="Dismiss"
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
-                ))}
-                {completedJobs.slice(0, 5).map((job) => (
-                  <div
-                    key={job.id}
-                    className="p-2 rounded-lg bg-surface-2 border border-border text-xs flex items-center justify-between gap-2"
-                  >
-                    <span className="truncate text-text-secondary text-[11px]">
-                      {job.youtube_url || job.id}
-                    </span>
-                    <span className="text-[10px] text-status-success font-medium shrink-0">Ready</span>
-                  </div>
-                ))}
-              </div>
+                );
+              })}
             </section>
+          )}
+
+          {finishedJobs.length > 0 && (
+            <section className="pt-2 border-t border-border">
+              <div className="py-1.5 text-xs text-text-muted">History</div>
+              {finishedJobs.map((job) => {
+                const failed = job.status === 'failed';
+                return (
+                  <div
+                    key={job.id}
+                    className="flex items-center justify-between gap-2 py-2 border-t border-border/60 text-xs"
+                  >
+                    <span className="text-text-secondary truncate">{jobTitle(job)}</span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] text-text-muted font-mono tabular-nums">
+                        {relativeTime(job.created_at)}
+                      </span>
+                      <span className={`text-[10px] font-medium ${failed ? 'text-danger' : 'text-status-success'}`}>
+                        {failed ? 'Failed' : 'Ready'}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+            </section>
+          )}
+
+          {uniqueNotifications.length === 0 && finishedJobs.length === 0 && activeJobs.length === 0 && (
+            <div className="py-10 text-center text-xs text-text-muted">
+              No recent activity.
+            </div>
           )}
         </div>
 
-        {/* Modal Footer */}
-        <div className="pt-2 border-t border-border flex items-center justify-between text-xs text-text-muted shrink-0">
-          <span className="text-[11px]">Pull down on library lists to refresh</span>
+        <div className="pt-2 mt-1 border-t border-border shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="min-h-[36px] px-4 rounded-xl bg-surface-2 hover:bg-surface-3 text-text-main text-xs font-semibold active:scale-[0.98] transition-all border border-border"
+            className="w-full min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-sm font-medium active:scale-[0.98] transition-all"
           >
             Done
           </button>

@@ -9,6 +9,7 @@ export interface CloudJobItem {
   status: string; // 'queued' | 'claimed' | 'processing' | 'completed' | 'done' | 'failed'
   stage?: string;
   last_error?: string;
+  source_title?: string;
   created_at?: string;
 }
 
