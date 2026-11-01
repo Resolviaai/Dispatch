@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "source_duration": 100.0,
+  "cases": {
+    "split": {
+      "ranges": [[10.0, 30.0]],
+      "source_time": 20.0,
+      "expected": [[10.0, 20.0], [20.0, 30.0]]
+    },
+    "split_multi_range": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "source_time": 30.0,
+      "expected": [[10.0, 20.0], [25.0, 30.0], [30.0, 35.0]]
+    },
+    "trim_start": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "index": 0,
+      "edge": "start",
+      "new_source_time": 12.0,
+      "expected": [[12.0, 20.0], [25.0, 35.0]]
+    },
+    "trim_expand_into_gap": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "index": 1,
+      "edge": "start",
+      "new_source_time": 22.0,
+      "expected": [[10.0, 20.0], [22.0, 35.0]]
+    },
+    "trim_end": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "index": 0,
+      "edge": "end",
+      "new_source_time": 23.0,
+      "expected": [[10.0, 23.0], [25.0, 35.0]]
+    },
+    "trim_end_expand_into_gap": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "index": 0,
+      "edge": "end",
+      "new_source_time": 24.0,
+      "expected": [[10.0, 24.0], [25.0, 35.0]]
+    },
+    "delete_middle": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0], [40.0, 50.0]],
+      "index": 1,
+      "expected": [[10.0, 20.0], [40.0, 50.0]]
+    },
+    "adjacency_preserved": {
+      "ranges": [[10.0, 15.0], [15.0, 20.0]],
+      "expected_count": 2,
+      "expected_duration": 10.0
+    },
+    "point_mapping": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "source_to_concat": [
+        {"source": 15.0, "expected": 5.0},
+        {"source": 22.0, "expected": null},
+        {"source": 20.0, "expected": 10.0},
+        {"source": 25.0, "expected": 10.0},
+        {"source": 35.0, "expected": 20.0}
+      ],
+      "concat_to_source": [
+        {"timeline": 0.0, "expected": 10.0},
+        {"timeline": 5.0, "expected": 15.0},
+        {"timeline": 10.0, "expected": 25.0},
+        {"timeline": 15.0, "expected": 30.0},
+        {"timeline": 20.0, "expected": 35.0}
+      ]
+    },
+    "source_interval_fragments": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "source_start": 15.0,
+      "source_end": 30.0,
+      "expected": [
+        {"source_start": 15.0, "source_end": 20.0, "timeline_start": 5.0, "timeline_end": 10.0},
+        {"source_start": 25.0, "source_end": 30.0, "timeline_start": 10.0, "timeline_end": 15.0}
+      ]
+    },
+    "timeline_interval_fragments": {
+      "ranges": [[10.0, 20.0], [25.0, 35.0]],
+      "timeline_start": 8.0,
+      "timeline_end": 12.0,
+      "expected": [
+        {"source_start": 18.0, "source_end": 20.0, "timeline_start": 8.0, "timeline_end": 10.0},
+        {"source_start": 25.0, "source_end": 27.0, "timeline_start": 10.0, "timeline_end": 12.0}
+      ]
+    },
+    "edl_document": {
+      "document": {
+        "v": 1,
+        "source_asset_id": "asset_original_001",
+        "source_duration": 60.0,
+        "ranges": [[5.0, 10.0], [15.0, 20.0]],
+        "settings": {"aspect_ratio": "9:16"},
+        "provenance": {"origin": "gemini_auto_cut"}
+      },
+      "expected_range_count": 2,
+      "expected_duration": 10.0
+    }
+  },
+  "invalid_ranges": [
+    {"name": "overlap", "source_duration": 100.0, "ranges": [[0.0, 10.0], [9.0, 15.0]]},
+    {"name": "unsorted", "source_duration": 100.0, "ranges": [[20.0, 30.0], [10.0, 20.0]]},
+    {"name": "piece_too_short", "source_duration": 100.0, "ranges": [[0.0, 0.09], [1.0, 6.0]]},
+    {"name": "total_too_short", "source_duration": 100.0, "ranges": [[0.0, 4.99]]},
+    {"name": "total_too_long", "source_duration": 200.0, "ranges": [[0.0, 181.0]]},
+    {"name": "below_source_bounds", "source_duration": 100.0, "ranges": [[-0.02, 10.0]]},
+    {"name": "above_source_bounds", "source_duration": 100.0, "ranges": [[90.0, 100.02]]},
+    {"name": "empty", "source_duration": 100.0, "ranges": []}
+  ]
+}
