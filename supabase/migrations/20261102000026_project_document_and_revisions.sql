@@ -28,6 +28,8 @@ create table if not exists public.clip_revisions (
     log_parent_revision bigint,
     state_parent_revision bigint,
     active_state_revision bigint not null,
+    undo_target_revision bigint,
+    redo_of_revision bigint,
     redo_stack jsonb not null default '[]'::jsonb,
     operation_id text not null,
     project_document jsonb not null,
@@ -446,7 +448,7 @@ begin
         'source_asset_id', v_source_asset_id,
         'revision', 1,
         'timeline', jsonb_build_object(
-            'segments', jsonb_build_array(jsonb_build_array(round(r.start_time, 3), round(r.end_time, 3))),
+            'segments', jsonb_build_array(jsonb_build_object('id', 'seg-1', 'source_start', round(r.start_time, 3), 'source_end', round(r.end_time, 3))),
             'kept_duration', v_dur,
             'hull_start', round(r.start_time, 3),
             'hull_end', round(r.end_time, 3),
@@ -484,7 +486,7 @@ begin
     -- Update cloud clip
     update clips_cloud set
         project_document = v_doc,
-        segments_json = jsonb_build_array(jsonb_build_array(round(r.start_time, 3), round(r.end_time, 3))),
+        segments_json = jsonb_build_array(jsonb_build_object('id', 'seg-1', 'source_start', round(r.start_time, 3), 'source_end', round(r.end_time, 3))),
         kept_duration = v_dur,
         segments_revision = 1,
         active_state_revision = 1,

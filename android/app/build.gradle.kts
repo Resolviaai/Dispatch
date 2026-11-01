@@ -114,6 +114,12 @@ dependencies {
     // WorkManager (Reliable background YouTube uploads)
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
+    // Jetpack Media3 Transformer (Hardware-accelerated on-device video rendering)
+    val media3Version = "1.5.1"
+    implementation("androidx.media3:media3-transformer:$media3Version")
+    implementation("androidx.media3:media3-effect:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
+
     // Security (EncryptedSharedPreferences / Android Keystore)
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 

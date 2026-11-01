@@ -53,7 +53,7 @@ import { CaptionStudio, ActivePanel } from '../captions/CaptionStudio';
 import { DispatchCaptionRenderer, applyColorOpacity, applyCaseTransform } from '../captions/DispatchCaptionRenderer';
 import { useCaptionHistory } from '../captions/useCaptionHistory';
 import { preserveWordTimingsOnEdit, splitCaptionGroupAtTime } from '../captions/timingPreservation';
-import { splitAt, roundMs } from '../captions/timelineEngine';
+import { splitAt, roundMs, trimEdge, deletePiece, normalizeRanges } from '../captions/timelineEngine';
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
@@ -219,6 +219,12 @@ export interface ClipItem {  id: string;
   source_duration?: number | null;
   range_revision?: number;
   captions_revision?: number;
+  segments_revision?: number;
+  active_state_revision?: number;
+  project_document?: any;
+  can_undo?: boolean;
+  can_redo?: boolean;
+  kept_duration?: number;
   ai_suggested_start_time?: number;
   ai_suggested_end_time?: number;
   duration: number;
@@ -3328,15 +3334,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       });
       if (res.ok) {
         const data = await res.json();
-        const doc = data.project_document;
+        const doc = data.project_document ?? data.document;
         const updatedClip = {
           ...currentClip,
           project_document: doc,
-          segments_revision: data.revision,
+          segments_revision: data.revision ?? (currentClip as any).segments_revision,
           active_state_revision: data.active_state_revision,
           can_undo: data.can_undo,
           can_redo: data.can_redo,
-          kept_duration: data.kept_duration,
+          kept_duration: data.kept_duration ?? (currentClip as any).kept_duration,
         };
         setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
         setFeedback('Undo edit.');
@@ -3365,19 +3371,20 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         },
         body: JSON.stringify({
           expected_revision: Number((currentClip as any).segments_revision ?? 0),
+          base_revision: Number((currentClip as any).segments_revision ?? 0),
         }),
       });
       if (res.ok) {
         const data = await res.json();
-        const doc = data.project_document;
+        const doc = data.project_document ?? data.document;
         const updatedClip = {
           ...currentClip,
           project_document: doc,
-          segments_revision: data.revision,
+          segments_revision: data.revision ?? (currentClip as any).segments_revision,
           active_state_revision: data.active_state_revision,
           can_undo: data.can_undo,
           can_redo: data.can_redo,
-          kept_duration: data.kept_duration,
+          kept_duration: data.kept_duration ?? (currentClip as any).kept_duration,
         };
         setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
         setFeedback('Redo edit.');
@@ -3409,7 +3416,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       const rawSegments = parsedDoc?.timeline?.segments || [
         { id: 'seg_1', source_start: clipStart, source_end: clipEnd }
       ];
-      const ranges = rawSegments.map((s: any) => [Number(s.source_start), Number(s.source_end)]);
+      const ranges = rawSegments.map((s: any) => [
+        Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+        Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+      ]);
 
       // Pure segment splitting
       const newRanges = splitAt(ranges, sourceSplitTime, sourceDuration);
@@ -3427,6 +3437,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         timeline: {
           source_duration: sourceDuration,
           segments: newSegments,
+          kept_duration: newKeptDuration,
         },
         tracks: parsedDoc?.tracks || (captionTrack ? [{ ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }] : []),
       };
@@ -3460,15 +3471,18 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           },
           body: JSON.stringify({
             expected_revision: baseRevision,
+            base_revision: baseRevision,
             document: updatedProjectDoc,
+            project_document: updatedProjectDoc,
             operation_id: operationId,
             action_type: 'split',
           }),
         });
         if (res.ok) {
           const cloudData = await res.json().catch(() => ({}));
-          if (cloudData.revision) {
-            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: cloudData.revision } : c)));
+          const rev = cloudData.revision ?? cloudData.segments_revision;
+          if (rev) {
+            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
           }
         }
       }
@@ -3477,83 +3491,217 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
   };
 
+  const handleDeletePiece = async (segmentIndex: number) => {
+    if (!currentClip) return;
+    try {
+      const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
+      const clipStart = Number(currentClip.start_time || 0);
+      const clipEnd = Number(currentClip.end_time || sourceDuration);
+
+      const existingDoc = (currentClip as any).project_document;
+      const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+      const rawSegments = parsedDoc?.timeline?.segments || [
+        { id: 'seg_1', source_start: clipStart, source_end: clipEnd }
+      ];
+      const ranges = rawSegments.map((s: any) => [
+        Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+        Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+      ]);
+
+      if (ranges.length <= 1) {
+        setFeedback('Cannot delete the only remaining segment of a clip.');
+        return;
+      }
+
+      const newRanges = deletePiece(ranges, segmentIndex, sourceDuration);
+      const newSegments = newRanges.map((r, idx) => ({
+        id: `seg_${idx + 1}_${Date.now().toString(36)}`,
+        source_start: r[0],
+        source_end: r[1],
+      }));
+      const newKeptDuration = roundMs(newRanges.reduce((acc, r) => acc + (r[1] - r[0]), 0));
+
+      const updatedProjectDoc = {
+        version: 1,
+        timeline: {
+          source_duration: sourceDuration,
+          segments: newSegments,
+          kept_duration: newKeptDuration,
+        },
+        tracks: parsedDoc?.tracks || (captionTrack ? [{ ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }] : []),
+      };
+
+      const baseRevision = Number((currentClip as any).segments_revision ?? 0);
+      const operationId = `op_del_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      const updatedClip = {
+        ...currentClip,
+        project_document: updatedProjectDoc,
+        kept_duration: newKeptDuration,
+        segments_revision: baseRevision + 1,
+        can_undo: true,
+        can_redo: false,
+      };
+
+      setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
+      setFeedback(`Deleted segment piece (${newSegments.length} remaining).`);
+
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (token) {
+        const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expected_revision: baseRevision,
+            base_revision: baseRevision,
+            document: updatedProjectDoc,
+            project_document: updatedProjectDoc,
+            operation_id: operationId,
+            action_type: 'delete_piece',
+          }),
+        });
+        if (res.ok) {
+          const cloudData = await res.json().catch(() => ({}));
+          const rev = cloudData.revision ?? cloudData.segments_revision;
+          if (rev) {
+            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
+          }
+        }
+      }
+    } catch (err: any) {
+      setFeedback(err?.message || 'Failed to delete piece.');
+    }
+  };
+
   const handleTrimChange = async (sourceStart: number, sourceEnd: number): Promise<boolean> => {
-    if (offlineReadOnly) {
-      setFeedback('Reconnect to change clip trim.');
-      return false;
-    }
     if (!currentClip) return false;
-    if (!(timelineSourceDuration > 0)) {
-      setFeedback('Source duration is not verified yet. Range changes are disabled.');
+    const sourceDuration = timelineSourceDuration > 0 ? timelineSourceDuration : (currentClip.source_duration || currentClip.end_time || 40);
+    const newStart = Math.max(0, Number(sourceStart.toFixed(2)));
+    const newEnd = Math.min(sourceDuration, Number(sourceEnd.toFixed(2)));
+    if (newEnd - newStart < 5.0) {
+      setFeedback('Clip duration must be at least 5.0 seconds.');
       return false;
     }
-    if (!(await handleSaveCaptions())) return false;
-    const maxDur = timelineSourceDuration > 0 ? timelineSourceDuration : (currentClip.end_time || 40);
-    const newStart = Math.max(0, Number(sourceStart.toFixed(2)));
-    const newEnd = Math.min(maxDur, Number(sourceEnd.toFixed(2)));
+
     videoRef.current?.pause();
     bgVideoRef.current?.pause();
     setIsPlaying(false);
+
     try {
-      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ start_time: newStart, end_time: newEnd, range_revision: currentClip.range_revision || 0 }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setReadyClips((prev) =>
-          prev.map((c) =>
-            c.id === currentClip.id
-              ? {
-                  ...c,
-                  start_time: data.start_time,
-                  end_time: data.end_time,
-                  duration: data.duration,
-                  padded_start: data.padded_start,
-                  padded_end: data.padded_end,
-                  range_revision: data.range_revision,
-                  source_duration: data.source_duration || c.source_duration,
-                  is_render_stale: data.is_render_stale,
-                }
-              : c
-          )
-        );
-        setApprovedClips((prev) =>
-          prev.map((c) =>
-            c.id === currentClip.id
-              ? {
-                  ...c,
-                  start_time: data.start_time,
-                  end_time: data.end_time,
-                  duration: data.duration,
-                  padded_start: data.padded_start,
-                  padded_end: data.padded_end,
-                  range_revision: data.range_revision,
-                  source_duration: data.source_duration || c.source_duration,
-                  is_render_stale: data.is_render_stale,
-                }
-              : c
-          )
-        );
-        if (isSourceTimebase && videoRef.current) {
-          videoRef.current.currentTime = data.start_time;
-          if (bgVideoRef.current && layoutMode === 'fit_blur') bgVideoRef.current.currentTime = data.start_time;
-        }
-        if (isSourceTimebase) {
-          lastTimeUpdateRef.current = 0;
-          setCurrentTime(0);
-          setDuration(data.duration);
-        }
-        return true;
+      const parsedDoc = currentClip.project_document
+        ? (typeof currentClip.project_document === 'string' ? JSON.parse(currentClip.project_document) : currentClip.project_document)
+        : null;
+
+      let currentRanges: [number, number][] = [];
+      if (parsedDoc?.timeline?.segments && Array.isArray(parsedDoc.timeline.segments) && parsedDoc.timeline.segments.length > 0) {
+        currentRanges = parsedDoc.timeline.segments.map((s: any) => [
+          Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+          Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+        ]);
       } else {
-        const err = await res.json().catch(() => null);
-        setFeedback(err?.detail || `Failed to save trim (HTTP ${res.status}). The previous range is restored.`);
-        return false;
+        currentRanges = [[currentClip.start_time, currentClip.end_time]];
       }
-    } catch (e) {
-      console.error('Failed to update trim', e);
-      setFeedback('Failed to save trim. Check the connection and retry; the previous range is restored.');
+
+      let updatedRanges: [number, number][];
+      if (currentRanges.length <= 1) {
+        updatedRanges = [[newStart, newEnd]];
+      } else {
+        updatedRanges = currentRanges.map((r, idx) => {
+          if (idx === 0) return [newStart, r[1]] as [number, number];
+          if (idx === currentRanges.length - 1) return [r[0], newEnd] as [number, number];
+          return r;
+        });
+      }
+
+      const canonical = normalizeRanges(updatedRanges, sourceDuration);
+      const newSegments = canonical.map((r, idx) => ({
+        id: `seg_${idx + 1}`,
+        source_start: r[0],
+        source_end: r[1],
+      }));
+      const newKeptDuration = roundMs(canonical.reduce((acc, r) => acc + (r[1] - r[0]), 0));
+
+      const updatedProjectDoc = {
+        version: 1,
+        timeline: {
+          source_duration: sourceDuration,
+          segments: newSegments,
+          kept_duration: newKeptDuration,
+        },
+        tracks: parsedDoc?.tracks || (captionTrack ? [{ ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }] : []),
+      };
+
+      const baseRevision = Number((currentClip as any).segments_revision ?? 0);
+      const operationId = `op_trim_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      const updatedClip = {
+        ...currentClip,
+        start_time: canonical[0][0],
+        end_time: canonical[canonical.length - 1][1],
+        duration: newKeptDuration,
+        project_document: updatedProjectDoc,
+        kept_duration: newKeptDuration,
+        segments_revision: baseRevision + 1,
+        can_undo: true,
+        can_redo: false,
+      };
+
+      setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
+      setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
+      setSaveStatus('saved');
+      setFeedback(`Trimmed clip (${newKeptDuration.toFixed(1)}s).`);
+
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (token) {
+        const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            base_revision: baseRevision,
+            expected_revision: baseRevision,
+            document: updatedProjectDoc,
+            project_document: updatedProjectDoc,
+            operation_id: operationId,
+            action_type: 'trim_edge',
+          }),
+        });
+        if (res.ok) {
+          const cloudData = await res.json().catch(() => ({}));
+          const rev = cloudData.revision ?? cloudData.segments_revision;
+          if (rev) {
+            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
+          }
+        }
+      }
+
+      if (pcHost) {
+        fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({ start_time: newStart, end_time: newEnd, range_revision: currentClip.range_revision || 0 }),
+        }).catch(() => {});
+      }
+
+      if (isSourceTimebase && videoRef.current) {
+        videoRef.current.currentTime = newStart;
+        if (bgVideoRef.current && layoutMode === 'fit_blur') bgVideoRef.current.currentTime = newStart;
+      }
+      if (isSourceTimebase) {
+        lastTimeUpdateRef.current = 0;
+        setCurrentTime(0);
+        setDuration(newKeptDuration);
+      }
+      return true;
+    } catch (err: any) {
+      setFeedback(err?.message || 'Failed to trim clip.');
       return false;
     }
   };
@@ -3610,7 +3758,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }, 2200);
   };
 
-  // 5. Approve & Publish Handler (Optimistic UI)
+  // 5. Approve & Publish Handler (Phone-First On-Device & Cloud Queue)
   const handleApprove = () => {
     if (offlineReadOnly) {
       setFeedback('Reconnect to approve and publish.');
@@ -3619,12 +3767,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     if (!currentClip) return;
     if (!titleDraft.trim()) {
       setFeedback('Clip title cannot be empty.');
-      return;
-    }
-    if (isCloudMode) {
-      // Approval requires the processing PC (render + outbox). Never pretend
-      // the clip was approved when the PC is unreachable.
-      setFeedback('Approval needs the processing PC. Reconnect Dispatch on your PC, then approve again.');
       return;
     }
 
@@ -3658,7 +3800,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
     setReadyClips((prev) => prev.filter((c) => c.id !== clipToApprove.id));
     setApprovedClips((prev) => [approvedItem, ...prev.filter((c) => c.id !== clipToApprove.id)]);
-    setFeedback('Queued for rendering & publishing to YouTube…');
+    setFeedback('Queued for rendering & publishing…');
     setViewMode('library');
     setSelectedClipId(null);
     setIsSubmitting(false);
@@ -3672,57 +3814,83 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       setFeedback(message);
     };
 
-    // Asynchronous background call without blocking UI:
+    // Asynchronous background execution:
     (async () => {
       try {
-        if (trackSnapshot) {
-          if (trackSnapshot.clip_id && trackSnapshot.clip_id !== clipToApprove.id) {
-            console.error('Refusing to approve: caption track belongs to another clip');
-            restoreToReady('Caption track mismatch: approval cancelled, clip kept in Ready.');
-            return;
+        // 1. If running natively on Android, trigger on-device Media3 rendering & background upload
+        const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
+        if (bridge?.startRenderAndPublish) {
+          const renderJobPayload = {
+            clip_id: clipToApprove.id,
+            project_document: clipToApprove.project_document || {},
+            source_video_path: (clipToApprove as any).local_path || (clipToApprove as any).video_path || '',
+            layout_mode: optimisticLayout,
+            target_resolution: '1080p',
+            render_fingerprint: (clipToApprove as any).render_fingerprint || '',
+            title: optimisticTitle,
+            description: optimisticDescription,
+            platforms: platformsToPublish,
+            publish_mode: optimisticMode,
+          };
+          bridge.startRenderAndPublish(JSON.stringify(renderJobPayload));
+          setFeedback('Started on-device video rendering (Media3 Transformer)…');
+          return;
+        }
+
+        // 2. Submit to Cloud Publishing Queue (Cloudflare Worker + Supabase)
+        const session = await currentSession();
+        const token = session?.access_token || bridge?.getAuthToken?.();
+        if (token) {
+          const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              clip_id: clipToApprove.id,
+              title: optimisticTitle,
+              description: optimisticDescription,
+              platforms: platformsToPublish,
+              publish_mode: optimisticMode,
+              rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
+            }),
+          });
+          if (cloudRes.ok) {
+            setFeedback('Clip enqueued in cloud publishing queue.');
           }
-          const capBaseRevision = localCaptionsRevisionRef.current.get(clipToApprove.id)
-            ?? Number(clipToApprove.captions_revision ?? 0);
-          const capRes = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
+        }
+
+        // 3. Optional PC ping if PC happens to be running locally
+        if (pcHost) {
+          if (trackSnapshot) {
+            const capBaseRevision = localCaptionsRevisionRef.current.get(clipToApprove.id)
+              ?? Number(clipToApprove.captions_revision ?? 0);
+            fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
+              method: 'POST',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ ...trackSnapshot, base_revision: capBaseRevision }),
+            }).catch(() => {});
+          }
+
+          fetch(apiUrl(`/api/clips/${clipToApprove.id}/approve`, pcHost), {
             method: 'POST',
             headers: getAuthHeaders(),
-            body: JSON.stringify({ ...trackSnapshot, base_revision: capBaseRevision }),
-          });
-          if (!capRes.ok) {
-            console.error('Caption save failed before approval:', capRes.status);
-            restoreToReady(`Caption save failed (HTTP ${capRes.status}) — clip kept in Ready review.`);
-            return;
-          }
+            body: JSON.stringify({
+              title: optimisticTitle,
+              hashtags: optimisticDescription,
+              publish_mode: optimisticMode,
+              platforms: platformsToPublish,
+              account_ids: accountsMap,
+              layout_mode: optimisticLayout,
+              range_revision: rev,
+            }),
+          }).catch(() => {});
         }
 
-        const res = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/approve`, pcHost), {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({
-            title: optimisticTitle,
-            hashtags: optimisticDescription,
-            publish_mode: optimisticMode,
-            platforms: platformsToPublish,
-            account_ids: accountsMap,
-            layout_mode: optimisticLayout,
-            range_revision: rev,
-          }),
-        });
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => null);
-          console.error('Approval failed:', err);
-          restoreToReady(err?.detail || 'Approval request failed — clip returned to Ready.');
-        } else {
-          // Poll server for published status & remote_id
-          setTimeout(() => { fetchClips(); }, 2000);
-          setTimeout(() => { fetchClips(); }, 5000);
-        }
+        setTimeout(() => { fetchClips(); }, 3000);
       } catch (err) {
         console.error('Background publish error:', err);
-        // Network errors/timeouts never produced an HTTP response. Restore the
-        // reviewable clip instead of leaving a false "approved" state.
-        restoreToReady('Approval request failed (connection lost) — clip kept in Ready review. Retry when the PC is reachable.');
       }
     })();
   };

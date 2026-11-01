@@ -7,7 +7,7 @@ handle exact boundaries explicitly so Python and TypeScript can share fixtures.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Tuple
 
 TimeRange = Tuple[float, float]
@@ -40,6 +40,14 @@ def _duration(source_duration: Any) -> float:
 
 
 def _read_range(raw: Any, index: int) -> TimeRange:
+    if isinstance(raw, (dict, Mapping)):
+        start_val = raw.get("source_start", raw.get("start"))
+        end_val = raw.get("source_end", raw.get("end"))
+        if start_val is None or end_val is None:
+            raise SegmentError(f"range {index} object must contain source_start/source_end or start/end")
+        start = _finite_number(start_val, f"ranges[{index}].source_start")
+        end = _finite_number(end_val, f"ranges[{index}].source_end")
+        return start, end
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or len(raw) != 2:
         raise SegmentError(f"range {index} must contain exactly [start, end]")
     start = _finite_number(raw[0], f"ranges[{index}][0]")
@@ -309,13 +317,21 @@ def canonical_media_spans(ranges: Any, source_duration: Optional[float] = None) 
         normalized = normalize_ranges(ranges, source_duration)
     else:
         if not isinstance(ranges, Sequence) or isinstance(ranges, (str, bytes)):
-            raise SegmentError("ranges must be a list of [start, end] pairs")
+            raise SegmentError("ranges must be a list of [start, end] pairs or segment dicts")
         normalized = []
         for item in ranges:
-            if not isinstance(item, Sequence) or isinstance(item, (str, bytes)) or len(item) != 2:
-                raise SegmentError("range element must be a [start, end] pair")
-            s = round_ms(item[0])
-            e = round_ms(item[1])
+            if isinstance(item, (dict, Mapping)):
+                start_val = item.get("source_start", item.get("start"))
+                end_val = item.get("source_end", item.get("end"))
+                if start_val is None or end_val is None:
+                    raise SegmentError("range element dict must contain source_start/source_end or start/end")
+                s = round_ms(start_val)
+                e = round_ms(end_val)
+            elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)) and len(item) == 2:
+                s = round_ms(item[0])
+                e = round_ms(item[1])
+            else:
+                raise SegmentError("range element must be a [start, end] pair or segment dict")
             if s < 0 or e <= s:
                 raise SegmentError(f"invalid segment bounds: [{s}, {e}]")
             normalized.append((s, e))

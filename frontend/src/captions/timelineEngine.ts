@@ -49,6 +49,18 @@ function validSourceDuration(value: unknown): number {
 }
 
 function readRange(raw: unknown, index: number): TimeRange {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    const startVal = obj.source_start ?? obj.start;
+    const endVal = obj.source_end ?? obj.end;
+    if (startVal === undefined || endVal === undefined) {
+      throw new TimelineError(`range ${index} object must contain source_start/source_end or start/end`);
+    }
+    return [
+      finiteNumber(startVal, `ranges[${index}].source_start`),
+      finiteNumber(endVal, `ranges[${index}].source_end`),
+    ];
+  }
   if (!Array.isArray(raw) || raw.length !== 2) {
     throw new TimelineError(`range ${index} must contain exactly [start, end]`);
   }
@@ -357,13 +369,20 @@ export function canonicalMediaSpans(ranges: unknown, sourceDuration?: number): T
   if (sourceDuration !== undefined) {
     normalized = normalizeRanges(ranges, sourceDuration);
   } else {
-    if (!Array.isArray(ranges)) throw new TimelineError("ranges must be an array of [start, end] pairs");
+    if (!Array.isArray(ranges)) throw new TimelineError("ranges must be an array of [start, end] pairs or segment objects");
     normalized = ranges.map((item, idx) => {
-      if (!Array.isArray(item) || item.length !== 2) {
-        throw new TimelineError(`range at index ${idx} must be a [start, end] pair`);
+      let s: number;
+      let e: number;
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const obj = item as Record<string, unknown>;
+        s = roundMs(obj.source_start ?? obj.start);
+        e = roundMs(obj.source_end ?? obj.end);
+      } else if (Array.isArray(item) && item.length === 2) {
+        s = roundMs(item[0]);
+        e = roundMs(item[1]);
+      } else {
+        throw new TimelineError(`range at index ${idx} must be a [start, end] pair or segment object`);
       }
-      const s = roundMs(item[0]);
-      const e = roundMs(item[1]);
       if (s < 0 || e <= s) {
         throw new TimelineError(`invalid segment bounds: [${s}, ${e}]`);
       }

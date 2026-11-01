@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [SessionEntity::class, SegmentEntity::class, OutboxEntity::class],
-    version = 6,
+    entities = [SessionEntity::class, SegmentEntity::class, OutboxEntity::class, RenderJobEntity::class],
+    version = 7,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -160,6 +160,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `render_jobs` (" +
+                        "`jobId` TEXT NOT NULL, `clipId` TEXT NOT NULL, " +
+                        "`renderFingerprint` TEXT NOT NULL, `projectDocumentJson` TEXT NOT NULL, " +
+                        "`sourceVideoPath` TEXT NOT NULL, `outputVideoPath` TEXT NOT NULL, " +
+                        "`thumbnailPath` TEXT, `layoutMode` TEXT NOT NULL, " +
+                        "`cropAnchorX` REAL NOT NULL, `targetResolution` TEXT NOT NULL, " +
+                        "`status` TEXT NOT NULL, `progressPercent` INTEGER NOT NULL, " +
+                        "`renderedDurationSeconds` REAL NOT NULL, `r2Key` TEXT, " +
+                        "`r2UploadOffset` INTEGER NOT NULL, `r2TotalBytes` INTEGER NOT NULL, " +
+                        "`lastError` TEXT, `retryCount` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "`completedAt` INTEGER, PRIMARY KEY(`jobId`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_render_jobs_clipId` ON `render_jobs` (`clipId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_render_jobs_status` ON `render_jobs` (`status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_render_jobs_renderFingerprint` ON `render_jobs` (`renderFingerprint`)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -167,7 +189,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "dispatch_mobile.db"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_2_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_2_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING) // Strict WAL mode for crash recovery!
                 .build()

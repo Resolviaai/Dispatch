@@ -27,7 +27,26 @@ test("canonicalMediaSpans merges contiguous adjacent intervals", () => {
 test("computeMediaFingerprint split invariance", () => {
   const fp1 = computeMediaFingerprint("source_123", [[10.0, 30.0]]);
   const fp2 = computeMediaFingerprint("source_123", [[10.0, 20.0], [20.0, 30.0]]);
+  const fp3 = computeMediaFingerprint("source_123", [
+    { id: "seg-1", source_start: 10.0, source_end: 20.0 },
+    { id: "seg-2", source_start: 20.0, source_end: 30.0 },
+  ]);
   assert.equal(fp1, fp2);
+  assert.equal(fp1, fp3);
+});
+
+test("validateTimelineSegments accepts canonical segment objects and arrays", () => {
+  const objSegs = [
+    { id: "s1", source_start: 1.0, source_end: 10.0 },
+    { id: "s2", source_start: 10.0, source_end: 20.0 },
+  ];
+  const check = validateTimelineSegments(objSegs);
+  assert.equal(check.valid, true);
+  assert.equal(check.keptDuration, 19.0);
+  assert.deepEqual(check.canonicalSegments, [
+    { id: "s1", source_start: 1.0, source_end: 10.0 },
+    { id: "s2", source_start: 10.0, source_end: 20.0 },
+  ]);
 });
 
 test("validateTimelineSegments rejects invalid durations and overlaps", () => {

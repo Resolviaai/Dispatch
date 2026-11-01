@@ -1058,11 +1058,13 @@ def import_cloud_timelines_for_clips(user_ids: Optional[List[str]] = None) -> in
                 logger.warning("cloud timeline fetch failed for %s: HTTP %s", user_id, res.status_code)
                 continue
             body = res.json() if res.text else {}
-            items = body.get("timelines", []) if isinstance(body, dict) else []
+            items = body.get("timelines") or body.get("clips") or []
+            if not isinstance(items, list):
+                items = []
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                local_clip_id = str(item.get("clip_id") or "")
+                local_clip_id = str(item.get("clip_id") or item.get("local_clip_id") or "")
                 if not local_clip_id:
                     continue
                 outcome = db.import_cloud_timeline_data(local_clip_id, item, expected_user_id=user_id)
@@ -1093,6 +1095,7 @@ def report_render_complete_to_cloud(
     rendered_fingerprint: str,
     duration: float,
     r2_key: Optional[str] = None,
+    byte_count: Optional[int] = None,
 ) -> bool:
     """Notify Cloudflare Worker that headless PC has rendered the clip with rendered_fingerprint."""
     token = get_worker_token()
@@ -1101,15 +1104,21 @@ def report_render_complete_to_cloud(
     try:
         clip = db.get_clip_by_id(clip_id)
         owner = str(clip.get("user_id") or "").strip() if clip else None
+        payload: Dict[str, Any] = {
+            "clip_id": clip_id,
+            "local_clip_id": clip_id,
+            "rendered_fingerprint": rendered_fingerprint,
+            "render_fingerprint": rendered_fingerprint,
+            "duration": duration,
+        }
+        if r2_key:
+            payload["r2_key"] = r2_key
+        if byte_count is not None:
+            payload["byte_count"] = byte_count
         res = requests.post(
             f"{_worker_base()}/sync/pc/render-complete",
             headers=_cloud_headers(token, owner),
-            json={
-                "clip_id": clip_id,
-                "rendered_fingerprint": rendered_fingerprint,
-                "duration": duration,
-                "r2_key": r2_key or f"outputs/{clip_id}/{rendered_fingerprint}.mp4",
-            },
+            json=payload,
             timeout=15,
         )
         if res.ok:

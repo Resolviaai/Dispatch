@@ -2681,5 +2681,103 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
         }
     }
 
+    @JavascriptInterface
+    fun startRenderAndPublish(jobJson: String): String {
+        return try {
+            val json = com.google.gson.JsonParser.parseString(jobJson).asJsonObject
+            val clipId = json.get("clip_id")?.asString ?: java.util.UUID.randomUUID().toString()
+            val jobId = "render_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}"
+            val projectDocJson = json.get("project_document")?.toString() ?: "{}"
+            val sourceVideoPath = json.get("source_video_path")?.asString ?: ""
+            val layoutMode = json.get("layout_mode")?.asString ?: "portrait_9_16"
+            val cropAnchorX = json.get("crop_anchor_x")?.asFloat ?: 0.5f
+            val targetRes = json.get("target_resolution")?.asString ?: "1080p"
+            val renderFingerprint = json.get("render_fingerprint")?.asString ?: "fp_$jobId"
+
+            val outputDir = java.io.File(activity.filesDir, "rendered_clips").apply { mkdirs() }
+            val outputVideoPath = java.io.File(outputDir, "${clipId}_${System.currentTimeMillis()}.mp4").absolutePath
+            val thumbPath = java.io.File(outputDir, "${clipId}_${System.currentTimeMillis()}.jpg").absolutePath
+
+            val entity = com.resolvia.dispatch.data.RenderJobEntity(
+                jobId = jobId,
+                clipId = clipId,
+                renderFingerprint = renderFingerprint,
+                projectDocumentJson = projectDocJson,
+                sourceVideoPath = sourceVideoPath,
+                outputVideoPath = outputVideoPath,
+                thumbnailPath = thumbPath,
+                layoutMode = layoutMode,
+                cropAnchorX = cropAnchorX,
+                targetResolution = targetRes,
+                status = com.resolvia.dispatch.data.RenderJobEntity.STATUS_QUEUED,
+                progressPercent = 0,
+                createdAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis()
+            )
+
+            runBlocking(Dispatchers.IO) {
+                database.recordingDao().insertRenderJob(entity)
+            }
+
+            com.resolvia.dispatch.renderer.RenderForegroundService.start(
+                context = activity,
+                jobId = jobId,
+                clipId = clipId
+            )
+
+            JsonObject().apply {
+                addProperty("success", true)
+                addProperty("job_id", jobId)
+                addProperty("status", "QUEUED")
+            }.toString()
+        } catch (e: Exception) {
+            JsonObject().apply {
+                addProperty("success", false)
+                addProperty("error", e.message ?: "Failed to start render")
+            }.toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun getRenderJobStatus(jobIdOrClipId: String): String {
+        return try {
+            val job = runBlocking(Dispatchers.IO) {
+                database.recordingDao().getRenderJobById(jobIdOrClipId)
+                    ?: database.recordingDao().getLatestRenderJobForClip(jobIdOrClipId)
+            }
+            if (job == null) {
+                JsonObject().apply {
+                    addProperty("found", false)
+                }.toString()
+            } else {
+                JsonObject().apply {
+                    addProperty("found", true)
+                    addProperty("job_id", job.jobId)
+                    addProperty("clip_id", job.clipId)
+                    addProperty("status", job.status)
+                    addProperty("progress", job.progressPercent)
+                    addProperty("output_path", job.outputVideoPath)
+                    addProperty("duration", job.renderedDurationSeconds)
+                    addProperty("error", job.lastError)
+                }.toString()
+            }
+        } catch (e: Exception) {
+            JsonObject().apply {
+                addProperty("found", false)
+                addProperty("error", e.message)
+            }.toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun cancelRenderJob(jobId: String): Boolean {
+        return try {
+            com.resolvia.dispatch.renderer.RenderForegroundService.cancel(activity, jobId)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
 }
 

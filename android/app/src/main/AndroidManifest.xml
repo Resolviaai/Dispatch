@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -72,6 +73,12 @@
         <service
             android:name=".recorder.RecordingForegroundService"
             android:foregroundServiceType="camera|microphone"
+            android:exported="false" />
+
+        <!-- Foreground Service for Hardware-Accelerated Video Rendering & Export -->
+        <service
+            android:name=".renderer.RenderForegroundService"
+            android:foregroundServiceType="mediaProcessing"
             android:exported="false" />
 
         <!-- WorkManager foreground uploads (dataSync): Android 14 requires the

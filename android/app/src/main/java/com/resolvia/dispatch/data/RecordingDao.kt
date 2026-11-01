@@ -124,4 +124,34 @@ interface RecordingDao {
 
     @Query("UPDATE segments SET uploadOrigin = :origin WHERE segmentId = :segmentId")
     suspend fun updateSegmentUploadOrigin(segmentId: String, origin: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRenderJob(job: RenderJobEntity)
+
+    @Update
+    suspend fun updateRenderJob(job: RenderJobEntity)
+
+    @Query("SELECT * FROM render_jobs WHERE jobId = :jobId LIMIT 1")
+    suspend fun getRenderJobById(jobId: String): RenderJobEntity?
+
+    @Query("SELECT * FROM render_jobs WHERE clipId = :clipId ORDER BY createdAt DESC LIMIT 1")
+    suspend fun getLatestRenderJobForClip(clipId: String): RenderJobEntity?
+
+    @Query("SELECT * FROM render_jobs WHERE status IN ('QUEUED', 'RENDERING') ORDER BY createdAt ASC")
+    suspend fun getPendingRenderJobs(): List<RenderJobEntity>
+
+    @Query("UPDATE render_jobs SET status = :status, progressPercent = :progress, updatedAt = :updatedAt WHERE jobId = :jobId")
+    suspend fun updateRenderJobProgress(jobId: String, status: String, progress: Int, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE render_jobs SET status = :status, lastError = :lastError, updatedAt = :updatedAt WHERE jobId = :jobId")
+    suspend fun updateRenderJobError(jobId: String, status: String, lastError: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE render_jobs SET r2UploadOffset = :offset, updatedAt = :updatedAt WHERE jobId = :jobId")
+    suspend fun updateRenderJobUploadOffset(jobId: String, offset: Long, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE render_jobs SET status = :status, outputVideoPath = :outputPath, thumbnailPath = :thumbnailPath, renderedDurationSeconds = :duration, updatedAt = :updatedAt WHERE jobId = :jobId")
+    suspend fun markRenderJobRenderComplete(jobId: String, status: String, outputPath: String, thumbnailPath: String?, duration: Float, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE render_jobs SET status = :status, r2Key = :r2Key, completedAt = :completedAt, updatedAt = :updatedAt WHERE jobId = :jobId")
+    suspend fun markRenderJobPublishingQueued(jobId: String, status: String, r2Key: String, completedAt: Long = System.currentTimeMillis(), updatedAt: Long = System.currentTimeMillis())
 }

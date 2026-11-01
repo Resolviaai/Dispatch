@@ -64,14 +64,21 @@ export function roundMs(seconds: number): number {
 }
 
 export function canonicalMediaSpans(ranges: unknown): [number, number][] {
-  if (!Array.isArray(ranges)) throw new Error("ranges must be an array of [start, end] pairs");
+  if (!Array.isArray(ranges)) throw new Error("ranges must be an array of [start, end] pairs or segment objects");
   const normalized: [number, number][] = ranges.map((item, idx) => {
-    if (!Array.isArray(item) || item.length !== 2) {
-      throw new Error(`range at index ${idx} must be a [start, end] pair`);
+    let s: number;
+    let e: number;
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const obj = item as Record<string, unknown>;
+      s = roundMs(Number(obj.source_start ?? obj.start));
+      e = roundMs(Number(obj.source_end ?? obj.end));
+    } else if (Array.isArray(item) && item.length === 2) {
+      s = roundMs(Number(item[0]));
+      e = roundMs(Number(item[1]));
+    } else {
+      throw new Error(`range at index ${idx} must be a [start, end] pair or segment object`);
     }
-    const s = roundMs(item[0]);
-    const e = roundMs(item[1]);
-    if (s < 0 || e <= s) {
+    if (s < 0 || e <= s || !Number.isFinite(s) || !Number.isFinite(e)) {
       throw new Error(`invalid segment bounds: [${s}, ${e}]`);
     }
     return [s, e];
@@ -192,20 +199,45 @@ export function computeRenderFingerprint(
   return sha256Hex(payload);
 }
 
-export function validateTimelineSegments(segments: unknown): { valid: boolean; error?: string; keptDuration: number } {
+export function validateTimelineSegments(segments: unknown): {
+  valid: boolean;
+  error?: string;
+  keptDuration: number;
+  canonicalSegments?: Array<{ id: string; source_start: number; source_end: number }>;
+} {
   if (!Array.isArray(segments) || segments.length === 0) {
     return { valid: false, error: "segments must be a non-empty array", keptDuration: 0 };
   }
   let total = 0;
   let prevEnd = -1;
+  const canonicalSegments: Array<{ id: string; source_start: number; source_end: number }> = [];
+
   for (let i = 0; i < segments.length; i++) {
-    const pair = segments[i];
-    if (!Array.isArray(pair) || pair.length !== 2) {
-      return { valid: false, error: `segment at index ${i} must be [start, end]`, keptDuration: 0 };
+    const item = segments[i];
+    let s: number;
+    let e: number;
+    let id: string = `seg-${i + 1}`;
+
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const obj = item as Record<string, unknown>;
+      const startVal = obj.source_start ?? obj.start;
+      const endVal = obj.source_end ?? obj.end;
+      if (typeof obj.id === "string" && obj.id.trim()) {
+        id = obj.id.trim();
+      }
+      if (typeof startVal !== "number" || typeof endVal !== "number") {
+        return { valid: false, error: `segment at index ${i} missing numeric source_start/source_end`, keptDuration: 0 };
+      }
+      s = roundMs(startVal);
+      e = roundMs(endVal);
+    } else if (Array.isArray(item) && item.length === 2) {
+      s = roundMs(Number(item[0]));
+      e = roundMs(Number(item[1]));
+    } else {
+      return { valid: false, error: `segment at index ${i} must be [start, end] or { source_start, source_end }`, keptDuration: 0 };
     }
-    const s = roundMs(pair[0]);
-    const e = roundMs(pair[1]);
-    if (s < 0 || e <= s) {
+
+    if (s < 0 || e <= s || !Number.isFinite(s) || !Number.isFinite(e)) {
       return { valid: false, error: `invalid segment bounds [${s}, ${e}] at index ${i}`, keptDuration: 0 };
     }
     if (s < prevEnd - 1e-9) {
@@ -213,7 +245,9 @@ export function validateTimelineSegments(segments: unknown): { valid: boolean; e
     }
     prevEnd = e;
     total += (e - s);
+    canonicalSegments.push({ id, source_start: s, source_end: e });
   }
+
   total = roundMs(total);
   if (total < 5.0) {
     return { valid: false, error: `total kept duration (${total}s) must be at least 5.0s`, keptDuration: total };
@@ -221,7 +255,7 @@ export function validateTimelineSegments(segments: unknown): { valid: boolean; e
   if (total > 180.0) {
     return { valid: false, error: `total kept duration (${total}s) exceeds 180.0s maximum`, keptDuration: total };
   }
-  return { valid: true, keptDuration: total };
+  return { valid: true, keptDuration: total, canonicalSegments };
 }
 
 export function validateReserveInput(kind: string, mime: string, expectedBytes: number): string | null {
@@ -2675,7 +2709,17 @@ export default {
           );
           const rows = res.ok ? ((await res.json()) as Array<Record<string, unknown>>) : [];
           if (!rows || rows.length === 0) return json(404, { error: "clip not found" });
-          return json(200, { clip: rows[0] });
+          const row = rows[0];
+          return json(200, {
+            clip: row,
+            document: row.project_document,
+            project_document: row.project_document,
+            revision: row.segments_revision,
+            segments_revision: row.segments_revision,
+            active_state_revision: row.active_state_revision,
+            can_undo: row.can_undo,
+            can_redo: row.can_redo,
+          });
         } catch (e) {
           return json(502, { error: `timeline fetch failed: ${e instanceof Error ? e.message : e}` });
         }
@@ -2686,22 +2730,35 @@ export default {
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
         const body = await readJson<{
           document?: Record<string, unknown>;
+          project_document?: Record<string, unknown>;
           base_revision?: number;
+          expected_revision?: number;
           operation_id?: string;
           action_type?: string;
           action_metadata?: Record<string, unknown>;
         }>(request);
 
-        const doc = body?.document;
+        const doc = body?.project_document ?? body?.document;
         if (!doc || typeof doc !== "object") return json(400, { error: "project document required" });
         const operationId = typeof body?.operation_id === "string" && body.operation_id.trim() ? body.operation_id.trim() : crypto.randomUUID();
         const actionType = typeof body?.action_type === "string" ? body.action_type : "edit";
+        const baseRev = typeof body?.expected_revision === "number"
+          ? Math.floor(body.expected_revision)
+          : (typeof body?.base_revision === "number" ? Math.floor(body.base_revision) : null);
 
         // Validate segments and kept duration server-side
         const timeline = doc.timeline as Record<string, unknown> | undefined;
         const segCheck = validateTimelineSegments(timeline?.segments);
         if (!segCheck.valid) {
           return json(422, { error: segCheck.error });
+        }
+
+        // Standardize canonical segments representation
+        if (timeline) {
+          timeline.kept_duration = segCheck.keptDuration;
+          if (segCheck.canonicalSegments) {
+            timeline.segments = segCheck.canonicalSegments;
+          }
         }
 
         // Server-Side Trusted Fingerprint Recomputation
@@ -2718,16 +2775,13 @@ export default {
           render_fingerprint: renderFp,
           action_type: actionType,
         };
-        if (timeline) {
-          timeline.kept_duration = segCheck.keptDuration;
-        }
 
         try {
           const result = await rpc<{ revision: number; conflict: boolean; current_document: unknown }>(env, "cloud_put_project_document", {
             p_user_id: userId,
             p_local_clip_id: localClipId,
             p_document: doc,
-            p_base_revision: typeof body?.base_revision === "number" ? Math.floor(body.base_revision) : null,
+            p_base_revision: baseRev,
             p_operation_id: operationId,
             p_action_type: actionType,
             p_action_metadata: body?.action_metadata ?? null,
@@ -2735,9 +2789,20 @@ export default {
           });
 
           if (result?.conflict) {
-            return json(409, { error: "timeline_conflict", revision: result.revision, current_document: result.current_document });
+            return json(409, {
+              error: "timeline_conflict",
+              revision: result.revision,
+              current_document: result.current_document,
+              project_document: result.current_document,
+              document: result.current_document,
+            });
           }
-          return json(200, { ok: true, revision: result?.revision ?? 0, document: doc });
+          return json(200, {
+            ok: true,
+            revision: result?.revision ?? 0,
+            document: doc,
+            project_document: doc,
+          });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           return json(502, { error: `timeline save failed: ${msg}` });
@@ -2755,7 +2820,12 @@ export default {
             p_local_clip_id: localClipId,
             p_operation_id: opId,
           });
-          return json(200, { ok: true, revision: result?.revision, document: result?.current_document });
+          return json(200, {
+            ok: true,
+            revision: result?.revision,
+            document: result?.current_document,
+            project_document: result?.current_document,
+          });
         } catch (e) {
           return json(400, { error: `undo failed: ${e instanceof Error ? e.message : e}` });
         }
@@ -2772,9 +2842,81 @@ export default {
             p_local_clip_id: localClipId,
             p_operation_id: opId,
           });
-          return json(200, { ok: true, revision: result?.revision, document: result?.current_document });
+          return json(200, {
+            ok: true,
+            revision: result?.revision,
+            document: result?.current_document,
+            project_document: result?.current_document,
+          });
         } catch (e) {
           return json(400, { error: `redo failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Direct Mobile-to-Cloud Publishing Queue:
+      // Phone submits rendered clip for multi-platform publishing without PC dependency.
+      if (request.method === "POST" && url.pathname === "/publish/queue") {
+        const body = await readJson<{
+          clip_id: string;
+          title: string;
+          description?: string;
+          platforms?: string | string[];
+          publish_mode?: "private" | "unlisted" | "public";
+          r2_key?: string;
+          rendered_fingerprint?: string;
+        }>(request);
+
+        if (!body?.clip_id || typeof body.clip_id !== "string" || !body.clip_id.trim()) {
+          return json(400, { error: "clip_id required" });
+        }
+        if (!body?.title || typeof body.title !== "string" || !body.title.trim()) {
+          return json(400, { error: "title required" });
+        }
+
+        const rawPlatforms = body.platforms;
+        const platformsList = Array.isArray(rawPlatforms)
+          ? rawPlatforms
+          : (typeof rawPlatforms === "string" ? rawPlatforms.split(",").map(p => p.trim()).filter(Boolean) : ["youtube"]);
+        const publishMode = ["private", "unlisted", "public"].includes(String(body.publish_mode)) ? body.publish_mode! : "private";
+
+        try {
+          const rows = await rpcRaw(env, "cloud_enqueue_publishing_job", {
+            p_user_id: userId,
+            p_clip_id: body.clip_id.trim(),
+            p_title: body.title.trim().slice(0, 100),
+            p_description: typeof body.description === "string" ? body.description.trim().slice(0, 5000) : "",
+            p_platforms: platformsList,
+            p_publish_mode: publishMode,
+            p_r2_key: body.r2_key ?? null,
+            p_rendered_fingerprint: body.rendered_fingerprint ?? null,
+          });
+
+          const job = Array.isArray(rows) && rows.length > 0 ? (rows[0] as { id: string; status: string }) : null;
+          return json(200, {
+            ok: true,
+            job_id: job?.id,
+            status: job?.status ?? "queued",
+            clip_id: body.clip_id.trim(),
+            platforms: platformsList,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json(502, { error: `publish enqueue failed: ${msg}` });
+        }
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/publish/status/")) {
+        const targetClipId = decodeURIComponent(url.pathname.slice("/publish/status/".length));
+        if (!targetClipId || targetClipId.length > 128) return json(400, { error: "invalid clip id" });
+        try {
+          const res = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/publishing_jobs?user_id=eq.${userId}&clip_id=eq.${encodeURIComponent(targetClipId)}&order=created_at.desc&limit=10`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const rows = res.ok ? ((await res.json()) as Array<Record<string, unknown>>) : [];
+          return json(200, { ok: true, clip_id: targetClipId, jobs: Array.isArray(rows) ? rows : [] });
+        } catch (e) {
+          return json(502, { error: `publish status fetch failed: ${e instanceof Error ? e.message : e}` });
         }
       }
 
@@ -3471,8 +3613,13 @@ export default {
             `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&segments_revision=gt.0&select=local_clip_id,project_document,segments_revision,active_state_revision,media_fingerprint,render_fingerprint,rendered_fingerprint,render_stale&order=cloud_updated_at.desc&limit=200`,
             { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
           );
-          const rows = res.ok ? ((await res.json()) as unknown[]) : [];
-          return json(200, { clips: Array.isArray(rows) ? rows : [] });
+          const rows = res.ok ? ((await res.json()) as Array<Record<string, unknown>>) : [];
+          const timelines = (Array.isArray(rows) ? rows : []).map((r) => ({
+            ...r,
+            clip_id: r.local_clip_id,
+            local_clip_id: r.local_clip_id,
+          }));
+          return json(200, { status: "ok", timelines, clips: timelines });
         } catch (e) {
           return json(502, { error: `timeline sync failed: ${e instanceof Error ? e.message : e}` });
         }
@@ -3482,35 +3629,42 @@ export default {
       if (request.method === "POST" && url.pathname === "/sync/pc/render-complete") {
         if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
         const body = await readJson<{
-          local_clip_id: string;
-          render_fingerprint: string;
-          r2_key: string;
-          byte_count: number;
-          duration: number;
+          local_clip_id?: string;
+          clip_id?: string;
+          render_fingerprint?: string;
+          rendered_fingerprint?: string;
+          r2_key?: string;
+          byte_count?: number;
+          duration?: number;
         }>(request);
 
-        if (!body?.local_clip_id || !body?.render_fingerprint || !body?.r2_key || !body?.byte_count) {
-          return json(400, { error: "missing required render completion fields" });
+        const localClipId = body?.local_clip_id ?? body?.clip_id;
+        const renderFp = body?.rendered_fingerprint ?? body?.render_fingerprint;
+
+        if (!localClipId || !renderFp) {
+          return json(400, { error: "missing required clip_id / render_fingerprint" });
         }
 
-        // Verify R2 object existence and size
-        try {
-          const obj = await env.BUCKET.head(body.r2_key);
-          if (!obj) {
-            return json(404, { error: `rendered object not found in R2: ${body.r2_key}` });
+        // Verify R2 object existence and size if r2_key and byte_count are provided
+        if (body?.r2_key && env.BUCKET && typeof body?.byte_count === "number") {
+          try {
+            const obj = await env.BUCKET.head(body.r2_key);
+            if (!obj) {
+              return json(404, { error: `rendered object not found in R2: ${body.r2_key}` });
+            }
+            if (obj.size !== body.byte_count) {
+              return json(400, { error: `R2 object size mismatch: expected ${body.byte_count}, got ${obj.size}` });
+            }
+          } catch (e) {
+            return json(502, { error: `R2 verification failed: ${e instanceof Error ? e.message : e}` });
           }
-          if (obj.size !== body.byte_count) {
-            return json(400, { error: `R2 object size mismatch: expected ${body.byte_count}, got ${obj.size}` });
-          }
-        } catch (e) {
-          return json(502, { error: `R2 verification failed: ${e instanceof Error ? e.message : e}` });
         }
 
         // Update clips_cloud rendered_fingerprint atomically
         try {
           // Check target clip
           const clipRes = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(body.local_clip_id)}&select=id,render_fingerprint&limit=1`,
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id,render_fingerprint&limit=1`,
             { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
           );
           const clipRows = clipRes.ok ? ((await clipRes.json()) as Array<{ id: string; render_fingerprint: string }>) : [];
@@ -3518,7 +3672,7 @@ export default {
 
           const clip = clipRows[0];
           // Check if render_fingerprint matches (split-only cuts preserve fingerprint!)
-          const isFresh = clip.render_fingerprint === body.render_fingerprint;
+          const isFresh = clip.render_fingerprint === renderFp;
 
           await fetch(
             `${env.SUPABASE_URL}/rest/v1/clips_cloud?id=eq.${clip.id}`,
@@ -3530,14 +3684,14 @@ export default {
                 "content-type": "application/json",
               },
               body: JSON.stringify({
-                rendered_fingerprint: body.render_fingerprint,
+                rendered_fingerprint: renderFp,
                 render_stale: !isFresh,
                 cloud_updated_at: new Date().toISOString(),
               }),
             }
           );
 
-          return json(200, { ok: true, render_stale: !isFresh, rendered_fingerprint: body.render_fingerprint });
+          return json(200, { ok: true, render_stale: !isFresh, rendered_fingerprint: renderFp });
         } catch (e) {
           return json(502, { error: `render commit failed: ${e instanceof Error ? e.message : e}` });
         }

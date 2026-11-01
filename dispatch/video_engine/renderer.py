@@ -3,6 +3,7 @@ Cuts exact time segments, applies dead-air silence removal with frame-accurate
 subtitle synchronization, applies adaptive framing, burns animated subtitles,
 normalizes audio, generates preview thumbnails, and enforces strict duration limits.
 """
+import json
 import subprocess
 import logging
 import uuid
@@ -81,7 +82,7 @@ def render_clip(
             doc_segs = p_doc.get("timeline", {}).get("segments", []) if isinstance(p_doc, dict) else []
             if doc_segs:
                 from dispatch.segments import canonical_media_spans
-                timeline_spans = canonical_media_spans([[float(s["source_start"]), float(s["source_end"])] for s in doc_segs])
+                timeline_spans = canonical_media_spans(doc_segs)
         except Exception as e:
             logger.debug("Could not parse project_document segments for clip %s: %s", clip_id, e)
 
