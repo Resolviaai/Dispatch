@@ -92,7 +92,10 @@ Write-Host "== 1. Web bundle =="
 # The WebView ships the frontend from android/app/src/main/assets/web, which is
 # Vite's outDir. Gradle packages whatever is committed there, so skipping this
 # step silently releases an APK built from an older UI than the source tree.
-& npm --prefix (Join-Path $root "frontend") run build
+# Driven through node directly: PowerShell's call operator mangles the npm.cmd
+# shim under a "Program Files" path and npm then reports "Unknown command: pm".
+$frontend = Join-Path $root "frontend"
+& node (Join-Path $frontend "node_modules\vite\bin\vite.js") build $frontend
 if ($LASTEXITCODE -ne 0) { throw "FATAL: frontend build failed; refusing to package a stale WebView bundle." }
 
 Write-Host "== 2. assembleRelease =="
