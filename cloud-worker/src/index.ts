@@ -54,9 +54,9 @@ export interface Env {
 const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
 // Tolerance for PC/cloud clock drift when enforcing the reject purge deadline.
 const PURGE_CLOCK_SKEW_MS = 5 * 60_000;
-const KINDS = { clip_video: "video/mp4", thumbnail: "image/jpeg", edit_window: "video/mp4" } as const;
+const KINDS = { clip_video: "video/mp4", thumbnail: "image/jpeg", edit_window: "video/mp4", render: "video/mp4" } as const;
 type Kind = keyof typeof KINDS;
-const CAP_BYTES: Record<Kind, number> = { clip_video: 536870912, thumbnail: 8388608, edit_window: 536870912 };
+const CAP_BYTES: Record<Kind, number> = { clip_video: 536870912, thumbnail: 8388608, edit_window: 536870912, render: 536870912 };
 
 // ---------- pure helpers (also unit-tested) ----------
 export function roundMs(seconds: number): number {
@@ -259,10 +259,11 @@ export function validateTimelineSegments(segments: unknown): {
 }
 
 export function validateReserveInput(kind: string, mime: string, expectedBytes: number): string | null {
-  if (!(kind in KINDS)) return "unsupported kind";
-  if (KINDS[kind as Kind] !== mime) return "unsupported mime for kind";
+  const normalizedKind = kind === "render" ? "clip_video" : kind;
+  if (!(normalizedKind in KINDS)) return "unsupported kind";
+  if (KINDS[normalizedKind as Kind] !== mime) return "unsupported mime for kind";
   if (!Number.isInteger(expectedBytes) || expectedBytes <= 0) return "expected_bytes must be a positive integer";
-  if (expectedBytes > CAP_BYTES[kind as Kind]) return "expected_bytes exceeds object cap";
+  if (expectedBytes > CAP_BYTES[normalizedKind as Kind]) return "expected_bytes exceeds object cap";
   return null;
 }
 
@@ -661,38 +662,64 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
   let failed = 0;
 
   try {
-    const queueRes = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/publishing_jobs?status=eq.queued&order=created_at.asc&limit=5`,
-      { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-    );
-    if (!queueRes.ok) return { processed: 0, succeeded: 0, failed: 0 };
-    const queuedJobs = (await queueRes.json()) as Array<{
+    // 1. Atomically claim jobs using the SKIP LOCKED RPC, with fallback to PostgREST representation return
+    let queuedJobs: Array<{
       id: string;
       user_id: string;
       clip_id: string;
       title: string;
       description?: string;
-      platforms: string[];
+      platforms: string[] | string;
       publish_mode: "private" | "unlisted" | "public";
       r2_key?: string | null;
       rendered_fingerprint?: string | null;
       platform_results?: Record<string, unknown>;
-    }>;
+    }> = [];
+
+    try {
+      const claimRpcRows = await rpcRaw<typeof queuedJobs>(env, "cloud_claim_publishing_jobs", {
+        p_limit: 5,
+        p_stale_seconds: 600,
+      });
+      if (Array.isArray(claimRpcRows)) {
+        queuedJobs = claimRpcRows;
+      }
+    } catch {
+      // Fallback for environments before migration 0028 is applied:
+      // Fetch queued jobs and patch with Prefer: return=representation to ensure atomic claim
+      const queueRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/publishing_jobs?or=(status.eq.queued,and(status.eq.processing,updated_at.lt.${new Date(Date.now() - 600000).toISOString()}))&order=created_at.asc&limit=5`,
+        { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+      );
+      if (queueRes.ok) {
+        const candidates = (await queueRes.json()) as typeof queuedJobs;
+        for (const candidate of candidates) {
+          const claimPatch = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(candidate.id)}&status=in.(queued,processing)`,
+            {
+              method: "PATCH",
+              headers: {
+                ...svc,
+                Prefer: "return=representation",
+              },
+              body: JSON.stringify({ status: "processing", updated_at: new Date().toISOString() }),
+            }
+          );
+          if (claimPatch.ok) {
+            const updatedRows = (await claimPatch.json()) as typeof queuedJobs;
+            if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+              queuedJobs.push(updatedRows[0]);
+            }
+          }
+        }
+      }
+    }
 
     if (!Array.isArray(queuedJobs) || queuedJobs.length === 0) {
       return { processed: 0, succeeded: 0, failed: 0 };
     }
 
     for (const job of queuedJobs) {
-      const claimRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(job.id)}&status=eq.queued`,
-        {
-          method: "PATCH",
-          headers: svc,
-          body: JSON.stringify({ status: "processing", updated_at: new Date().toISOString() }),
-        }
-      );
-      if (!claimRes.ok) continue;
 
       processed++;
       const results: Record<string, unknown> = { ...(job.platform_results || {}) };
@@ -921,6 +948,160 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
             } catch (igErr) {
               const msg = igErr instanceof Error ? igErr.message : String(igErr);
               results.instagram = { status: "failed", error: msg };
+              lastErrorMessage = msg;
+            }
+          } else if (normPlatform === "linkedin") {
+            try {
+              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=eq.linkedin&select=id,account_id,credentials_encrypted&limit=1`;
+              const accRes = await fetch(accUrl, { headers: svc });
+              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string; credentials_encrypted?: string }>) : [];
+              const acc = accRows.length > 0 ? accRows[0] : null;
+
+              if (!acc || !acc.credentials_encrypted) {
+                results.linkedin = { status: "skipped_no_account", error: "No connected LinkedIn account found" };
+                continue;
+              }
+
+              const plaintext = await decryptToken(env.TOKEN_VAULT_KEY, acc.credentials_encrypted);
+              let cred: Record<string, unknown> = {};
+              try { cred = JSON.parse(plaintext); } catch { cred = { access_token: plaintext }; }
+              const accessToken = typeof cred.access_token === "string" ? cred.access_token : "";
+              const personUrn = typeof cred.account_id === "string" ? cred.account_id : (acc.account_id || "");
+
+              if (!accessToken) {
+                results.linkedin = { status: "failed", error: "No LinkedIn access token" };
+                continue;
+              }
+
+              const authorUrn = personUrn.startsWith("urn:li:") ? personUrn : `urn:li:person:${personUrn}`;
+              const liRes = await fetch("https://api.linkedin.com/v2/ugcPosts", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                  "X-Restli-Protocol-Version": "2.0.0",
+                },
+                body: JSON.stringify({
+                  author: authorUrn,
+                  lifecycleState: "PUBLISHED",
+                  specificContent: {
+                    "com.linkedin.ugc.ShareContent": {
+                      shareCommentary: {
+                        text: `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 3000),
+                      },
+                      shareMediaCategory: "NONE",
+                    },
+                  },
+                  visibility: {
+                    "com.linkedin.ugc.MemberNetworkVisibility": job.publish_mode === "public" ? "PUBLIC" : "CONNECTIONS",
+                  },
+                }),
+              });
+
+              if (!liRes.ok) {
+                const errText = await liRes.text().catch(() => "");
+                throw new Error(`LinkedIn post failed (${liRes.status}): ${errText.slice(0, 200)}`);
+              }
+
+              const liData = (await liRes.json()) as { id?: string };
+              const postUrn = liData.id || "published";
+              const postUrl = `https://www.linkedin.com/feed/update/${postUrn}`;
+
+              results.linkedin = {
+                status: "published",
+                remote_id: postUrn,
+                remote_url: postUrl,
+                published_at: new Date().toISOString(),
+              };
+              anySuccess = true;
+
+              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
+                method: "POST",
+                headers: svc,
+                body: JSON.stringify({
+                  user_id: job.user_id,
+                  clip_id: job.clip_id,
+                  platform: "linkedin",
+                  account_id: acc.id,
+                  remote_id: postUrn,
+                  remote_url: postUrl,
+                  status: "published",
+                  publish_mode: job.publish_mode,
+                  published_at: new Date().toISOString(),
+                }),
+              }).catch(() => {});
+            } catch (liErr) {
+              const msg = liErr instanceof Error ? liErr.message : String(liErr);
+              results.linkedin = { status: "failed", error: msg };
+              lastErrorMessage = msg;
+            }
+          } else if (normPlatform === "twitter" || normPlatform === "x") {
+            try {
+              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=in.(twitter,x)&select=id,account_id,credentials_encrypted&limit=1`;
+              const accRes = await fetch(accUrl, { headers: svc });
+              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string; credentials_encrypted?: string }>) : [];
+              const acc = accRows.length > 0 ? accRows[0] : null;
+
+              if (!acc || !acc.credentials_encrypted) {
+                results[normPlatform] = { status: "skipped_no_account", error: "No connected X (Twitter) account found" };
+                continue;
+              }
+
+              const plaintext = await decryptToken(env.TOKEN_VAULT_KEY, acc.credentials_encrypted);
+              let cred: Record<string, unknown> = {};
+              try { cred = JSON.parse(plaintext); } catch { cred = { access_token: plaintext }; }
+              const accessToken = typeof cred.access_token === "string" ? cred.access_token : (typeof cred.bearer_token === "string" ? cred.bearer_token : "");
+
+              if (!accessToken) {
+                results[normPlatform] = { status: "failed", error: "No X access token" };
+                continue;
+              }
+
+              const tweetText = `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 280);
+              const twRes = await fetch("https://api.twitter.com/2/tweets", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ text: tweetText }),
+              });
+
+              if (!twRes.ok) {
+                const errText = await twRes.text().catch(() => "");
+                throw new Error(`X tweet failed (${twRes.status}): ${errText.slice(0, 200)}`);
+              }
+
+              const twData = (await twRes.json()) as { data?: { id?: string } };
+              const tweetId = twData.data?.id || "published";
+              const tweetUrl = `https://x.com/i/status/${tweetId}`;
+
+              results[normPlatform] = {
+                status: "published",
+                remote_id: tweetId,
+                remote_url: tweetUrl,
+                published_at: new Date().toISOString(),
+              };
+              anySuccess = true;
+
+              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
+                method: "POST",
+                headers: svc,
+                body: JSON.stringify({
+                  user_id: job.user_id,
+                  clip_id: job.clip_id,
+                  platform: "twitter",
+                  account_id: acc.id,
+                  remote_id: tweetId,
+                  remote_url: tweetUrl,
+                  status: "published",
+                  publish_mode: job.publish_mode,
+                  published_at: new Date().toISOString(),
+                }),
+              }).catch(() => {});
+            } catch (twErr) {
+              const msg = twErr instanceof Error ? twErr.message : String(twErr);
+              results[normPlatform] = { status: "failed", error: msg };
               lastErrorMessage = msg;
             }
           } else {
@@ -2854,11 +3035,12 @@ export default {
     if (request.method === "POST" && url.pathname === "/reserve") {
         const body = await readJson<{ kind: string; mime_type: string; expected_bytes: number; client_token: string; clip_id?: string }>(request);
         if (!body?.client_token) return json(400, { error: "client_token required" });
-        const invalid = validateReserveInput(body.kind, body.mime_type, body.expected_bytes);
+        const effectiveKind = body.kind === "render" ? "clip_video" : body.kind;
+        const invalid = validateReserveInput(effectiveKind, body.mime_type, body.expected_bytes);
         if (invalid) return json(400, { error: invalid });
         try {
           const r = await rpc<{ reservation_id: string; staging_key: string; media_object_id: string }>(env, "cloud_reserve_upload", {
-            p_user_id: userId, p_kind: body.kind, p_mime: body.mime_type,
+            p_user_id: userId, p_kind: effectiveKind, p_mime: body.mime_type,
             p_expected_bytes: body.expected_bytes, p_client_token: body.client_token,
             p_clip_id: body.clip_id ?? null,
           });

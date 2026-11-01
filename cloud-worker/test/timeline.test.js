@@ -86,3 +86,90 @@ test("drainPublishingQueue handles empty queue gracefully", async () => {
     globalThis.fetch = origFetch;
   }
 });
+
+test("validateReserveInput accepts kind 'render' as normalized clip_video", async () => {
+  const { validateReserveInput } = await import("../src/index.ts");
+  const errClipVideo = validateReserveInput("clip_video", "video/mp4", 1024 * 1024);
+  assert.equal(errClipVideo, null);
+
+  const errRender = validateReserveInput("render", "video/mp4", 1024 * 1024);
+  assert.equal(errRender, null);
+
+  const errInvalidKind = validateReserveInput("unknown_kind", "video/mp4", 1024);
+  assert.equal(errInvalidKind, "unsupported kind");
+});
+
+test("drainPublishingQueue claims job atomically and dispatches publication", async () => {
+  const { drainPublishingQueue } = await import("../src/index.ts");
+  const sampleVideoBytes = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]); // mp4 header
+  const mockEnv = {
+    SUPABASE_URL: "https://mock.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY: "mock-key",
+    TOKEN_VAULT_KEY: "0123456789abcdef0123456789abcdef",
+    BUCKET: {
+      get: async (key) => ({
+        arrayBuffer: async () => sampleVideoBytes.buffer,
+      }),
+    },
+  };
+
+  const sampleJob = {
+    id: "job-atomic-1",
+    user_id: "user-1",
+    clip_id: "clip-1",
+    title: "Awesome Short",
+    description: "Published from Android phone",
+    platforms: ["youtube"],
+    publish_mode: "unlisted",
+    r2_key: "final/user-1/media-1",
+    platform_results: {},
+  };
+
+  let claimAttempts = 0;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const urlStr = String(url);
+    if (urlStr.includes("cloud_claim_publishing_jobs")) {
+      claimAttempts++;
+      if (claimAttempts === 1) {
+        return new Response(JSON.stringify([{ ...sampleJob, status: "processing" }]), { status: 200, headers: { "content-type": "application/json" } });
+      } else {
+        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    }
+    if (urlStr.includes("publishing_jobs") && options.method === "PATCH") {
+      claimAttempts++;
+      // First attempt succeeds, concurrent second attempt returns 0 rows (already claimed)
+      if (claimAttempts === 1) {
+        return new Response(JSON.stringify([{ ...sampleJob, status: "processing" }]), { status: 200, headers: { "content-type": "application/json" } });
+      } else {
+        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    }
+    if (urlStr.includes("connected_accounts")) {
+      return new Response(JSON.stringify([{ id: "acc-yt-1", account_id: "yt-channel-1" }]), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (urlStr.includes("youtube.googleapis.com")) {
+      return new Response(JSON.stringify({ id: "yt-video-123" }), {
+        status: 200,
+        headers: {
+          "Location": "https://youtube.googleapis.com/upload-target",
+          "content-type": "application/json",
+        },
+      });
+    }
+    return new Response(JSON.stringify([sampleJob]), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    // Run worker 1
+    const res1 = await drainPublishingQueue(mockEnv);
+    assert.equal(res1.processed, 1);
+
+    // Run concurrent worker 2 on the same queue (must be safely skipped)
+    const res2 = await drainPublishingQueue(mockEnv);
+    assert.equal(res2.processed, 0);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

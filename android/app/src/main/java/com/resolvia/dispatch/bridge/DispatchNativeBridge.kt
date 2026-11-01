@@ -2693,6 +2693,10 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
             val cropAnchorX = json.get("crop_anchor_x")?.asFloat ?: 0.5f
             val targetRes = json.get("target_resolution")?.asString ?: "1080p"
             val renderFingerprint = json.get("render_fingerprint")?.asString ?: "fp_$jobId"
+            val title = json.get("title")?.asString ?: "Clip ${clipId.take(8)}"
+            val description = json.get("description")?.asString ?: ""
+            val platforms = json.get("platforms")?.asString ?: "youtube"
+            val publishMode = json.get("publish_mode")?.asString ?: "private"
 
             val outputDir = java.io.File(activity.filesDir, "rendered_clips").apply { mkdirs() }
             val outputVideoPath = java.io.File(outputDir, "${clipId}_${System.currentTimeMillis()}.mp4").absolutePath
@@ -2709,6 +2713,10 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
                 layoutMode = layoutMode,
                 cropAnchorX = cropAnchorX,
                 targetResolution = targetRes,
+                title = title,
+                description = description,
+                platforms = platforms,
+                publishMode = publishMode,
                 status = com.resolvia.dispatch.data.RenderJobEntity.STATUS_QUEUED,
                 progressPercent = 0,
                 createdAt = System.currentTimeMillis(),

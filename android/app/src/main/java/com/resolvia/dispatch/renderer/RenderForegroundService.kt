@@ -126,6 +126,22 @@ class RenderForegroundService : LifecycleService() {
                 return@launch
             }
 
+            // Genuinely resumable: If video was already rendered, resume R2 upload directly without re-rendering
+            val existingOutput = File(job.outputVideoPath)
+            if (existingOutput.exists() && existingOutput.length() > 0L &&
+                (job.status == RenderJobEntity.STATUS_RENDER_COMPLETE || job.status == RenderJobEntity.STATUS_UPLOADING)) {
+                android.util.Log.i("RenderForeground", "Job $jobId output already rendered (${existingOutput.length()} bytes). Resuming cloud upload directly.")
+                updateNotification("Resuming cloud upload...", 0)
+                try {
+                    enqueueR2UploadIfReady(jobId, job.outputVideoPath)
+                } finally {
+                    withContext(Dispatchers.Main) {
+                        stopForegroundService()
+                    }
+                }
+                return@launch
+            }
+
             try {
                 // 1. Verify source video exists; if missing locally, stage from Cloud Worker
                 var currentJob = job
@@ -242,10 +258,10 @@ class RenderForegroundService : LifecycleService() {
             )
             updateNotification("Reserving cloud upload...", 0)
 
-            // Step 1: POST /reserve
-            val clientToken = "render_${job.clipId}_${System.currentTimeMillis()}"
+            // Step 1: POST /reserve (deterministic token per job for safe resume; kind clip_video)
+            val clientToken = "render_${job.jobId}"
             val reserveBody = JsonObject().apply {
-                addProperty("kind", "render")
+                addProperty("kind", "clip_video")
                 addProperty("mime_type", "video/mp4")
                 addProperty("expected_bytes", outputFile.length())
                 addProperty("client_token", clientToken)
@@ -337,14 +353,15 @@ class RenderForegroundService : LifecycleService() {
             )
             updateNotification("Upload complete. Enqueueing social publishing...", 100)
 
-            // Step 4: POST /publish/queue
+            // Step 4: POST /publish/queue (preserves user-selected title, description, platforms, and visibility mode)
+            val platformsList = job.platforms.split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("youtube") }
+            val platformsArr = JsonArray().apply { platformsList.forEach { add(it) } }
             val publishBody = JsonObject().apply {
                 addProperty("clip_id", job.clipId)
-                addProperty("title", "Dispatch Clip " + job.clipId.take(8))
-                addProperty("description", "Rendered and published via Dispatch on Android")
-                val platformsArr = JsonArray().apply { add("youtube") }
+                addProperty("title", job.title.ifBlank { "Dispatch Clip " + job.clipId.take(8) })
+                addProperty("description", job.description)
                 add("platforms", platformsArr)
-                addProperty("publish_mode", "private")
+                addProperty("publish_mode", job.publishMode.ifBlank { "private" })
                 addProperty("r2_key", finalKey)
                 addProperty("rendered_fingerprint", job.renderFingerprint)
             }

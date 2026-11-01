@@ -16,6 +16,7 @@ import androidx.media3.common.MediaItem.ClippingConfiguration
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.CanvasOverlay
+import androidx.media3.effect.Crop
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.TextureOverlay
@@ -44,8 +45,8 @@ import kotlin.math.min
 
 /**
  * Hardware-accelerated on-device video renderer for Dispatch Mobile using Android Jetpack Media3 Transformer.
- * Performs multi-segment trimming and concatenation, 9:16 layout presentation,
- * and frame-accurate word-level karaoke caption rendering.
+ * Performs multi-segment trimming and concatenation, 9:16 layout presentation with custom crop positioning,
+ * and frame-accurate word-level karaoke caption rendering with 1.08x scale pop, outline stroke, and text shadows.
  */
 @OptIn(UnstableApi::class)
 class AndroidClipRenderer(
@@ -55,6 +56,165 @@ class AndroidClipRenderer(
     companion object {
         private const val TAG = "AndroidClipRenderer"
         private const val PROGRESS_POLL_INTERVAL_MS = 250L
+
+        fun parseHexOrRgbaColor(colorStr: String?, defaultColor: Int): Int {
+            if (colorStr.isNullOrBlank()) return defaultColor
+            val trimmed = colorStr.trim()
+            try {
+                if (trimmed.startsWith("#")) {
+                    val hex = trimmed.substring(1)
+                    when (hex.length) {
+                        3 -> {
+                            val r = hex[0].toString().repeat(2).toInt(16)
+                            val g = hex[1].toString().repeat(2).toInt(16)
+                            val b = hex[2].toString().repeat(2).toInt(16)
+                            return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                        }
+                        4 -> {
+                            val r = hex[0].toString().repeat(2).toInt(16)
+                            val g = hex[1].toString().repeat(2).toInt(16)
+                            val b = hex[2].toString().repeat(2).toInt(16)
+                            val a = hex[3].toString().repeat(2).toInt(16)
+                            return (a shl 24) or (r shl 16) or (g shl 8) or b
+                        }
+                        6 -> {
+                            val rgb = hex.toInt(16)
+                            return (0xFF shl 24) or rgb
+                        }
+                        8 -> {
+                            val r = hex.substring(0, 2).toInt(16)
+                            val g = hex.substring(2, 4).toInt(16)
+                            val b = hex.substring(4, 6).toInt(16)
+                            val a = hex.substring(6, 8).toInt(16)
+                            return (a shl 24) or (r shl 16) or (g shl 8) or b
+                        }
+                    }
+                }
+                val rgbaRegex = Regex("""rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)""", RegexOption.IGNORE_CASE)
+                val match = rgbaRegex.matchEntire(trimmed)
+                if (match != null) {
+                    val r = match.groupValues[1].toInt().coerceIn(0, 255)
+                    val g = match.groupValues[2].toInt().coerceIn(0, 255)
+                    val b = match.groupValues[3].toInt().coerceIn(0, 255)
+                    val aStr = match.groupValues[4]
+                    val a = if (aStr.isNotEmpty()) {
+                        val alphaFloat = aStr.toFloat().coerceIn(0f, 1f)
+                        (alphaFloat * 255f).toInt()
+                    } else 255
+                    return (a shl 24) or (r shl 16) or (g shl 8) or b
+                }
+            } catch (e: Exception) {
+                // Return default fallback
+            }
+            return defaultColor
+        }
+
+        fun parseOverlayGroups(docObj: JsonObject): List<CaptionGroup> {
+            val groups = mutableListOf<CaptionGroup>()
+            val tracks = docObj.getAsJsonArray("tracks") ?: return groups
+
+            for (i in 0 until tracks.size()) {
+                val track = tracks.get(i).asJsonObject
+                val kind = track.get("kind")?.asString ?: track.get("type")?.asString ?: ""
+                val isCaption = (kind == "captions" || kind == "caption")
+                val isTextOrOverlay = (kind == "text" || kind == "overlay")
+                if (!isCaption && !isTextOrOverlay) continue
+
+                val defaultStyle = track.getAsJsonObject("default_style") ?: JsonObject()
+                val defaultLayout = track.getAsJsonObject("default_layout") ?: JsonObject()
+
+                val groupsArray = track.getAsJsonArray("groups") ?: continue
+                for (j in 0 until groupsArray.size()) {
+                    val g = groupsArray.get(j).asJsonObject
+                    val gId = g.get("id")?.asString ?: "grp_${kind}_$j"
+                    val gStart = g.get("start")?.asFloat ?: 0f
+                    val gEnd = g.get("end")?.asFloat ?: 0f
+
+                    val words = mutableListOf<CaptionWord>()
+                    val wordsArray = g.getAsJsonArray("words")
+                    if (wordsArray != null) {
+                        for (k in 0 until wordsArray.size()) {
+                            val w = wordsArray.get(k).asJsonObject
+                            val text = w.get("text")?.asString ?: w.get("word")?.asString ?: ""
+                            val wStart = w.get("start")?.asFloat ?: gStart
+                            val wEnd = w.get("end")?.asFloat ?: gEnd
+                            if (text.isNotEmpty()) {
+                                words.add(CaptionWord(text, wStart, wEnd))
+                            }
+                        }
+                    }
+
+                    if (words.isEmpty()) {
+                        val rawText = g.get("text")?.asString ?: g.get("label")?.asString ?: ""
+                        if (rawText.isNotEmpty()) {
+                            words.add(CaptionWord(rawText, gStart, gEnd))
+                        }
+                    }
+
+                    if (gEnd > gStart && words.isNotEmpty()) {
+                        val groupStyle = g.getAsJsonObject("style") ?: defaultStyle
+                        val groupLayout = g.getAsJsonObject("layout") ?: defaultLayout
+
+                        // Layout extraction
+                        val posX = groupLayout.get("position_x")?.asFloat ?: defaultLayout.get("position_x")?.asFloat ?: 0.5f
+                        val defaultPosY = if (isCaption) 0.78f else 0.50f
+                        val posY = groupLayout.get("position_y")?.asFloat ?: defaultLayout.get("position_y")?.asFloat ?: defaultPosY
+                        val alignment = groupLayout.get("alignment")?.asString ?: defaultLayout.get("alignment")?.asString ?: "center"
+
+                        // Style extraction
+                        val primaryColorStr = groupStyle.get("primary_color")?.asString ?: groupStyle.get("color")?.asString
+                        val highlightColorStr = groupStyle.get("highlight_color")?.asString
+                        val fontSize = groupStyle.get("font_size")?.asFloat ?: (if (isCaption) 36f else 32f)
+
+                        val outlineEnabled = groupStyle.get("outline_enabled")?.asBoolean
+                            ?: groupStyle.get("stroke_enabled")?.asBoolean
+                            ?: false
+                        val outlineColorStr = groupStyle.get("outline_color")?.asString ?: groupStyle.get("stroke_color")?.asString
+                        val outlineWidth = groupStyle.get("outline_width")?.asFloat ?: groupStyle.get("stroke_width")?.asFloat ?: 4f
+
+                        val shadowEnabled = groupStyle.get("shadow_enabled")?.asBoolean ?: true
+                        val shadowColorStr = groupStyle.get("shadow_color")?.asString
+                        val shadowOffsetX = groupStyle.get("shadow_offset_x")?.asFloat ?: 2f
+                        val shadowOffsetY = groupStyle.get("shadow_offset_y")?.asFloat ?: 4f
+                        val shadowBlur = groupStyle.get("shadow_blur")?.asFloat ?: 6f
+
+                        val backgroundEnabled = groupStyle.get("background_enabled")?.asBoolean ?: isCaption
+                        val backgroundColorStr = groupStyle.get("background_color")?.asString
+
+                        groups.add(
+                            CaptionGroup(
+                                id = gId,
+                                start = gStart,
+                                end = gEnd,
+                                words = words,
+                                primaryColor = parseHexOrRgbaColor(primaryColorStr, -1),
+                                highlightColor = parseHexOrRgbaColor(highlightColorStr, 0xFFFFE600.toInt()),
+                                fontSizeSp = fontSize,
+                                backgroundEnabled = backgroundEnabled,
+                                isCaption = isCaption,
+                                positionX = posX,
+                                positionY = posY,
+                                alignment = alignment,
+                                strokeEnabled = outlineEnabled,
+                                strokeColor = parseHexOrRgbaColor(outlineColorStr, 0xFF000000.toInt()),
+                                strokeWidthPx = outlineWidth,
+                                shadowEnabled = shadowEnabled,
+                                shadowColor = parseHexOrRgbaColor(shadowColorStr, 0xC8000000.toInt()),
+                                shadowOffsetX = shadowOffsetX,
+                                shadowOffsetY = shadowOffsetY,
+                                shadowRadius = shadowBlur,
+                                backgroundColor = parseHexOrRgbaColor(backgroundColorStr, 0xB4000000.toInt())
+                            )
+                        )
+                    }
+                }
+            }
+            return groups
+        }
+
+        fun parseCaptionGroups(docObj: JsonObject): List<CaptionGroup> {
+            return parseOverlayGroups(docObj)
+        }
     }
 
     data class RenderOutcome(
@@ -80,10 +240,23 @@ class AndroidClipRenderer(
         val start: Float,
         val end: Float,
         val words: List<CaptionWord>,
-        val primaryColor: Int = Color.WHITE,
-        val highlightColor: Int = Color.YELLOW,
+        val primaryColor: Int = 0xFFFFFFFF.toInt(),
+        val highlightColor: Int = 0xFFFFE600.toInt(),
         val fontSizeSp: Float = 36f,
-        val backgroundEnabled: Boolean = true
+        val backgroundEnabled: Boolean = true,
+        val isCaption: Boolean = true,
+        val positionX: Float = 0.5f,
+        val positionY: Float = 0.78f,
+        val alignment: String = "center",
+        val strokeEnabled: Boolean = false,
+        val strokeColor: Int = 0xFF000000.toInt(),
+        val strokeWidthPx: Float = 4f,
+        val shadowEnabled: Boolean = true,
+        val shadowColor: Int = 0xC8000000.toInt(),
+        val shadowOffsetX: Float = 2f,
+        val shadowOffsetY: Float = 4f,
+        val shadowRadius: Float = 6f,
+        val backgroundColor: Int = 0xB4000000.toInt()
     )
 
     data class RenderRequest(
@@ -169,7 +342,7 @@ class AndroidClipRenderer(
         }
 
         try {
-            // 1. Parse Project Document: segments & caption track
+            // 1. Parse Project Document: segments & overlay tracks
             val docObj = try {
                 gson.fromJson(request.projectDocJson, JsonObject::class.java)
             } catch (e: Exception) {
@@ -189,103 +362,192 @@ class AndroidClipRenderer(
                 }
             }
 
-            // Fallback: full source duration or first 10 seconds if no segments
+            // Read source video properties (duration, dimensions, upright rotation)
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(request.sourceVideoFile.absolutePath)
+            val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            val rawW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 1920
+            val rawH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 1080
+            val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            retriever.release()
+
             if (segmentSpans.isEmpty()) {
-                val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(request.sourceVideoFile.absolutePath)
-                val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                retriever.release()
                 val totalMs = durStr?.toLongOrNull() ?: 10_000L
                 segmentSpans.add(Pair(0L, totalMs))
             }
 
-            // 2. Parse Caption Track for On-Device Text Overlay
-            val captionGroups = parseCaptionGroups(docObj)
+            val srcW = if (rot == 90 || rot == 270) rawH else rawW
+            val srcH = if (rot == 90 || rot == 270) rawW else rawH
 
-            // 3. Build Video Effects List (9:16 layout + optional Captions CanvasOverlay)
+            // 2. Parse Caption & Static Text/Overlay Tracks
+            val overlayGroups = parseOverlayGroups(docObj)
+
+            // 3. Build Video Effects List (Horizontal Crop using cropAnchorX + 9:16 layout + Overlays)
             val is720p = request.targetResolution.equals("720p", ignoreCase = true)
             val targetWidth = if (is720p) 720 else 1080
             val targetHeight = if (is720p) 1280 else 1920
 
             val effectsBuilder = ImmutableList.builder<androidx.media3.common.Effect>()
 
-            // 9:16 Presentation scale to fit or crop depending on layoutMode
-            val presentationLayout = if (request.layoutMode.contains("crop", ignoreCase = true) || request.layoutMode.contains("portrait_9_16", ignoreCase = true)) {
-                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
+            val isPortraitTarget = request.layoutMode.contains("portrait", ignoreCase = true) ||
+                                  request.layoutMode.contains("9_16", ignoreCase = true) ||
+                                  request.layoutMode.contains("crop", ignoreCase = true)
+
+            if (isPortraitTarget) {
+                val targetAspect = 9f / 16f
+                val srcAspect = srcW.toFloat() / srcH.toFloat().coerceAtLeast(1f)
+
+                if (srcAspect > targetAspect) {
+                    // Source is wider than 9:16 (e.g. 16:9). Crop horizontally according to cropAnchorX
+                    val cropFractionW = targetAspect / srcAspect
+                    val slackW = (1.0f - cropFractionW).coerceAtLeast(0f)
+                    val anchor = request.cropAnchorX.coerceIn(0f, 1f)
+                    val normLeft = anchor * slackW
+                    val normRight = normLeft + cropFractionW
+                    val ndcLeft = -1.0f + 2.0f * normLeft
+                    val ndcRight = -1.0f + 2.0f * normRight
+                    effectsBuilder.add(Crop(ndcLeft, ndcRight, -1.0f, 1.0f))
+                } else if (srcAspect < targetAspect) {
+                    // Source is narrower/taller than 9:16. Crop vertically centered
+                    val cropFractionH = srcAspect / targetAspect
+                    val slackH = (1.0f - cropFractionH).coerceAtLeast(0f)
+                    val normTop = 0.5f * slackH
+                    val normBottom = normTop + cropFractionH
+                    val ndcBottom = -1.0f + 2.0f * (1.0f - normBottom)
+                    val ndcTop = -1.0f + 2.0f * (1.0f - normTop)
+                    effectsBuilder.add(Crop(-1.0f, 1.0f, ndcBottom, ndcTop))
+                }
+
+                // Scale cropped 9:16 frame to exact output resolution
+                effectsBuilder.add(
+                    Presentation.createForWidthAndHeight(
+                        targetWidth,
+                        targetHeight,
+                        Presentation.LAYOUT_SCALE_TO_FIT
+                    )
+                )
             } else {
-                Presentation.LAYOUT_SCALE_TO_FIT
+                effectsBuilder.add(
+                    Presentation.createForWidthAndHeight(
+                        targetWidth,
+                        targetHeight,
+                        Presentation.LAYOUT_SCALE_TO_FIT
+                    )
+                )
             }
 
-            effectsBuilder.add(
-                Presentation.createForWidthAndHeight(
-                    targetWidth,
-                    targetHeight,
-                    presentationLayout
-                )
-            )
-
-            // Add dynamic word-highlighting caption overlay if captions exist
-            if (captionGroups.isNotEmpty()) {
+            // Dynamic word-highlighting caption and text overlay if any groups exist
+            if (overlayGroups.isNotEmpty()) {
                 val captionOverlay = object : CanvasOverlay(false) {
-                    private val bgPaint = Paint().apply {
-                        color = Color.argb(190, 0, 0, 0)
-                        style = Paint.Style.FILL
-                        isAntiAlias = true
-                    }
-                    private val textPaint = Paint().apply {
-                        color = Color.WHITE
-                        textSize = (if (is720p) 26f else 40f) * context.resources.displayMetrics.scaledDensity
-                        typeface = Typeface.DEFAULT_BOLD
-                        isAntiAlias = true
-                        textAlign = Paint.Align.LEFT
-                    }
-                    private val highlightPaint = Paint().apply {
-                        color = Color.rgb(255, 230, 0) // Punchy yellow highlight
-                        textSize = (if (is720p) 26f else 40f) * context.resources.displayMetrics.scaledDensity
-                        typeface = Typeface.DEFAULT_BOLD
-                        isAntiAlias = true
-                        textAlign = Paint.Align.LEFT
-                    }
+                    private val density = context.resources.displayMetrics.scaledDensity
 
                     override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
                         val timelineSeconds = presentationTimeUs / 1_000_000f
-                        val activeGroup = captionGroups.firstOrNull { g ->
+                        val activeGroups = overlayGroups.filter { g ->
                             timelineSeconds >= g.start && timelineSeconds <= g.end
-                        } ?: return
-
-                        if (activeGroup.words.isEmpty()) return
-
-                        val centerX = canvas.width / 2f
-                        val centerY = canvas.height * 0.78f // 78% down screen
-
-                        val spaceWidth = textPaint.measureText(" ")
-                        val wordWidths = activeGroup.words.map { textPaint.measureText(it.text) }
-                        val totalWordsWidth = wordWidths.sum()
-                        val totalWidth = totalWordsWidth + (activeGroup.words.size - 1).coerceAtLeast(0) * spaceWidth
-
-                        val fontMetrics = textPaint.fontMetrics
-                        val paddingX = 24f
-                        val paddingY = 16f
-                        val rect = RectF(
-                            centerX - (totalWidth / 2f) - paddingX,
-                            centerY + fontMetrics.top - paddingY,
-                            centerX + (totalWidth / 2f) + paddingX,
-                            centerY + fontMetrics.bottom + paddingY
-                        )
-
-                        if (activeGroup.backgroundEnabled) {
-                            canvas.drawRoundRect(rect, 16f, 16f, bgPaint)
                         }
+                        if (activeGroups.isEmpty()) return
 
-                        // Draw word-by-word with frame-accurate highlight on the word active at timestamp T
-                        var currentX = centerX - (totalWidth / 2f)
-                        for (i in activeGroup.words.indices) {
-                            val word = activeGroup.words[i]
-                            val isWordActive = timelineSeconds >= word.start && timelineSeconds <= word.end
-                            val paintToUse = if (isWordActive) highlightPaint else textPaint
+                        for (group in activeGroups) {
+                            if (group.words.isEmpty()) continue
 
-                            canvas.drawText(word.text, currentX, centerY, paintToUse)
-                            currentX += wordWidths[i] + spaceWidth
+                            val baseFontSize = (if (is720p) group.fontSizeSp * 0.75f else group.fontSizeSp) * density
+                            val activeFontSize = baseFontSize * 1.08f // 1.08x active word scale pop
+
+                            val textPaint = Paint().apply {
+                                color = group.primaryColor
+                                textSize = baseFontSize
+                                typeface = Typeface.DEFAULT_BOLD
+                                isAntiAlias = true
+                                textAlign = Paint.Align.LEFT
+                                if (group.shadowEnabled) {
+                                    setShadowLayer(group.shadowRadius * density, group.shadowOffsetX * density, group.shadowOffsetY * density, group.shadowColor)
+                                }
+                            }
+
+                            val activeTextPaint = Paint().apply {
+                                color = group.highlightColor
+                                textSize = activeFontSize
+                                typeface = Typeface.DEFAULT_BOLD
+                                isAntiAlias = true
+                                textAlign = Paint.Align.LEFT
+                                if (group.shadowEnabled) {
+                                    setShadowLayer(group.shadowRadius * density, group.shadowOffsetX * density, group.shadowOffsetY * density, group.shadowColor)
+                                }
+                            }
+
+                            val strokePaint = if (group.strokeEnabled) {
+                                Paint().apply {
+                                    color = group.strokeColor
+                                    style = Paint.Style.STROKE
+                                    strokeWidth = group.strokeWidthPx * density
+                                    textSize = baseFontSize
+                                    typeface = Typeface.DEFAULT_BOLD
+                                    isAntiAlias = true
+                                    textAlign = Paint.Align.LEFT
+                                }
+                            } else null
+
+                            val activeStrokePaint = if (group.strokeEnabled) {
+                                Paint().apply {
+                                    color = group.strokeColor
+                                    style = Paint.Style.STROKE
+                                    strokeWidth = group.strokeWidthPx * density
+                                    textSize = activeFontSize
+                                    typeface = Typeface.DEFAULT_BOLD
+                                    isAntiAlias = true
+                                    textAlign = Paint.Align.LEFT
+                                }
+                            } else null
+
+                            val bgPaint = if (group.backgroundEnabled) {
+                                Paint().apply {
+                                    color = group.backgroundColor
+                                    style = Paint.Style.FILL
+                                    isAntiAlias = true
+                                }
+                            } else null
+
+                            val spaceWidth = textPaint.measureText(" ")
+                            val wordWidths = group.words.map { word ->
+                                val isWordActive = group.isCaption && timelineSeconds >= word.start && timelineSeconds <= word.end
+                                if (isWordActive) activeTextPaint.measureText(word.text) else textPaint.measureText(word.text)
+                            }
+                            val totalWordsWidth = wordWidths.sum()
+                            val totalWidth = totalWordsWidth + (group.words.size - 1).coerceAtLeast(0) * spaceWidth
+
+                            val anchorX = canvas.width * group.positionX
+                            val centerY = canvas.height * group.positionY
+                            val startX = when (group.alignment.lowercase()) {
+                                "left" -> anchorX
+                                "right" -> anchorX - totalWidth
+                                else -> anchorX - (totalWidth / 2f)
+                            }
+
+                            if (bgPaint != null) {
+                                val fontMetrics = textPaint.fontMetrics
+                                val paddingX = 24f * density
+                                val paddingY = 16f * density
+                                val pillRect = RectF(
+                                    startX - paddingX,
+                                    centerY + fontMetrics.top - paddingY,
+                                    startX + totalWidth + paddingX,
+                                    centerY + fontMetrics.bottom + paddingY
+                                )
+                                canvas.drawRoundRect(pillRect, 16f * density, 16f * density, bgPaint)
+                            }
+
+                            var currentX = startX
+                            for (wIdx in group.words.indices) {
+                                val word = group.words[wIdx]
+                                val isWordActive = group.isCaption && timelineSeconds >= word.start && timelineSeconds <= word.end
+                                val fillPaint = if (isWordActive) activeTextPaint else textPaint
+                                val strokeP = if (isWordActive) activeStrokePaint else strokePaint
+
+                                strokeP?.let { canvas.drawText(word.text, currentX, centerY, it) }
+                                canvas.drawText(word.text, currentX, centerY, fillPaint)
+                                currentX += wordWidths[wIdx] + spaceWidth
+                            }
                         }
                     }
                 }
@@ -344,16 +606,16 @@ class AndroidClipRenderer(
                             tempOutput.renameTo(request.outputFile)
 
                             // Validate with MediaMetadataRetriever
-                            val retriever = MediaMetadataRetriever()
-                            retriever.setDataSource(request.outputFile.absolutePath)
-                            val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                            val durationSeconds = (durStr?.toFloatOrNull() ?: 0f) / 1000f
+                            val valRetriever = MediaMetadataRetriever()
+                            valRetriever.setDataSource(request.outputFile.absolutePath)
+                            val finalDurStr = valRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            val durationSeconds = (finalDurStr?.toFloatOrNull() ?: 0f) / 1000f
 
                             // Generate thumbnail at 50%
                             if (request.thumbnailFile != null && durationSeconds > 0) {
                                 try {
                                     val frameUs = ((durationSeconds / 2f) * 1_000_000f).toLong()
-                                    val bitmap = retriever.getFrameAtTime(frameUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                    val bitmap = valRetriever.getFrameAtTime(frameUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                                     if (bitmap != null) {
                                         FileOutputStream(request.thumbnailFile).use { out ->
                                             bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
@@ -363,7 +625,7 @@ class AndroidClipRenderer(
                                     Log.w(TAG, "Thumbnail generation non-fatal error: ${e.message}")
                                 }
                             }
-                            retriever.release()
+                            valRetriever.release()
 
                             callback.onProgress(100)
                             callback.onCompleted(request.outputFile, request.thumbnailFile, durationSeconds)
@@ -411,57 +673,5 @@ class AndroidClipRenderer(
         progressJob?.cancel()
         activeTransformer?.cancel()
         activeTransformer = null
-    }
-
-    private fun parseCaptionGroups(docObj: JsonObject): List<CaptionGroup> {
-        val groups = mutableListOf<CaptionGroup>()
-        val tracks = docObj.getAsJsonArray("tracks") ?: return groups
-
-        for (i in 0 until tracks.size()) {
-            val track = tracks.get(i).asJsonObject
-            val kind = track.get("kind")?.asString ?: track.get("type")?.asString ?: ""
-            if (kind != "captions") continue
-
-            val groupsArray = track.getAsJsonArray("groups") ?: continue
-            for (j in 0 until groupsArray.size()) {
-                val g = groupsArray.get(j).asJsonObject
-                val gId = g.get("id")?.asString ?: "grp_$j"
-                val gStart = g.get("start")?.asFloat ?: 0f
-                val gEnd = g.get("end")?.asFloat ?: 0f
-
-                val words = mutableListOf<CaptionWord>()
-                val wordsArray = g.getAsJsonArray("words")
-                if (wordsArray != null) {
-                    for (k in 0 until wordsArray.size()) {
-                        val w = wordsArray.get(k).asJsonObject
-                        val text = w.get("text")?.asString ?: w.get("word")?.asString ?: ""
-                        val wStart = w.get("start")?.asFloat ?: gStart
-                        val wEnd = w.get("end")?.asFloat ?: gEnd
-                        if (text.isNotEmpty()) {
-                            words.add(CaptionWord(text, wStart, wEnd))
-                        }
-                    }
-                }
-
-                if (words.isEmpty()) {
-                    val rawText = g.get("text")?.asString ?: ""
-                    if (rawText.isNotEmpty()) {
-                        words.add(CaptionWord(rawText, gStart, gEnd))
-                    }
-                }
-
-                if (gEnd > gStart && words.isNotEmpty()) {
-                    groups.add(
-                        CaptionGroup(
-                            id = gId,
-                            start = gStart,
-                            end = gEnd,
-                            words = words
-                        )
-                    )
-                }
-            }
-        }
-        return groups
     }
 }

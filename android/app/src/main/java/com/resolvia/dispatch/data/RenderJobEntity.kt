@@ -28,6 +28,10 @@ data class RenderJobEntity(
     val layoutMode: String = "portrait_9_16",
     val cropAnchorX: Float = 0.5f,
     val targetResolution: String = "1080p", // "1080p" or "720p"
+    val title: String = "",
+    val description: String = "",
+    val platforms: String = "youtube",
+    val publishMode: String = "private",
     val status: String = STATUS_QUEUED,
     val progressPercent: Int = 0,
     val renderedDurationSeconds: Float = 0.0f,
