@@ -5215,7 +5215,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     track={visibleCaptionTrack}
                     currentTime={currentTime}
                     duration={duration || currentClip.duration || 40}
-                    hideTrimControls={true}
+                    hideTrimControls={!isSourceTimebase}
                     sourceDuration={timelineSourceDuration}
                     sourceTimebase={isSourceTimebase}
                     timeMode={isSourceTimebase ? 'source' : 'clip'}
@@ -5265,8 +5265,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     setCaptionTrack(updated, commit);
                     setSaveStatus('unsaved');
                   }}
-                  onSplitClip={(t) => handleSplitClip(isSourceTimebase ? t - (currentClip.start_time || 0) : t)}
-                  splitClipTime={isSourceTimebase ? currentTime - (currentClip.start_time || 0) : currentTime}
+                  onSplitClip={(t) => handleSplitClip(t)}
+                  splitClipTime={currentTime}
                   onLayoutChange={handleLayoutChange}
                   onSeek={handleSeek}
                   onPreviewAnimation={handlePreviewAnimation}

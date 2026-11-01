@@ -1514,6 +1514,12 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
         return {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail=f"Clip cannot be approved from status '{clip.get('status')}'")
+    _duration = float(clip.get("end_time") or 0) - float(clip.get("start_time") or 0)
+    if _duration < MIN_CLIP_DURATION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Clip is {_duration:.1f}s — shorter than the {MIN_CLIP_DURATION:.0f}s minimum.",
+        )
 
     # Cloud caption reconciliation: the phone may have saved newer caption
     # edits in Dispatch Cloud while this PC was offline. Pull them (monotonic

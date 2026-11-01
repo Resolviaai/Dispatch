@@ -199,11 +199,22 @@ def _schedule_processing_check(job_id: str, attempts: int) -> None:
         conn.commit()
 
 
-def _process_outbox_queue_internal() -> int:
-    # 1. Recover stale uploading jobs orphaned by unexpected process restarts (> 10 min)
-    # If job has been uploading for > 10 min, do NOT blindly republish: mark 'reconciliation_required'
+def _recover_stale_uploads() -> None:
+    """Mark stale 'uploading' rows for reconciliation and finalize their clips.
+
+    The bulk UPDATE cannot return the affected clip_ids, so they are read first;
+    without this a clip with one published platform stays 'approved' after a
+    daemon restart.
+    """
     try:
+        stale_clip_ids: list[str] = []
         with db.get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT DISTINCT clip_id FROM publishing_outbox
+                WHERE status = 'uploading'
+                  AND (julianday('now') - julianday(COALESCE(attempt_started_at, updated_at, created_at))) * 1440.0 > 10.0
+            """).fetchall()
+            stale_clip_ids = [r["clip_id"] for r in rows if r["clip_id"]]
             conn.execute("""
                 UPDATE publishing_outbox 
                 SET status = 'reconciliation_required',
@@ -212,8 +223,19 @@ def _process_outbox_queue_internal() -> int:
                 WHERE status = 'uploading' 
                   AND (julianday('now') - julianday(COALESCE(attempt_started_at, updated_at, created_at))) * 1440.0 > 10.0
             """)
+            conn.commit()
+        for stale_clip_id in stale_clip_ids:
+            check_and_finalize_clip(stale_clip_id, Path(f"storage/clips/{stale_clip_id}.mp4"))
     except Exception as e:
         logger.debug("Stale outbox recovery check note: %s", e)
+
+
+def _process_outbox_queue_internal() -> int:
+    # 1. Recover stale uploading jobs orphaned by unexpected process restarts (> 10 min)
+    # If job has been uploading for > 10 min, do NOT blindly republish: mark
+    # 'reconciliation_required' and finalize its clip so a platform that already
+    # published is not left stuck in 'approved'.
+    _recover_stale_uploads()
 
     # 2. Check remote status of in-flight processing jobs (e.g. YouTube processing)
     try:

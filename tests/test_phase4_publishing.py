@@ -230,3 +230,36 @@ class TestPhase4Publishing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaleUploadRecovery(unittest.TestCase):
+    def setUp(self):
+        db.init_db()
+
+    def test_stale_uploading_finalizes_clip_with_a_published_platform(self):
+        """A restart must not leave a partially published clip stuck in 'approved'."""
+        clip_id = "test_clip_restart_finalize"
+        with db.get_db_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO clips (id, title, start_time, end_time, duration, status) "
+                "VALUES (?, 'Clip', 0.0, 15.0, 15.0, 'approved')", (clip_id,))
+            conn.execute(
+                "INSERT OR REPLACE INTO publishing_outbox (id, clip_id, platform, status, idempotency_key) "
+                "VALUES ('job_pub_restart', ?, 'youtube', 'published', 'idem_pub_restart')", (clip_id,))
+            conn.execute(
+                "INSERT OR REPLACE INTO publishing_outbox (id, clip_id, platform, status, idempotency_key, "
+                "attempt_started_at, updated_at, created_at) "
+                "VALUES ('job_stale_restart', ?, 'instagram', 'uploading', 'idem_stale_restart', "
+                "datetime('now','-30 minutes'), datetime('now','-30 minutes'), datetime('now','-30 minutes'))",
+                (clip_id,))
+            conn.commit()
+
+        from dispatch.publisher.outbox import _recover_stale_uploads
+        _recover_stale_uploads()
+
+        clip = db.get_clip_by_id(clip_id)
+        assert clip["status"] == "published"
+        with db.get_db_connection() as conn:
+            stale = conn.execute(
+                "SELECT status FROM publishing_outbox WHERE id = 'job_stale_restart'").fetchone()
+        assert stale["status"] == "reconciliation_required"
