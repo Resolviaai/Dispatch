@@ -4,9 +4,9 @@
     "versionCode":  85,
     "versionName":  "1.7.17",
     "releaseTag":  "v1.7.17-alpha",
-    "generatedAt":  "2026-10-31T20:22:10Z",
+    "generatedAt":  "2026-11-01T07:02:50Z",
     "releaseNotes":  "Dispatch 1.7.17 alpha build.",
     "apkAsset":  "Dispatch.apk",
-    "apkSizeBytes":  21249670,
-    "apkSha256":  "364dd02f34e607b764633dcfd3f744412d3e3055d271a505fab395899deb8fce"
+    "apkSizeBytes":  21249426,
+    "apkSha256":  "3514163a35044e3900c753cb3e057904f5fc8f60bdf86f098ea2bf489b6b2de9"
 }
