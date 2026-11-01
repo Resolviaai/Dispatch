@@ -53,6 +53,7 @@ import { CaptionStudio, ActivePanel } from '../captions/CaptionStudio';
 import { DispatchCaptionRenderer, applyColorOpacity, applyCaseTransform } from '../captions/DispatchCaptionRenderer';
 import { useCaptionHistory } from '../captions/useCaptionHistory';
 import { preserveWordTimingsOnEdit, splitCaptionGroupAtTime } from '../captions/timingPreservation';
+import { splitAt, roundMs } from '../captions/timelineEngine';
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
@@ -3306,6 +3307,88 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
   };
 
+  const handleTimelineUndo = async () => {
+    if (!currentClip) return;
+    const session = await currentSession();
+    const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+    if (!token) {
+      undo();
+      return;
+    }
+    try {
+      const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline/undo`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          expected_revision: Number((currentClip as any).segments_revision ?? 0),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const doc = data.project_document;
+        const updatedClip = {
+          ...currentClip,
+          project_document: doc,
+          segments_revision: data.revision,
+          active_state_revision: data.active_state_revision,
+          can_undo: data.can_undo,
+          can_redo: data.can_redo,
+          kept_duration: data.kept_duration,
+        };
+        setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
+        setFeedback('Undo edit.');
+      } else {
+        undo();
+      }
+    } catch {
+      undo();
+    }
+  };
+
+  const handleTimelineRedo = async () => {
+    if (!currentClip) return;
+    const session = await currentSession();
+    const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+    if (!token) {
+      redo();
+      return;
+    }
+    try {
+      const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline/redo`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          expected_revision: Number((currentClip as any).segments_revision ?? 0),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const doc = data.project_document;
+        const updatedClip = {
+          ...currentClip,
+          project_document: doc,
+          segments_revision: data.revision,
+          active_state_revision: data.active_state_revision,
+          can_undo: data.can_undo,
+          can_redo: data.can_redo,
+          kept_duration: data.kept_duration,
+        };
+        setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
+        setFeedback('Redo edit.');
+      } else {
+        redo();
+      }
+    } catch {
+      redo();
+    }
+  };
+
   const handleSplitClip = async (splitTime: number) => {
     if (offlineReadOnly) {
       setFeedback('Reconnect to split clip.');
@@ -3313,36 +3396,84 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
     if (!currentClip) return;
     try {
-      const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/split`, pcHost), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ split_time: splitTime, is_source_time: false }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const stableClip1 = stabilizeMediaUrls(data.clip1);
-        const stableClip2 = stabilizeMediaUrls(data.clip2);
-        setReadyClips((prev) => {
-          const idx = prev.findIndex((c) => c.id === currentClip.id);
-          if (idx >= 0) {
-            const next = [...prev];
-            next.splice(idx, 1, stableClip1, stableClip2);
-            return next;
-          }
-          return [stableClip1, stableClip2, ...prev];
+      const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
+      const clipStart = Number(currentClip.start_time || 0);
+      const clipEnd = Number(currentClip.end_time || sourceDuration);
+
+      // Window-relative to source time mapping (C2 -> C3)
+      const windowStart = Number((currentClip as any).edit_window?.start ?? clipStart);
+      const sourceSplitTime = roundMs(windowStart + splitTime);
+
+      const existingDoc = (currentClip as any).project_document;
+      const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+      const rawSegments = parsedDoc?.timeline?.segments || [
+        { id: 'seg_1', source_start: clipStart, source_end: clipEnd }
+      ];
+      const ranges = rawSegments.map((s: any) => [Number(s.source_start), Number(s.source_end)]);
+
+      // Pure segment splitting
+      const newRanges = splitAt(ranges, sourceSplitTime, sourceDuration);
+
+      const newSegments = newRanges.map((r, i) => ({
+        id: rawSegments[i]?.id || `seg_${i + 1}_${Date.now().toString(36)}`,
+        source_start: r[0],
+        source_end: r[1],
+      }));
+
+      const newKeptDuration = roundMs(newRanges.reduce((acc, r) => acc + (r[1] - r[0]), 0));
+
+      const updatedProjectDoc = {
+        version: 1,
+        timeline: {
+          source_duration: sourceDuration,
+          segments: newSegments,
+        },
+        tracks: parsedDoc?.tracks || (captionTrack ? [{ ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }] : []),
+      };
+
+      const baseRevision = Number((currentClip as any).segments_revision ?? 0);
+      const operationId = `op_split_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      // Update clip in-place (Single Library Card: NO second clip card!)
+      const updatedClip = {
+        ...currentClip,
+        project_document: updatedProjectDoc,
+        kept_duration: newKeptDuration,
+        segments_revision: baseRevision + 1,
+        can_undo: true,
+        can_redo: false,
+      };
+
+      setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
+      setSaveStatus('saved');
+      setFeedback(`Split clip at ${splitTime.toFixed(1)}s (${newSegments.length} segments).`);
+
+      // Commit asynchronously to Cloudflare Worker
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      if (token) {
+        const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expected_revision: baseRevision,
+            document: updatedProjectDoc,
+            operation_id: operationId,
+            action_type: 'split',
+          }),
         });
-        // CapCut editing model: automatically advance selection to the newly created second segment at 00:00
-        setSelectedClipId(stableClip2.id);
-        setCurrentTime(0);
-        setSaveStatus('saved');
-        setFeedback(`Split clip at ${splitTime.toFixed(1)}s into 2 parts.`);
-        void fetchClips();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setFeedback(err.detail || 'Failed to split clip.');
+        if (res.ok) {
+          const cloudData = await res.json().catch(() => ({}));
+          if (cloudData.revision) {
+            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: cloudData.revision } : c)));
+          }
+        }
       }
-    } catch {
-      setFeedback('Network error splitting clip.');
+    } catch (err: any) {
+      setFeedback(err?.message || 'Failed to split segment.');
     }
   };
 
@@ -5145,8 +5276,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               </button>
               <button
                 type="button"
-                disabled={!canUndo}
-                onClick={undo}
+                disabled={!(Boolean((currentClip as any)?.can_undo) || canUndo)}
+                onClick={handleTimelineUndo}
                 className="w-7 h-7 rounded-lg bg-surface-200 hover:bg-surface-300 border border-border flex items-center justify-center text-text-secondary hover:text-text-main disabled:opacity-25 active:scale-95 transition-all"
                 title="Undo"
                 aria-label="Undo"
@@ -5155,8 +5286,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               </button>
               <button
                 type="button"
-                disabled={!canRedo}
-                onClick={redo}
+                disabled={!(Boolean((currentClip as any)?.can_redo) || canRedo)}
+                onClick={handleTimelineRedo}
                 className="w-7 h-7 rounded-lg bg-surface-200 hover:bg-surface-300 border border-border flex items-center justify-center text-text-secondary hover:text-text-main disabled:opacity-25 active:scale-95 transition-all"
                 title="Redo"
                 aria-label="Redo"
@@ -5319,10 +5450,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   onLayoutChange={handleLayoutChange}
                   onSeek={handleSeek}
                   onPreviewAnimation={handlePreviewAnimation}
-                  canUndo={canUndo}
-                  canRedo={canRedo}
-                  onUndo={undo}
-                  onRedo={redo}
+                  canUndo={Boolean((currentClip as any)?.can_undo) || canUndo}
+                  canRedo={Boolean((currentClip as any)?.can_redo) || canRedo}
+                  onUndo={handleTimelineUndo}
+                  onRedo={handleTimelineRedo}
                 />
               </div>
             </>
