@@ -59,6 +59,171 @@ type Kind = keyof typeof KINDS;
 const CAP_BYTES: Record<Kind, number> = { clip_video: 536870912, thumbnail: 8388608, edit_window: 536870912 };
 
 // ---------- pure helpers (also unit-tested) ----------
+export function roundMs(seconds: number): number {
+  return Math.floor(Number(seconds) * 1000.0 + 0.5) / 1000.0;
+}
+
+export function canonicalMediaSpans(ranges: unknown): [number, number][] {
+  if (!Array.isArray(ranges)) throw new Error("ranges must be an array of [start, end] pairs");
+  const normalized: [number, number][] = ranges.map((item, idx) => {
+    if (!Array.isArray(item) || item.length !== 2) {
+      throw new Error(`range at index ${idx} must be a [start, end] pair`);
+    }
+    const s = roundMs(item[0]);
+    const e = roundMs(item[1]);
+    if (s < 0 || e <= s) {
+      throw new Error(`invalid segment bounds: [${s}, ${e}]`);
+    }
+    return [s, e];
+  });
+
+  if (normalized.length === 0) return [];
+  const sorted = [...normalized].sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const [s, e] = sorted[i];
+    const prev = merged[merged.length - 1];
+    if (s < prev[1] - 1e-9) {
+      throw new Error(`overlapping segments detected: [${prev[0]}, ${prev[1]}] and [${s}, ${e}]`);
+    } else if (Math.abs(s - prev[1]) <= 1e-6) {
+      prev[1] = e;
+    } else {
+      merged.push([s, e]);
+    }
+  }
+  return merged.map(([s, e]) => [roundMs(s), roundMs(e)]);
+}
+
+export function canonicalSpansStr(ranges: unknown): string {
+  const spans = canonicalMediaSpans(ranges);
+  return "[" + spans.map(([s, e]) => `${s.toFixed(3)}-${e.toFixed(3)}`).join(",") + "]";
+}
+
+export function sha256Hex(ascii: string): string {
+  function rightRotate(value: number, amount: number): number {
+    return (value >>> amount) | (value << (32 - amount));
+  }
+  const mathPow = Math.pow;
+  const maxWord = mathPow(2, 32);
+  let i = 0, j = 0, result = "";
+  const words: number[] = [];
+  const asciiBitLength = ascii.length * 8;
+  let hash: number[] = [];
+  const k: number[] = [];
+  let primeCounter = 0;
+  const isComposite: Record<number, number> = {};
+
+  for (let candidate = 2; primeCounter < 64; candidate++) {
+    if (!isComposite[candidate]) {
+      for (i = 0; i < 313; i += candidate) isComposite[i] = candidate;
+      hash[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;
+      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+    }
+  }
+
+  ascii += "\x80";
+  while ((ascii.length % 64) - 56) ascii += "\x00";
+  for (i = 0; i < ascii.length; i++) {
+    j = ascii.charCodeAt(i);
+    words[i >> 2] |= j << (((3 - i) % 4) * 8);
+  }
+  words[words.length] = (asciiBitLength / maxWord) | 0;
+  words[words.length] = asciiBitLength;
+
+  for (j = 0; j < words.length; ) {
+    const w = words.slice(j, (j += 16));
+    const oldHash = hash;
+    hash = hash.slice(0, 8);
+    for (i = 0; i < 64; i++) {
+      const w15 = w[i - 15], w2 = w[i - 2];
+      const s0 = rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3);
+      const s1 = rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10);
+      const ch = (hash[4] & hash[5]) ^ (~hash[4] & hash[6]);
+      const maj = (hash[0] & hash[1]) ^ (hash[0] & hash[2]) ^ (hash[1] & hash[2]);
+      const temp1 = hash[7] + (rightRotate(hash[4], 6) ^ rightRotate(hash[4], 11) ^ rightRotate(hash[4], 25)) + ch + k[i] + (w[i] = i < 16 ? w[i] : (w[i - 16] + s0 + w[i - 7] + s1) | 0);
+      const temp2 = (rightRotate(hash[0], 2) ^ rightRotate(hash[0], 13) ^ rightRotate(hash[0], 22)) + maj;
+      hash = [(temp1 + temp2) | 0, hash[0], hash[1], hash[2], (hash[3] + temp1) | 0, hash[4], hash[5], hash[6]];
+    }
+    for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+  }
+  for (i = 0; i < 8; i++) {
+    for (j = 3; j + 1; j--) {
+      const b = (hash[i] >> (j * 8)) & 255;
+      result += (b < 16 ? "0" : "") + b.toString(16);
+    }
+  }
+  return result;
+}
+
+export function computeMediaFingerprint(sourceAssetId: string, ranges: unknown): string {
+  if (typeof sourceAssetId !== "string" || !sourceAssetId.trim()) {
+    throw new Error("sourceAssetId must be a non-empty string");
+  }
+  const spansStr = canonicalSpansStr(ranges);
+  return sha256Hex(`v1:media:${sourceAssetId.trim()}:${spansStr}`);
+}
+
+export function computeRenderFingerprint(
+  mediaFingerprint: string,
+  layoutMode: string,
+  cropAnchorX: number,
+  layers?: unknown[],
+  settings?: Record<string, unknown>
+): string {
+  if (typeof mediaFingerprint !== "string" || mediaFingerprint.length !== 64) {
+    throw new Error("mediaFingerprint must be a valid 64-character SHA-256 hex string");
+  }
+  const layout = layoutMode ? String(layoutMode).trim() : "portrait_9_16";
+  const cropStr = roundMs(cropAnchorX).toFixed(3);
+  function canonicalStringify(obj: unknown): string {
+    if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+    if (Array.isArray(obj)) return "[" + obj.map(canonicalStringify).join(",") + "]";
+    const keys = Object.keys(obj as Record<string, unknown>).sort();
+    return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalStringify((obj as Record<string, unknown>)[k])).join(",") + "}";
+  }
+  const layersStr = canonicalStringify(Array.isArray(layers) ? layers : []);
+  const layersHash = sha256Hex(layersStr);
+  const settingsClean = settings && typeof settings === "object" ? settings : {};
+  let payload = `v1:render:${mediaFingerprint}:${layout}:${cropStr}:${layersHash}`;
+  if (Object.keys(settingsClean).length > 0) {
+    payload += `:${sha256Hex(canonicalStringify(settingsClean))}`;
+  }
+  return sha256Hex(payload);
+}
+
+export function validateTimelineSegments(segments: unknown): { valid: boolean; error?: string; keptDuration: number } {
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return { valid: false, error: "segments must be a non-empty array", keptDuration: 0 };
+  }
+  let total = 0;
+  let prevEnd = -1;
+  for (let i = 0; i < segments.length; i++) {
+    const pair = segments[i];
+    if (!Array.isArray(pair) || pair.length !== 2) {
+      return { valid: false, error: `segment at index ${i} must be [start, end]`, keptDuration: 0 };
+    }
+    const s = roundMs(pair[0]);
+    const e = roundMs(pair[1]);
+    if (s < 0 || e <= s) {
+      return { valid: false, error: `invalid segment bounds [${s}, ${e}] at index ${i}`, keptDuration: 0 };
+    }
+    if (s < prevEnd - 1e-9) {
+      return { valid: false, error: `overlapping segment at index ${i}`, keptDuration: 0 };
+    }
+    prevEnd = e;
+    total += (e - s);
+  }
+  total = roundMs(total);
+  if (total < 5.0) {
+    return { valid: false, error: `total kept duration (${total}s) must be at least 5.0s`, keptDuration: total };
+  }
+  if (total > 180.0) {
+    return { valid: false, error: `total kept duration (${total}s) exceeds 180.0s maximum`, keptDuration: total };
+  }
+  return { valid: true, keptDuration: total };
+}
+
 export function validateReserveInput(kind: string, mime: string, expectedBytes: number): string | null {
   if (!(kind in KINDS)) return "unsupported kind";
   if (KINDS[kind as Kind] !== mime) return "unsupported mime for kind";
@@ -2498,6 +2663,121 @@ export default {
         return json(200, { deleted: true });
       }
 
+            // Project Document Timeline Editing (Stage 2 Mobile Endpoints):
+      // Single authoritative document, CAS optimistic concurrency, and persistent undo/redo.
+      if (request.method === "GET" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline")) {
+        const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline".length));
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        try {
+          const res = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id,project_document,segments_revision,active_state_revision,can_undo,can_redo,media_fingerprint,render_fingerprint,rendered_fingerprint,render_stale&limit=1`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const rows = res.ok ? ((await res.json()) as Array<Record<string, unknown>>) : [];
+          if (!rows || rows.length === 0) return json(404, { error: "clip not found" });
+          return json(200, { clip: rows[0] });
+        } catch (e) {
+          return json(502, { error: `timeline fetch failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "PUT" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline")) {
+        const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline".length));
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        const body = await readJson<{
+          document?: Record<string, unknown>;
+          base_revision?: number;
+          operation_id?: string;
+          action_type?: string;
+          action_metadata?: Record<string, unknown>;
+        }>(request);
+
+        const doc = body?.document;
+        if (!doc || typeof doc !== "object") return json(400, { error: "project document required" });
+        const operationId = typeof body?.operation_id === "string" && body.operation_id.trim() ? body.operation_id.trim() : crypto.randomUUID();
+        const actionType = typeof body?.action_type === "string" ? body.action_type : "edit";
+
+        // Validate segments and kept duration server-side
+        const timeline = doc.timeline as Record<string, unknown> | undefined;
+        const segCheck = validateTimelineSegments(timeline?.segments);
+        if (!segCheck.valid) {
+          return json(422, { error: segCheck.error });
+        }
+
+        // Server-Side Trusted Fingerprint Recomputation
+        const sourceAssetId = String(doc.source_asset_id || localClipId);
+        const mediaFp = computeMediaFingerprint(sourceAssetId, timeline?.segments);
+        const layoutMode = (doc.layout as Record<string, unknown> | undefined)?.mode ? String((doc.layout as Record<string, unknown>).mode) : "portrait_9_16";
+        const cropAnchor = typeof (doc.layout as Record<string, unknown> | undefined)?.crop_anchor_x === "number" ? Number((doc.layout as Record<string, unknown>).crop_anchor_x) : 0.5;
+        const renderFp = computeRenderFingerprint(mediaFp, layoutMode, cropAnchor, doc.tracks as unknown[]);
+
+        // Inject trusted metadata
+        doc.metadata = {
+          ...(typeof doc.metadata === "object" && doc.metadata !== null ? doc.metadata : {}),
+          media_fingerprint: mediaFp,
+          render_fingerprint: renderFp,
+          action_type: actionType,
+        };
+        if (timeline) {
+          timeline.kept_duration = segCheck.keptDuration;
+        }
+
+        try {
+          const result = await rpc<{ revision: number; conflict: boolean; current_document: unknown }>(env, "cloud_put_project_document", {
+            p_user_id: userId,
+            p_local_clip_id: localClipId,
+            p_document: doc,
+            p_base_revision: typeof body?.base_revision === "number" ? Math.floor(body.base_revision) : null,
+            p_operation_id: operationId,
+            p_action_type: actionType,
+            p_action_metadata: body?.action_metadata ?? null,
+            p_author: "mobile",
+          });
+
+          if (result?.conflict) {
+            return json(409, { error: "timeline_conflict", revision: result.revision, current_document: result.current_document });
+          }
+          return json(200, { ok: true, revision: result?.revision ?? 0, document: doc });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return json(502, { error: `timeline save failed: ${msg}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline/undo")) {
+        const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline/undo".length));
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        const body = await readJson<{ operation_id?: string }>(request);
+        const opId = typeof body?.operation_id === "string" && body.operation_id.trim() ? body.operation_id.trim() : crypto.randomUUID();
+        try {
+          const result = await rpc<{ revision: number; conflict: boolean; current_document: unknown }>(env, "cloud_undo_project_document", {
+            p_user_id: userId,
+            p_local_clip_id: localClipId,
+            p_operation_id: opId,
+          });
+          return json(200, { ok: true, revision: result?.revision, document: result?.current_document });
+        } catch (e) {
+          return json(400, { error: `undo failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline/redo")) {
+        const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline/redo".length));
+        if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        const body = await readJson<{ operation_id?: string }>(request);
+        const opId = typeof body?.operation_id === "string" && body.operation_id.trim() ? body.operation_id.trim() : crypto.randomUUID();
+        try {
+          const result = await rpc<{ revision: number; conflict: boolean; current_document: unknown }>(env, "cloud_redo_project_document", {
+            p_user_id: userId,
+            p_local_clip_id: localClipId,
+            p_operation_id: opId,
+          });
+          return json(200, { ok: true, revision: result?.revision, document: result?.current_document });
+        } catch (e) {
+          return json(400, { error: `redo failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
       // Cloud caption editing: persist an edited offline caption track so it can
       // be reloaded cloud-side without the PC, and so laptops sync it later.
       // Conflict-safe: the save carries the revision it was prepared against;
@@ -3180,6 +3460,86 @@ export default {
           return json(200, { linked: true, cloud_clip_id: cloudClipId });
         } catch (e) {
           return json(502, { error: `media link failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Headless PC pre-render sweep: pull higher revisions of project documents
+      if (request.method === "GET" && url.pathname === "/sync/pc/timeline") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        try {
+          const res = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&segments_revision=gt.0&select=local_clip_id,project_document,segments_revision,active_state_revision,media_fingerprint,render_fingerprint,rendered_fingerprint,render_stale&order=cloud_updated_at.desc&limit=200`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const rows = res.ok ? ((await res.json()) as unknown[]) : [];
+          return json(200, { clips: Array.isArray(rows) ? rows : [] });
+        } catch (e) {
+          return json(502, { error: `timeline sync failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Headless PC verified render completion: confirms R2 upload and updates rendered_fingerprint
+      if (request.method === "POST" && url.pathname === "/sync/pc/render-complete") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        const body = await readJson<{
+          local_clip_id: string;
+          render_fingerprint: string;
+          r2_key: string;
+          byte_count: number;
+          duration: number;
+        }>(request);
+
+        if (!body?.local_clip_id || !body?.render_fingerprint || !body?.r2_key || !body?.byte_count) {
+          return json(400, { error: "missing required render completion fields" });
+        }
+
+        // Verify R2 object existence and size
+        try {
+          const obj = await env.BUCKET.head(body.r2_key);
+          if (!obj) {
+            return json(404, { error: `rendered object not found in R2: ${body.r2_key}` });
+          }
+          if (obj.size !== body.byte_count) {
+            return json(400, { error: `R2 object size mismatch: expected ${body.byte_count}, got ${obj.size}` });
+          }
+        } catch (e) {
+          return json(502, { error: `R2 verification failed: ${e instanceof Error ? e.message : e}` });
+        }
+
+        // Update clips_cloud rendered_fingerprint atomically
+        try {
+          // Check target clip
+          const clipRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(body.local_clip_id)}&select=id,render_fingerprint&limit=1`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          const clipRows = clipRes.ok ? ((await clipRes.json()) as Array<{ id: string; render_fingerprint: string }>) : [];
+          if (!clipRows || clipRows.length === 0) return json(404, { error: "clip not found" });
+
+          const clip = clipRows[0];
+          // Check if render_fingerprint matches (split-only cuts preserve fingerprint!)
+          const isFresh = clip.render_fingerprint === body.render_fingerprint;
+
+          await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?id=eq.${clip.id}`,
+            {
+              method: "PATCH",
+              headers: {
+                apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+                Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                rendered_fingerprint: body.render_fingerprint,
+                render_stale: !isFresh,
+                cloud_updated_at: new Date().toISOString(),
+              }),
+            }
+          );
+
+          return json(200, { ok: true, render_stale: !isFresh, rendered_fingerprint: body.render_fingerprint });
+        } catch (e) {
+          return json(502, { error: `render commit failed: ${e instanceof Error ? e.message : e}` });
         }
       }
 
