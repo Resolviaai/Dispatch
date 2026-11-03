@@ -2626,6 +2626,29 @@ export default {
       return json(200, { cancelled });
     }
 
+    if (url.pathname === "/sessions/delete" && request.method === "POST") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const body = await request.json().catch(() => ({})) as { session_id?: string; video_id?: string };
+      const rawId = (body.video_id || body.session_id || "").trim();
+      if (!rawId) return json(400, { error: "missing id" });
+      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+
+      const query = `user_id=eq.${user.userId}&or=(id.eq.${encodeURIComponent(rawId)},video_id.eq.${encodeURIComponent(rawId)},session_id.eq.${encodeURIComponent(rawId)},upload_object_id.eq.${encodeURIComponent(rawId)})`;
+      const delJobRes = await fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?${query}`, {
+        method: "DELETE",
+        headers: svc,
+      });
+
+      const clipQuery = `user_id=eq.${user.userId}&or=(session_id.eq.${encodeURIComponent(rawId)},youtube_video_id.eq.${encodeURIComponent(rawId)})`;
+      await fetch(`${env.SUPABASE_URL}/rest/v1/clips_cloud?${clipQuery}`, {
+        method: "DELETE",
+        headers: svc,
+      }).catch(() => null);
+
+      return json(200, { ok: true, deleted: delJobRes.ok });
+    }
+
     // ---- Direct video uploads (Route C): submit a staged clip_video object for
     // processing. The row is created only after /complete, so a queued direct job
     // always references a fully-uploaded, quota-accounted R2 object.
@@ -2931,6 +2954,36 @@ export default {
         jobs_degraded: !jobsRes || !jobsRes.ok ? true : undefined,
         publications_degraded: publicationsDegraded ? true : undefined,
       });
+    }
+
+    const clipRejectMatch = url.pathname.match(/^\/clips\/([^/]+)\/reject$/);
+    if (request.method === "POST" && clipRejectMatch) {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const clipId = decodeURIComponent(clipRejectMatch[1]);
+      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+      const patchRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&or=(id.eq.${encodeURIComponent(clipId)},local_clip_id.eq.${encodeURIComponent(clipId)})`,
+        {
+          method: "PATCH",
+          headers: { ...svc, "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "rejected" }),
+        }
+      );
+      return json(200, { ok: true, rejected: patchRes.ok });
+    }
+
+    const clipDeleteMatch = url.pathname.match(/^\/clips\/([^/]+)\/(?:delete|purge)$/);
+    if ((request.method === "POST" || request.method === "DELETE") && clipDeleteMatch) {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const clipId = decodeURIComponent(clipDeleteMatch[1]);
+      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+      const delRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&or=(id.eq.${encodeURIComponent(clipId)},local_clip_id.eq.${encodeURIComponent(clipId)})`,
+        { method: "DELETE", headers: svc }
+      );
+      return json(200, { ok: true, deleted: delRes.ok });
     }
 
     const cloudPublicationsMatch = url.pathname.match(/^\/clips\/([^/]+)\/publications$/);

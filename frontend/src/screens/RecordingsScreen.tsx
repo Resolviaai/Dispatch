@@ -833,7 +833,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       list.push({
         id: item.video_id,
         title: displayTitle,
-        origin: itemYtId ? 'youtube' : 'phone',
+        origin: 'youtube',
         createdAt: item.discovered_at ? new Date(item.discovered_at).getTime() : Date.now(),
         totalDuration: computedDuration,
         totalBytes: 0,
@@ -1453,10 +1453,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     const sess = await currentSession().catch(() => null);
     if (!sess?.access_token) return 'Session deleted.';
 
-    await fetch(`${WORKER_BASE}/jobs/cancel`, {
+    await fetch(`${WORKER_BASE}/sessions/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
-      body: JSON.stringify({ video_id: videoId })
+      body: JSON.stringify({ video_id: videoId, session_id: videoId })
     }).catch(() => null);
 
     if (!alsoDeleteYouTube) return 'Session deleted.';
@@ -1532,16 +1532,24 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         }
       }
 
+      // Cloud cleanup: remove the job and any cloud clips immediately so background sync never resurrects it
+      const sess = await currentSession().catch(() => null);
+      if (sess?.access_token) {
+        await fetch(`${WORKER_BASE}/sessions/delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
+          body: JSON.stringify({ video_id: target.id, session_id: target.id })
+        }).catch(() => null);
+      }
+
       setInboxItems(prev => prev.filter(i => i.video_id !== target.id && (target.rawInbox ? i.video_id !== target.rawInbox.video_id : true)));
       if (onDeleteSession) {
         onDeleteSession(target.id);
       }
-      // Local/PC removal already succeeded and is never rolled back; the cloud
-      // cleanup below is best-effort so a connectivity hiccup cannot strand the
-      // user's completed delete.
+
       let finalToast = 'Session deleted.';
-      if (target.youtubeVideoId) {
-        finalToast = await cleanupCloudSessionArtifacts(target.youtubeVideoId, deleteYoutubeCopy);
+      if (target.youtubeVideoId && deleteYoutubeCopy) {
+        finalToast = await cleanupCloudSessionArtifacts(target.youtubeVideoId, true);
       }
       showToast(finalToast, finalToast.includes('could not') ? 'error' : 'success');
     } catch (err) {
