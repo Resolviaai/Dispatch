@@ -95,7 +95,7 @@ export const CaptionDock: React.FC<CaptionDockProps> = ({
         <div className="flex items-center gap-2">
           <Type size={13} className="text-[#2563EB]" />
           <span className="text-[11px] font-bold uppercase tracking-wider text-[#F3F4F6]">
-            Caption Timeline (Whisper Timestamps)
+            Caption Timeline (Gemini Timestamps)
           </span>
           <span className="text-[10px] font-mono text-[#747D8A]">
             {track?.groups?.length || 0} phrase segments

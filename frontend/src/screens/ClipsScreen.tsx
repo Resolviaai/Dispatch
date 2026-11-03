@@ -2427,7 +2427,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ url: submitUrlInput.trim() }),
+        body: JSON.stringify({ url: submitUrlInput.trim(), source_type: 'youtube_import' }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {

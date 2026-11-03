@@ -15,6 +15,7 @@ export default {
         'surface-3': 'var(--ds-surface-3, #282828)',
         border: 'var(--ds-border, #2E2E2E)',
         'border-strong': 'var(--ds-border-strong, #3E3E3E)',
+        'foreground': 'var(--ds-text, #F5F5F5)',
         'text-main': 'var(--ds-text, #F5F5F5)',
         'text-secondary': 'var(--ds-text-2, #A3A3A3)',
         'text-muted': 'var(--ds-text-3, #737373)',

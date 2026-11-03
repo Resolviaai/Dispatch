@@ -3,6 +3,7 @@ import { Eye, EyeOff, ArrowLeft } from 'lucide-react'
 import { supabase, currentSession, signIn, signUp, signOut, resetPassword, updatePassword } from './supabase'
 import type { Session } from '@supabase/supabase-js'
 import { Bridge } from '../bridge'
+import { MorphingSquare } from '@/components/ui/morphing-square'
 
 /**
  * Email/password gate for the whole app (Supabase Auth). Session persists across
@@ -62,7 +63,10 @@ export function AuthGate({ children }: { children: (session: Session) => React.R
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-canvas">
-        <span className="text-text-muted text-sm">Loading…</span>
+        <MorphingSquare
+          className="bg-primary shadow-hero-glow"
+          message="Loading Dispatch…"
+        />
       </div>
     )
   }

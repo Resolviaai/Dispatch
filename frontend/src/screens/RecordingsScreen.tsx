@@ -1,3 +1,4 @@
+import { MorphingSquare } from '@/components/ui/morphing-square';
 import { useBackHandler } from '../navigation/backHandler';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
@@ -316,6 +317,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [deleteYoutubeCopy, setDeleteYoutubeCopy] = useState(false);
   const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
+  const [isPlayingInline, setIsPlayingInline] = useState(false);
+  const [routeCMediaUrl, setRouteCMediaUrl] = useState<string | null>(null);
+  const [isRouteCLoading, setIsRouteCLoading] = useState(false);
+  const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>({});
   const lastSchedulerNudgeRef = useRef(0);
 
   useEffect(() => {
@@ -817,8 +822,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         displayTitle = `Session ${item.video_id.slice(0, 10)}`;
       }
 
-      // Derive authentic duration: item.duration -> source_duration of clips -> max clip end_time / sum -> 0
-      let computedDuration = item.duration || 0;
+      // Derive authentic duration: resolvedDurations -> item.duration -> source_duration of clips -> max clip end_time / sum -> 0
+      let computedDuration = resolvedDurations[item.video_id] || (itemYtId ? resolvedDurations[itemYtId] : 0) || item.duration || 0;
       if (computedDuration <= 0 && itemClips.length > 0) {
         const clipWithSource = itemClips.find(c => (c.source_duration ?? 0) > 0);
         if (clipWithSource && clipWithSource.source_duration) {
@@ -849,7 +854,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
     list.sort((a, b) => b.createdAt - a.createdAt);
     return list;
-  }, [nativeSessions, inboxItems, clips]);
+  }, [nativeSessions, inboxItems, clips, resolvedDurations]);
 
   // Active Session Detail item
   const currentSessionDetail = useMemo(() => {
@@ -954,7 +959,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         res = await fetch(`${WORKER_BASE}/jobs/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
-          body: JSON.stringify({ url: value })
+          body: JSON.stringify({ url: value, source_type: 'youtube_import' })
         });
       } else {
         res = await fetch(apiUrl('/api/youtube/ingest', pcHost), {
@@ -1068,11 +1073,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         <main className="flex-1 min-h-0 flex flex-col px-4 pt-3 pb-4 gap-4 overflow-y-auto">
           {/* VIDEO / MEDIA STAGE */}
           <div className="w-full aspect-video rounded-xl bg-black overflow-hidden border border-border relative flex items-center justify-center shrink-0 shadow-sm">
-            {s.videoUrl && !videoPlaybackError ? (
+            {(s.videoUrl || routeCMediaUrl) && !videoPlaybackError ? (
               <video
-                src={s.videoUrl.startsWith('http') ? s.videoUrl : apiUrl(s.videoUrl, pcHost)}
-                // Without a poster the stage stays blank until the user presses play,
-                // because a <video> will not paint a frame from the local interceptor.
+                src={(s.videoUrl || routeCMediaUrl)!.startsWith('http') ? (s.videoUrl || routeCMediaUrl)! : apiUrl((s.videoUrl || routeCMediaUrl)!, pcHost)}
                 poster={s.thumbnailUrl
                   ? (s.thumbnailUrl.startsWith('http')
                     ? s.thumbnailUrl
@@ -1080,10 +1083,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   : undefined}
                 controls
                 playsInline
+                onLoadedMetadata={(e) => {
+                  const d = e.currentTarget.duration;
+                  if (d && d > 0 && s.totalDuration <= 0) {
+                    setResolvedDurations(prev => ({ ...prev, [s.id]: Math.round(d) }));
+                  }
+                }}
                 onError={(e) => {
-                  // A missing MediaError.code means the resource never loaded at all
-                  // (interceptor/network level) rather than failing to decode, so the
-                  // element state is the only thing that distinguishes the two.
                   const el = e.currentTarget as HTMLVideoElement;
                   const code = el.error?.code ?? 'none';
                   setVideoPlaybackError(
@@ -1094,9 +1100,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 className="w-full h-full object-contain"
                 preload="metadata"
               />
+            ) : isRouteCLoading ? (
+              <div className="flex flex-col items-center justify-center gap-3 p-6 text-text-muted">
+                <MorphingSquare className="bg-primary shadow-hero-glow" message="Loading cloud video…" />
+              </div>
             ) : videoPlaybackError ? (
-              // Previously a playback error fell through to the "Waiting for PC"
-              // placeholder, which blamed the PC for a local player failure.
               <div className="text-center p-6 text-text-muted space-y-2">
                 <AlertCircle size={28} className="mx-auto text-danger" />
                 <p className="text-xs font-semibold text-danger">Playback failed</p>
@@ -1120,27 +1128,60 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 </div>
               </div>
             ) : isYouTubeId(ytId) ? (
-              <div className="w-full h-full relative group">
-                <img
-                  src={`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`}
-                  alt="Video thumbnail"
-                  className="w-full h-full object-cover"
-                />
-                <a
-                  href={`https://youtu.be/${ytId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="absolute inset-0 bg-black/40 hover:bg-black/50 transition-colors flex flex-col items-center justify-center text-white gap-2"
-                >
-                  <div className="w-12 h-12 rounded-full bg-danger flex items-center justify-center shadow-lg group-hover:scale-105 active:scale-95 transition-transform">
-                    <Play size={20} className="fill-white translate-x-0.5" />
-                  </div>
-                  <span className="text-xs font-semibold flex items-center gap-1 bg-black/70 px-2.5 py-1 rounded-full">
-                    <span>Watch on YouTube</span>
-                    <ExternalLink size={11} />
-                  </span>
-                </a>
-              </div>
+              isPlayingInline ? (
+                <div className="w-full h-full relative bg-black">
+                  <iframe
+                    src={`https://www.youtube-nocookie.com/embed/${ytId}?autoplay=1&rel=0&playsinline=1&modestbranding=1`}
+                    title={s.title || 'YouTube video'}
+                    className="w-full h-full border-0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setIsPlayingInline(false)}
+                    className="absolute top-2 right-2 min-h-[32px] px-2.5 rounded-full bg-black/80 hover:bg-black text-white text-[11px] font-medium border border-white/20 flex items-center gap-1 active:scale-95 transition-all z-20 backdrop-blur-sm"
+                    title="Close player"
+                    aria-label="Close player"
+                  >
+                    <X size={13} />
+                    <span>Close</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="w-full h-full relative group">
+                  <img
+                    src={`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`}
+                    alt="Video thumbnail"
+                    className="w-full h-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setIsPlayingInline(true)}
+                    className="absolute inset-0 bg-black/40 hover:bg-black/50 transition-colors flex flex-col items-center justify-center text-white gap-2 cursor-pointer"
+                  >
+                    <div className="w-14 h-14 rounded-full bg-danger flex items-center justify-center shadow-hero-glow group-hover:scale-105 active:scale-95 transition-transform">
+                      <Play size={22} className="fill-white translate-x-0.5" />
+                    </div>
+                    <span className="text-xs font-semibold flex items-center gap-1.5 bg-black/75 px-3 py-1.5 rounded-full border border-white/10 shadow-sm">
+                      <Play size={12} className="fill-white" />
+                      <span>Play Video</span>
+                    </span>
+                  </button>
+
+                  <a
+                    href={`https://youtu.be/${ytId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/80 hover:bg-black text-white text-[10px] font-medium border border-white/20 flex items-center gap-1 transition-all z-10 backdrop-blur-sm"
+                    title="Open on YouTube"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span>YouTube</span>
+                    <ExternalLink size={10} />
+                  </a>
+                </div>
+              )
             ) : (
               <div className="text-center p-6 text-text-muted space-y-2">
                 <div className="w-12 h-12 rounded-full bg-surface-2 flex items-center justify-center mx-auto text-text-secondary">
@@ -1212,7 +1253,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <div className="space-y-0.5">
               <span className="text-[10px] uppercase font-semibold text-text-muted block">Duration</span>
               <span className="font-mono font-semibold tabular-nums text-text-main">
-                {formatDuration(s.totalDuration)}
+                {s.totalDuration > 0 ? formatDuration(s.totalDuration) : '--:--'}
               </span>
             </div>
 
@@ -1513,22 +1554,16 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
           );
           return;
         }
-        // Phone sessions have no PC inbox row; do not block their deletion on
-        // an unreachable PC request.
-      } else if (pcHost) {
+      } else if (pcHost && pcStatus.online) {
+        // Best effort PC cleanup; never blocks cloud deletion if PC is offline
         try {
-          const res = await fetch(apiUrl(`/api/youtube/inbox/${target.id}`, pcHost), {
+          await fetch(apiUrl(`/api/youtube/inbox/${target.id}`, pcHost), {
             method: 'DELETE',
             headers: getAuthHeaders(),
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(3000),
           });
-          if (!res.ok) {
-            showToast('Could not delete session from PC.', 'error');
-            return;
-          }
-        } catch {
-          showToast('Could not reach PC to delete session.', 'error');
-          return;
+        } catch (err) {
+          console.warn('Could not reach PC to delete session:', err);
         }
       }
 
@@ -1538,17 +1573,25 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         await fetch(`${WORKER_BASE}/sessions/delete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
-          body: JSON.stringify({ video_id: target.id, session_id: target.id })
+          body: JSON.stringify({
+            video_id: target.youtubeVideoId || target.id,
+            session_id: target.id,
+            dispatch_id: target.rawInbox?.dispatch_id
+          })
         }).catch(() => null);
       }
 
-      setInboxItems(prev => prev.filter(i => i.video_id !== target.id && (target.rawInbox ? i.video_id !== target.rawInbox.video_id : true)));
+      setInboxItems(prev => prev.filter(i =>
+        i.video_id !== target.id &&
+        i.session_id !== target.id &&
+        (target.rawInbox ? (i.video_id !== target.rawInbox.video_id && i.dispatch_id !== target.rawInbox.dispatch_id) : true)
+      ));
       if (onDeleteSession) {
         onDeleteSession(target.id);
       }
 
       let finalToast = 'Session deleted.';
-      if (target.youtubeVideoId && deleteYoutubeCopy) {
+      if (target.origin === 'phone' && target.youtubeVideoId && deleteYoutubeCopy) {
         finalToast = await cleanupCloudSessionArtifacts(target.youtubeVideoId, true);
       }
       showToast(finalToast, finalToast.includes('could not') ? 'error' : 'success');
@@ -2045,7 +2088,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   : 'This recording has not finished uploading. Deleting it will permanently remove the local recording and cancel the pending upload.'}
               </p>
             )}
-            {showConfirmDelete.youtubeVideoId && (
+            {showConfirmDelete.origin === 'phone' && showConfirmDelete.youtubeVideoId && (
               <label className="flex items-center gap-3 min-h-[44px] px-3 py-2 rounded-xl bg-surface-2 border border-border cursor-pointer select-none active:scale-[0.99] transition-colors">
                 <input
                   type="checkbox"
@@ -2064,7 +2107,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setShowConfirmDelete(null)}
+                onClick={() => { setDeleteYoutubeCopy(false); setShowConfirmDelete(null); }}
                 className="min-h-[44px] px-4 rounded-xl bg-surface-2 border border-border text-xs font-medium text-text-main active:scale-[0.98] hover:bg-surface-3 transition-colors"
               >
                 Cancel

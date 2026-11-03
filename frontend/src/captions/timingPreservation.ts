@@ -6,7 +6,7 @@ import { CaptionGroup, Word } from './types';
  * Invariants:
  * 1. Single word edits strictly preserve every other word's ID, start/end timestamps, and style overrides.
  * 2. Multi-word edits find unchanged anchor words via alignment and only interpolate timing for the modified span.
- * 3. Never silently distribute words evenly across a segment when authentic Whisper timing exists.
+ * 3. Never silently distribute words evenly across a segment when authentic word timing exists.
  */
 
 export function preserveWordTimingsOnEdit(

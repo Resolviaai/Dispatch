@@ -1591,7 +1591,23 @@ test("/youtube/videos/delete rejects an invalid video id", async () => {
   assert.equal(res.status, 400);
 });
 
+test("/youtube/videos/delete rejects non-camera videos with 403 (Route B provenance guard)", async () => {
+  supabase.set("processing_jobs?user_id=eq.", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "j1", source_type: "youtube_import" }] }),
+  });
+  const res = await post("/youtube/videos/delete", { video_id: "abc123def45" });
+  assert.equal(res.status, 403);
+  const body = await res.json();
+  assert.equal(body.deleted, false);
+  assert.ok(body.error.includes("only Dispatch camera recordings"));
+});
+
 test("/youtube/videos/delete returns 409 when the caller has no linked YouTube account", async () => {
+  supabase.set("processing_jobs?user_id=eq.", {
+    method: "GET",
+    fn: () => ({ body: [{ id: "j1", source_type: "camera" }] }),
+  });
   supabase.set("connected_accounts?user_id=eq.", {
     method: "GET",
     fn: () => ({ body: [] }),
@@ -1860,4 +1876,38 @@ test("a proxy still referenced by another live window is never reclaimed", async
   assert.deepEqual(calls.repointed, [MEDIA], "re-point still happens");
   assert.equal(calls.marked.length, 0, "shared proxy must survive");
   assert.deepEqual(bucket.deleted, []);
+});
+
+
+test("/sessions/delete deletes processing_jobs and cleans clips_cloud", async () => {
+  let deletedJobs = false;
+  let deletedClips = false;
+
+  supabase.set("processing_jobs?user_id=eq.", {
+    method: "DELETE",
+    fn: (url) => {
+      deletedJobs = true;
+      return { body: { ok: true } };
+    },
+  });
+
+  supabase.set("clips_cloud?user_id=eq.", {
+    method: "DELETE",
+    fn: (url) => {
+      deletedClips = true;
+      return { body: { ok: true } };
+    },
+  });
+
+  const res = await post("/sessions/delete", { video_id: "test_vid_123", session_id: "sess_456" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(deletedJobs, true);
+  assert.equal(deletedClips, true);
+});
+
+test("/youtube/duration rejects missing video_id with 400", async () => {
+  const res = await worker.fetch(new Request("https://dispatch.app/youtube/duration", { method: "GET" }), env());
+  assert.equal(res.status, 400);
 });

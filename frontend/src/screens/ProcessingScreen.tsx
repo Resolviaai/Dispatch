@@ -72,7 +72,7 @@ export const ProcessingScreen: React.FC<ProcessingScreenProps> = ({ pcHost }) =>
     { key: 'RECORDED', label: 'Phone Capture', desc: '1080p FHD segment finalized on POCO C65' },
     { key: 'YOUTUBE_UPLOADED', label: 'YouTube Cloud Inbox', desc: 'Uploaded as private [DISPATCH] stream' },
     { key: 'PC_DISCOVERED', label: 'PC Ingestion', desc: 'Discovered & downloaded by PC daemon' },
-    { key: 'TRANSCRIBING', label: 'Whisper Transcription', desc: 'Word-level timestamps & Roman Hinglish STT' },
+    { key: 'TRANSCRIBING', label: 'Gemini AI Transcription', desc: 'High-precision word-level timestamps & speech-to-text' },
     { key: 'ANALYZING', label: 'Gemini Analysis', desc: 'Hook detection & viral segment isolation' },
     { key: 'CLIPS_READY', label: 'Clips Defined', desc: '9:16 vertical shorts with animated subtitles' },
   ];

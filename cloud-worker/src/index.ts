@@ -647,6 +647,56 @@ async function presign(env: Env, method: "PUT" | "GET", key: string, mime?: stri
 }
 
 /**
+ * Probe YouTube video duration in seconds via public watch page metadata.
+ */
+
+export async function probeYouTubeDurationDebug(videoId: string): Promise<any> {
+  try {
+    const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(6000),
+    });
+    const text = await res.text();
+    return {
+      status: res.status,
+      redirected: res.redirected,
+      url: res.url,
+      len: text.length,
+      hasLengthSeconds: text.includes("lengthSeconds"),
+      hasApproxDurationMs: text.includes("approxDurationMs"),
+      titleMatch: text.match(/<title>([^<]+)<\/title>/)?.[1]
+    };
+  } catch (err: any) {
+    return { error: err.message };
+  }
+}
+
+export async function probeYouTubeDuration(videoId: string): Promise<number | null> {
+  if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return null;
+  try {
+    const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(3500),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const matchSec = text.match(/"lengthSeconds":"(\d+)"/);
+    if (matchSec) return parseInt(matchSec[1], 10);
+    const matchMs = text.match(/"approxDurationMs":"(\d+)"/);
+    if (matchMs) return Math.round(parseInt(matchMs[1], 10) / 1000);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Drain queued social publishing jobs directly from Cloudflare Worker without PC dependency.
  * Supports YouTube Shorts (OAuth resumable upload) and Meta/Instagram Reels via R2 presigned URLs.
  */
@@ -1803,6 +1853,27 @@ export default {
       if (!/^[A-Za-z0-9_-]{11}$/.test(videoId) || (accountId && !/^[0-9a-f-]{36}$/i.test(accountId))) {
         return json(400, { error: "invalid delete request" }, reqOrigin);
       }
+      // AUTHORITATIVE PROVENANCE GUARD:
+      // Deleting a YouTube video is strictly permitted ONLY if Dispatch can prove
+      // this authenticated user uploaded that video as a native camera recording (source_type = 'camera').
+      // Route B imported YouTube links or any non-camera videos are strictly blocked (403 Forbidden).
+      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+      const jobCheckRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&or=(video_id.eq.${encodeURIComponent(videoId)},youtube_url.ilike.*${encodeURIComponent(videoId)}*)&select=id,source_type,session_id&limit=5`,
+        { headers: svc }
+      );
+      if (!jobCheckRes.ok) {
+        return json(502, { error: `provenance verification failed: ${jobCheckRes.status}` }, reqOrigin);
+      }
+      const matchingJobs = await jobCheckRes.json() as Array<{ id: string; source_type?: string; session_id?: string }>;
+      const isVerifiedCameraUpload = matchingJobs.some(j => j.source_type === "camera" || (j.session_id && j.session_id.startsWith("sess_")));
+      if (!isVerifiedCameraUpload) {
+        return json(403, {
+          deleted: false,
+          error: "forbidden: only Dispatch camera recordings can be deleted from YouTube. Imported YouTube links cannot be removed from YouTube."
+        }, reqOrigin);
+      }
+
       // Only the user's own vault accounts are ever used; real ownership is
       // enforced by YouTube itself (a non-owned video id returns 403, a
       // missing one 404, and both leave the caller's data untouched).
@@ -1831,6 +1902,26 @@ export default {
         }
       }
       return json(200, { deleted: false, error: lastError || "delete failed" }, reqOrigin);
+    }
+
+    if (url.pathname === "/youtube/duration" && request.method === "GET") {
+      const vId = (url.searchParams.get("video_id") || "").trim();
+      if (!vId) return json(400, { error: "missing video_id" }, reqOrigin);
+      const dur = await probeYouTubeDuration(vId);
+      if (dur && dur > 0) {
+        fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?or=(video_id.eq.${encodeURIComponent(vId)},youtube_url.ilike.*${encodeURIComponent(vId)}*)&duration=is.null`, {
+          method: "PATCH",
+          headers: {
+            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ duration: dur }),
+        }).catch(() => null);
+        return json(200, { duration: dur }, reqOrigin);
+      }
+      const dbg = await probeYouTubeDurationDebug(vId);
+      return json(200, { duration: null, debug: dbg }, reqOrigin);
     }
 
     // ---- Per-User Gemini API Keys Vault ----
@@ -2534,6 +2625,27 @@ export default {
       if (!sub.ok) return json(502, { error: `submit failed: ${sub.status}` });
       const subBody = await sub.json() as unknown;
       const arr = Array.isArray(subBody) ? subBody as Array<{ id: string; status: string }> : [];
+      if (arr[0]?.id) {
+        const jobId = arr[0].id;
+        const vIdMatch = ytUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{6,20})/);
+        const vId = vIdMatch ? vIdMatch[1] : null;
+        if (vId) {
+          (async () => {
+            const dur = await probeYouTubeDuration(vId);
+            if (dur && dur > 0) {
+              await fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?id=eq.${jobId}`, {
+                method: "PATCH",
+                headers: {
+                  apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+                  Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ duration: dur }),
+              }).catch(() => null);
+            }
+          })().catch(() => null);
+        }
+      }
       return json(200, { job_id: arr[0]?.id ?? null, status: arr[0]?.status ?? "queued" });
     }
     if (url.pathname === "/template/default") {
@@ -2629,17 +2741,37 @@ export default {
     if (url.pathname === "/sessions/delete" && request.method === "POST") {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
-      const body = await request.json().catch(() => ({})) as { session_id?: string; video_id?: string };
-      const rawId = (body.video_id || body.session_id || "").trim();
-      if (!rawId) return json(400, { error: "missing id" });
+      const body = await request.json().catch(() => ({})) as { session_id?: string; video_id?: string; dispatch_id?: string; job_id?: string };
+      const rawCandidates = [body.video_id, body.session_id, body.dispatch_id, body.job_id]
+        .map(s => typeof s === "string" ? s.trim() : "")
+        .filter(Boolean);
+      if (rawCandidates.length === 0) return json(400, { error: "missing id" });
       const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
 
-      const query = `user_id=eq.${user.userId}&or=(id.eq.${encodeURIComponent(rawId)},video_id.eq.${encodeURIComponent(rawId)},session_id.eq.${encodeURIComponent(rawId)},upload_object_id.eq.${encodeURIComponent(rawId)})`;
+      const conditions: string[] = [];
+      for (const rawId of rawCandidates) {
+        conditions.push(`id.eq.${encodeURIComponent(rawId)}`);
+        conditions.push(`video_id.eq.${encodeURIComponent(rawId)}`);
+        conditions.push(`session_id.eq.${encodeURIComponent(rawId)}`);
+        conditions.push(`upload_object_id.eq.${encodeURIComponent(rawId)}`);
+        if (rawId.length >= 6) {
+          conditions.push(`youtube_url.ilike.*${encodeURIComponent(rawId)}*`);
+        }
+      }
+      const query = `user_id=eq.${user.userId}&or=(${conditions.join(",")})`;
       const delJobRes = await fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?${query}`, {
         method: "DELETE",
         headers: svc,
       });
 
+      const clipConditions = rawCandidates.flatMap(id => [
+        `session_id.eq.${encodeURIComponent(id)}`,
+        `youtube_video_id.eq.${encodeURIComponent(id)}`
+      ]);
+      await fetch(
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&or=(${clipConditions.join(",")})`,
+        { method: "DELETE", headers: svc }
+      ).catch(() => null);
 
       return json(200, { ok: true, deleted: delJobRes.ok });
     }
@@ -2949,23 +3081,6 @@ export default {
         jobs_degraded: !jobsRes || !jobsRes.ok ? true : undefined,
         publications_degraded: publicationsDegraded ? true : undefined,
       });
-    }
-
-    const clipRejectMatch = url.pathname.match(/^\/clips\/([^/]+)\/reject$/);
-    if (request.method === "POST" && clipRejectMatch) {
-      const user = await authenticate(env, request);
-      if (!user) return json(401, { error: "unauthorized" });
-      const clipId = decodeURIComponent(clipRejectMatch[1]);
-      const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
-      const patchRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&or=(id.eq.${encodeURIComponent(clipId)},local_clip_id.eq.${encodeURIComponent(clipId)})`,
-        {
-          method: "PATCH",
-          headers: { ...svc, "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "rejected" }),
-        }
-      );
-      return json(200, { ok: true, rejected: patchRes.ok });
     }
 
     const clipDeleteMatch = url.pathname.match(/^\/clips\/([^/]+)\/(?:delete|purge)$/);

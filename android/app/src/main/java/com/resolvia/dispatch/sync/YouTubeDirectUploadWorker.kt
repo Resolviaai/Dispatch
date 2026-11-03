@@ -193,13 +193,17 @@ class YouTubeDirectUploadWorker(
     }
 
     /** Scoped YouTube status checks and lookups performed by the cloud worker. */
-    private suspend fun submitVideoForAiClipping(videoId: String) {
+    private suspend fun submitVideoForAiClipping(videoId: String, sessionId: String? = null) {
         if (videoId.isBlank()) return
         val token = pairingManager.cloudAccessToken.trim()
         if (token.isBlank()) return
         try {
             val body = JsonObject().apply {
                 addProperty("url", "https://youtu.be/$videoId")
+                addProperty("source_type", "camera")
+                if (!sessionId.isNullOrBlank()) {
+                    addProperty("session_id", sessionId)
+                }
             }
             val req = Request.Builder()
                 .url("$workerUrl/jobs/submit")
@@ -456,7 +460,7 @@ class YouTubeDirectUploadWorker(
                         dao.updateSegment(updated)
                         dao.deleteOutboxItem(seg.segmentId)
                         pairingManager.clearUploadSessionUrl(seg.segmentId)
-                        submitVideoForAiClipping(videoId)
+                        submitVideoForAiClipping(videoId, seg.sessionId)
                         
                         // Check for immediate durable PC acknowledgement if PC is reachable
                         val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else calculateSha256(file)
@@ -1332,7 +1336,7 @@ class YouTubeDirectUploadWorker(
                     dao.updateSegmentStatus(seg.segmentId, "PROCESSED_ON_YOUTUBE")
                     val vId = seg.youtubeVideoId ?: ""
                     if (vId.isNotBlank()) {
-                        submitVideoForAiClipping(vId)
+                        submitVideoForAiClipping(vId, seg.sessionId)
                     }
                 }
                 "failed" -> {
