@@ -2640,11 +2640,6 @@ export default {
         headers: svc,
       });
 
-      const clipQuery = `user_id=eq.${user.userId}&or=(session_id.eq.${encodeURIComponent(rawId)},youtube_video_id.eq.${encodeURIComponent(rawId)})`;
-      await fetch(`${env.SUPABASE_URL}/rest/v1/clips_cloud?${clipQuery}`, {
-        method: "DELETE",
-        headers: svc,
-      }).catch(() => null);
 
       return json(200, { ok: true, deleted: delJobRes.ok });
     }
