@@ -40,8 +40,13 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * Hardware-accelerated on-device video renderer for Dispatch Mobile using Android Jetpack Media3 Transformer.
@@ -109,6 +114,160 @@ class AndroidClipRenderer(
             return defaultColor
         }
 
+        fun applyOpacityToColor(color: Int, opacity: Float): Int {
+            if (opacity >= 0.999f) return color
+            val clamped = opacity.coerceIn(0f, 1f)
+            val origAlpha = (color ushr 24) and 0xFF
+            val newAlpha = (origAlpha * clamped).toInt()
+            return (newAlpha shl 24) or (color and 0x00FFFFFF)
+        }
+
+        fun applyCaseTransform(text: String, transform: String?): String {
+            return when (transform?.lowercase(Locale.ROOT)) {
+                "uppercase" -> text.uppercase(Locale.ROOT)
+                "lowercase" -> text.lowercase(Locale.ROOT)
+                "title" -> text.split(" ").joinToString(" ") { word ->
+                    word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+                }
+                else -> text
+            }
+        }
+
+        fun getFontAssetFilename(fontFamily: String?): String {
+            if (fontFamily.isNullOrBlank()) return "Montserrat-Variable.ttf"
+            val clean = fontFamily.trim().lowercase(Locale.ROOT)
+            return when {
+                clean.contains("impact") -> "impact.ttf"
+                clean.contains("anton") -> "Anton-Regular.ttf"
+                clean.contains("archivo") -> "ArchivoBlack-Regular.ttf"
+                clean.contains("bebas") -> "BebasNeue-Regular.ttf"
+                clean.contains("banger") -> "Bangers-Regular.ttf"
+                clean.contains("luckiest") -> "LuckiestGuy-Regular.ttf"
+                clean.contains("marker") -> "PermanentMarker-Regular.ttf"
+                clean.contains("titan") -> "TitanOne-Regular.ttf"
+                clean.contains("russo") -> "RussoOne-Regular.ttf"
+                clean.contains("bungee") -> "Bungee-Regular.ttf"
+                clean.contains("barlow") -> "BarlowCondensed-Bold.ttf"
+                clean.contains("poppins") -> "Poppins-Bold.ttf"
+                clean.contains("inter") -> "Inter-Variable.ttf"
+                clean.contains("roboto") -> "Roboto-Variable.ttf"
+                clean.contains("open sans") -> "OpenSans-Variable.ttf"
+                clean.contains("oswald") -> "Oswald-Variable.ttf"
+                clean.contains("space grotesk") -> "SpaceGrotesk-Variable.ttf"
+                clean.contains("devanagari") -> "NotoSansDevanagari-Variable.ttf"
+                clean.contains("noto") -> "NotoSans-Variable.ttf"
+                clean.contains("montserrat") -> "Montserrat-Variable.ttf"
+                clean.contains("arial black") -> "ArchivoBlack-Regular.ttf"
+                clean.contains("comic") -> "Bangers-Regular.ttf"
+                else -> "Montserrat-Variable.ttf"
+            }
+        }
+
+        private val fontCache = ConcurrentHashMap<String, Typeface>()
+
+        fun getTypeface(context: Context?, fontFamily: String?, isBold: Boolean, isItalic: Boolean): Typeface {
+            val family = fontFamily?.trim() ?: "Montserrat"
+            val cacheKey = "$family-$isBold-$isItalic"
+            return fontCache.computeIfAbsent(cacheKey) {
+                val assetFilename = getFontAssetFilename(family)
+                if (context != null) {
+                    try {
+                        Typeface.createFromAsset(context.assets, "fonts/$assetFilename")
+                    } catch (_: Exception) {
+                        fallbackTypeface(family, isBold, isItalic)
+                    }
+                } else {
+                    fallbackTypeface(family, isBold, isItalic)
+                }
+            }
+        }
+
+        private fun fallbackTypeface(family: String, isBold: Boolean, isItalic: Boolean): Typeface {
+            val style = when {
+                isBold && isItalic -> Typeface.BOLD_ITALIC
+                isBold -> Typeface.BOLD
+                isItalic -> Typeface.ITALIC
+                else -> Typeface.NORMAL
+            }
+            return try {
+                Typeface.create(family, style) ?: (if (isBold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT)
+            } catch (_: Exception) {
+                if (isBold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            }
+        }
+
+        data class VisualWord(
+            val rawWord: CaptionWord,
+            val text: String,
+            val width: Float
+        )
+
+        data class VisualLine(
+            val words: List<VisualWord>,
+            val lineWidth: Float
+        )
+
+        fun partitionWordsIntoVisualLines(
+            words: List<CaptionWord>,
+            textPaint: Paint,
+            maxWidthPx: Float,
+            textTransform: String?,
+            letterSpacing: Float
+        ): List<VisualLine> {
+            if (words.isEmpty()) return emptyList()
+
+            val spaceWidth = textPaint.measureText(" ")
+            val lines = mutableListOf<VisualLine>()
+            var currentLineWords = mutableListOf<VisualWord>()
+            var currentLineWidth = 0f
+
+            for (word in words) {
+                val transformed = applyCaseTransform(word.text, textTransform).trim()
+                if (transformed.isEmpty()) continue
+
+                // Support explicit newlines inside words
+                if (transformed.contains("\n")) {
+                    val parts = transformed.split("\n")
+                    for (pIdx in parts.indices) {
+                        val part = parts[pIdx].trim()
+                        if (pIdx > 0 && currentLineWords.isNotEmpty()) {
+                            val actualWidth = (currentLineWidth - spaceWidth).coerceAtLeast(0f)
+                            lines.add(VisualLine(currentLineWords.toList(), actualWidth))
+                            currentLineWords = mutableListOf()
+                            currentLineWidth = 0f
+                        }
+                        if (part.isNotEmpty()) {
+                            val wWidth = textPaint.measureText(part) + letterSpacing * part.length
+                            val vWord = VisualWord(word.copy(text = part), part, wWidth)
+                            currentLineWords.add(vWord)
+                            currentLineWidth += wWidth + spaceWidth
+                        }
+                    }
+                    continue
+                }
+
+                val wWidth = textPaint.measureText(transformed) + letterSpacing * transformed.length
+                val vWord = VisualWord(word.copy(text = transformed), transformed, wWidth)
+
+                if (currentLineWords.isNotEmpty() && (currentLineWidth + wWidth > maxWidthPx)) {
+                    val actualWidth = (currentLineWidth - spaceWidth).coerceAtLeast(0f)
+                    lines.add(VisualLine(currentLineWords.toList(), actualWidth))
+                    currentLineWords = mutableListOf(vWord)
+                    currentLineWidth = wWidth + spaceWidth
+                } else {
+                    currentLineWords.add(vWord)
+                    currentLineWidth += wWidth + spaceWidth
+                }
+            }
+
+            if (currentLineWords.isNotEmpty()) {
+                val actualWidth = (currentLineWidth - spaceWidth).coerceAtLeast(0f)
+                lines.add(VisualLine(currentLineWords.toList(), actualWidth))
+            }
+
+            return lines
+        }
+
         fun parseOverlayGroups(docObj: JsonObject): List<CaptionGroup> {
             val groups = mutableListOf<CaptionGroup>()
             val tracks = docObj.getAsJsonArray("tracks") ?: return groups
@@ -120,8 +279,9 @@ class AndroidClipRenderer(
                 val isTextOrOverlay = (kind == "text" || kind == "overlay")
                 if (!isCaption && !isTextOrOverlay) continue
 
-                val defaultStyle = track.getAsJsonObject("default_style") ?: JsonObject()
-                val defaultLayout = track.getAsJsonObject("default_layout") ?: JsonObject()
+                val defaultStyle = track.getAsJsonObject("default_style") ?: track.getAsJsonObject("style") ?: JsonObject()
+                val defaultLayout = track.getAsJsonObject("default_layout") ?: track.getAsJsonObject("layout") ?: JsonObject()
+                val trackAnim = track.getAsJsonObject("animation") ?: JsonObject()
 
                 val groupsArray = track.getAsJsonArray("groups") ?: continue
                 for (j in 0 until groupsArray.size()) {
@@ -154,32 +314,74 @@ class AndroidClipRenderer(
                     if (gEnd > gStart && words.isNotEmpty()) {
                         val groupStyle = g.getAsJsonObject("style") ?: defaultStyle
                         val groupLayout = g.getAsJsonObject("layout") ?: defaultLayout
+                        val groupAnim = g.getAsJsonObject("animation") ?: trackAnim
 
                         // Layout extraction
                         val posX = groupLayout.get("position_x")?.asFloat ?: defaultLayout.get("position_x")?.asFloat ?: 0.5f
                         val defaultPosY = if (isCaption) 0.78f else 0.50f
                         val posY = groupLayout.get("position_y")?.asFloat ?: defaultLayout.get("position_y")?.asFloat ?: defaultPosY
                         val alignment = groupLayout.get("alignment")?.asString ?: defaultLayout.get("alignment")?.asString ?: "center"
+                        val maxWidth = groupLayout.get("max_width")?.asFloat ?: defaultLayout.get("max_width")?.asFloat ?: 0.88f
 
                         // Style extraction
-                        val primaryColorStr = groupStyle.get("primary_color")?.asString ?: groupStyle.get("color")?.asString
-                        val highlightColorStr = groupStyle.get("highlight_color")?.asString
-                        val fontSize = groupStyle.get("font_size")?.asFloat ?: (if (isCaption) 36f else 32f)
+                        val primaryColorStr = groupStyle.get("primary_color")?.asString ?: groupStyle.get("color")?.asString ?: defaultStyle.get("primary_color")?.asString ?: defaultStyle.get("color")?.asString
+                        val highlightColorStr = groupStyle.get("highlight_color")?.asString ?: defaultStyle.get("highlight_color")?.asString
+                        val fontSize = groupStyle.get("font_size")?.asFloat ?: defaultStyle.get("font_size")?.asFloat ?: (if (isCaption) 52f else 36f)
+
+                        val fontFamily = groupStyle.get("font_family")?.asString ?: defaultStyle.get("font_family")?.asString ?: "Montserrat"
+                        val fontWeight = groupStyle.get("font_weight")?.asString ?: defaultStyle.get("font_weight")?.asString ?: "bold"
+                        val fontStyle = groupStyle.get("font_style")?.asString ?: defaultStyle.get("font_style")?.asString ?: "normal"
+                        val textTransform = groupStyle.get("text_transform")?.asString ?: defaultStyle.get("text_transform")?.asString ?: "none"
+                        val lineHeight = groupStyle.get("line_height")?.asFloat ?: defaultStyle.get("line_height")?.asFloat ?: 1.25f
+                        val letterSpacing = groupStyle.get("letter_spacing")?.asFloat ?: defaultStyle.get("letter_spacing")?.asFloat ?: 0f
+
+                        val textOpacity = groupStyle.get("text_opacity")?.asFloat ?: groupStyle.get("opacity")?.asFloat ?: 1.0f
+                        val parsedPrimaryColor = applyOpacityToColor(parseHexOrRgbaColor(primaryColorStr, -1), textOpacity)
+                        val parsedHighlightColor = applyOpacityToColor(parseHexOrRgbaColor(highlightColorStr, 0xFFFFE600.toInt()), textOpacity)
 
                         val outlineEnabled = groupStyle.get("outline_enabled")?.asBoolean
                             ?: groupStyle.get("stroke_enabled")?.asBoolean
+                            ?: defaultStyle.get("outline_enabled")?.asBoolean
+                            ?: defaultStyle.get("stroke_enabled")?.asBoolean
                             ?: false
-                        val outlineColorStr = groupStyle.get("outline_color")?.asString ?: groupStyle.get("stroke_color")?.asString
-                        val outlineWidth = groupStyle.get("outline_width")?.asFloat ?: groupStyle.get("stroke_width")?.asFloat ?: 4f
+                        val outlineColorStr = groupStyle.get("outline_color")?.asString ?: groupStyle.get("stroke_color")?.asString ?: defaultStyle.get("outline_color")?.asString ?: defaultStyle.get("stroke_color")?.asString
+                        val outlineWidth = groupStyle.get("outline_width")?.asFloat ?: groupStyle.get("stroke_width")?.asFloat ?: defaultStyle.get("outline_width")?.asFloat ?: defaultStyle.get("stroke_width")?.asFloat ?: 4f
+                        val outlineOpacity = groupStyle.get("outline_opacity")?.asFloat ?: defaultStyle.get("outline_opacity")?.asFloat ?: 1.0f
+                        val parsedOutlineColor = applyOpacityToColor(parseHexOrRgbaColor(outlineColorStr, 0xFF000000.toInt()), outlineOpacity)
 
-                        val shadowEnabled = groupStyle.get("shadow_enabled")?.asBoolean ?: true
-                        val shadowColorStr = groupStyle.get("shadow_color")?.asString
-                        val shadowOffsetX = groupStyle.get("shadow_offset_x")?.asFloat ?: 2f
-                        val shadowOffsetY = groupStyle.get("shadow_offset_y")?.asFloat ?: 4f
-                        val shadowBlur = groupStyle.get("shadow_blur")?.asFloat ?: 6f
+                        val shadowEnabled = groupStyle.get("shadow_enabled")?.asBoolean ?: defaultStyle.get("shadow_enabled")?.asBoolean ?: true
+                        val shadowColorStr = groupStyle.get("shadow_color")?.asString ?: defaultStyle.get("shadow_color")?.asString
+                        val shadowOffsetX = groupStyle.get("shadow_offset_x")?.asFloat ?: defaultStyle.get("shadow_offset_x")?.asFloat ?: 2f
+                        val shadowOffsetY = groupStyle.get("shadow_offset_y")?.asFloat ?: defaultStyle.get("shadow_offset_y")?.asFloat ?: 4f
+                        val shadowBlur = groupStyle.get("shadow_blur")?.asFloat ?: defaultStyle.get("shadow_blur")?.asFloat ?: 6f
+                        val shadowOpacity = groupStyle.get("shadow_opacity")?.asFloat ?: defaultStyle.get("shadow_opacity")?.asFloat ?: 1.0f
+                        val parsedShadowColor = applyOpacityToColor(parseHexOrRgbaColor(shadowColorStr, 0xC8000000.toInt()), shadowOpacity)
 
-                        val backgroundEnabled = groupStyle.get("background_enabled")?.asBoolean ?: isCaption
-                        val backgroundColorStr = groupStyle.get("background_color")?.asString
+                        val backgroundEnabled = groupStyle.get("background_enabled")?.asBoolean ?: defaultStyle.get("background_enabled")?.asBoolean ?: isCaption
+                        val backgroundColorStr = groupStyle.get("background_color")?.asString ?: defaultStyle.get("background_color")?.asString
+                        val backgroundOpacity = groupStyle.get("background_opacity")?.asFloat ?: defaultStyle.get("background_opacity")?.asFloat ?: 1.0f
+                        val parsedBackgroundColor = applyOpacityToColor(parseHexOrRgbaColor(backgroundColorStr, 0xB4000000.toInt()), backgroundOpacity)
+
+                        val backgroundMode = groupStyle.get("background_mode")?.asString ?: defaultStyle.get("background_mode")?.asString ?: (if (isCaption) "block" else "none")
+                        val backgroundCornerRadius = groupStyle.get("background_corner_radius")?.asFloat ?: defaultStyle.get("background_corner_radius")?.asFloat ?: 16f
+                        val backgroundPaddingX = groupStyle.get("background_padding_x")?.asFloat ?: defaultStyle.get("background_padding_x")?.asFloat ?: 24f
+                        val backgroundPaddingY = groupStyle.get("background_padding_y")?.asFloat ?: defaultStyle.get("background_padding_y")?.asFloat ?: 16f
+
+                        // Animation extraction
+                        val activeWordObj = groupAnim.getAsJsonObject("active_word")
+                        val activeAnimType = activeWordObj?.get("type")?.asString
+                            ?: groupAnim.get("type")?.asString
+                            ?: groupAnim.get("active_word_effect")?.asString
+                            ?: "pop"
+                        val activeAnimDurationMs = activeWordObj?.get("duration_ms")?.asInt
+                            ?: groupAnim.get("duration_ms")?.asInt
+                            ?: 120
+                        val activeScaleMax = activeWordObj?.get("active_scale")?.asFloat
+                            ?: groupAnim.get("active_scale")?.asFloat
+                            ?: 1.16f
+                        val highlightEnabled = groupStyle.get("highlight_enabled")?.asBoolean
+                            ?: defaultStyle.get("highlight_enabled")?.asBoolean
+                            ?: true
 
                         groups.add(
                             CaptionGroup(
@@ -187,8 +389,8 @@ class AndroidClipRenderer(
                                 start = gStart,
                                 end = gEnd,
                                 words = words,
-                                primaryColor = parseHexOrRgbaColor(primaryColorStr, -1),
-                                highlightColor = parseHexOrRgbaColor(highlightColorStr, 0xFFFFE600.toInt()),
+                                primaryColor = parsedPrimaryColor,
+                                highlightColor = parsedHighlightColor,
                                 fontSizeSp = fontSize,
                                 backgroundEnabled = backgroundEnabled,
                                 isCaption = isCaption,
@@ -196,14 +398,29 @@ class AndroidClipRenderer(
                                 positionY = posY,
                                 alignment = alignment,
                                 strokeEnabled = outlineEnabled,
-                                strokeColor = parseHexOrRgbaColor(outlineColorStr, 0xFF000000.toInt()),
+                                strokeColor = parsedOutlineColor,
                                 strokeWidthPx = outlineWidth,
                                 shadowEnabled = shadowEnabled,
-                                shadowColor = parseHexOrRgbaColor(shadowColorStr, 0xC8000000.toInt()),
+                                shadowColor = parsedShadowColor,
                                 shadowOffsetX = shadowOffsetX,
                                 shadowOffsetY = shadowOffsetY,
                                 shadowRadius = shadowBlur,
-                                backgroundColor = parseHexOrRgbaColor(backgroundColorStr, 0xB4000000.toInt())
+                                backgroundColor = parsedBackgroundColor,
+                                fontFamily = fontFamily,
+                                fontWeight = fontWeight,
+                                fontStyle = fontStyle,
+                                textTransform = textTransform,
+                                maxWidth = maxWidth,
+                                lineHeight = lineHeight,
+                                letterSpacing = letterSpacing,
+                                backgroundMode = backgroundMode,
+                                backgroundCornerRadius = backgroundCornerRadius,
+                                backgroundPaddingX = backgroundPaddingX,
+                                backgroundPaddingY = backgroundPaddingY,
+                                activeAnimType = activeAnimType,
+                                activeAnimDurationMs = activeAnimDurationMs,
+                                activeScaleMax = activeScaleMax,
+                                highlightEnabled = highlightEnabled
                             )
                         )
                     }
@@ -256,7 +473,22 @@ class AndroidClipRenderer(
         val shadowOffsetX: Float = 2f,
         val shadowOffsetY: Float = 4f,
         val shadowRadius: Float = 6f,
-        val backgroundColor: Int = 0xB4000000.toInt()
+        val backgroundColor: Int = 0xB4000000.toInt(),
+        val fontFamily: String = "Montserrat",
+        val fontWeight: String = "bold",
+        val fontStyle: String = "normal",
+        val textTransform: String = "none",
+        val maxWidth: Float = 0.88f,
+        val lineHeight: Float = 1.25f,
+        val letterSpacing: Float = 0f,
+        val backgroundMode: String = "block",
+        val backgroundCornerRadius: Float = 16f,
+        val backgroundPaddingX: Float = 24f,
+        val backgroundPaddingY: Float = 16f,
+        val activeAnimType: String = "pop",
+        val activeAnimDurationMs: Int = 120,
+        val activeScaleMax: Float = 1.16f,
+        val highlightEnabled: Boolean = true
     )
 
     data class RenderRequest(
@@ -439,8 +671,6 @@ class AndroidClipRenderer(
             // Dynamic word-highlighting caption and text overlay if any groups exist
             if (overlayGroups.isNotEmpty()) {
                 val captionOverlay = object : CanvasOverlay(false) {
-                    private val density = context.resources.displayMetrics.scaledDensity
-
                     override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
                         val timelineSeconds = presentationTimeUs / 1_000_000f
                         val activeGroups = overlayGroups.filter { g ->
@@ -448,31 +678,49 @@ class AndroidClipRenderer(
                         }
                         if (activeGroups.isEmpty()) return
 
+                        val canvasScale = canvas.width / 1080f
+
                         for (group in activeGroups) {
                             if (group.words.isEmpty()) continue
 
-                            val baseFontSize = (if (is720p) group.fontSizeSp * 0.75f else group.fontSizeSp) * density
-                            val activeFontSize = baseFontSize * 1.08f // 1.08x active word scale pop
+                            val baseFontSize = group.fontSizeSp * canvasScale
+                            val maxContentWidth = canvas.width * group.maxWidth
+
+                            val isBold = group.fontWeight.contains("bold", ignoreCase = true) ||
+                                         group.fontWeight == "700" || group.fontWeight == "800" || group.fontWeight == "900"
+                            val isItalic = group.fontStyle.equals("italic", ignoreCase = true)
+
+                            val resolvedTypeface = getTypeface(context, group.fontFamily, isBold, isItalic)
 
                             val textPaint = Paint().apply {
                                 color = group.primaryColor
                                 textSize = baseFontSize
-                                typeface = Typeface.DEFAULT_BOLD
+                                typeface = resolvedTypeface
                                 isAntiAlias = true
                                 textAlign = Paint.Align.LEFT
                                 if (group.shadowEnabled) {
-                                    setShadowLayer(group.shadowRadius * density, group.shadowOffsetX * density, group.shadowOffsetY * density, group.shadowColor)
+                                    setShadowLayer(
+                                        group.shadowRadius * canvasScale,
+                                        group.shadowOffsetX * canvasScale,
+                                        group.shadowOffsetY * canvasScale,
+                                        group.shadowColor
+                                    )
                                 }
                             }
 
                             val activeTextPaint = Paint().apply {
                                 color = group.highlightColor
-                                textSize = activeFontSize
-                                typeface = Typeface.DEFAULT_BOLD
+                                textSize = baseFontSize // Same layout size: scale pop handled by canvas matrix
+                                typeface = resolvedTypeface
                                 isAntiAlias = true
                                 textAlign = Paint.Align.LEFT
                                 if (group.shadowEnabled) {
-                                    setShadowLayer(group.shadowRadius * density, group.shadowOffsetX * density, group.shadowOffsetY * density, group.shadowColor)
+                                    setShadowLayer(
+                                        group.shadowRadius * canvasScale,
+                                        group.shadowOffsetX * canvasScale,
+                                        group.shadowOffsetY * canvasScale,
+                                        group.shadowColor
+                                    )
                                 }
                             }
 
@@ -480,9 +728,9 @@ class AndroidClipRenderer(
                                 Paint().apply {
                                     color = group.strokeColor
                                     style = Paint.Style.STROKE
-                                    strokeWidth = group.strokeWidthPx * density
+                                    strokeWidth = group.strokeWidthPx * canvasScale
                                     textSize = baseFontSize
-                                    typeface = Typeface.DEFAULT_BOLD
+                                    typeface = resolvedTypeface
                                     isAntiAlias = true
                                     textAlign = Paint.Align.LEFT
                                 }
@@ -492,61 +740,141 @@ class AndroidClipRenderer(
                                 Paint().apply {
                                     color = group.strokeColor
                                     style = Paint.Style.STROKE
-                                    strokeWidth = group.strokeWidthPx * density
-                                    textSize = activeFontSize
-                                    typeface = Typeface.DEFAULT_BOLD
+                                    strokeWidth = group.strokeWidthPx * canvasScale
+                                    textSize = baseFontSize
+                                    typeface = resolvedTypeface
                                     isAntiAlias = true
                                     textAlign = Paint.Align.LEFT
                                 }
                             } else null
 
-                            val bgPaint = if (group.backgroundEnabled) {
-                                Paint().apply {
+                            val lines = partitionWordsIntoVisualLines(
+                                group.words,
+                                textPaint,
+                                maxContentWidth,
+                                group.textTransform,
+                                group.letterSpacing * canvasScale
+                            )
+                            if (lines.isEmpty()) continue
+
+                            val fontMetrics = textPaint.fontMetrics
+                            val lineHeight = (fontMetrics.descent - fontMetrics.ascent) * group.lineHeight
+                            val totalBlockHeight = lines.size * lineHeight
+
+                            val blockCenterY = canvas.height * group.positionY
+                            val blockTopY = blockCenterY - (totalBlockHeight / 2f)
+
+                            // 1. Draw Background Box if enabled
+                            if (group.backgroundEnabled && group.backgroundMode != "none") {
+                                val bgPaint = Paint().apply {
                                     color = group.backgroundColor
                                     style = Paint.Style.FILL
                                     isAntiAlias = true
                                 }
-                            } else null
+                                val padX = group.backgroundPaddingX * canvasScale
+                                val padY = group.backgroundPaddingY * canvasScale
+                                val cornerRad = group.backgroundCornerRadius * canvasScale
 
+                                if (group.backgroundMode == "line") {
+                                    // Per-line pills
+                                    for (lIdx in lines.indices) {
+                                        val line = lines[lIdx]
+                                        val lineCenterY = blockTopY + (lIdx + 0.5f) * lineHeight
+                                        val lineStartX = when (group.alignment.lowercase(Locale.ROOT)) {
+                                            "left" -> canvas.width * group.positionX - (maxContentWidth / 2f)
+                                            "right" -> canvas.width * group.positionX + (maxContentWidth / 2f) - line.lineWidth
+                                            else -> (canvas.width * group.positionX) - (line.lineWidth / 2f)
+                                        }
+                                        val pillRect = RectF(
+                                            lineStartX - padX,
+                                            lineCenterY - (lineHeight / 2f) - padY,
+                                            lineStartX + line.lineWidth + padX,
+                                            lineCenterY + (lineHeight / 2f) + padY
+                                        )
+                                        canvas.drawRoundRect(pillRect, cornerRad, cornerRad, bgPaint)
+                                    }
+                                } else {
+                                    // Block mode (encloses all lines)
+                                    var minLeft = Float.MAX_VALUE
+                                    var maxRight = Float.MIN_VALUE
+                                    for (line in lines) {
+                                        val lineStartX = when (group.alignment.lowercase(Locale.ROOT)) {
+                                            "left" -> canvas.width * group.positionX - (maxContentWidth / 2f)
+                                            "right" -> canvas.width * group.positionX + (maxContentWidth / 2f) - line.lineWidth
+                                            else -> (canvas.width * group.positionX) - (line.lineWidth / 2f)
+                                        }
+                                        minLeft = minOf(minLeft, lineStartX)
+                                        maxRight = maxOf(maxRight, lineStartX + line.lineWidth)
+                                    }
+                                    val blockRect = RectF(
+                                        minLeft - padX,
+                                        blockTopY - padY,
+                                        maxRight + padX,
+                                        blockTopY + totalBlockHeight + padY
+                                    )
+                                    canvas.drawRoundRect(blockRect, cornerRad, cornerRad, bgPaint)
+                                }
+                            }
+
+                            // 2. Draw Lines and Words
                             val spaceWidth = textPaint.measureText(" ")
-                            val wordWidths = group.words.map { word ->
-                                val isWordActive = group.isCaption && timelineSeconds >= word.start && timelineSeconds <= word.end
-                                if (isWordActive) activeTextPaint.measureText(word.text) else textPaint.measureText(word.text)
-                            }
-                            val totalWordsWidth = wordWidths.sum()
-                            val totalWidth = totalWordsWidth + (group.words.size - 1).coerceAtLeast(0) * spaceWidth
+                            for (lIdx in lines.indices) {
+                                val line = lines[lIdx]
+                                val lineCenterY = blockTopY + (lIdx + 0.5f) * lineHeight
+                                val baselineY = lineCenterY - (fontMetrics.ascent + fontMetrics.descent) / 2f
 
-                            val anchorX = canvas.width * group.positionX
-                            val centerY = canvas.height * group.positionY
-                            val startX = when (group.alignment.lowercase()) {
-                                "left" -> anchorX
-                                "right" -> anchorX - totalWidth
-                                else -> anchorX - (totalWidth / 2f)
-                            }
+                                val lineStartX = when (group.alignment.lowercase(Locale.ROOT)) {
+                                    "left" -> canvas.width * group.positionX - (maxContentWidth / 2f)
+                                    "right" -> canvas.width * group.positionX + (maxContentWidth / 2f) - line.lineWidth
+                                    else -> (canvas.width * group.positionX) - (line.lineWidth / 2f)
+                                }
 
-                            if (bgPaint != null) {
-                                val fontMetrics = textPaint.fontMetrics
-                                val paddingX = 24f * density
-                                val paddingY = 16f * density
-                                val pillRect = RectF(
-                                    startX - paddingX,
-                                    centerY + fontMetrics.top - paddingY,
-                                    startX + totalWidth + paddingX,
-                                    centerY + fontMetrics.bottom + paddingY
-                                )
-                                canvas.drawRoundRect(pillRect, 16f * density, 16f * density, bgPaint)
-                            }
+                                var curX = lineStartX
+                                for (vWord in line.words) {
+                                    val raw = vWord.rawWord
+                                    val isWordActive = group.isCaption && group.highlightEnabled && timelineSeconds >= raw.start && timelineSeconds <= raw.end
 
-                            var currentX = startX
-                            for (wIdx in group.words.indices) {
-                                val word = group.words[wIdx]
-                                val isWordActive = group.isCaption && timelineSeconds >= word.start && timelineSeconds <= word.end
-                                val fillPaint = if (isWordActive) activeTextPaint else textPaint
-                                val strokeP = if (isWordActive) activeStrokePaint else strokePaint
+                                    var scale = 1.0f
+                                    var translateY = 0f
 
-                                strokeP?.let { canvas.drawText(word.text, currentX, centerY, it) }
-                                canvas.drawText(word.text, currentX, centerY, fillPaint)
-                                currentX += wordWidths[wIdx] + spaceWidth
+                                    if (isWordActive && group.activeAnimType != "none") {
+                                        val animDurSec = group.activeAnimDurationMs / 1000f
+                                        val elapsed = (timelineSeconds - raw.start).coerceAtLeast(0f)
+                                        if (elapsed < animDurSec) {
+                                            val progress = (elapsed / animDurSec).coerceIn(0f, 1f)
+                                            val punch = group.activeScaleMax - 1.0f
+                                            if (group.activeAnimType == "bounce") {
+                                                scale = 1.0f + punch * cos(progress * (PI / 2).toFloat())
+                                                translateY = -8f * canvasScale * sin(progress * PI.toFloat())
+                                            } else { // "pop"
+                                                scale = 1.0f + punch * cos(progress * (PI / 2).toFloat())
+                                            }
+                                        } else {
+                                            scale = 1.08f // Gentle steady karaoke scale pop
+                                        }
+                                    } else if (isWordActive) {
+                                        scale = 1.08f
+                                    }
+
+                                    val fillPaint = if (isWordActive) activeTextPaint else textPaint
+                                    val strokeP = if (isWordActive) activeStrokePaint else strokePaint
+
+                                    if (scale != 1.0f || translateY != 0f) {
+                                        val wordCenterX = curX + vWord.width / 2f
+                                        val wordCenterY = baselineY + (fontMetrics.ascent + fontMetrics.descent) / 2f
+                                        canvas.save()
+                                        canvas.translate(0f, translateY)
+                                        canvas.scale(scale, scale, wordCenterX, wordCenterY)
+                                        strokeP?.let { canvas.drawText(vWord.text, curX, baselineY, it) }
+                                        canvas.drawText(vWord.text, curX, baselineY, fillPaint)
+                                        canvas.restore()
+                                    } else {
+                                        strokeP?.let { canvas.drawText(vWord.text, curX, baselineY, it) }
+                                        canvas.drawText(vWord.text, curX, baselineY, fillPaint)
+                                    }
+
+                                    curX += vWord.width + spaceWidth
+                                }
                             }
                         }
                     }

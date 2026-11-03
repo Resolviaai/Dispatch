@@ -127,3 +127,9 @@ dispatch.db
 
 # Test sandbox (contains generated DB/WAL; never commit)
 .test-storage/
+
+Opus_pro_research/
+
+.dev.vars*
+!.dev.vars.example
+!.env.example

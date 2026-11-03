@@ -1,3 +1,4 @@
+import { useBackHandler } from '../navigation/backHandler';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Film,
@@ -418,12 +419,39 @@ function formatAge(dateStr?: string): string {
   return Math.floor(hrs / 24) + 'd ago';
 }
 
-function getRetentionDaysLeft(publishedAt?: string): number {
-  if (!publishedAt) return 7;
-  const pubDate = parseUtcTimestamp(publishedAt);
-  if (isNaN(pubDate)) return 7;
-  const diffDays = 7 - (Date.now() - pubDate) / (1000 * 60 * 60 * 24);
-  return Math.max(0, Math.ceil(diffDays));
+interface RetentionRemaining {
+  hoursLeft: number;
+  daysLeft: number;
+  label: string;
+  isExpired: boolean;
+}
+
+function getRetentionRemaining(timestampStr?: string | null): RetentionRemaining {
+  if (!timestampStr) {
+    return { hoursLeft: 72, daysLeft: 3, label: '3d left', isExpired: false };
+  }
+  const ts = parseUtcTimestamp(timestampStr);
+  if (isNaN(ts)) {
+    return { hoursLeft: 72, daysLeft: 3, label: '3d left', isExpired: false };
+  }
+  // 72-hour (3-day) retention window
+  const totalWindowMs = 72 * 60 * 60 * 1000;
+  const elapsedMs = Date.now() - ts;
+  const remainingMs = totalWindowMs - elapsedMs;
+
+  if (remainingMs <= 0) {
+    return { hoursLeft: 0, daysLeft: 0, label: 'Expired', isExpired: true };
+  }
+
+  const hoursLeft = Math.ceil(remainingMs / (1000 * 60 * 60));
+  const daysLeft = Math.ceil(hoursLeft / 24);
+  const label = hoursLeft > 24 ? `${daysLeft}d left` : `${hoursLeft}h left`;
+
+  return { hoursLeft, daysLeft, label, isExpired: false };
+}
+
+function getRetentionDaysLeft(publishedAt?: string | null): number {
+  return getRetentionRemaining(publishedAt).daysLeft;
 }
 
 // Interactive Direct-Canvas Caption Editor (Used inside Studio Mode)
@@ -1565,6 +1593,62 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     closeNotificationCenter,
     addNotification,
   } = useActivity();
+
+  useBackHandler('clips_modals', 40, () => {
+    if (isNotificationCenterOpen) {
+      closeNotificationCenter();
+      return true;
+    }
+    if (showStudioExitConfirm) {
+      setShowStudioExitConfirm(false);
+      return true;
+    }
+    if (showSubmitModal) {
+      setShowSubmitModal(false);
+      return true;
+    }
+    if (isMoreModalOpen) {
+      setIsMoreModalOpen(false);
+      return true;
+    }
+    if (clipToReject) {
+      setClipToReject(null);
+      return true;
+    }
+    if (isFullscreenPreview) {
+      setIsFullscreenPreview(false);
+      return true;
+    }
+    if (activePanel !== 'none') {
+      setActivePanel('none');
+      return true;
+    }
+    return false;
+  }, isActive);
+
+  useBackHandler('clips_subscreens', 20, () => {
+    if (viewMode === 'publish') {
+      setViewMode('detail');
+      return true;
+    }
+    if (viewMode === 'studio') {
+      setViewMode('detail');
+      setSelectedGroupId(null);
+      setIsVideoSelected(false);
+      return true;
+    }
+    if (viewMode === 'detail') {
+      setViewMode('library');
+      setSelectedClipId(null);
+      setSelectedGroupId(null);
+      return true;
+    }
+    if (sessionFilter !== null) {
+      onClearSessionFilter?.();
+      return true;
+    }
+    return false;
+  }, isActive);
 
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isCloudMode, setIsCloudMode] = useState<boolean>(false);
@@ -3857,9 +3941,34 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           return;
         }
 
-        // 2. Submit to Cloud Publishing Queue (Cloudflare Worker + Supabase)
         const session = await currentSession();
         const token = session?.access_token || bridge?.getAuthToken?.();
+
+        // If clip was already published, directly submit to cloud publishing queue without re-rendering
+        if (clipToApprove.status === 'published' && token) {
+          const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              clip_id: clipToApprove.id,
+              title: optimisticTitle,
+              description: optimisticDescription,
+              platforms: platformsToPublish,
+              publish_mode: optimisticMode,
+              rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
+            }),
+          });
+          if (cloudRes.ok) {
+            setFeedback(`Publishing to ${platformsToPublish}…`);
+            setTimeout(() => { fetchClips(); }, 3000);
+            return;
+          }
+        }
+
+        // 2. Submit to Cloud Publishing Queue (Cloudflare Worker + Supabase)
         if (token) {
           const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
             method: 'POST',
@@ -4185,7 +4294,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     else if (filterStatus === 'approved') list = approvedClips;
 
     if (sessionFilter) {
-      list = list.filter((c) => c.session_id === sessionFilter || c.chunk_id === sessionFilter);
+      const normFilter = sessionFilter.replace(/^(sess_|dir_)/, '');
+      list = list.filter((c) =>
+        c.session_id === sessionFilter ||
+        c.chunk_id === sessionFilter ||
+        (c.session_id && c.session_id.replace(/^(sess_|dir_)/, '') === normFilter) ||
+        (c.chunk_id && c.chunk_id.replace(/^(sess_|dir_)/, '') === normFilter) ||
+        (c.youtube_video_id && c.youtube_video_id === sessionFilter)
+      );
     }
     return list;
   }, [filterStatus, readyClips, approvedClips, allClips, sessionFilter]);
@@ -4230,28 +4346,13 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               Clips
             </h1>
             <p className="text-xs text-text-muted mt-0.5 tabular-nums truncate flex items-center gap-1.5">
-              {offlineReadOnly ? (
+              {offlineReadOnly && (
                 <>
                   <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
                   <span>Offline · saved clips</span>
-                </>
-              ) : isCloudMode ? (
-                <>
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                  <span>Cloud Mode (Remote)</span>
-                </>
-              ) : (isPcOnline ?? !connectionError) ? (
-                <>
-                  <span className="w-1.5 h-1.5 rounded-full bg-status-success" />
-                  <span>Studio Online (LAN)</span>
-                </>
-              ) : (
-                <>
-                  <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
-                  <span>Offline</span>
+                  <span>&middot;</span>
                 </>
               )}
-              <span>&middot;</span>
               <span>{readyClips.length} ready</span>
               <span>&middot;</span>
               <span>{allClips.length} total</span>
@@ -4538,8 +4639,12 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     const isUploaded = clip.status === 'approved' || clip.status === 'published';
                     const isPublished = clip.status === 'published' || Boolean(clip.remote_id || clip.remote_url);
                     const youtubeUrl = clip.remote_url || (clip.remote_id ? 'https://youtu.be/' + clip.remote_id : null);
-                    const daysLeft = getRetentionDaysLeft(clip.published_at);
-                    const age = formatAge(isUploaded ? (clip.published_at || clip.approved_at || clip.created_at) : clip.created_at);
+                    const effectivePublishedAt = clip.published_at
+                      || (clip.publications && clip.publications.length > 0 ? clip.publications[0]?.published_at : null)
+                      || clip.approved_at
+                      || clip.created_at;
+                    const retention = getRetentionRemaining(isPublished ? effectivePublishedAt : null);
+                    const age = formatAge(isUploaded ? effectivePublishedAt : clip.created_at);
                     const clipOrigin = clip.origin || (clip.youtube_video_id ? 'youtube' : (clip.session_id ? 'phone' : 'youtube'));
 
                     return (
@@ -4614,11 +4719,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                             )}
                             {age || (clip.session_id ? `#${clip.session_id.replace('sess_', '')}` : 'Clip')}
                             {isPublished ? (
-                              !clip.is_cloud_only && <> &middot; {daysLeft}d left</>
+                              !clip.is_cloud_only && !retention.isExpired ? (
+                                <> &middot; {retention.label}</>
+                              ) : (
+                                <> &middot; Cloud only</>
+                              )
                             ) : isUploaded ? (
                               <> &middot; <span className="inline-flex items-center gap-1 text-primary font-medium"><span className="w-2.5 h-2.5 rounded-full border border-primary/30 border-t-primary animate-spin inline-block" /><span>Uploading…</span></span></>
                             ) : null}
-                            {clip.is_cloud_only && <> &middot; Cloud only</>}
                           </p>
                         </div>
 
@@ -4861,7 +4969,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 <div className="flex items-center gap-2 min-w-0">
                   <Cloud size={14} className="shrink-0" />
                   <span className="text-xs truncate font-mono">
-                    Local MP4 deleted after 7d retention. Published to YouTube.
+                    Local MP4 deleted after 72h retention. Published to YouTube.
                   </span>
                 </div>
                 {(currentClip.remote_url || currentClip.remote_id) && (
@@ -5060,32 +5168,92 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                       );
                     })}
 
-                    {/* Single hero action (opens the primary destination) +
-                        secondary edit affordance. */}
-                    <div className="w-full grid grid-cols-2 gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (liveUrl) window.open(liveUrl, '_blank', 'noopener,noreferrer');
-                        }}
-                        disabled={!liveUrl}
-                        className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40 disabled:pointer-events-none"
-                      >
-                        <ExternalLink size={15} />
-                        <span>Open on {openPlatform}</span>
-                      </button>
+                    {(() => {
+                      const effectiveDetailPubDate = currentClip.published_at
+                        || (publications.length > 0 ? publications[0]?.published_at : null)
+                        || currentClip.approved_at
+                        || currentClip.created_at;
+                      const detailRetention = getRetentionRemaining(effectiveDetailPubDate);
+                      const canCrossPost = !currentClip.is_cloud_only && !detailRetention.isExpired;
 
-                      <button
-                        type="button"
-                        onClick={() => setViewMode('studio')}
-                        disabled={offlineReadOnly}
-                        title={offlineReadOnly ? 'Reconnect to edit this clip' : undefined}
-                        className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-semibold text-text-secondary hover:text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-40"
-                      >
-                        <Scissors size={14} className="text-primary" />
-                        <span>Edit a Copy</span>
-                      </button>
-                    </div>
+                      if (canCrossPost) {
+                        return (
+                          <div className="w-full space-y-2.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const publishedPlatforms = new Set(publications.map(p => p.platform));
+                                const remaining = ['youtube_shorts', 'instagram', 'linkedin', 'x'].filter(id => {
+                                  const prov = id === 'youtube_shorts' ? 'youtube' : (id === 'x' ? 'twitter' : id);
+                                  return !publishedPlatforms.has(prov);
+                                });
+                                if (remaining.length > 0) {
+                                  setSelectedPlatforms(remaining);
+                                }
+                                setViewMode('publish');
+                              }}
+                              disabled={offlineReadOnly}
+                              className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40"
+                            >
+                              <Send size={15} />
+                              <span>Publish to More Platforms · {detailRetention.label}</span>
+                            </button>
+
+                            <div className="w-full grid grid-cols-2 gap-2.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (liveUrl) window.open(liveUrl, '_blank', 'noopener,noreferrer');
+                                }}
+                                disabled={!liveUrl}
+                                className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-semibold text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-40 disabled:pointer-events-none"
+                              >
+                                <ExternalLink size={14} className="text-primary" />
+                                <span>Open on {openPlatform}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setViewMode('studio')}
+                                disabled={offlineReadOnly}
+                                title={offlineReadOnly ? 'Reconnect to edit this clip' : undefined}
+                                className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-semibold text-text-secondary hover:text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-40"
+                              >
+                                <Scissors size={14} className="text-primary" />
+                                <span>Edit a Copy</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="w-full grid grid-cols-2 gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (liveUrl) window.open(liveUrl, '_blank', 'noopener,noreferrer');
+                            }}
+                            disabled={!liveUrl}
+                            className="min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all disabled:opacity-40 disabled:pointer-events-none"
+                          >
+                            <ExternalLink size={15} />
+                            <span>Open on {openPlatform}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setViewMode('studio')}
+                            disabled={offlineReadOnly}
+                            title={offlineReadOnly ? 'Reconnect to edit this clip' : undefined}
+                            className="min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 text-xs font-semibold text-text-secondary hover:text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-40"
+                          >
+                            <Scissors size={14} className="text-primary" />
+                            <span>Edit a Copy</span>
+                          </button>
+                        </div>
+                      );
+                    })()}
                   </section>
                 );
               }
@@ -5901,36 +6069,49 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     {/* Inset divider removed for clean edge-to-edge row appearance */}
                     <div className="p-3.5 space-y-2">
                       <div className="flex items-center justify-between gap-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (hasAccount) {
-                              togglePlatform(p.id);
-                            } else {
-                              setFeedback(`Connect ${p.label} in Settings`);
-                            }
-                          }}
-                          aria-pressed={isSelected}
-                          className="flex items-center gap-3 min-w-0 text-left text-sm transition-all active:scale-[0.99] flex-1"
-                        >
-                          <div className={hasAccount ? 'shrink-0' : 'shrink-0 opacity-50'}>
-                            {p.icon}
-                          </div>
-                          <div className="min-w-0">
-                            <span className={`font-medium block truncate ${hasAccount ? 'text-text-main' : 'text-text-secondary'}`}>
-                              {p.label}
-                            </span>
-                            {hasAccount ? (
-                              <span className="text-xs text-text-muted font-mono block truncate">
-                                {chosenAccount?.account_name || 'Connected'}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-text-muted block">
-                                Not connected
-                              </span>
-                            )}
-                          </div>
-                        </button>
+                        {(() => {
+                          const pubList = (publicationLoad && publicationLoad.clipId === currentClip.id ? publicationLoad.items : (currentClip.publications || []));
+                          const alreadyPub = pubList.find((pub: PublicationItem) => pub.platform === (p.provider === 'twitter' ? 'x' : p.provider) || pub.platform === p.provider);
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (hasAccount) {
+                                  togglePlatform(p.id);
+                                } else {
+                                  setFeedback(`Connect ${p.label} in Settings`);
+                                }
+                              }}
+                              aria-pressed={isSelected}
+                              className="flex items-center gap-3 min-w-0 text-left text-sm transition-all active:scale-[0.99] flex-1"
+                            >
+                              <div className={hasAccount ? 'shrink-0' : 'shrink-0 opacity-50'}>
+                                {p.icon}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className={`font-medium block truncate ${hasAccount ? 'text-text-main' : 'text-text-secondary'}`}>
+                                    {p.label}
+                                  </span>
+                                  {alreadyPub && (
+                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5 shrink-0">
+                                      <Check size={10} /> Published
+                                    </span>
+                                  )}
+                                </div>
+                                {hasAccount ? (
+                                  <span className="text-xs text-text-muted font-mono block truncate">
+                                    {chosenAccount?.account_name || 'Connected'}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-text-muted block">
+                                    Not connected
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })()}
 
                         {hasAccount ? (
                           <button

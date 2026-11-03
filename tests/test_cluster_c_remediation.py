@@ -435,7 +435,7 @@ class TestCleanupExpiredPublishedClips(unittest.TestCase):
         self._mk_published(clip_id, video_file, thumb_file, published=True)
         _seed_outbox_job(_uid("job_purge_ok"), clip_id, status="published", remote_id="yt_x")
         try:
-            purged = db.cleanup_expired_published_clips(retention_days=7)
+            purged = db.cleanup_expired_published_clips(retention_days=3)
             self.assertGreaterEqual(purged, 1)
             self.assertFalse(video_file.exists(), "Expired verified publish must drop local media")
             self.assertTrue(thumb_file.exists(), "Thumbnail must be preserved")
@@ -459,7 +459,7 @@ class TestCleanupExpiredPublishedClips(unittest.TestCase):
         _seed_outbox_job(_uid("job_purge_pending"), clip_id, status="published", remote_id=None)
         try:
             before = video_file.stat().st_size
-            db.cleanup_expired_published_clips(retention_days=7)
+            db.cleanup_expired_published_clips(retention_days=3)
             self.assertTrue(video_file.exists())
             self.assertEqual(video_file.stat().st_size, before)
             with get_db_connection() as conn:
@@ -478,7 +478,7 @@ class TestCleanupExpiredPublishedClips(unittest.TestCase):
         _mk_clip(clip_id, status="published", video_path=str(video_file), thumbnail_path=str(thumb_file))
         _seed_outbox_job(_uid("job_purge_fresh"), clip_id, status="published", remote_id="yt_fresh")
         try:
-            db.cleanup_expired_published_clips(retention_days=7)
+            db.cleanup_expired_published_clips(retention_days=3)
             self.assertTrue(video_file.exists(), "Within retention window: media stays")
         finally:
             _drop_clip(clip_id)

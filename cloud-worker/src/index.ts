@@ -2574,7 +2574,7 @@ export default {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
       const res = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,youtube_url,status,stage,video_id,last_error,created_at,source,upload_object_id,source_title&order=created_at.desc&limit=20`,
+        `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=neq.cancelled&select=id,youtube_url,status,stage,video_id,last_error,created_at,source,upload_object_id,source_title,duration,session_id&order=created_at.desc&limit=100`,
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
       if (!res.ok) return json(502, { error: `status failed: ${res.status}` });
       return json(200, { jobs: await res.json() });
@@ -2668,7 +2668,7 @@ export default {
       // Supabase round trip previously degraded to an empty 200 response, which
       // wipe-cleaned; now it returns 502 so clients can keep their last data.
       const clipsRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after,source_orientation,source_aspect_ratio,layout_mode,available_layout_modes&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after,source_orientation,source_aspect_ratio,layout_mode,available_layout_modes,session_id,youtube_video_id&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
       );
       if (!clipsRes.ok) {
@@ -2835,6 +2835,7 @@ export default {
           id: localId,
           cloud_id: c.id,
           session_id: c.session_id,
+          youtube_video_id: c.youtube_video_id as string | undefined,
           title: c.title,
           status: targetStatus,
           start_time: Number(c.start_time || 0),
@@ -2856,6 +2857,7 @@ export default {
           edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
           edit_window_end: clipEw ? Number(clipEw.window_end) : undefined,
           publications: (publicationsByClip.get(cloudClipId) ?? []).map(publicationPayload),
+          published_at: (c.published_at as string) || (((publicationsByClip.get(cloudClipId) ?? []).find(p => p.published_at)?.published_at) as string | undefined),
           captions,
           captions_source: source,
           captions_ready: captionsReady,
@@ -3736,7 +3738,7 @@ export default {
           start_time: number; end_time: number;
           ai_suggested_start_time?: number; ai_suggested_end_time?: number; range_revision?: number;
           source_orientation?: string; source_aspect_ratio?: string; layout_mode?: string;
-          available_layout_modes?: unknown; caption_data?: unknown; caption_revision?: number;
+          available_layout_modes?: unknown; caption_data?: unknown; caption_revision?: number; session_id?: string; youtube_video_id?: string;
           publications?: Array<{
             platform?: string;
             account_id?: string;
@@ -3783,6 +3785,8 @@ export default {
                 available_layout_modes: body?.available_layout_modes || null,
                 caption_data: body?.caption_data || null,
                 caption_revision: Number(body?.caption_revision || 0),
+                ...(body?.session_id ? { session_id: body.session_id } : {}),
+                ...(body?.youtube_video_id ? { youtube_video_id: body.youtube_video_id } : {}),
               }),
             }
           );

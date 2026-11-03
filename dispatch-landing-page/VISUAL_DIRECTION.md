@@ -22,7 +22,7 @@ The sloth is a patient studio companion: observant, reassuring, quietly funny, a
 
 ## Composition
 
-- Begin with a split editorial hero: concise promise on the left, mascot plus compact illustrated review desk on the right.
+- Begin with a full-bleed ambient field: the promise on the left, three facts as a right-aligned rail, both resting on one hairline desk rule. The field's light pool sits upper-right so the copy always falls over the dark half.
 - Let whitespace and a few oversized circular outlines suggest depth; keep them behind content.
 - Move into a dark evergreen pause, then a pinned interactive workflow story, then a paper-like review section.
 - Finish with a dark alpha note and a compact useful footer.

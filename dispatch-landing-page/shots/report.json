@@ -1,0 +1,892 @@
+{
+  "desktop-1280": {
+    "title": "Dispatch: keep the hour, post the minute",
+    "lang": "en",
+    "description": "Dispatch records long sessions on Android or takes a YouTube link, then builds short captioned clips on your Windows PC. You approve every clip before it publishes.",
+    "overflow": false,
+    "scrollWidth": 1280,
+    "clientWidth": 1280,
+    "h1": {
+      "text": "Keep the hour.\nPost the minute.",
+      "rect": {
+        "x": 51.1875,
+        "y": 443.09375,
+        "w": 720,
+        "h": 152.34375,
+        "b": 595.4375,
+        "r": 771.1875
+      },
+      "size": "79.36px",
+      "family": "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif",
+      "weight": "600"
+    },
+    "lede": {
+      "x": 51.1875,
+      "y": 619.4375,
+      "w": 406.015625,
+      "h": 51.5625,
+      "b": 671,
+      "r": 457.203125
+    },
+    "primary": {
+      "x": 51.1875,
+      "y": 703,
+      "w": 146.046875,
+      "h": 48,
+      "b": 751,
+      "r": 197.234375
+    },
+    "heroCopy": {
+      "x": 51.1875,
+      "y": 443.09375,
+      "w": 720,
+      "h": 307.90625,
+      "b": 751,
+      "r": 771.1875
+    },
+    "heroSpec": {
+      "x": 988.8125,
+      "y": 585.828125,
+      "w": 240,
+      "h": 165.171875,
+      "b": 751,
+      "r": 1228.8125
+    },
+    "hero": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 800,
+      "b": 800,
+      "r": 1280
+    },
+    "heroBottomInside": true,
+    "h1Visible": true,
+    "ledeVisible": true,
+    "primaryVisible": true,
+    "copyVisible": true,
+    "specVisible": true,
+    "fonts": {
+      "fraunces": true,
+      "manrope": true
+    },
+    "imgs": [
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": ""
+      },
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": "Dispatch"
+      }
+    ],
+    "smallTargets": [],
+    "uniqueWeights": [
+      "600",
+      "400"
+    ],
+    "families": [
+      "\"Manrope Variable\", \"Segoe UI\", sans-serif",
+      "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif"
+    ],
+    "h2s": [
+      {
+        "text": "Two ways in.One desk.",
+        "size": "53.76px",
+        "rect": {
+          "x": 51.1875,
+          "y": 928,
+          "w": 425.453125,
+          "h": 111.8125,
+          "b": 1039.8125,
+          "r": 476.640625
+        }
+      },
+      {
+        "text": "Nothing leaves without you.",
+        "size": "53.76px",
+        "rect": {
+          "x": 51.1875,
+          "y": 1663.875,
+          "w": 496.359375,
+          "h": 111.8125,
+          "b": 1775.6875,
+          "r": 547.546875
+        }
+      },
+      {
+        "text": "Five stages on your PC.",
+        "size": "53.76px",
+        "rect": {
+          "x": 51.1875,
+          "y": 2307.625,
+          "w": 1177.625,
+          "h": 55.90625,
+          "b": 2363.53125,
+          "r": 1228.8125
+        }
+      },
+      {
+        "text": "The alpha is openby invitation.",
+        "size": "53.76px",
+        "rect": {
+          "x": 51.1875,
+          "y": 3130.609375,
+          "w": 496.359375,
+          "h": 111.8125,
+          "b": 3242.421875,
+          "r": 547.546875
+        }
+      }
+    ],
+    "sectionTops": [
+      {
+        "cls": "hero",
+        "top": 0,
+        "h": 800
+      },
+      {
+        "cls": "routes",
+        "top": 800,
+        "h": 735.875
+      },
+      {
+        "cls": "review",
+        "top": 1535.875,
+        "h": 656.5625
+      },
+      {
+        "cls": "pipeline",
+        "top": 2192.4375,
+        "h": 822.984375
+      },
+      {
+        "cls": "access",
+        "top": 3015.421875,
+        "h": 876.953125
+      }
+    ],
+    "wordCount": 366,
+    "bodyFontSize": "17px",
+    "routes": "ref: <Node>",
+    "pageHeight": 4160,
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  "desktop-1440": {
+    "title": "Dispatch: keep the hour, post the minute",
+    "lang": "en",
+    "description": "Dispatch records long sessions on Android or takes a YouTube link, then builds short captioned clips on your Windows PC. You approve every clip before it publishes.",
+    "overflow": false,
+    "scrollWidth": 1440,
+    "clientWidth": 1440,
+    "h1": {
+      "text": "Keep the hour.\nPost the minute.",
+      "rect": {
+        "x": 77.59375,
+        "y": 519.8125,
+        "w": 720,
+        "h": 171.40625,
+        "b": 691.21875,
+        "r": 797.59375
+      },
+      "size": "89.28px",
+      "family": "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif",
+      "weight": "600"
+    },
+    "lede": {
+      "x": 77.59375,
+      "y": 715.21875,
+      "w": 439.1875,
+      "h": 55.78125,
+      "b": 771,
+      "r": 516.78125
+    },
+    "primary": {
+      "x": 77.59375,
+      "y": 803,
+      "w": 146.046875,
+      "h": 48,
+      "b": 851,
+      "r": 223.640625
+    },
+    "heroCopy": {
+      "x": 77.59375,
+      "y": 519.8125,
+      "w": 720,
+      "h": 331.1875,
+      "b": 851,
+      "r": 797.59375
+    },
+    "heroSpec": {
+      "x": 1122.40625,
+      "y": 685.828125,
+      "w": 240,
+      "h": 165.171875,
+      "b": 851,
+      "r": 1362.40625
+    },
+    "hero": {
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "b": 900,
+      "r": 1440
+    },
+    "heroBottomInside": true,
+    "h1Visible": true,
+    "ledeVisible": true,
+    "primaryVisible": true,
+    "copyVisible": true,
+    "specVisible": true,
+    "fonts": {
+      "fraunces": true,
+      "manrope": true
+    },
+    "imgs": [
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": ""
+      },
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": "Dispatch"
+      }
+    ],
+    "smallTargets": [],
+    "uniqueWeights": [
+      "600",
+      "400"
+    ],
+    "families": [
+      "\"Manrope Variable\", \"Segoe UI\", sans-serif",
+      "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif"
+    ],
+    "h2s": [
+      {
+        "text": "Two ways in.One desk.",
+        "size": "60px",
+        "rect": {
+          "x": 77.59375,
+          "y": 1044,
+          "w": 471.953125,
+          "h": 124.78125,
+          "b": 1168.78125,
+          "r": 549.546875
+        }
+      },
+      {
+        "text": "Nothing leaves without you.",
+        "size": "60px",
+        "rect": {
+          "x": 77.59375,
+          "y": 1829.875,
+          "w": 550.609375,
+          "h": 124.78125,
+          "b": 1954.65625,
+          "r": 628.203125
+        }
+      },
+      {
+        "text": "Five stages on your PC.",
+        "size": "60px",
+        "rect": {
+          "x": 77.59375,
+          "y": 2504.03125,
+          "w": 1284.8125,
+          "h": 62.390625,
+          "b": 2566.421875,
+          "r": 1362.40625
+        }
+      },
+      {
+        "text": "The alpha is openby invitation.",
+        "size": "60px",
+        "rect": {
+          "x": 77.59375,
+          "y": 3347.90625,
+          "w": 550.609375,
+          "h": 124.78125,
+          "b": 3472.6875,
+          "r": 628.203125
+        }
+      }
+    ],
+    "sectionTops": [
+      {
+        "cls": "hero",
+        "top": 0,
+        "h": 900
+      },
+      {
+        "cls": "routes",
+        "top": 900,
+        "h": 785.875
+      },
+      {
+        "cls": "review",
+        "top": 1685.875,
+        "h": 688.5625
+      },
+      {
+        "cls": "pipeline",
+        "top": 2374.4375,
+        "h": 843.875
+      },
+      {
+        "cls": "access",
+        "top": 3218.3125,
+        "h": 918.734375
+      }
+    ],
+    "wordCount": 366,
+    "bodyFontSize": "17px",
+    "routes": "ref: <Node>",
+    "pageHeight": 4405,
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  "desktop-1920": {
+    "title": "Dispatch: keep the hour, post the minute",
+    "lang": "en",
+    "description": "Dispatch records long sessions on Android or takes a YouTube link, then builds short captioned clips on your Windows PC. You approve every clip before it publishes.",
+    "overflow": false,
+    "scrollWidth": 1920,
+    "clientWidth": 1920,
+    "h1": {
+      "text": "Keep the hour.\nPost the minute.",
+      "rect": {
+        "x": 332,
+        "y": 699.21875,
+        "w": 720,
+        "h": 172,
+        "b": 871.21875,
+        "r": 1052
+      },
+      "size": "89.6px",
+      "family": "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif",
+      "weight": "600"
+    },
+    "lede": {
+      "x": 332,
+      "y": 895.21875,
+      "w": 439.1875,
+      "h": 55.78125,
+      "b": 951,
+      "r": 771.1875
+    },
+    "primary": {
+      "x": 332,
+      "y": 983,
+      "w": 146.046875,
+      "h": 48,
+      "b": 1031,
+      "r": 478.046875
+    },
+    "heroCopy": {
+      "x": 332,
+      "y": 699.21875,
+      "w": 720,
+      "h": 331.78125,
+      "b": 1031,
+      "r": 1052
+    },
+    "heroSpec": {
+      "x": 1348,
+      "y": 865.828125,
+      "w": 240,
+      "h": 165.171875,
+      "b": 1031,
+      "r": 1588
+    },
+    "hero": {
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "b": 1080,
+      "r": 1920
+    },
+    "heroBottomInside": true,
+    "h1Visible": true,
+    "ledeVisible": true,
+    "primaryVisible": true,
+    "copyVisible": true,
+    "specVisible": true,
+    "fonts": {
+      "fraunces": true,
+      "manrope": true
+    },
+    "imgs": [
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": ""
+      },
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": "Dispatch"
+      }
+    ],
+    "smallTargets": [],
+    "uniqueWeights": [
+      "600",
+      "400"
+    ],
+    "families": [
+      "\"Manrope Variable\", \"Segoe UI\", sans-serif",
+      "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif"
+    ],
+    "h2s": [
+      {
+        "text": "Two ways in.One desk.",
+        "size": "60px",
+        "rect": {
+          "x": 332,
+          "y": 1232,
+          "w": 471.953125,
+          "h": 124.78125,
+          "b": 1356.78125,
+          "r": 803.953125
+        }
+      },
+      {
+        "text": "Nothing leaves without you.",
+        "size": "60px",
+        "rect": {
+          "x": 332,
+          "y": 2033.875,
+          "w": 535.796875,
+          "h": 124.78125,
+          "b": 2158.65625,
+          "r": 867.796875
+        }
+      },
+      {
+        "text": "Five stages on your PC.",
+        "size": "60px",
+        "rect": {
+          "x": 332,
+          "y": 2722.4375,
+          "w": 1256,
+          "h": 62.390625,
+          "b": 2784.828125,
+          "r": 1588
+        }
+      },
+      {
+        "text": "The alpha is openby invitation.",
+        "size": "60px",
+        "rect": {
+          "x": 332,
+          "y": 3572.71875,
+          "w": 550.609375,
+          "h": 124.78125,
+          "b": 3697.5,
+          "r": 882.609375
+        }
+      }
+    ],
+    "sectionTops": [
+      {
+        "cls": "hero",
+        "top": 0,
+        "h": 1080
+      },
+      {
+        "cls": "routes",
+        "top": 1080,
+        "h": 801.875
+      },
+      {
+        "cls": "review",
+        "top": 1881.875,
+        "h": 704.5625
+      },
+      {
+        "cls": "pipeline",
+        "top": 2586.4375,
+        "h": 850.28125
+      },
+      {
+        "cls": "access",
+        "top": 3436.71875,
+        "h": 931.546875
+      }
+    ],
+    "wordCount": 366,
+    "bodyFontSize": "17px",
+    "routes": "ref: <Node>",
+    "pageHeight": 4636,
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  "mobile-390": {
+    "title": "Dispatch: keep the hour, post the minute",
+    "lang": "en",
+    "description": "Dispatch records long sessions on Android or takes a YouTube link, then builds short captioned clips on your Windows PC. You approve every clip before it publishes.",
+    "overflow": false,
+    "scrollWidth": 390,
+    "clientWidth": 390,
+    "h1": {
+      "text": "Keep the hour.\nPost the minute.",
+      "rect": {
+        "x": 20,
+        "y": 503.15625,
+        "w": 350,
+        "h": 74.25,
+        "b": 577.40625,
+        "r": 370
+      },
+      "size": "38.68px",
+      "family": "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif",
+      "weight": "600"
+    },
+    "lede": {
+      "x": 20,
+      "y": 601.40625,
+      "w": 350,
+      "h": 49.59375,
+      "b": 651,
+      "r": 370
+    },
+    "primary": {
+      "x": 20,
+      "y": 683,
+      "w": 350,
+      "h": 48,
+      "b": 731,
+      "r": 370
+    },
+    "heroCopy": {
+      "x": 20,
+      "y": 503.15625,
+      "w": 350,
+      "h": 283.84375,
+      "b": 787,
+      "r": 370
+    },
+    "heroSpec": {
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "b": 0,
+      "r": 0
+    },
+    "hero": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "b": 844,
+      "r": 390
+    },
+    "heroBottomInside": true,
+    "h1Visible": true,
+    "ledeVisible": true,
+    "primaryVisible": true,
+    "copyVisible": true,
+    "specVisible": true,
+    "fonts": {
+      "fraunces": true,
+      "manrope": true
+    },
+    "imgs": [
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": ""
+      },
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": "Dispatch"
+      }
+    ],
+    "smallTargets": [],
+    "uniqueWeights": [
+      "600",
+      "400"
+    ],
+    "families": [
+      "\"Manrope Variable\", \"Segoe UI\", sans-serif",
+      "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif"
+    ],
+    "h2s": [
+      {
+        "text": "Two ways in.One desk.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 940,
+          "w": 282.15625,
+          "h": 73.21875,
+          "b": 1013.21875,
+          "r": 302.15625
+        }
+      },
+      {
+        "text": "Nothing leaves without you.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 2015.15625,
+          "w": 350,
+          "h": 73.21875,
+          "b": 2088.375,
+          "r": 370
+        }
+      },
+      {
+        "text": "Five stages on your PC.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 2782.203125,
+          "w": 350,
+          "h": 73.21875,
+          "b": 2855.421875,
+          "r": 370
+        }
+      },
+      {
+        "text": "The alpha is openby invitation.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 3895.140625,
+          "w": 350,
+          "h": 73.21875,
+          "b": 3968.359375,
+          "r": 370
+        }
+      }
+    ],
+    "sectionTops": [
+      {
+        "cls": "hero",
+        "top": 0,
+        "h": 844
+      },
+      {
+        "cls": "routes",
+        "top": 844,
+        "h": 1075.15625
+      },
+      {
+        "cls": "review",
+        "top": 1919.15625,
+        "h": 775.046875
+      },
+      {
+        "cls": "pipeline",
+        "top": 2694.203125,
+        "h": 1112.9375
+      },
+      {
+        "cls": "access",
+        "top": 3807.140625,
+        "h": 1163.875
+      }
+    ],
+    "wordCount": 353,
+    "bodyFontSize": "16px",
+    "routes": "ref: <Node>",
+    "pageHeight": 5312,
+    "consoleErrors": [],
+    "failedRequests": []
+  },
+  "mobile-320": {
+    "title": "Dispatch: keep the hour, post the minute",
+    "lang": "en",
+    "description": "Dispatch records long sessions on Android or takes a YouTube link, then builds short captioned clips on your Windows PC. You approve every clip before it publishes.",
+    "overflow": false,
+    "scrollWidth": 320,
+    "clientWidth": 320,
+    "h1": {
+      "text": "Keep the hour.\nPost the minute.",
+      "rect": {
+        "x": 20,
+        "y": 385.84375,
+        "w": 280,
+        "h": 67.5625,
+        "b": 453.40625,
+        "r": 300
+      },
+      "size": "35.2px",
+      "family": "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif",
+      "weight": "600"
+    },
+    "lede": {
+      "x": 20,
+      "y": 477.40625,
+      "w": 280,
+      "h": 49.59375,
+      "b": 527,
+      "r": 300
+    },
+    "primary": {
+      "x": 20,
+      "y": 559,
+      "w": 280,
+      "h": 48,
+      "b": 607,
+      "r": 300
+    },
+    "heroCopy": {
+      "x": 20,
+      "y": 385.84375,
+      "w": 280,
+      "h": 277.15625,
+      "b": 663,
+      "r": 300
+    },
+    "heroSpec": {
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "b": 0,
+      "r": 0
+    },
+    "hero": {
+      "x": 0,
+      "y": 0,
+      "w": 320,
+      "h": 720,
+      "b": 720,
+      "r": 320
+    },
+    "heroBottomInside": true,
+    "h1Visible": true,
+    "ledeVisible": true,
+    "primaryVisible": true,
+    "copyVisible": true,
+    "specVisible": true,
+    "fonts": {
+      "fraunces": true,
+      "manrope": true
+    },
+    "imgs": [
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": ""
+      },
+      {
+        "src": "http://127.0.0.1:4173/assets/dispatch-lockup-white.svg",
+        "w": 924,
+        "h": 256,
+        "alt": "Dispatch"
+      }
+    ],
+    "smallTargets": [],
+    "uniqueWeights": [
+      "600",
+      "400"
+    ],
+    "families": [
+      "\"Manrope Variable\", \"Segoe UI\", sans-serif",
+      "\"Fraunces Variable\", \"Iowan Old Style\", \"Palatino Linotype\", serif"
+    ],
+    "h2s": [
+      {
+        "text": "Two ways in.One desk.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 816,
+          "w": 280,
+          "h": 73.21875,
+          "b": 889.21875,
+          "r": 300
+        }
+      },
+      {
+        "text": "Nothing leaves without you.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 1916.75,
+          "w": 280,
+          "h": 73.21875,
+          "b": 1989.96875,
+          "r": 300
+        }
+      },
+      {
+        "text": "Five stages on your PC.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 2757.6875,
+          "w": 280,
+          "h": 73.21875,
+          "b": 2830.90625,
+          "r": 300
+        }
+      },
+      {
+        "text": "The alpha is openby invitation.",
+        "size": "35.2px",
+        "rect": {
+          "x": 20,
+          "y": 3961.359375,
+          "w": 280,
+          "h": 73.21875,
+          "b": 4034.578125,
+          "r": 300
+        }
+      }
+    ],
+    "sectionTops": [
+      {
+        "cls": "hero",
+        "top": 0,
+        "h": 720
+      },
+      {
+        "cls": "routes",
+        "top": 720,
+        "h": 1100.75
+      },
+      {
+        "cls": "review",
+        "top": 1820.75,
+        "h": 848.9375
+      },
+      {
+        "cls": "pipeline",
+        "top": 2669.6875,
+        "h": 1203.671875
+      },
+      {
+        "cls": "access",
+        "top": 3873.359375,
+        "h": 1276.65625
+      }
+    ],
+    "wordCount": 353,
+    "bodyFontSize": "16px",
+    "routes": "ref: <Node>",
+    "pageHeight": 5510,
+    "consoleErrors": [],
+    "failedRequests": []
+  }
+}

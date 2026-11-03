@@ -1,3 +1,4 @@
+import { useBackHandler } from '../navigation/backHandler';
 import React, { useState, useEffect } from 'react';
 import {
   Settings as SettingsIcon,
@@ -157,6 +158,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [themePref, setThemePref] = useState<ThemePreference>(() => getThemePreference());
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [defaultLens, setDefaultLens] = useState<'back' | 'front'>(() => getDefaultLensPref());
   const [accountEmail, setAccountEmail] = useState('');
   const [jwtToken, setJwtToken] = useState<string | null>(null);
@@ -503,6 +505,30 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
     closeNotificationCenter,
   } = useActivity();
 
+  useBackHandler('settings_modals', 40, () => {
+    if (isNotificationCenterOpen) {
+      closeNotificationCenter();
+      return true;
+    }
+    if (showSignOutConfirm) {
+      setShowSignOutConfirm(false);
+      return true;
+    }
+    if (isTemplateEditorOpen) {
+      setIsTemplateEditorOpen(false);
+      return true;
+    }
+    if (showCloudFiles) {
+      setShowCloudFiles(false);
+      return true;
+    }
+    if (showGeminiInput) {
+      setShowGeminiInput(false);
+      return true;
+    }
+    return false;
+  });
+
   if (isTemplateEditorOpen) {
     return (
       <TemplateStudio
@@ -548,8 +574,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         )}
 
-        {/* ACCOUNT PROFILE ROW (borderless; separated by a hairline) */}
-        <section className="pb-1 border-b border-border flex items-center justify-between gap-3">
+        {/* ACCOUNT PROFILE ROW */}
+        <section className="rounded-2xl bg-surface border border-border p-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <span className="w-9 h-9 rounded-full bg-primary-soft border border-primary/30 flex items-center justify-center text-primary shrink-0">
               <UserRound size={17} />
@@ -559,18 +585,37 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               <p className="text-sm font-medium text-text-main truncate mt-1">{accountEmail || '…'}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className="min-h-[44px] px-3 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-danger active:scale-[0.98] transition-all flex items-center gap-1.5 shrink-0"
-          >
-            <LogOut size={13} />
-            <span>Sign out</span>
-          </button>
+          {showSignOutConfirm ? (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="w-[72px] min-h-[40px] rounded-xl bg-danger hover:bg-danger/90 text-white text-xs font-semibold active:scale-[0.98] transition-all flex items-center justify-center"
+              >
+                Confirm
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSignOutConfirm(false)}
+                className="w-[52px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs text-text-muted active:scale-[0.98] transition-all flex items-center justify-center"
+              >
+                No
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowSignOutConfirm(true)}
+              className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-danger active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 shrink-0"
+            >
+              <LogOut size={13} />
+              <span>Sign out</span>
+            </button>
+          )}
         </section>
 
-        {/* 1. APPEARANCE — compact grouped selector, no outer card */}
-        <section className="space-y-2.5">
+        {/* 1. APPEARANCE */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-2.5">
           <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Appearance</h2>
           <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Theme">
             {themeOptions.map((opt) => {
@@ -599,15 +644,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 2. RECORDING — one simple row with an inline lens control */}
-        <section className="space-y-2.5">
-          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Recording</h2>
+        {/* 2. RECORDING & CAPTURE STYLE */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-4">
+          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Capture &amp; Style</h2>
           <div className="flex items-center justify-between gap-3">
             <span className="flex items-center gap-1.5 text-sm font-medium text-text-main shrink-0">
               <Camera size={14} className="text-text-muted" />
               Default lens
             </span>
-            <div className="flex items-center p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Default camera">
+            <div className="flex items-center p-0.5 rounded-xl bg-surface-2 border border-border w-[140px]" role="radiogroup" aria-label="Default camera">
               {(['back', 'front'] as const).map((lens) => {
                 const isSelected = defaultLens === lens;
                 return (
@@ -617,7 +662,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                     role="radio"
                     aria-checked={isSelected}
                     onClick={() => handleLensChange(lens)}
-                    className={`min-h-[44px] px-4 rounded-lg text-xs font-medium transition-all active:scale-[0.98] ${
+                    className={`flex-1 min-h-[36px] rounded-lg text-xs font-medium transition-all active:scale-[0.98] flex items-center justify-center ${
                       isSelected ? 'bg-primary text-white font-semibold' : 'text-text-secondary hover:text-text-main'
                     }`}
                   >
@@ -627,22 +672,21 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               })}
             </div>
           </div>
-        </section>
 
-        {/* 3. DEFAULT EDITING STYLE — heading + action, no redundant helper text */}
-        <section className="flex items-center justify-between gap-3">
-          <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary flex items-center gap-1.5 shrink-0">
-            <Sliders size={13} className="text-text-muted" />
-            Default Editing Style
-          </h2>
-          <button
-            type="button"
-            onClick={() => setIsTemplateEditorOpen(true)}
-            className="px-3 min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-hero-glow active:scale-[0.98] transition-all flex items-center gap-1.5 shrink-0"
-          >
-            <Sliders size={13} />
-            Customize
-          </button>
+          <div className="pt-3 border-t border-white/[0.06] flex items-center justify-between gap-3">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-text-main shrink-0">
+              <Sliders size={14} className="text-text-muted" />
+              Editing Style
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsTemplateEditorOpen(true)}
+              className="w-[96px] min-h-[40px] rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-hero-glow active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 shrink-0"
+            >
+              <Sliders size={13} />
+              <span>Customize</span>
+            </button>
+          </div>
         </section>
 
         {/* 4. CONNECTED ACCOUNTS (Single service of truth) — the one deliberate
@@ -693,7 +737,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                         </div>
                         <button
                           onClick={() => handleDisconnectAccount(acc)}
-                          className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
+                          className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
                         >
                           Disconnect
                         </button>
@@ -767,7 +811,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                       </div>
                       <button
                         onClick={() => handleDisconnectAccount(acc)}
-                        className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
+                        className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
                       >
                         Disconnect
                       </button>
@@ -792,7 +836,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                   </div>
                   <button
                     onClick={() => handleConnectProvider('instagram')}
-                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-3 hover:bg-surface-2 border border-white/[0.05] text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
+                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center justify-center shrink-0"
                   >
                     Connect
                   </button>
@@ -816,14 +860,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {facebookAccount ? (
                   <button
                     onClick={() => handleDisconnectAccount(facebookAccount)}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
+                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('facebook')}
-                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-3 hover:bg-surface-2 border border-white/[0.05] text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
+                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center justify-center shrink-0"
                   >
                     Connect
                   </button>
@@ -847,14 +891,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {linkedinAccount ? (
                   <button
                     onClick={() => handleDisconnectAccount(linkedinAccount)}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
+                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('linkedin')}
-                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-3 hover:bg-surface-2 border border-white/[0.05] text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
+                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center justify-center shrink-0"
                   >
                     Connect
                   </button>
@@ -878,14 +922,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 {twitterAccount ? (
                   <button
                     onClick={() => handleDisconnectAccount(twitterAccount)}
-                    className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center shrink-0"
+                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
                   >
                     Disconnect
                   </button>
                 ) : (
                   <button
                     onClick={() => handleConnectProvider('twitter')}
-                    className="min-h-[44px] px-3.5 rounded-lg bg-surface-3 hover:bg-surface-2 border border-white/[0.05] text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center shrink-0"
+                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center justify-center shrink-0"
                   >
                     Connect
                   </button>
@@ -895,9 +939,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 5. PER-USER GEMINI API KEY — flat section; the status chip carries the
-            state, no helper copy or wrapping card */}
-        <section className="space-y-3">
+        {/* 5. PER-USER GEMINI API KEY */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary flex items-center gap-1.5">
               <Sparkles size={13} className="text-text-muted" />
@@ -916,14 +959,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
 
           {geminiStatus.configured ? (
-            <div className="p-3 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
-              <div className="flex items-center gap-2 min-w-0">
+            <div className="p-2.5 rounded-xl bg-surface-2 border border-border flex items-center justify-between gap-3 text-sm">
+              <div className="flex items-center gap-2 min-w-0 pl-1">
                 <Key size={15} className="text-primary shrink-0" />
                 <span className="font-mono text-xs text-text-main truncate">{geminiStatus.key_prefix}</span>
               </div>
               <button
                 onClick={handleDeleteGeminiKey}
-                className="min-h-[44px] px-3 rounded-lg bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary transition-colors flex items-center"
+                className="w-[96px] min-h-[40px] rounded-xl bg-surface-3 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
               >
                 Remove
               </button>
@@ -970,8 +1013,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           )}
         </section>
 
-        {/* 6. UPLOADS — network behavior selector, grouped segmented control */}
-        <section className="space-y-2.5">
+        {/* 6. UPLOADS */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-2.5">
           <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Uploads</h2>
           <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-surface-2 border border-border" role="radiogroup" aria-label="Upload Network Policy">
             <button
@@ -1016,8 +1059,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
           </div>
         </section>
 
-        {/* 7. STORAGE — flat section; usage bars are the content, no wrap card */}
-        <section className="space-y-3.5">
+        {/* 7. STORAGE */}
+        <section className="rounded-2xl bg-surface border border-border p-4 space-y-3.5">
           <h2 className="text-[10px] uppercase tracking-wider font-semibold text-text-secondary">Storage</h2>
 
           {/* Device Local Storage */}

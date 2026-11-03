@@ -1,3 +1,4 @@
+import { useBackHandler } from '../navigation/backHandler';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Film,
@@ -342,6 +343,31 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     addNotification,
   } = useActivity();
 
+  useBackHandler('recordings_modals', 40, () => {
+    if (isNotificationCenterOpen) {
+      closeNotificationCenter();
+      return true;
+    }
+    if (showConfirmDelete) {
+      setShowConfirmDelete(null);
+      return true;
+    }
+    if (isOptionsModalOpen) {
+      setIsOptionsModalOpen(false);
+      return true;
+    }
+    return false;
+  });
+
+  useBackHandler('recordings_detail', 20, () => {
+    if (viewMode === 'detail' || selectedSessionId !== null) {
+      setViewMode('library');
+      setSelectedSessionId(null);
+      return true;
+    }
+    return false;
+  });
+
   // Clips & Inbox items
   const [clips, setClips] = useState<{
     id: string;
@@ -469,9 +495,16 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         if (res.ok) {
           const data = await res.json();
           const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-          // Deduplicate jobs by canonical video ID to eliminate duplicate cloud retries
+          // Deduplicate jobs deterministically by status rank & freshness, skipping cancelled jobs
           const jobMap = new Map<string, YouTubeInboxItem>();
+          const statusRank = (st: string) => {
+            if (st === 'COMPLETED' || st === 'CLIPS_CREATED') return 4;
+            if (st === 'PROCESSING') return 3;
+            if (st === 'QUEUED' || st === 'DISCOVERED') return 2;
+            return 1; // FAILED
+          };
           jobs.forEach((j: any) => {
+            if (j.status === 'cancelled') return;
             const extracted = extractVideoId(j.youtube_url || j.video_id || '');
             const vId = extracted || j.video_id || j.id;
             if (!vId) return;
@@ -483,12 +516,17 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             const parsedDur = typeof j.duration === 'number' ? j.duration : (parseFloat(j.duration) || undefined);
 
             const existing = jobMap.get(vId);
-            if (!existing || (existing.status !== 'COMPLETED' && isDone)) {
+            const shouldReplace = !existing ||
+              statusRank(itemStatus) > statusRank(existing.status) ||
+              (statusRank(itemStatus) === statusRank(existing.status) &&
+               new Date(j.created_at).getTime() > new Date(existing.discovered_at || 0).getTime());
+
+            if (shouldReplace) {
               jobMap.set(vId, {
                 video_id: vId,
                 session_id: j.session_id,
                 dispatch_id: j.id,
-                title: j.title || j.youtube_url,
+                title: j.source_title || j.title || j.youtube_url,
                 status: itemStatus,
                 stage: isDone ? 'ready' : rawStage,
                 last_error: j.last_error,
@@ -592,6 +630,51 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${timeStr}`;
   };
 
+  const isYouTubeId = (id?: string | null): boolean => {
+    return Boolean(id && /^[a-zA-Z0-9_-]{11}$/.test(id));
+  };
+
+  const isClipMatchingSession = (
+    c: { session_id?: string; chunk_id?: string; youtube_video_id?: string },
+    sessionId: string,
+    opts?: {
+      ytId?: string | null;
+      segmentIds?: string[];
+      inboxDispatchId?: string;
+      inboxSessionId?: string;
+    }
+  ): boolean => {
+    if (!c || !sessionId) return false;
+    const normSess = sessionId.replace(/^(sess_|dir_)/, '');
+
+    // 1. Exact match on primary session ID
+    if (c.session_id === sessionId || c.chunk_id === sessionId) return true;
+
+    // 2. Normalized prefix-stripped match
+    if (c.session_id && c.session_id.replace(/^(sess_|dir_)/, '') === normSess) return true;
+    if (c.chunk_id && c.chunk_id.replace(/^(sess_|dir_)/, '') === normSess) return true;
+
+    // 3. YouTube video ID match
+    if (opts?.ytId && (c.session_id === opts.ytId || c.chunk_id === opts.ytId || c.youtube_video_id === opts.ytId)) {
+      return true;
+    }
+
+    // 4. Segment IDs match
+    if (opts?.segmentIds?.some(sid => sid === c.chunk_id || sid === c.session_id)) {
+      return true;
+    }
+
+    // 5. Inbox dispatch / session ID match
+    if (opts?.inboxDispatchId && (c.chunk_id === opts.inboxDispatchId || c.session_id === opts.inboxDispatchId)) {
+      return true;
+    }
+    if (opts?.inboxSessionId && (c.session_id === opts.inboxSessionId || c.chunk_id === opts.inboxSessionId)) {
+      return true;
+    }
+
+    return false;
+  };
+
   // UNIFIED SESSIONS MODEL: Merges native phone recordings and YouTube inbox items
   const unifiedSessions: UnifiedSession[] = useMemo(() => {
     const list: UnifiedSession[] = [];
@@ -622,11 +705,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         ?? ns.segments.find(segment => segment.uploadReason)?.uploadReason
         ?? '';
 
+      const segIds = ns.segments.map(s => s.segmentId);
       const sessClips = clips.filter(c =>
-        c.session_id === ns.sessionId ||
-        c.chunk_id === ns.sessionId ||
-        ns.segments.some(seg => seg.segmentId === c.chunk_id || (seg.youtubeVideoId && (c.session_id === seg.youtubeVideoId || c.chunk_id === seg.youtubeVideoId))) ||
-        (ytId && (c.session_id === ytId || c.chunk_id === ytId))
+        isClipMatchingSession(c, ns.sessionId, {
+          ytId,
+          segmentIds: segIds,
+        })
       );
       const clipCount = sessClips.length;
 
@@ -696,11 +780,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       seenYtIds.add(item.video_id);
       if (item.session_id) seenSessionIds.add(item.session_id);
 
+      const itemYtId = isYouTubeId(item.video_id) ? item.video_id : undefined;
       const itemClips = clips.filter(c =>
-        c.session_id === item.video_id ||
-        c.chunk_id === item.video_id ||
-        c.youtube_video_id === item.video_id ||
-        (item.session_id && (c.session_id === item.session_id || c.chunk_id === item.session_id))
+        isClipMatchingSession(c, item.video_id, {
+          ytId: itemYtId,
+          inboxDispatchId: item.dispatch_id,
+          inboxSessionId: item.session_id,
+        })
       );
       const clipCount = itemClips.length;
 
@@ -709,16 +795,27 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         status = 'ready';
       } else if (item.status === 'FAILED' || item.status === 'STALLED_YOUTUBE_PROCESSING') {
         status = 'failed';
-      } else if (item.status === 'DISCOVERED') {
+      } else if (item.status === 'DISCOVERED' || item.status === 'QUEUED') {
         status = 'queued';
-      } else {
+      } else if (item.status === 'PROCESSING') {
         status = 'processing';
+      } else {
+        status = 'queued';
       }
 
       const firstClipWithTitle = itemClips.find(c => c.source_title);
-      const displayTitle = firstClipWithTitle?.source_title
-        ? cleanTitle(firstClipWithTitle.source_title)
-        : (item.title && !item.title.startsWith('http') ? cleanTitle(item.title) : `YouTube ${item.video_id}`);
+      let displayTitle = '';
+      if (firstClipWithTitle?.source_title) {
+        displayTitle = cleanTitle(firstClipWithTitle.source_title);
+      } else if (item.title && !item.title.startsWith('http')) {
+        displayTitle = cleanTitle(item.title);
+      } else if (item.video_id.startsWith('dir_')) {
+        displayTitle = 'Direct Video Upload';
+      } else if (itemYtId) {
+        displayTitle = `YouTube ${itemYtId}`;
+      } else {
+        displayTitle = `Session ${item.video_id.slice(0, 10)}`;
+      }
 
       // Derive authentic duration: item.duration -> source_duration of clips -> max clip end_time / sum -> 0
       let computedDuration = item.duration || 0;
@@ -731,17 +828,20 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         }
       }
 
+      const thumbUrl = itemClips[0]?.thumbnail_url || undefined;
+
       list.push({
         id: item.video_id,
         title: displayTitle,
-        origin: 'youtube',
+        origin: itemYtId ? 'youtube' : 'phone',
         createdAt: item.discovered_at ? new Date(item.discovered_at).getTime() : Date.now(),
         totalDuration: computedDuration,
         totalBytes: 0,
         status,
         stage: item.stage,
         clipCount,
-        youtubeVideoId: item.video_id,
+        youtubeVideoId: itemYtId,
+        thumbnailUrl: thumbUrl,
         errorMessage: clipCount > 0 ? undefined : item.last_error,
         rawInbox: item
       });
@@ -1019,7 +1119,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   </button>
                 </div>
               </div>
-            ) : ytId ? (
+            ) : isYouTubeId(ytId) ? (
               <div className="w-full h-full relative group">
                 <img
                   src={`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`}
@@ -1265,23 +1365,31 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
           {/* PRIMARY HERO CTA & WORKSTATION ACTIONS */}
           <div className="space-y-2.5 pt-1">
-            {isReady ? (
-              <button
-                type="button"
-                onClick={() => {
-                  const sid = s.id;
-                  setViewMode('library');
-                  setSelectedSessionId(null);
-                  if (onNavigateToClips) {
-                    onNavigateToClips(sid);
-                  }
-                }}
-                className="w-full min-h-[46px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
-              >
-                <Sparkles size={16} />
-                <span>View {s.clipCount}&nbsp;{s.clipCount === 1 ? 'Clip' : 'Clips'}</span>
-              </button>
-            ) : (
+            {isReady ? (() => {
+              const liveClips = clips.filter(c => isClipMatchingSession(c, s.id, {
+                ytId: s.youtubeVideoId,
+                inboxDispatchId: s.rawInbox?.dispatch_id,
+                inboxSessionId: s.rawInbox?.session_id,
+              }));
+              const count = Math.max(s.clipCount, liveClips.length);
+              return (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sid = s.id;
+                    setViewMode('library');
+                    setSelectedSessionId(null);
+                    if (onNavigateToClips) {
+                      onNavigateToClips(sid);
+                    }
+                  }}
+                  className="w-full min-h-[46px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-hero-glow active:scale-[0.98] transition-all"
+                >
+                  <Sparkles size={16} />
+                  <span>View {count}&nbsp;{count === 1 ? 'Clip' : 'Clips'}</span>
+                </button>
+              );
+            })() : (
               <button
                 type="button"
                 onClick={() => {
@@ -1658,17 +1766,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 {/* 16:9 Thumbnail Stage */}
                 <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
                   <Film size={16} className="text-white/40" />
-                  {ytId ? (
+                  {isYouTubeId(ytId) && (
                     <img
                       src={`https://img.youtube.com/vi/${ytId}/mqdefault.jpg`}
                       alt=""
-                      className="absolute inset-0 w-full h-full object-cover"
+                      className="absolute inset-0 w-full h-full object-cover z-10"
                       loading="lazy"
                       onError={e => {
                         (e.target as HTMLElement).style.display = 'none';
                       }}
                     />
-                  ) : session.thumbnailUrl ? (
+                  )}
+                  {session.thumbnailUrl ? (
                     <img
                       src={session.thumbnailUrl.startsWith('http') ? session.thumbnailUrl : apiUrl(session.thumbnailUrl, pcHost)}
                       alt=""
@@ -1694,7 +1803,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
                   {/* Origin badge: icon-only so repeated source labels don't clutter every row. */}
                   <span
-                    className="absolute top-1 left-1 w-4 h-4 rounded bg-black/85 text-white flex items-center justify-center"
+                    className="absolute top-1 left-1 w-4 h-4 rounded bg-black/85 text-white flex items-center justify-center z-20"
                     title={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
                     role="img"
                     aria-label={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
@@ -1705,8 +1814,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   </span>
 
                   {/* Duration badge */}
-                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white">
-                    {formatDuration(session.totalDuration)}
+                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 font-mono tabular-nums text-[10px] font-semibold text-white z-20">
+                    {session.totalDuration > 0 ? formatDuration(session.totalDuration) : '--:--'}
                   </span>
                 </div>
 

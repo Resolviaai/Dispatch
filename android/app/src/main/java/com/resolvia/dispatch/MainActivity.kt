@@ -427,14 +427,27 @@ class MainActivity : ComponentActivity() {
         )
         webView.addJavascriptInterface(bridge, "DispatchBridge")
 
-        // Handle hardware and gesture back navigation cleanly
+        // Handle hardware and gesture back navigation cleanly matching Instagram & YouTube back-stack UX
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            private var lastBackPressTime = 0L
+
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) {
-                    webView.goBack()
-                } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+                webView.evaluateJavascript("window.__dispatchBackHandler ? window.__dispatchBackHandler() : false") { result ->
+                    val handled = result != null && (result == "true" || result == "\"true\"")
+                    if (!handled) {
+                        if (webView.canGoBack()) {
+                            webView.goBack()
+                        } else {
+                            val now = System.currentTimeMillis()
+                            if (now - lastBackPressTime < 2000L) {
+                                isEnabled = false
+                                onBackPressedDispatcher.onBackPressed()
+                            } else {
+                                lastBackPressTime = now
+                                Toast.makeText(this@MainActivity, "Press back again to exit", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                 }
             }
         })

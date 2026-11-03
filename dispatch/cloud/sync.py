@@ -452,6 +452,19 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
             except Exception:
                 pass
 
+        yt_video_id = None
+        if clip.get("session_id"):
+            try:
+                from dispatch.database import get_db
+                with get_db() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT video_id FROM youtube_inbox WHERE session_id = ? LIMIT 1", (clip.get("session_id"),))
+                    row = cur.fetchone()
+                    if row:
+                        yt_video_id = row[0]
+            except Exception:
+                pass
+
         r_clip = requests.post(
             f"{_worker_base()}/sync/pc/clips",
             headers=_cloud_headers(get_worker_token(), user_id),
@@ -471,6 +484,8 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
                 "caption_data": caption_payload,
                 "caption_revision": int(clip.get("caption_range_revision") or clip.get("captions_revision") or 0),
                 "publications": _publication_sync_payload(clip_id),
+                "session_id": clip.get("session_id") or None,
+                "youtube_video_id": yt_video_id,
             },
             timeout=20,
         )

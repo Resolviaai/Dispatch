@@ -1,15 +1,15 @@
 # AGENT_HANDOFF — Dispatch working-state index
 
 Single source of truth for the next coding agent. Keep this short; link, don't copy.
-Updated: 2026-10-23 (Phase C review-fix checkpoint).
+Updated: 2026-11-03 (Release v1.7.25-alpha, versionCode 93).
 
-Detailed docs: `PROGRESS.md` (verification log) · `docs/ROUTE_B_IMPLEMENTATION_HANDOFF.md` (Route B workflow) · `docs/EXECUTION_HANDOFF.md` · `docs/architecture/cloud-migration-plan.md` (**current task plan + baseline findings**) · `AGENTS.md` (UI invariants) · `DESIGN_SYSTEM.md` · `docs/CANONICAL_ARCHITECTURE.md`.
+Detailed docs: `PROGRESS.md` (verification log) · `docs/2026-11-02_MASTER_TASK_LIST.md` (active roadmap & audit log) · `docs/architecture/cloud-migration-plan.md` (cloud architecture) · `AGENTS.md` (UI invariants) · `design.md` (Design System v3) · `docs/CANONICAL_ARCHITECTURE.md`.
 
 ## 1. Project overview
-Personal content engine: POCO C65 Android app records long sessions → uploads directly to YouTube (unlisted) → Windows PC daemon (`python -m dispatch.main`) polls YouTube authenticated, downloads originals, transcribes (YouTube captions first, Gemini two-stage fallback), Gemini selects highlight clips, FFmpeg renders 9:16 clips with burned captions, React review studio (FastAPI `127.0.0.1:8000`, also packaged into the Android WebView), approve → durable outbox publishes to YouTube/Instagram/LinkedIn/X. Local SQLite (WAL) owns processing state. **No cloud component yet** — that is the current task.
+Dispatch is an autonomous AI-native video clipping workstation and creator studio. The POCO C65 Android app records sessions, reviews clips, and customizes animated captions in a mobile-optimized studio. The cloud control plane (Supabase Postgres + Cloudflare Worker API gateway + R2 distributed storage) manages multi-user authentication, cloud sessions, and 720p edit windows for remote editing on cellular. An optional local Windows PC daemon (`python -m dispatch.main`) provides high-speed local media acceleration (faster-whisper Hinglish transcription, Gemini highlight extraction, FFmpeg delivery rendering, and multi-platform publishing outbox).
 
 ## 2. Current objective
-Cloud migration per `docs/architecture/cloud-migration-plan.md` (authoritative plan; owner brief = the Principal Architect brief). Add Supabase Auth/Postgres (identity + cloud-owned metadata/review/quota), private R2 clip media, Cloudflare Worker control plane, server-enforced quotas/retention, remote review — **all media processing stays on the PC; originals stay on YouTube; not cloud rendering**. Free-tier only, RLS everywhere, secrets server-side only, preserve range-revision semantics, keep local pipeline and tests green.
+Continuous stabilization, mobile UI/UX ergonomics (Dispatch Design System v3), release governance monotonicity, and multi-platform publishing integrity.
 
 ## 3. Repository state
 - Branch `main`. Observed 2026-10-23 (review-fix session, after `git fetch origin`): `HEAD == origin/main == ddd5f1c` "feat: add cloud configuration, Supabase init migration, and RLS checklist" (parent `c1fd0b0`), working tree clean — the entire Phase C hardening of the previous session IS pushed (the earlier "one-commit-ahead, NOT pushed" claim was stale). This session adds a Phase C review-fix commit on top (created together with this handoff update; see `git log -1` for the exact hash). **After it: local ahead of origin/main by one commit; NOT pushed (push requires owner decision).**

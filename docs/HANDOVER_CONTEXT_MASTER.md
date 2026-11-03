@@ -1,9 +1,9 @@
 # Dispatch Master Architecture & Agent Handover Constitution
 > **Target Audience:** Next Agent (`Z code GLM 5.3 flash`) / Engineering Lead  
 > **Repository:** `c:\CODE\Dispatch` (`https://github.com/Resolviaai/Dispatch`)  
-> **Last Updated Release:** `v1.3.0-alpha` (Android `versionCode: 45`)  
+> **Last Updated Release:** `v1.7.25-alpha` (Android `versionCode: 93`)  
 > **Author:** Antigravity (Google DeepMind Pair Programming Assistant)  
-> **Date:** October 27, 2026
+> **Date:** November 3, 2026
 
 ---
 

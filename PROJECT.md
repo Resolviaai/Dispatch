@@ -1,28 +1,24 @@
 # Project: Dispatch — Autonomous Personal Content Engine
 
-## Current Architecture (2026-10-07)
+## Canonical Architecture
 
-The active target is **Phone → Record → YouTube; PC → detect upload → download original → YouTube captions (Whisper only when unavailable) → Gemini → FFmpeg clip → PC dashboard**. Phone-to-PC LAN/Tailscale sync and discovery are obsolete. The current handoff and milestone status are in `PROGRESS.md`; the architecture and feature tables below are retained as historical project context and are not current requirements where they conflict with this section.
+Dispatch is an autonomous AI-native video clipping workstation and creator studio built on a hybrid cloud-and-device architecture:
 
-## Architecture
-Dispatch is a dual-tier autonomous personal content engine:
-1. **Android Capture Tier (POCO C65)**:
-   - High-definition 1080p FHD continuous video capture via CameraX.
-   - Foreground service (`RecordingForegroundService`) with partial `PowerManager.WakeLock` to survive screen-off/dim sleep on HyperOS.
-   - Non-blocking rolling segmenter (`SegmenterEngine`) with asynchronous background hashing and instant segment rolling (zero dropped footage).
-   - Multi-transport sync engine (`LiveSyncManager`, `ResumableSyncWorker`, `YouTubeDirectUploadWorker`) with cryptographic verification before local pruning.
-   - 6 Pro Compose UI screens (Record Home, FullScreen Active Viewfinder, Sessions & Upload Gauge, Live Processing Timeline, 9:16 Clip Reviewer, Settings & Connection).
-2. **PC Media & Orchestration Tier (Windows 11 PC)**:
-   - Ingestion receiver (`dispatch/sync/receiver.py`) supporting chunked resumable upload with SHA-256 verification and atomic renaming.
-   - Secured pairing endpoint (`/api/sync/pairing/config`) preventing unauthorized secret exposure to LAN sniffers.
-   - Discovery beacon server (`dispatch/transport/discovery.py`) on UDP 8765.
-   - YouTube Cloud Inbox poller and catcher (`dispatch/youtube_inbox/`) with VTT subtitle parsing, rolling deduplication, and faster-whisper fallback.
-   - Checkpointed 5-stage pipeline (`VERIFY` -> `TRANSCRIBE` -> `ANALYZE` -> `RENDER` -> `FINALIZE`) with lease renewal heartbeats and raw source retention.
-   - Transcription engine (`faster-whisper`, base, int8) primed with Roman Hinglish vocabulary.
-   - AI highlight picker (`gemini-2.5-flash`) via header authentication with complete-thought scoring (20-90s), zero canned fake titles, and local heuristic fallback.
-   - Video renderer (FFmpeg) generating 9:16 vertical MP4s with animated karaoke ASS subtitles (active-word yellow illumination).
-   - Publishing outbox (`dispatch/publisher/outbox.py`) supporting YouTube Shorts, Instagram Reels, LinkedIn, and X, strictly verifying credentials and marking unauthenticated jobs as `blocked_needs_auth`.
-   - Web control dashboard (FastAPI + Tailwind 4-layer dark canvas SPA) with real-time pipeline status, vertical clip player, and APK distribution endpoint (`/download/dispatch.apk`).
+1. **Android Mobile Client (Native CameraX + WebView Studio)**:
+   - Continuous 1080p FHD video capture with CameraX and background segmenting.
+   - Studio workstation for interactive review, dynamic framing, and live animated caption editing.
+   - Direct cloud authentication via Supabase JWT with biometric/credential safety.
+
+2. **Cloud Infrastructure (Supabase + Cloudflare Worker + R2)**:
+   - **Supabase (PostgreSQL with RLS)**: Multi-user authentication, user profiles, `clips_cloud`, `processing_jobs`, and quotas.
+   - **Cloudflare Worker (`dispatch-cloud`)**: Edge API gateway, OAuth ticketing, token vault for social credentials, and presigned R2 URLs.
+   - **Cloudflare R2 (`dispatch-clips`)**: Distributed storage for bounded 720p edit windows, rendered clips, and thumbnails.
+
+3. **PC Media Acceleration Tier (Optional Hybrid Workstation)**:
+   - Local AI transcription engine (`faster-whisper`, base, int8) with Hinglish vocabulary support.
+   - Gemini highlight extraction with engagement scoring and title generation.
+   - High-throughput FFmpeg delivery rendering and multi-platform publishing outbox (YouTube Shorts, Instagram, LinkedIn, X).
+   - *Note: Legacy single-user UDP beacon discovery (port 8765) and local Wi-Fi pairing have been completely superseded by Supabase authentication and Cloudflare Workers.*
 
 ---
 

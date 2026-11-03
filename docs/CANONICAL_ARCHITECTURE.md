@@ -1,7 +1,8 @@
 # Dispatch Canonical Architecture & Invariants
 **Status:** Authoritative Repository Standard  
 **Effective Date:** 2026-10-30  
-**Scope:** Ingestion, Video Engine, Mobile UI / Studio Review, Captions, and Publishing Outbox.
+**Scope:** Ingestion, Video Engine, Mobile UI / Studio Review, Captions, and Publishing Outbox.  
+> **Infrastructure Application:** This 4-step lifecycle governs all media processing across both local PC execution (`dispatch/`) and Cloud Staging (Supabase + Cloudflare Worker R2).
 
 ---
 

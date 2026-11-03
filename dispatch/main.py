@@ -213,7 +213,7 @@ def start_dispatch(run_web: bool = True):
             while True:
                 try:
                     time.sleep(300 if first else 6 * 60 * 60)
-                    purged = db.cleanup_expired_published_clips(retention_days=7)
+                    purged = db.cleanup_expired_published_clips(retention_days=3)
                     if purged:
                         logger.info("Published-clip janitor purged media for %d expired clip(s).", purged)
                 except Exception as sweep_err:

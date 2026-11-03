@@ -231,16 +231,6 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
             </div>
           )}
         </div>
-
-        <div className="pt-2 mt-1 border-t border-white/[0.06] shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-full min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-sm font-medium active:scale-[0.98] transition-all"
-          >
-            Done
-          </button>
-        </div>
       </div>
     </div>
   );

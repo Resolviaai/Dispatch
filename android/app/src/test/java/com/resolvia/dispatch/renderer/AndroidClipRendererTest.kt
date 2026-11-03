@@ -162,4 +162,104 @@ class AndroidClipRendererTest {
         assertEquals(1, textGroup.words.size)
         assertEquals("@resolvia_dispatch", textGroup.words[0].text)
     }
+
+    @Test
+    fun applyCaseTransform_modes() {
+        assertEquals("HELLO WORLD", AndroidClipRenderer.applyCaseTransform("Hello World", "uppercase"))
+        assertEquals("hello world", AndroidClipRenderer.applyCaseTransform("Hello World", "lowercase"))
+        assertEquals("Hello World", AndroidClipRenderer.applyCaseTransform("hello world", "title"))
+        assertEquals("Hello World", AndroidClipRenderer.applyCaseTransform("Hello World", null))
+        assertEquals("Hello World", AndroidClipRenderer.applyCaseTransform("Hello World", "none"))
+    }
+
+    @Test
+    fun getFontAssetFilename_resolution() {
+        assertEquals("impact.ttf", AndroidClipRenderer.getFontAssetFilename("Impact"))
+        assertEquals("Anton-Regular.ttf", AndroidClipRenderer.getFontAssetFilename("Anton"))
+        assertEquals("ArchivoBlack-Regular.ttf", AndroidClipRenderer.getFontAssetFilename("Archivo Black"))
+        assertEquals("BebasNeue-Regular.ttf", AndroidClipRenderer.getFontAssetFilename("Bebas Neue"))
+        assertEquals("Bangers-Regular.ttf", AndroidClipRenderer.getFontAssetFilename("Bangers"))
+        assertEquals("LuckiestGuy-Regular.ttf", AndroidClipRenderer.getFontAssetFilename("Luckiest Guy"))
+        assertEquals("PermanentMarker-Regular.ttf", AndroidClipRenderer.getFontAssetFilename("Permanent Marker"))
+        assertEquals("Montserrat-Variable.ttf", AndroidClipRenderer.getFontAssetFilename("Montserrat"))
+        assertEquals("Montserrat-Variable.ttf", AndroidClipRenderer.getFontAssetFilename("Montserrat Black"))
+        assertEquals("Montserrat-Variable.ttf", AndroidClipRenderer.getFontAssetFilename(null))
+    }
+
+    @Test
+    fun applyOpacityToColor_calculations() {
+        // Full opacity (1.0f) preserves color
+        val color = 0xFF112233.toInt()
+        assertEquals(color, AndroidClipRenderer.applyOpacityToColor(color, 1.0f))
+
+        // Half opacity (0.5f) halves alpha channel
+        val halfOpacity = AndroidClipRenderer.applyOpacityToColor(0xFF000000.toInt(), 0.5f)
+        val alpha = (halfOpacity ushr 24) and 0xFF
+        assertTrue(alpha in 127..128)
+
+        // Zero opacity (0.0f) zeroes alpha channel
+        val zeroOpacity = AndroidClipRenderer.applyOpacityToColor(0xFF000000.toInt(), 0.0f)
+        assertEquals(0, (zeroOpacity ushr 24) and 0xFF)
+    }
+
+    @Test
+    fun parseOverlayGroups_extractsTypographyAndAnimationOptions() {
+        val json = """
+        {
+          "tracks": [
+            {
+              "id": "t_captions",
+              "kind": "captions",
+              "default_style": {
+                "font_family": "Anton",
+                "font_weight": "900",
+                "text_transform": "uppercase",
+                "background_mode": "line",
+                "background_corner_radius": 20,
+                "background_padding_x": 30,
+                "background_padding_y": 18
+              },
+              "default_layout": {
+                "max_width": 0.85
+              },
+              "animation": {
+                "active_word": {
+                  "type": "bounce",
+                  "duration_ms": 140,
+                  "active_scale": 1.2
+                }
+              },
+              "groups": [
+                {
+                  "id": "grp_cap_wysiwyg",
+                  "start": 0.0,
+                  "end": 3.0,
+                  "words": [
+                    { "text": "Dispatch", "start": 0.0, "end": 1.0 },
+                    { "text": "Studio", "start": 1.0, "end": 2.0 }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """.trimIndent()
+
+        val docObj = JsonParser.parseString(json).asJsonObject
+        val groups = AndroidClipRenderer.parseOverlayGroups(docObj)
+
+        assertEquals(1, groups.size)
+        val g = groups[0]
+        assertEquals("Anton", g.fontFamily)
+        assertEquals("900", g.fontWeight)
+        assertEquals("uppercase", g.textTransform)
+        assertEquals(0.85f, g.maxWidth, 0.001f)
+        assertEquals("line", g.backgroundMode)
+        assertEquals(20f, g.backgroundCornerRadius, 0.001f)
+        assertEquals(30f, g.backgroundPaddingX, 0.001f)
+        assertEquals(18f, g.backgroundPaddingY, 0.001f)
+        assertEquals("bounce", g.activeAnimType)
+        assertEquals(140, g.activeAnimDurationMs)
+        assertEquals(1.2f, g.activeScaleMax, 0.001f)
+    }
 }

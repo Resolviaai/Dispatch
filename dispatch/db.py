@@ -1530,7 +1530,7 @@ def record_render_completion(
         return True
 
 
-def cleanup_expired_published_clips(retention_days: int = 7) -> int:
+def cleanup_expired_published_clips(retention_days: int = 3) -> int:
     """Purge heavy local rendered MP4 files for published clips older than retention_days.
     Strictly PRESERVES thumbnail_path, remote_url, and clip metadata so creator still
     has full thumbnail preview and redirection to the published live video.

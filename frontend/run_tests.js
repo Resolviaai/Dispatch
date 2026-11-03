@@ -22,6 +22,7 @@ async function run() {
     await server.ssrLoadModule('/frontend/test_filmstrip_contract.js');
     await server.ssrLoadModule('/frontend/test_editor_audit_regressions.ts');
     await server.ssrLoadModule('/frontend/test_update_service.js');
+    await server.ssrLoadModule('/frontend/test_back_handler.ts');
   } catch (err) {
     console.error('Test execution failed:', err);
     process.exit(1);

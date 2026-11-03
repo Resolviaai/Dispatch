@@ -1,3 +1,4 @@
+import { useBackHandler } from './navigation/backHandler';
 import React, { useState, useEffect } from 'react';
 import { AuthGate } from './auth/AuthGate';
 import { CameraScreen } from './screens/CameraScreen';
@@ -13,12 +14,42 @@ import { ActivityProvider } from './context/ActivityContext';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('record');
+  const [tabHistory, setTabHistory] = useState<TabType[]>(['record']);
+
   const handleTabChange = (tab: TabType) => {
+    if (tab !== currentTab) {
+      setTabHistory(prev => {
+        const filtered = prev.filter(t => t !== tab);
+        return [...filtered, tab];
+      });
+    }
     setCurrentTab(tab);
     if (tab === 'record' && Bridge.isAvailable()) {
       Bridge.retryCameraInit();
     }
   };
+
+  useBackHandler('app_tab_history', 10, () => {
+    if (tabHistory.length > 1) {
+      const nextHistory = [...tabHistory];
+      nextHistory.pop();
+      const prevTab = nextHistory[nextHistory.length - 1] || 'record';
+      setTabHistory(nextHistory);
+      setCurrentTab(prevTab);
+      if (prevTab === 'record' && Bridge.isAvailable()) {
+        Bridge.retryCameraInit();
+      }
+      return true;
+    } else if (currentTab !== 'record') {
+      setCurrentTab('record');
+      setTabHistory(['record']);
+      if (Bridge.isAvailable()) {
+        Bridge.retryCameraInit();
+      }
+      return true;
+    }
+    return false;
+  });
   const [pcHost, setPcHost] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const native = (window as any).DispatchBridge?.getPcHost?.()?.trim();
