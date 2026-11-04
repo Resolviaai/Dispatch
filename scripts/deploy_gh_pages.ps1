@@ -156,6 +156,18 @@ try {
         Copy-Item (Join-Path $siteDir "data-deletion.html") (Join-Path $wtSiteDir "data-deletion.html") -Force
     }
 
+    # Mirror assets/ directory (CSS, JS bundles, fonts, panoramas) to root and site/
+    if (Test-Path (Join-Path $siteDir "assets")) {
+        Copy-Item (Join-Path $siteDir "assets") (Join-Path $tempWorktree "assets") -Recurse -Force
+        Copy-Item (Join-Path $siteDir "assets") (Join-Path $wtSiteDir "assets") -Recurse -Force
+    }
+
+    # Mirror gen/ directory (card visuals) to root and site/
+    if (Test-Path (Join-Path $siteDir "gen")) {
+        Copy-Item (Join-Path $siteDir "gen") (Join-Path $tempWorktree "gen") -Recurse -Force
+        Copy-Item (Join-Path $siteDir "gen") (Join-Path $wtSiteDir "gen") -Recurse -Force
+    }
+
     Write-Host "== 4. Committing and pushing gh-pages =="
     Push-Location $tempWorktree
     try {
