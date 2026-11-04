@@ -1,5 +1,6 @@
 """Generate complete Android mipmap icon set from master symbol."""
 import os
+import re
 from pathlib import Path
 from PIL import Image, ImageDraw
 
@@ -48,25 +49,39 @@ values_dir.mkdir(parents=True, exist_ok=True)
 
 colors_xml = """<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#070A0F</color>
-    <color name="primary_blue">#2563EB</color>
+    <color name="ic_launcher_background">#004df7</color>
+    <color name="primary_blue">#004df7</color>
 </resources>
 """
 (values_dir / "colors.xml").write_text(colors_xml, encoding="utf-8")
 
+# Extract vector path from master white symbol
+svg_text = Path("branding/master/dispatch-symbol-white.svg").read_text(encoding="utf-8")
+m = re.search(r'd="([^"]+)"', svg_text)
+if not m:
+    raise ValueError("Could not extract symbol path data from dispatch-symbol-white.svg")
+symbol_path = m.group(1)
+
 # Adaptive vector drawable foreground in drawable/
+# Central safe zone in 108dp: scale 0.65 to fit 72dp mask comfortably
 drawable_dir = res_dir / "drawable"
 drawable_dir.mkdir(parents=True, exist_ok=True)
 
-fg_vector = """<vector xmlns:android="http://schemas.android.com/apk/res/android"
+fg_vector = f"""<vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="256"
     android:viewportHeight="256">
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M 60,44 L 136,44 C 178,44 212,78 212,128 C 212,178 178,212 136,212 L 60,212 A 16,16 0 0,1 44,196 L 44,60 A 16,16 0 0,1 60,44 Z M 96,91.05 L 160,128 L 96,164.95 Z"
-        android:fillType="evenOdd"/>
+    <group
+        android:pivotX="128"
+        android:pivotY="128"
+        android:scaleX="0.65"
+        android:scaleY="0.65">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="{symbol_path}"
+            android:fillType="evenOdd"/>
+    </group>
 </vector>
 """
 (drawable_dir / "ic_launcher_foreground.xml").write_text(fg_vector, encoding="utf-8")

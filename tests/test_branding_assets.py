@@ -67,7 +67,7 @@ class TestBrandingAssets(unittest.TestCase):
         res = self.client.get("/")
         self.assertEqual(res.status_code, 200)
         html = res.text
-        self.assertIn("M 96 91.05 L 160 128 L 96 164.95 Z", html, "Velocity D 30-deg arrow path should be in dashboard")
+        self.assertIn("M 146.87 25.00 C 144", html, "Clothespin symbol path should be in dashboard")
         self.assertIn("/favicon.ico", html, "Favicon should be linked in dashboard HTML")
 
 if __name__ == "__main__":
