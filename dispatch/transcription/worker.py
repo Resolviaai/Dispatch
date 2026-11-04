@@ -470,6 +470,19 @@ class TranscriptionWorker:
         except Exception:
             pass
 
+        # 5. Post-transcription AI metadata enrichment (Route A YouTube uploads)
+        if full_text and not video_id.startswith("dir_"):
+            try:
+                from dispatch.youtube_inbox.enricher import enrich_youtube_video_metadata
+                enrich_youtube_video_metadata(
+                    video_id=video_id,
+                    transcript_text=full_text,
+                    user_id=yt_record.get("user_id") if yt_record else None,
+                    account_id=yt_record.get("account_id") if yt_record else None,
+                )
+            except Exception as enrich_err:
+                logger.warning("Post-transcription metadata enrichment error for %s: %s", video_id, enrich_err)
+
         logger.info(
             "Pillar 2 Transcription SUCCESS for %s -> TRANSCRIBED (Source: %s, Segments: %d, Words: %d, TranscriptID: %s)",
             video_id, source, len(segments), len(full_text.split()), transcript_id

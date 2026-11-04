@@ -311,7 +311,8 @@ def init_db():
                 last_ai_error TEXT,
                 source_sha256 TEXT,
                 source_file_size INTEGER,
-                user_id TEXT
+                user_id TEXT,
+                account_id TEXT
             );
         """)
         cursor.execute("""
@@ -346,6 +347,8 @@ def init_db():
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_file_size INTEGER;")
         if "user_id" not in yt_cols:
             cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN user_id TEXT;");
+        if "account_id" not in yt_cols:
+            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN account_id TEXT;");
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_youtube_user_id ON youtube_inbox (user_id);")
 
         cursor.execute("""
@@ -1713,7 +1716,8 @@ def register_youtube_video(
     sequence_number: Optional[int] = None,
     source_sha256: Optional[str] = None,
     source_file_size: Optional[int] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    account_id: Optional[str] = None
 ) -> bool:
     """Register discovered YouTube video in inbox idempotently.
     Returns True if newly inserted, False if already present.
@@ -1728,9 +1732,9 @@ def register_youtube_video(
             cursor.execute("INSERT OR IGNORE INTO sessions (id, status) VALUES (?, 'recording')", (session_id,))
 
         cursor.execute("""
-            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status, source_sha256, source_file_size, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED', ?, ?, ?)
-        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, source_sha256, source_file_size, user_id))
+            INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status, source_sha256, source_file_size, user_id, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED', ?, ?, ?, ?)
+        """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, source_sha256, source_file_size, user_id, account_id))
         conn.commit()
         return True
 
@@ -1773,7 +1777,9 @@ def update_youtube_video(
     source_file_size: Optional[int] = None,
     duration: Optional[float] = None,
     user_id: Optional[str] = None,
-    expected_status: Optional[str] = None
+    expected_status: Optional[str] = None,
+    title: Optional[str] = None,
+    account_id: Optional[str] = None
 ):
     """Update status, paths, errors, or retry schedule on YouTube inbox item.
 
@@ -1851,6 +1857,14 @@ def update_youtube_video(
             updates.append("user_id = ?")
             params.append(user_id)
 
+        if title is not None:
+            updates.append("title = ?")
+            params.append(title)
+
+        if account_id is not None:
+            updates.append("account_id = ?")
+            params.append(account_id)
+
         if last_error is not None:
             updates.append("last_error = ?")
             params.append(last_error)
@@ -1865,6 +1879,14 @@ def update_youtube_video(
         cursor.execute(query, params)
         conn.commit()
         return cursor.rowcount
+
+
+def update_youtube_video_title(video_id: str, title: str) -> None:
+    """Update title of a YouTube inbox video durably."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE youtube_inbox SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE video_id = ?", (title, video_id))
+        conn.commit()
 
 
 def list_youtube_inbox(status: Optional[str] = None, limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:

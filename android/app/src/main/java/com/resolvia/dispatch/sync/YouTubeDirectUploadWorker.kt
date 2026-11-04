@@ -576,15 +576,17 @@ class YouTubeDirectUploadWorker(
             return DirectUploadResult(success = true, youtubeVideoId = existingVideoId)
         }
 
-        val timestampStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
-        val title = "[DISPATCH] Session ${seg.sessionId.takeLast(6)} - Part ${seg.sequenceNumber} ($timestampStr)"
+        val titleDateFormat = SimpleDateFormat("MMM d, yyyy \u00b7 h:mm a", Locale.US)
+        val dateFormatted = titleDateFormat.format(Date())
+        val title = "$dateFormatted \u2014 Recording Part ${seg.sequenceNumber}"
+        val shortSessionId = seg.sessionId.takeLast(6)
+        val description = "Preserved recording segment for AI highlight extraction.\nRecorded via Dispatch Mobile Studio.\n\nSession: #$shortSessionId \u00b7 Part ${seg.sequenceNumber}\nID: $dispatchId"
         // Foreground notification visibility: label live for the duration of this
         // segment's upload; promote immediately so a segment discovered after the
         // drain's initial count also pins the service.
-        progressLabel = "Session ${seg.sessionId.takeLast(6)} \u00b7 Part ${seg.sequenceNumber}"
+        progressLabel = "Session $shortSessionId \u00b7 Part ${seg.sequenceNumber}"
         promoteUploadForeground(progressLabel, ((dao.getOutboxOffset(segId) ?: 0L) * 100 / totalBytes).toInt())
         val sha = if (seg.sha256Hash.isNotBlank()) seg.sha256Hash else calculateSha256(file)
-        val description = "dispatch_id: $dispatchId\nsession_id: ${seg.sessionId}\nsegment_id: ${seg.segmentId}\nsequence_number: ${seg.sequenceNumber}\nsource_sha256: $sha\nsource_file_size: ${file.length()}\nAutonomous mobile recording uploaded by Dispatch."
 
         // 1. Resumable Upload Initiation Request
         val metadataJson = JsonObject().apply {

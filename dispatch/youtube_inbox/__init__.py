@@ -12,6 +12,11 @@ from dispatch.youtube_inbox.catcher import (
     extract_youtube_video_id,
     scan_channel_for_dispatch_uploads
 )
+from dispatch.youtube_inbox.enricher import (
+    enrich_youtube_video_metadata,
+    merge_description,
+    generate_ai_metadata,
+)
 
 # Convenience aliases
 parse_vtt_to_segments = parse_vtt_file
@@ -27,4 +32,7 @@ __all__ = [
     "YouTubeCatcher",
     "extract_youtube_video_id",
     "scan_channel_for_dispatch_uploads",
+    "enrich_youtube_video_metadata",
+    "merge_description",
+    "generate_ai_metadata",
 ]

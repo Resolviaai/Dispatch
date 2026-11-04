@@ -1482,13 +1482,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/65 border border-white/20 backdrop-blur-md shadow-[0_2px_8px_rgba(0,0,0,0.5)] text-white [html[data-theme=light]_&]:bg-white/80 [html[data-theme=light]_&]:border-black/10 [html[data-theme=light]_&]:text-text-main [html[data-theme=light]_&]:shadow-md">
                 <span className="w-2 h-2 rounded-full bg-success drop-shadow-[0_0_4px_rgba(34,197,94,0.8)] [html[data-theme=light]_&]:drop-shadow-none" />
                 <span className="text-xs tabular-nums font-semibold tracking-wide drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] [html[data-theme=light]_&]:drop-shadow-none">1080P 30FPS</span>
-                {micActive && (
-                  <div className="flex items-end gap-0.5 h-2.5 opacity-80">
-                    <span className="w-0.5 h-1.5 bg-white [html[data-theme=light]_&]:bg-text-secondary rounded-full" />
-                    <span className="w-0.5 h-2.5 bg-white [html[data-theme=light]_&]:bg-text-secondary rounded-full" />
-                    <span className="w-0.5 h-1 bg-white [html[data-theme=light]_&]:bg-text-secondary rounded-full" />
-                  </div>
-                )}
               </div>
             )}
           </div>

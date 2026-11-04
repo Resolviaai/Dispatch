@@ -805,6 +805,18 @@ class YouTubeInboxCatcher:
             segments=segments
         )
 
+        # Post-transcription AI metadata enrichment (Route A YouTube uploads)
+        if full_text and not video_id.startswith("dir_"):
+            try:
+                from dispatch.youtube_inbox.enricher import enrich_youtube_video_metadata
+                enrich_youtube_video_metadata(
+                    video_id=video_id,
+                    transcript_text=full_text,
+                    user_id=user_id,
+                )
+            except Exception as enrich_err:
+                logger.warning("Post-transcription metadata enrichment error for %s: %s", video_id, enrich_err)
+
         # 5. Extract highlights (ANALYZING)
         db.update_youtube_video(video_id, status="ANALYZING")
         logger.info("Detecting candidate highlights for %s (Duration: %.1fs)", video_id, total_duration)

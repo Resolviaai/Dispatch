@@ -321,11 +321,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [routeCMediaUrl, setRouteCMediaUrl] = useState<string | null>(null);
   const [isRouteCLoading, setIsRouteCLoading] = useState(false);
   const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>({});
+  const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
   const lastSchedulerNudgeRef = useRef(0);
 
   useEffect(() => {
     setVideoPlaybackError(null);
   }, [selectedSessionId]);
+
+
 
   // Connection status (LAN vs Cloud Relay)
   const [pcStatus, setPcStatus] = useState<{
@@ -390,6 +393,44 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     origin?: string;
   }[]>([]);
   const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
+
+  // Probe YouTube metadata (duration & title) for any inbox items missing duration or clean title
+  useEffect(() => {
+    inboxItems.forEach(async (item) => {
+      const ytId = extractVideoId(item.video_id) || extractVideoId(item.title || '');
+      if (!ytId) return;
+
+      const needsDuration = !resolvedDurations[ytId] && (!item.duration || item.duration <= 0);
+      const needsTitle = !resolvedTitles[ytId] && (!item.title || item.title.startsWith('http') || item.title.startsWith('YouTube '));
+
+      if (needsDuration || needsTitle) {
+        try {
+          const res = await fetch(`${WORKER_BASE}/youtube/duration?video_id=${ytId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.duration && data.duration > 0) {
+              setResolvedDurations(prev => ({ ...prev, [ytId]: data.duration, [item.video_id]: data.duration }));
+            }
+            if (data.title && typeof data.title === 'string' && data.title.trim()) {
+              setResolvedTitles(prev => ({ ...prev, [ytId]: data.title.trim(), [item.video_id]: data.title.trim() }));
+            }
+          }
+        } catch {
+          // Direct fallback to YouTube oEmbed if worker endpoint had a hiccup
+          if (needsTitle) {
+            fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`)
+              .then(r => r.json())
+              .then(d => {
+                if (d?.title) {
+                  setResolvedTitles(prev => ({ ...prev, [ytId]: d.title, [item.video_id]: d.title }));
+                }
+              })
+              .catch(() => null);
+          }
+        }
+      }
+    });
+  }, [inboxItems]);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -809,8 +850,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       }
 
       const firstClipWithTitle = itemClips.find(c => c.source_title);
+      const resolved = (itemYtId && resolvedTitles[itemYtId]) || resolvedTitles[item.video_id];
       let displayTitle = '';
-      if (firstClipWithTitle?.source_title) {
+      if (resolved) {
+        displayTitle = cleanTitle(resolved);
+      } else if (firstClipWithTitle?.source_title) {
         displayTitle = cleanTitle(firstClipWithTitle.source_title);
       } else if (item.title && !item.title.startsWith('http')) {
         displayTitle = cleanTitle(item.title);
@@ -854,7 +898,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
     list.sort((a, b) => b.createdAt - a.createdAt);
     return list;
-  }, [nativeSessions, inboxItems, clips, resolvedDurations]);
+  }, [nativeSessions, inboxItems, clips, resolvedDurations, resolvedTitles]);
 
   // Active Session Detail item
   const currentSessionDetail = useMemo(() => {

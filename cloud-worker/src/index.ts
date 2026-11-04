@@ -650,27 +650,25 @@ async function presign(env: Env, method: "PUT" | "GET", key: string, mime?: stri
  * Probe YouTube video duration in seconds via public watch page metadata.
  */
 
-export async function probeYouTubeDurationDebug(videoId: string): Promise<any> {
+
+
+/**
+ * Probe YouTube video title via public oEmbed endpoint.
+ */
+export async function probeYouTubeTitle(videoId: string): Promise<string | null> {
+  if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return null;
   try {
-    const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+    const res = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
       },
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(4000),
     });
-    const text = await res.text();
-    return {
-      status: res.status,
-      redirected: res.redirected,
-      url: res.url,
-      len: text.length,
-      hasLengthSeconds: text.includes("lengthSeconds"),
-      hasApproxDurationMs: text.includes("approxDurationMs"),
-      titleMatch: text.match(/<title>([^<]+)<\/title>/)?.[1]
-    };
-  } catch (err: any) {
-    return { error: err.message };
+    if (!res.ok) return null;
+    const data = await res.json() as { title?: string };
+    return typeof data?.title === "string" && data.title.trim() ? data.title.trim() : null;
+  } catch {
+    return null;
   }
 }
 
@@ -1738,10 +1736,20 @@ export default {
       try {
         const accessToken = await getUserYouTubeAccessToken(env, accountId, user.userId);
         if (!accessToken) return json(409, { error: "raw vault account is disconnected or not authorized for raw uploads" }, reqOrigin);
-        const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+        const uploadDate = new Date();
+        const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const month = months[uploadDate.getMonth()];
+        const day = uploadDate.getDate();
+        const year = uploadDate.getFullYear();
+        let hours = uploadDate.getHours();
+        const ampm = hours >= 12 ? "PM" : "AM";
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const minutes = String(uploadDate.getMinutes()).padStart(2, "0");
+        const title = `${month} ${day}, ${year} · ${hours}:${minutes} ${ampm} — Recording Part ${body.sequence_number}`;
+        const shortSessionId = sessionId.slice(-6);
+        const description = `Preserved recording segment for AI highlight extraction.\nRecorded via Dispatch Mobile Studio.\n\nSession: #${shortSessionId} · Part ${body.sequence_number}\nID: ${dispatchId}`;
         const sha = typeof body.sha256 === "string" ? body.sha256.slice(0, 128) : "";
-        const title = `[DISPATCH] Session ${sessionId.slice(-6)} - Part ${body.sequence_number} (${now})`;
-        const description = `dispatch_id: ${dispatchId}\nsession_id: ${sessionId}\nsegment_id: ${segmentId}\nsequence_number: ${body.sequence_number}\nsource_sha256: ${sha}\nsource_file_size: ${fileSize}\nAutonomous mobile recording uploaded by Dispatch.`;
         const metadata = {
           snippet: {
             title,
@@ -1907,21 +1915,29 @@ export default {
     if (url.pathname === "/youtube/duration" && request.method === "GET") {
       const vId = (url.searchParams.get("video_id") || "").trim();
       if (!vId) return json(400, { error: "missing video_id" }, reqOrigin);
-      const dur = await probeYouTubeDuration(vId);
-      if (dur && dur > 0) {
-        fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?or=(video_id.eq.${encodeURIComponent(vId)},youtube_url.ilike.*${encodeURIComponent(vId)}*)&duration=is.null`, {
+      const [dur, title] = await Promise.all([
+        probeYouTubeDuration(vId),
+        probeYouTubeTitle(vId),
+      ]);
+      const patchObj: Record<string, unknown> = {};
+      if (dur && dur > 0) patchObj.duration = dur;
+      if (title) patchObj.source_title = title;
+      if (Object.keys(patchObj).length > 0) {
+        fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?or=(video_id.eq.${encodeURIComponent(vId)},youtube_url.ilike.*${encodeURIComponent(vId)}*)`, {
           method: "PATCH",
           headers: {
             apikey: env.SUPABASE_SERVICE_ROLE_KEY,
             Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ duration: dur }),
+          body: JSON.stringify(patchObj),
         }).catch(() => null);
-        return json(200, { duration: dur }, reqOrigin);
+      }
+      if (dur && dur > 0) {
+        return json(200, { duration: dur, title: title || null }, reqOrigin);
       }
       const dbg = await probeYouTubeDurationDebug(vId);
-      return json(200, { duration: null, debug: dbg }, reqOrigin);
+      return json(200, { duration: null, title: title || null, debug: dbg }, reqOrigin);
     }
 
     // ---- Per-User Gemini API Keys Vault ----
@@ -2631,8 +2647,14 @@ export default {
         const vId = vIdMatch ? vIdMatch[1] : null;
         if (vId) {
           (async () => {
-            const dur = await probeYouTubeDuration(vId);
-            if (dur && dur > 0) {
+            const [dur, title] = await Promise.all([
+              probeYouTubeDuration(vId),
+              probeYouTubeTitle(vId),
+            ]);
+            const patchObj: Record<string, unknown> = {};
+            if (dur && dur > 0) patchObj.duration = dur;
+            if (title) patchObj.source_title = title;
+            if (Object.keys(patchObj).length > 0) {
               await fetch(`${env.SUPABASE_URL}/rest/v1/processing_jobs?id=eq.${jobId}`, {
                 method: "PATCH",
                 headers: {
@@ -2640,7 +2662,7 @@ export default {
                   Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ duration: dur }),
+                body: JSON.stringify(patchObj),
               }).catch(() => null);
             }
           })().catch(() => null);
@@ -2846,7 +2868,7 @@ export default {
         const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
         [jobsRes, mediaRes, editWindowsRes, publicationsRes] = await Promise.all([
           fetch(
-            `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&status=eq.queued&select=id`,
+            `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,status,video_id,session_id,source_title&order=created_at.desc&limit=100`,
             { headers: svc }
           ).catch(() => null),
           fetch(
@@ -2864,6 +2886,8 @@ export default {
         ]);
       }
       const mediaDegraded = !mediaRes || !mediaRes.ok;
+      const rawJobs = jobsRes && jobsRes.ok ? await jobsRes.json() : [];
+      const userJobs = Array.isArray(rawJobs) ? (rawJobs as Array<Record<string, unknown>>) : [];
       const windowsDegraded = !editWindowsRes || !editWindowsRes.ok;
       const publicationsDegraded = !publicationsRes || !publicationsRes.ok;
       const rawMedia = mediaRes && mediaRes.ok ? await mediaRes.json() : [];
@@ -2954,6 +2978,10 @@ export default {
       const mapClipItem = async (c: Record<string, unknown>, targetStatus: string) => {
         const localId = String(c.local_clip_id || c.id);
         const cloudClipId = String(c.id);
+        const matchingJob = userJobs.find(j =>
+          (c.youtube_video_id && (j.video_id === c.youtube_video_id || String(j.youtube_url || '').includes(String(c.youtube_video_id)))) ||
+          (c.session_id && j.session_id === c.session_id)
+        );
         const clipEw = readyWindows.find(w => String(w.local_clip_id) === localId) ?? null;
         const ewMo = clipEw
           ? activeMedia.find(m => String(m.id) === String(clipEw.media_object_id)) ?? null
@@ -2986,6 +3014,7 @@ export default {
           cloud_id: c.id,
           session_id: c.session_id,
           youtube_video_id: c.youtube_video_id as string | undefined,
+          source_title: (matchingJob?.source_title as string | undefined) || undefined,
           title: c.title,
           status: targetStatus,
           start_time: Number(c.start_time || 0),
@@ -3069,7 +3098,7 @@ export default {
         })
         .filter(c => !c.retention_expired);
 
-      const queuedJobs = jobsRes?.ok ? (await jobsRes.json() as unknown[]) : [];
+      const queuedJobs = userJobs.filter(j => !j.status || j.status === 'queued');
       return json(200, {
         ready,
         recent_approved,

@@ -1542,6 +1542,10 @@ function idempotencyToken(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+const cleanTitle = (raw: string): string => {
+  return raw.replace(/^\[DISPATCH\]\s*[-:–—]?\s*/i, '').trim() || raw;
+};
+
 export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   pcHost,
   isMobileFrame = true,
@@ -1579,6 +1583,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [approvedClips, setApprovedClips] = useState<ClipItem[]>([]);
   const [rejectedClips, setRejectedClips] = useState<RejectedCloudClip[]>([]);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
   const mountedOnceRef = useRef(false);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -1652,7 +1657,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isCloudMode, setIsCloudMode] = useState<boolean>(false);
-  const [remoteJobs, setRemoteJobs] = useState<Array<{ id: string; youtube_url: string; status: string; last_error?: string; created_at?: string }>>([]);
+  const [remoteJobs, setRemoteJobs] = useState<Array<{ id: string; youtube_url?: string; status: string; last_error?: string; created_at?: string; video_id?: string; session_id?: string; source_title?: string }>>([]);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
   const [directUploadPhase, setDirectUploadPhase] = useState<'idle' | 'checking' | 'uploading' | 'submitting'>('idle');
   const [directUploadPct, setDirectUploadPct] = useState(0);
@@ -2138,6 +2143,38 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       // Secondary to the review queue; leave whatever is already displayed.
     }
   };
+
+  // Probe YouTube titles for clips with youtube_video_id missing source_title
+  useEffect(() => {
+    const ytIds = new Set<string>();
+    allClips.forEach(c => {
+      if (c.youtube_video_id && !c.source_title && !resolvedTitles[c.youtube_video_id]) {
+        ytIds.add(c.youtube_video_id);
+      }
+    });
+    ytIds.forEach(async (vId) => {
+      try {
+        const res = await fetch(`${WORKER_BASE}/youtube/duration?video_id=${vId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.title && typeof data.title === 'string' && data.title.trim()) {
+            setResolvedTitles(prev => ({ ...prev, [vId]: data.title.trim() }));
+            return;
+          }
+        }
+      } catch {
+        // Fallback to oEmbed
+      }
+      fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${vId}&format=json`)
+        .then(r => r.json())
+        .then(d => {
+          if (d?.title && typeof d.title === 'string' && d.title.trim()) {
+            setResolvedTitles(prev => ({ ...prev, [vId]: d.title.trim() }));
+          }
+        })
+        .catch(() => null);
+    });
+  }, [allClips]);
 
   // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
@@ -4598,11 +4635,23 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               (sessionId.startsWith('sess_') && !isYt)
             );
             const sessionOrigin: 'phone' | 'youtube' | 'import' = isYt ? 'youtube' : isPhone ? 'phone' : 'import';
-            const sessionLabel = sessionId.startsWith('yt_')
-              ? (firstClip?.source_title || `YouTube ${sessionId.replace('yt_', '')}`)
-              : sessionId === 'Imported Video'
-                ? (sessionOrigin === 'youtube' ? 'YouTube Imports' : 'Imported Videos')
-                : `Session ${sessionId.replace('sess_', '')}`;
+            const rawYtId = sessionId.startsWith('yt_')
+              ? sessionId.replace('yt_', '')
+              : firstClip?.youtube_video_id || clipsInSession.find((c) => c.youtube_video_id)?.youtube_video_id;
+
+            const titleCandidate = (rawYtId && resolvedTitles[rawYtId]) ||
+              firstClip?.source_title ||
+              clipsInSession.find((c) => c.source_title)?.source_title ||
+              (rawYtId && remoteJobs.find((j) => j.video_id === rawYtId || j.youtube_url?.includes(rawYtId))?.source_title) ||
+              (firstClip?.session_id && remoteJobs.find((j) => j.session_id === firstClip.session_id)?.source_title);
+
+            const sessionLabel = titleCandidate
+              ? cleanTitle(titleCandidate)
+              : sessionId.startsWith('yt_')
+                ? `YouTube ${sessionId.replace('yt_', '')}`
+                : sessionId === 'Imported Video'
+                  ? (sessionOrigin === 'youtube' ? 'YouTube Imports' : 'Imported Videos')
+                  : `Session ${sessionId.replace('sess_', '')}`;
 
             const showGroupHeader = groupedSessions.length > 1;
 
@@ -4887,10 +4936,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     <Youtube size={9} className="text-danger" />
                   )}
                 </span>
-                <span>
+                <span className="truncate max-w-[200px]">
                   {currentClip.session_id
                     ? `Session ${currentClip.session_id.replace('sess_', '')}`
-                    : (currentClip.youtube_video_id ? `YouTube ${currentClip.youtube_video_id}` : 'Dispatch review')}
+                    : (currentClip.source_title
+                        ? cleanTitle(currentClip.source_title)
+                        : (currentClip.youtube_video_id && resolvedTitles[currentClip.youtube_video_id]
+                            ? cleanTitle(resolvedTitles[currentClip.youtube_video_id])
+                            : (currentClip.youtube_video_id ? `YouTube ${currentClip.youtube_video_id}` : 'Dispatch review')))}
                 </span>
                 <span>&middot;</span>
                 <span className="font-mono">{formatDuration(currentClip.duration)}</span>
@@ -5121,17 +5174,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                                 </span>
                               </div>
                             </div>
-                            {publicationUrl && (
-                              <button
-                                type="button"
-                                onClick={() => handleCopy(publicationUrl, `${label} link`)}
-                                className="shrink-0 w-11 h-11 rounded-xl bg-surface-200 hover:bg-surface-3 text-text-secondary hover:text-text-main flex items-center justify-center active:scale-95 transition-all"
-                                aria-label={`Copy ${label} link`}
-                                title="Copy link"
-                              >
-                                <Copy size={15} />
-                              </button>
-                            )}
+
                           </div>
 
                           <div className="grid grid-cols-3 gap-2 border-t border-border pt-2.5">

@@ -189,3 +189,174 @@ def upload_youtube_short(
     except Exception as e:
         logger.error("Real YouTube upload failed: %s", e)
         raise
+
+def get_authenticated_youtube_service(
+    account_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    credentials_path: Optional[Path] = None,
+    credentials_data: Optional[Dict[str, Any]] = None,
+    timeout_seconds: Optional[float] = None,
+):
+    """Retrieve an authorized YouTube Data API v3 client.
+    
+    Tries credentials in order:
+    1. Direct credentials_data dict
+    2. Account-specific credentials from Supabase vault via account_id / user_id
+    3. User refresh token from Supabase vault via user_id
+    4. Local OAuth token file (youtube_token.json)
+    5. Environment variables (YOUTUBE_ACCESS_TOKEN / YOUTUBE_REFRESH_TOKEN)
+    """
+    from googleapiclient.discovery import build
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from dispatch.config import ROOT_DIR, YOUTUBE_TOKEN_PATH
+
+    creds = None
+
+    # 1. Direct credentials data
+    if credentials_data and (credentials_data.get("refresh_token") or credentials_data.get("token") or credentials_data.get("access_token")):
+        ref_tok = credentials_data.get("refresh_token") or credentials_data.get("token")
+        acc_tok = credentials_data.get("access_token")
+        creds = Credentials(
+            token=acc_tok,
+            refresh_token=ref_tok,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+            client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+        )
+
+    # 2. Account-specific vault lookup
+    if not creds and account_id:
+        try:
+            from dispatch.youtube_connections import get_account_credentials
+            acc_creds = get_account_credentials(account_id, user_id=user_id)
+            if acc_creds and (acc_creds.get("refresh_token") or acc_creds.get("token") or acc_creds.get("access_token")):
+                ref_tok = acc_creds.get("refresh_token") or acc_creds.get("token")
+                acc_tok = acc_creds.get("access_token")
+                creds = Credentials(
+                    token=acc_tok,
+                    refresh_token=ref_tok,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+                    client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+                )
+        except Exception as e:
+            logger.debug("Failed to resolve account credentials for %s: %s", account_id, e)
+
+    # 3. User default refresh token vault lookup
+    if not creds and user_id:
+        try:
+            from dispatch.youtube_connections import get_user_refresh_token
+            ref_tok = get_user_refresh_token(user_id)
+            if ref_tok:
+                creds = Credentials(
+                    token=None,
+                    refresh_token=ref_tok,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+                    client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+                )
+        except Exception as e:
+            logger.debug("Failed to resolve user refresh token for %s: %s", user_id, e)
+
+    # 4. Local file token lookup
+    if not creds:
+        token_file = None
+        if credentials_path and credentials_path.exists():
+            token_file = credentials_path
+        else:
+            env_token_path = os.getenv("DISPATCH_YOUTUBE_TOKEN_PATH")
+            candidates = [
+                Path(env_token_path) if env_token_path else None,
+                YOUTUBE_TOKEN_PATH,
+                ROOT_DIR / "youtube_token.json",
+                Path("youtube_token.json"),
+            ]
+            for c in candidates:
+                if c and c.exists():
+                    token_file = c
+                    break
+        if token_file and token_file.exists():
+            try:
+                creds = Credentials.from_authorized_user_file(str(token_file))
+            except Exception as e:
+                logger.debug("Failed to load local token file %s: %s", token_file, e)
+
+    # 5. Environment tokens
+    if not creds and (os.getenv("YOUTUBE_REFRESH_TOKEN") or os.getenv("YOUTUBE_ACCESS_TOKEN")):
+        creds = Credentials(
+            token=os.getenv("YOUTUBE_ACCESS_TOKEN"),
+            refresh_token=os.getenv("YOUTUBE_REFRESH_TOKEN"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+            client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+        )
+
+    if not creds:
+        return None
+
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleAuthRequest())
+        except Exception as refresh_err:
+            logger.warning("Failed to refresh YouTube OAuth token: %s", refresh_err)
+
+    if timeout_seconds is not None:
+        import httplib2
+        from google_auth_httplib2 import AuthorizedHttp
+        authorized_http = AuthorizedHttp(creds, http=httplib2.Http(timeout=timeout_seconds))
+        return build("youtube", "v3", http=authorized_http)
+
+    return build("youtube", "v3", credentials=creds)
+
+
+def update_youtube_video_snippet(
+    video_id: str,
+    title: str,
+    description: str,
+    account_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    credentials_data: Optional[Dict[str, Any]] = None,
+    youtube_service=None,
+) -> bool:
+    """Update title and description on an existing YouTube video.
+    
+    Preserves all existing tags, categoryId, and localized audio/language fields.
+    Returns True on success, False on failure. Never raises an unhandled exception.
+    """
+    try:
+        service = youtube_service or get_authenticated_youtube_service(
+            account_id=account_id,
+            user_id=user_id,
+            credentials_data=credentials_data,
+        )
+        if not service:
+            logger.warning("No authenticated YouTube service available to update video %s", video_id)
+            return False
+
+        resp = service.videos().list(part="snippet", id=video_id).execute()
+        items = resp.get("items", [])
+        if not items:
+            logger.warning("YouTube video %s not found for snippet update", video_id)
+            return False
+
+        snippet = items[0].get("snippet", {})
+        snippet["title"] = title[:100]
+        snippet["description"] = description[:5000]
+        if not snippet.get("categoryId"):
+            snippet["categoryId"] = "22"
+
+        service.videos().update(
+            part="snippet",
+            body={
+                "id": video_id,
+                "snippet": snippet
+            }
+        ).execute()
+
+        logger.info("Successfully updated YouTube video %s snippet (Title: '%s')", video_id, snippet["title"])
+        return True
+    except Exception as e:
+        logger.warning("Failed to update YouTube video %s snippet: %s", video_id, e)
+        return False
+

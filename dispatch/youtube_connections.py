@@ -238,6 +238,60 @@ def update_remote_job_stage(job_id: str, stage: str, video_id: str = "") -> None
         logger.debug("Failed to update remote job stage for %s: %s", job_id, e)
 
 
+def update_job_title_by_video_id(video_id: str, title: str) -> None:
+    """Report enriched AI title for a video ID back to matching cloud jobs."""
+    if not video_id or not title:
+        return
+    try:
+        import httpx
+        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
+        if url and key:
+            httpx.patch(
+                f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}",
+                json={"source_title": title},
+                headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                timeout=5.0
+            )
+    except Exception as e:
+        logger.debug("Failed to update title by video_id %s: %s", video_id, e)
+
+
+def get_account_id_for_video(video_id: str, user_id: Optional[str] = None) -> Optional[str]:
+    """Look up bound account_id for a given YouTube video from processing_jobs or connected_accounts."""
+    if not video_id:
+        return None
+    try:
+        import httpx
+        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            return None
+        resp = httpx.get(
+            f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}&select=account_id,user_id&limit=1",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            timeout=5.0
+        )
+        if resp.status_code == 200:
+            rows = resp.json()
+            if rows and isinstance(rows, list) and rows[0].get("account_id"):
+                return str(rows[0]["account_id"])
+            if not user_id and rows and isinstance(rows, list):
+                user_id = rows[0].get("user_id")
+
+        if user_id:
+            acc_resp = httpx.get(
+                f"{url}/rest/v1/connected_accounts?user_id=eq.{user_id}&provider=eq.youtube&select=id,account_id&limit=1",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                timeout=5.0
+            )
+            if acc_resp.status_code == 200:
+                acc_rows = acc_resp.json()
+                if acc_rows and isinstance(acc_rows, list):
+                    return str(acc_rows[0].get("account_id") or acc_rows[0].get("id") or "")
+    except Exception as e:
+        logger.debug("Failed to query account_id for video %s: %s", video_id, e)
+    return None
+
+
 def update_job_stage_by_video_id(video_id: str, stage: str) -> None:
     """Report downstream processing stage for a video ID back to any matching cloud jobs."""
     if not video_id:
