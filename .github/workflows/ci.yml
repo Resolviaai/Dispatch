@@ -67,6 +67,7 @@ jobs:
             tests.test_waveform_autocut \
             tests.test_cloud_caption_reconciliation \
             tests.test_caption_range_sync \
+            tests.test_subtitle_edl_remapping \
             tests.test_caption_approval_contract \
             tests.test_gemini_two_stage \
             tests.test_phase3_highlights \
