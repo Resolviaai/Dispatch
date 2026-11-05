@@ -321,6 +321,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
   const [isPlayingInline, setIsPlayingInline] = useState(false);
   const [routeCMediaUrl, setRouteCMediaUrl] = useState<string | null>(null);
+  const [routeCMediaUrls, setRouteCMediaUrls] = useState<Record<string, string>>({});
   const [isRouteCLoading, setIsRouteCLoading] = useState(false);
   const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>({});
   const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
@@ -395,9 +396,33 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   }[]>([]);
   const [inboxItems, setInboxItems] = useState<YouTubeInboxItem[]>([]);
 
-  // Probe YouTube metadata (duration & title) for any inbox items missing duration or clean title
+  // Probe YouTube and direct upload metadata (duration & title) for any inbox items missing duration or clean title
   useEffect(() => {
     inboxItems.forEach(async (item) => {
+      if (item.video_id.startsWith('dir_')) {
+        const needsDuration = !resolvedDurations[item.video_id] && (!item.duration || item.duration <= 0);
+        if (needsDuration && !routeCMediaUrls[item.video_id]) {
+          try {
+            const sess = await currentSession().catch(() => null);
+            const token = sess?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+            if (!token) return;
+            const rawObjId = item.video_id.replace(/^dir_/, '').replace(/-/g, '').replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, '$1-$2-$3-$4-$5');
+            const res = await fetch(WORKER_BASE + '/media-url', {
+              method: 'POST',
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ media_object_id: rawObjId }),
+            });
+            const data = await res.json().catch(() => null);
+            if (res.ok && data?.url) {
+              setRouteCMediaUrls(prev => ({ ...prev, [item.video_id]: data.url }));
+            }
+          } catch {
+            /* ignore background resolution error */
+          }
+        }
+        return;
+      }
+
       const ytId = extractVideoId(item.video_id) || extractVideoId(item.title || '');
       if (!ytId) return;
 
@@ -879,6 +904,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       }
 
       const thumbUrl = itemClips[0]?.thumbnail_url || undefined;
+      const directVideoUrl = item.video_id.startsWith('dir_')
+        ? (routeCMediaUrls[item.video_id] || (pcHost && pcStatus.online ? apiUrl('/api/clips/' + item.video_id + '/source', pcHost) : undefined))
+        : undefined;
 
       list.push({
         id: item.video_id,
@@ -891,6 +919,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         stage: item.stage,
         clipCount,
         youtubeVideoId: itemYtId,
+        videoUrl: directVideoUrl,
         thumbnailUrl: thumbUrl,
         errorMessage: clipCount > 0 ? undefined : item.last_error,
         rawInbox: item
@@ -899,7 +928,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
     list.sort((a, b) => b.createdAt - a.createdAt);
     return list;
-  }, [nativeSessions, inboxItems, clips, resolvedDurations, resolvedTitles]);
+  }, [nativeSessions, inboxItems, clips, resolvedDurations, resolvedTitles, routeCMediaUrls, pcHost, pcStatus.online]);
 
   // Active Session Detail item
   const currentSessionDetail = useMemo(() => {
@@ -925,8 +954,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             const token = sess?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
             if (!token) return;
 
-            // Raw object ID from dir_<object_id>
-            const rawObjId = s.id.replace(/^dir_/, '');
+            // Raw object ID from dir_<object_id> (format with UUID dashes if 32 hex chars)
+            const cleanId = s.id.replace(/^dir_/, '');
+            const rawObjId = cleanId.includes('-')
+              ? cleanId
+              : cleanId.replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, '$1-$2-$3-$4-$5');
             const res = await fetch(WORKER_BASE + '/media-url', {
               method: 'POST',
               headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -935,6 +967,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             const data = await res.json().catch(() => null);
             if (res.ok && data?.url) {
               setRouteCMediaUrl(data.url);
+              setRouteCMediaUrls(prev => ({ ...prev, [s.id]: data.url }));
             }
           } catch (e) {
             console.warn('Failed to load direct video cloud URL:', e);
@@ -1709,7 +1742,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
                 Sessions
               </h1>
-              {/* Server status: Green Online if LAN PC reachable, Cyan Cloud if connected to Cloud, Offline otherwise */}
+              {/* Server status: Green Online if LAN PC reachable, Offline otherwise */}
               {pcStatus.checking ? null : pcStatus.online ? (
                 <span
                   className="inline-flex items-center gap-1.5 leading-none"
@@ -1719,20 +1752,6 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   <Server size={13} strokeWidth={1.5} className="text-status-success animate-pulse" />
                   <span className="text-xs font-medium text-status-success">Online</span>
                 </span>
-              ) : pcStatus.isCloudMode ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    checkPcStudio();
-                    showToast('Checking PC LAN status…');
-                  }}
-                  className="inline-flex items-center gap-1.5 leading-none px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary active:scale-[0.98] transition-all"
-                  title="Cloud Connected — media uploads and syncs to cloud. Tap to probe local PC."
-                  aria-label="Cloud Connected"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                  <span className="text-xs font-medium text-primary">Cloud</span>
-                </button>
               ) : (
                 <button
                   type="button"

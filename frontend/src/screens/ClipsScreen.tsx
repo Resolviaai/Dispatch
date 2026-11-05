@@ -6066,7 +6066,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     track={visibleCaptionTrack}
                     currentTime={currentTime}
                     duration={duration || currentClip.duration || 40}
-                    hideTrimControls={!isSourceTimebase}
+                    hideTrimControls={false}
                     sourceDuration={timelineSourceDuration}
                     sourceTimebase={isSourceTimebase}
                     timeMode={isSourceTimebase ? 'source' : 'clip'}
@@ -6301,176 +6301,178 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           </div>
         )}
         {/* Auto-Cut Review Drawer */}
+        {/* Auto-Cut Review Drawer: Docked bottom workspace drawer (~48vh max height), video preview remains visible & playable at top */}
         {showAutoCutDrawer && (
-          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex flex-col justify-end animate-in fade-in duration-200">
-            <div className="w-full max-h-[80vh] bg-surface-100 border-t border-border rounded-t-2xl flex flex-col overflow-hidden shadow-2xl">
-              {/* Drawer Header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                <div className="flex items-center gap-2">
-                  <Scissors size={16} className="text-primary" />
-                  <h3 className="text-sm font-semibold text-text-main">Auto-Cut Speech Cleanup</h3>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-medium bg-surface-200 text-text-secondary border border-border">
-                    {autoCutProposals.length}
-                  </span>
+          <div className="fixed inset-x-0 bottom-0 top-[50%] z-40 bg-surface-100/95 backdrop-blur-md border-t border-border flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
+            {/* Drawer Header */}
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-surface-100 shrink-0">
+              <div className="flex items-center gap-2">
+                <Scissors size={15} className="text-primary" />
+                <h3 className="text-xs font-semibold text-text-main">Auto-Cut Speech Cleanup</h3>
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-medium bg-surface-200 text-text-secondary border border-border">
+                  {autoCutProposals.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAutoCutDrawer(false)}
+                className="w-7 h-7 rounded-lg bg-surface-200 hover:bg-surface-300 flex items-center justify-center text-text-secondary hover:text-text-main transition-colors"
+                aria-label="Close"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex items-center gap-1.5 px-4 py-1.5 border-b border-border bg-surface-200/40 overflow-x-auto no-scrollbar shrink-0">
+              {(['all', 'AUTO-REMOVE', 'REVIEW', 'PRESERVE'] as const).map((tab) => {
+                const count = tab === 'all'
+                  ? autoCutProposals.length
+                  : autoCutProposals.filter((p) => p.decision === tab).length;
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setAutoCutFilter(tab)}
+                    className={`h-6 px-2 rounded-md text-[10px] font-medium flex items-center gap-1 transition-all shrink-0 ${
+                      autoCutFilter === tab
+                        ? 'bg-primary text-white shadow-hero-sm'
+                        : 'bg-surface-200 text-text-muted hover:text-text-main border border-border'
+                    }`}
+                  >
+                    <span>{tab === 'all' ? 'All' : tab.replace('_', ' ')}</span>
+                    <span className="opacity-75 font-mono text-[9px]">({count})</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Proposals Scrollable List */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2.5 space-y-2">
+              {autoCutProposals
+                .filter((p) => autoCutFilter === 'all' || p.decision === autoCutFilter)
+                .length === 0 ? (
+                <div className="text-center py-6 text-xs text-text-muted">
+                  No proposals match the current filter.
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowAutoCutDrawer(false)}
-                  className="w-7 h-7 rounded-lg bg-surface-200 hover:bg-surface-300 flex items-center justify-center text-text-secondary hover:text-text-main transition-colors"
-                  aria-label="Close"
-                >
-                  <X size={15} />
-                </button>
-              </div>
-
-              {/* Filter Tabs */}
-              <div className="flex items-center gap-1.5 px-4 py-2 border-b border-border bg-surface-200/50 overflow-x-auto no-scrollbar">
-                {(['all', 'AUTO-REMOVE', 'REVIEW', 'PRESERVE'] as const).map((tab) => {
-                  const count = tab === 'all'
-                    ? autoCutProposals.length
-                    : autoCutProposals.filter((p) => p.decision === tab).length;
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setAutoCutFilter(tab)}
-                      className={`h-7 px-2.5 rounded-md text-[11px] font-medium flex items-center gap-1 transition-all shrink-0 ${
-                        autoCutFilter === tab
-                          ? 'bg-primary text-white shadow-hero-sm'
-                          : 'bg-surface-200 text-text-muted hover:text-text-main border border-border/60'
-                      }`}
-                    >
-                      <span>{tab === 'all' ? 'All' : tab.replace('_', ' ')}</span>
-                      <span className="opacity-75 font-mono text-[10px]">({count})</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Proposals Scrollable List */}
-              <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5 min-h-[160px] max-h-[48vh]">
-                {autoCutProposals
+              ) : (
+                autoCutProposals
                   .filter((p) => autoCutFilter === 'all' || p.decision === autoCutFilter)
-                  .length === 0 ? (
-                  <div className="text-center py-8 text-xs text-text-muted">
-                    No proposals match the current filter.
-                  </div>
-                ) : (
-                  autoCutProposals
-                    .filter((p) => autoCutFilter === 'all' || p.decision === autoCutFilter)
-                    .map((prop) => {
-                      const isAccepted = prop.userOverride === 'accept' || (prop.decision === 'AUTO-REMOVE' && prop.userOverride !== 'reject');
-                      const isRejected = prop.userOverride === 'reject';
-                      return (
-                        <div
-                          key={prop.id}
-                          className={`p-3 rounded-xl border transition-all ${
-                            isAccepted
-                              ? 'bg-surface-200 border-primary/30'
-                              : isRejected
-                              ? 'bg-surface-200/40 border-border opacity-60'
-                              : 'bg-surface-200/80 border-border'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2 mb-1.5">
-                            <div className="flex items-center gap-1.5">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${
-                                prop.type === 'filler' || prop.type === 'filler_word' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                                prop.type === 'dead_air' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
-                                prop.type === 'audio_defect' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
-                                prop.type === 'stutter' || prop.type === 'repetition' ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30' :
-                                'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                              }`}>
-                                {prop.type.replace('_', ' ')}
-                              </span>
-                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                                prop.decision === 'AUTO-REMOVE' ? 'bg-red-500/20 text-red-300' :
-                                prop.decision === 'PRESERVE' ? 'bg-emerald-500/20 text-emerald-300' :
-                                'bg-amber-500/20 text-amber-300'
-                              }`}>
-                                {prop.userOverride ? (prop.userOverride === 'accept' ? 'ACCEPTED' : 'REJECTED') : prop.decision}
-                              </span>
-                            </div>
-                            <span className="font-mono text-xs text-text-muted tabular-nums">
-                              {prop.source_start.toFixed(2)}s – {prop.source_end.toFixed(2)}s ({prop.duration.toFixed(2)}s)
+                  .map((prop) => {
+                    const isAccepted = prop.userOverride === 'accept' || (prop.decision === 'AUTO-REMOVE' && prop.userOverride !== 'reject');
+                    const isRejected = prop.userOverride === 'reject';
+                    return (
+                      <div
+                        key={prop.id}
+                        className={`p-2.5 rounded-xl border transition-all ${
+                          isAccepted
+                            ? 'bg-surface-200 border-primary/30'
+                            : isRejected
+                            ? 'bg-surface-200/30 border-border opacity-50'
+                            : 'bg-surface-200 border-border'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium uppercase tracking-wider ${
+                              prop.type === 'filler' || prop.type === 'filler_word' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/20' :
+                              prop.type === 'dead_air' ? 'bg-blue-500/15 text-blue-300 border border-blue-500/20' :
+                              prop.type === 'audio_defect' ? 'bg-red-500/15 text-red-300 border border-red-500/20' :
+                              prop.type === 'stutter' || prop.type === 'repetition' ? 'bg-orange-500/15 text-orange-300 border border-orange-500/20' :
+                              'bg-purple-500/15 text-purple-300 border border-purple-500/20'
+                            }`}>
+                              {prop.type.replace('_', ' ')}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
+                              prop.decision === 'AUTO-REMOVE' ? 'bg-red-500/15 text-red-300 border border-red-500/20' :
+                              prop.decision === 'PRESERVE' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/20' :
+                              'bg-amber-500/15 text-amber-300 border border-amber-500/20'
+                            }`}>
+                              {prop.userOverride ? (prop.userOverride === 'accept' ? 'ACCEPTED' : 'REJECTED') : prop.decision}
                             </span>
                           </div>
+                          <span className="font-mono text-[11px] text-text-muted tabular-nums">
+                            {prop.source_start.toFixed(2)}s – {prop.source_end.toFixed(2)}s ({prop.duration.toFixed(2)}s)
+                          </span>
+                        </div>
 
-                          <p className="text-xs text-text-main line-clamp-2 mb-2 leading-relaxed">
-                            {prop.reason}
-                          </p>
+                        <p className="text-[11px] text-text-secondary line-clamp-2 mb-1.5 leading-relaxed">
+                          {prop.reason}
+                        </p>
 
-                          <div className="flex items-center justify-between pt-1 border-t border-border/50">
+                        <div className="flex items-center justify-between pt-1 border-t border-border">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handlePreviewContext({
+                                start: Math.max(0, prop.source_start - 0.5),
+                                end: Math.min((duration || currentClip.duration || 40), prop.source_end + 0.5),
+                              });
+                            }}
+                            className="h-6 px-2 rounded-md bg-surface-300 hover:bg-surface-400 text-[10px] font-medium text-text-secondary hover:text-text-main flex items-center gap-1 active:scale-95"
+                          >
+                            <Play size={10} />
+                            <span>Preview</span>
+                          </button>
+
+                          <div className="flex items-center gap-1.5">
                             <button
                               type="button"
                               onClick={() => {
-                                handleSeek(prop.source_start);
+                                setAutoCutProposals((prev) =>
+                                  prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'reject' ? undefined : 'reject' } : p))
+                                );
                               }}
-                              className="h-6 px-2 rounded-md bg-surface-300 hover:bg-surface-400 text-[10px] font-medium text-text-secondary hover:text-text-main flex items-center gap-1 active:scale-95"
+                              className={`h-6 px-2 rounded-md text-[10px] font-medium flex items-center gap-1 active:scale-95 border ${
+                                prop.userOverride === 'reject'
+                                  ? 'bg-red-500/25 text-red-200 border-red-500/40'
+                                  : 'bg-surface-300 text-text-muted hover:text-text-main border-transparent'
+                              }`}
                             >
-                              <Play size={10} />
-                              <span>Preview</span>
+                              <X size={10} />
+                              <span>Keep</span>
                             </button>
-
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setAutoCutProposals((prev) =>
-                                    prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'reject' ? undefined : 'reject' } : p))
-                                  );
-                                }}
-                                className={`h-6 px-2 rounded-md text-[10px] font-medium flex items-center gap-1 active:scale-95 border ${
-                                  prop.userOverride === 'reject'
-                                    ? 'bg-red-500/30 text-red-200 border-red-500/50'
-                                    : 'bg-surface-300 text-text-muted hover:text-text-main border-transparent'
-                                }`}
-                              >
-                                <X size={10} />
-                                <span>Keep</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setAutoCutProposals((prev) =>
-                                    prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'accept' ? undefined : 'accept' } : p))
-                                  );
-                                }}
-                                className={`h-6 px-2 rounded-md text-[10px] font-semibold flex items-center gap-1 active:scale-95 border ${
-                                  isAccepted
-                                    ? 'bg-primary text-white border-primary shadow-hero-sm'
-                                    : 'bg-surface-300 text-text-secondary hover:text-text-main border-transparent'
-                                }`}
-                              >
-                                <Check size={10} />
-                                <span>Cut</span>
-                              </button>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAutoCutProposals((prev) =>
+                                  prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'accept' ? undefined : 'accept' } : p))
+                                );
+                              }}
+                              className={`h-6 px-2 rounded-md text-[10px] font-semibold flex items-center gap-1 active:scale-95 border ${
+                                isAccepted
+                                  ? 'bg-primary text-white border-primary shadow-hero-sm'
+                                  : 'bg-surface-300 text-text-secondary hover:text-text-main border-transparent'
+                              }`}
+                            >
+                              <Check size={10} />
+                              <span>Cut</span>
+                            </button>
                           </div>
                         </div>
-                      );
-                    })
-                )}
-              </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
 
-              {/* Bottom Sticky Action Bar */}
-              <div className="p-4 border-t border-border bg-surface-100 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAutoCutDrawer(false)}
-                  className="flex-1 h-9 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-xs font-medium active:scale-98 transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleApplyAutoCut}
-                  className="flex-2 h-9 px-4 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-98 transition-all shadow-hero-glow"
-                >
-                  <Scissors size={13} />
-                  <span>Apply Auto-Cut ({autoCutProposals.filter((p) => p.userOverride === 'accept' || (p.decision === 'AUTO-REMOVE' && p.userOverride !== 'reject')).length})</span>
-                </button>
-              </div>
+            {/* Bottom Sticky Action Bar */}
+            <div className="p-3 border-t border-border bg-surface-100 flex items-center gap-2 shrink-0 pb-[max(12px,env(safe-area-inset-bottom,0px))]">
+              <button
+                type="button"
+                onClick={() => setShowAutoCutDrawer(false)}
+                className="flex-1 h-8 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-xs font-medium active:scale-98 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyAutoCut}
+                className="flex-2 h-8 px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-98 transition-all shadow-hero-glow"
+              >
+                <Scissors size={13} />
+                <span>Apply Auto-Cut ({autoCutProposals.filter((p) => p.userOverride === 'accept' || (p.decision === 'AUTO-REMOVE' && p.userOverride !== 'reject')).length})</span>
+              </button>
             </div>
           </div>
         )}

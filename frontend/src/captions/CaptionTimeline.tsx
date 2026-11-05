@@ -2867,62 +2867,65 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                             >
 
-                              {filmstrip && filmstrip.frames.length > 0 ? (
-
+                              {filmstrip && filmstrip.frames.length > 1 ? (
                                 filmstrip.frames.map((frame, idx) => {
-
                                   const box = filmstripFrameBox(frame, filmstrip, { pxPerSec, clipStart, isSourceMode });
-
                                   if (!box) return null;
-
                                   return (
-
                                     <div
-
                                       key={`${idx}-${frame.t}`}
-
                                       className="absolute top-0 bottom-0 overflow-hidden"
-
                                       style={{ left: `${box.left}px`, width: `${box.width}px` }}
-
                                     >
-
                                       <img
-
                                         src={frame.url}
-
                                         alt=""
-
                                         loading="eager"
-
                                         decoding="async"
-
                                         draggable={false}
-
                                         className="h-full w-full object-cover object-center pointer-events-none select-none"
-
                                         onError={(e) => { e.currentTarget.style.display = 'none'; }}
-
                                       />
-
                                     </div>
-
                                   );
-
                                 })
-
+                              ) : filmstrip && filmstrip.frames.length === 1 ? (
+                                (() => {
+                                  // Continuously tile the single fallback thumbnail across the whole clip duration
+                                  const frame = filmstrip.frames[0];
+                                  const slotSec = 2.0;
+                                  const slotCount = Math.max(1, Math.ceil(filmstrip.duration / slotSec));
+                                  return Array.from({ length: slotCount }).map((_, i) => {
+                                    const t = i * slotSec;
+                                    const dur = Math.min(slotSec, filmstrip.duration - t);
+                                    const rulerStart = isSourceMode ? (clipStart + t) : t;
+                                    const left = Math.round(rulerStart * pxPerSec);
+                                    const width = Math.max(1, Math.round(dur * pxPerSec));
+                                    return (
+                                      <div
+                                        key={`tile-${i}`}
+                                        className="absolute top-0 bottom-0 overflow-hidden"
+                                        style={{ left: `${left}px`, width: `${width}px` }}
+                                      >
+                                        <img
+                                          src={frame.url}
+                                          alt=""
+                                          loading="eager"
+                                          decoding="async"
+                                          draggable={false}
+                                          className="h-full w-full object-cover object-center pointer-events-none select-none"
+                                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                        />
+                                      </div>
+                                    );
+                                  });
+                                })()
                               ) : (
-
                                 <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
-
                                   {Array.from({ length: 8 }).map((_, i) => (
-
                                     <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
-
                                   ))}
-
                                 </div>
-
                               )}
 
                             </div>
