@@ -10,6 +10,7 @@ import {
   keptDuration,
   normalizeEdlDocument,
   normalizeRanges,
+  remapCaptionTrackToTimeline,
   sourceToConcat,
   splitAt,
   TimelineError,
@@ -48,6 +49,52 @@ function expectTimelineError(run: () => unknown, label: string): void {
 }
 
 console.log('EDL v1 timeline engine shared fixtures...');
+
+
+{
+  const sourceTrack = {
+    id: 'captions',
+    groups: [{
+      id: 'caption-1',
+      start: 0.2,
+      end: 3.0,
+      style: { primary_color: '#ff0000' },
+      words: [
+        { id: 'before', text: 'before', start: 0.2, end: 0.8, style_override: { color: '#111111' } },
+        { id: 'crossing', text: 'crossing', start: 1.5, end: 2.5, style_override: { color: '#222222' } },
+        { id: 'after', text: 'after', start: 2.5, end: 3.0 },
+      ],
+    }],
+  };
+  const singleRemainingRange = remapCaptionTrackToTimeline(
+    sourceTrack,
+    [[12.0, 18.0]],
+    10.0,
+    30.0,
+  );
+  assert.equal(singleRemainingRange.groups.length, 1, 'single-range EDL still remaps captions');
+  assert.deepEqual(
+    singleRemainingRange.groups[0].words.map((word: any) => [word.id, word.start, word.end]),
+    [['crossing', 0, 0.5], ['after', 0.5, 1]],
+    'deleted source words are omitted and boundary-crossing words are clipped once',
+  );
+  assert.equal(singleRemainingRange.groups[0].style.primary_color, '#ff0000');
+  assert.equal(singleRemainingRange.groups[0].words[0].style_override.color, '#222222');
+
+  const editedAgain = remapCaptionTrackToTimeline(
+    sourceTrack,
+    [[12.0, 12.8], [13.2, 18.0]],
+    10.0,
+    30.0,
+  );
+  assert.deepEqual(
+    editedAgain.groups[0].words.map((word: any) => [word.id, word.start, word.end]),
+    [['crossing', 0, 0.5], ['after', 0.5, 0.8]],
+    'source-origin remapping remains deterministic across EDL revisions',
+  );
+}
+
+
 
 const sourceDuration = fixtures.source_duration;
 const cases = fixtures.cases;

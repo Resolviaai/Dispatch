@@ -2712,11 +2712,24 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   const totalSourceDur = Number(timelineSourceDuration || currentClip?.source_duration || clipEnd || 60);
 
-  // Consumer remapping (T03): Remap caption coordinates to output presentation timeline when multi-segment EDL exists
+  // Always remap captions, including a single remaining EDL range. The persisted
+  // source origin must not follow mutable currentClip.start_time after edits.
   const presentationCaptionTrack = useMemo(() => {
     if (!visibleCaptionTrack || !currentClip) return visibleCaptionTrack;
-    if (!effectiveRanges || effectiveRanges.length <= 1) return visibleCaptionTrack;
-    const clipStart = Number(currentClip.start_time || 0);
+    const existingDoc = (currentClip as any).project_document;
+    let timelineDoc: any = null;
+    try {
+      timelineDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : existingDoc;
+    } catch {
+      timelineDoc = null;
+    }
+    const clipStart = Number(
+      timelineDoc?.timeline?.caption_source_origin ??
+      (currentClip as any).caption_source_origin ??
+      (currentClip as any).original_start_time ??
+      currentClip.start_time ??
+      0
+    );
     const sourceDur = Number(currentClip.source_duration || currentClip.end_time || 60);
     return remapCaptionTrackToTimeline(visibleCaptionTrack, effectiveRanges, clipStart, sourceDur);
   }, [visibleCaptionTrack, effectiveRanges, currentClip]);
@@ -3591,10 +3604,21 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         ? [activeCaptionTrack, ...otherTracks]
         : (parsedDoc?.tracks || []);
 
+      // Capture the immutable source-time origin once. start_time is a mutable
+      // presentation/clip boundary and must never become the caption coordinate anchor.
+      const captionSourceOrigin = Number(
+        parsedDoc?.timeline?.caption_source_origin ??
+        (currentClip as any).caption_source_origin ??
+        (currentClip as any).original_start_time ??
+        currentClip.start_time ??
+        0
+      );
+
       const updatedProjectDoc = {
         version: 1,
         timeline: {
           source_duration: sourceDuration,
+          caption_source_origin: captionSourceOrigin,
           segments: newSegments,
           kept_duration: newKeptDuration,
         },
@@ -3614,6 +3638,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         duration: newKeptDuration,
         kept_duration: newKeptDuration,
         project_document: updatedProjectDoc,
+        caption_source_origin: captionSourceOrigin,
         segments_revision: baseRevision + 1,
         can_undo: true,
         can_redo: false,

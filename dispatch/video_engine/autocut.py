@@ -22,6 +22,7 @@ from dispatch.video_engine.waveform import (
     extract_pcm_samples,
     snap_boundary_to_waveform_silence,
     find_zero_crossing,
+    is_waveform_interval_silent,
 )
 
 logger = logging.getLogger("dispatch.video_engine.autocut")
@@ -29,6 +30,75 @@ logger = logging.getLogger("dispatch.video_engine.autocut")
 # Acoustic & speaking thresholds
 MIN_DEAD_AIR_PAUSE = 2.5       # Seconds of silence before proposing dead-air trim
 TARGET_NATURAL_PAUSE = 0.8     # Remaining pause to retain across a dead-air gap
+
+
+# Canonical Gemini transcripts use "word"; older callers may use "text".
+def _word_text(word: Dict[str, Any]) -> str:
+    return str(word.get("word") or word.get("text") or "").strip()
+
+
+def _normalize_token(value: str) -> str:
+    return "".join(ch for ch in value.casefold().strip() if ch.isalnum() or ch in ("'", "’")).strip("'’")
+
+
+def _meaningful_like_context(words: List[Dict[str, Any]], index: int) -> Optional[str]:
+    """Identify clear lexical uses of 'like'; ambiguous uses remain REVIEW."""
+    previous = _normalize_token(_word_text(words[index - 1])) if index > 0 else ""
+    following = _normalize_token(_word_text(words[index + 1])) if index + 1 < len(words) else ""
+    before_previous = _normalize_token(_word_text(words[index - 2])) if index > 1 else ""
+    if previous in {"look", "looks", "looked", "sound", "sounds", "sounded", "feel", "feels", "felt", "seem", "seems", "seemed", "act", "acts", "acted", "taste", "tastes", "smell", "smells"}:
+        return "Meaningful comparison/perception construction."
+    if previous in {"would", "could", "should", "might", "i'd", "we'd", "you'd"}:
+        return "Meaningful modal + like construction."
+    if previous in {"something", "anything", "nothing", "everything", "someone", "anyone", "everyone", "people", "things", "much", "more", "less", "just", "exactly", "almost", "roughly", "about", "kind", "sort", "bit", "a"}:
+        return "Meaningful comparison, approximation, or noun phrase."
+    if before_previous in {"kind", "sort", "bit", "lot"}:
+        return "Meaningful comparison phrase."
+    if previous in {"i", "you", "we", "they", "he", "she"} and following:
+        return "Likely lexical verb, not a filler."
+    if following in {"a", "an", "the", "this", "that", "these", "those", "me", "him", "her", "them", "it", "to"}:
+        return "Likely meaningful example or comparison."
+    return None
+
+
+def detect_contextual_filler_words(words: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return reviewable, word-timestamped filler decisions; never delete by dictionary alone."""
+    proposals: List[Dict[str, Any]] = []
+    clear_fillers = {"um", "umm", "uh", "uhh", "erm", "er", "eerm"}
+    for index, word in enumerate(words):
+        raw = _word_text(word)
+        token = _normalize_token(raw)
+        decision = None
+        reason = ""
+        confidence = 0.0
+        if token in clear_fillers:
+            decision, reason, confidence = "AUTO-REMOVE", "Standalone hesitation vocalization; verify audio boundary.", 0.90
+        elif token == "like":
+            preservation_reason = _meaningful_like_context(words, index)
+            if preservation_reason:
+                decision, reason, confidence = "PRESERVE", preservation_reason, 0.94
+            else:
+                decision, reason, confidence = "REVIEW", "Potential discourse filler; context is ambiguous, listen before cutting.", 0.60
+        if decision is None:
+            continue
+        start = float(word.get("start", 0.0))
+        end = float(word.get("end", 0.0))
+        if end <= start:
+            continue
+        proposals.append({
+            "id": f"filler_{len(proposals) + 1}",
+            "type": "filler_word",
+            "source_start": round(start, 3),
+            "source_end": round(end, 3),
+            "duration": round(end - start, 3),
+            "word": raw,
+            "reason": reason,
+            "status": "candidate",
+            "decision": decision,
+            "confidence": confidence,
+        })
+    return proposals
+
 MAX_RESTART_WINDOW = 3.0       # Max seconds between repeated word loops for stutter detection
 MIN_SPEECH_PADDING_MS = 150.0  # Mandatory post-word release padding to prevent truncation
 
@@ -43,15 +113,15 @@ def detect_mechanical_stutters(
     Does NOT flag self-corrections ('actually', 'or rather', 'no wait') or rhetorical conclusions.
     """
     proposals: List[Dict[str, Any]] = []
-    if not words or len(words) < 4:
+    if not words or len(words) < 2:
         return proposals
 
     # Clean words helper
-    cleaned_tokens = [w.get("text", "").strip().lower().strip(".,!?:;\"'") for w in words]
+    cleaned_tokens = [_normalize_token(_word_text(w)) for w in words]
 
     # Look for 1-word, 2-word, or 3-word repetitions within max_gap_seconds
     i = 0
-    while i < len(words) - 2:
+    while i < len(words) - 1:
         matched = False
         # Try 2-word n-gram first
         if i + 3 < len(words):
@@ -73,7 +143,7 @@ def detect_mechanical_stutters(
                             "source_start": cut_start,
                             "source_end": cut_end,
                             "duration": round(cut_end - cut_start, 3),
-                            "reason": f"Redundant restart of '{words[i].get('text')} {words[i+1].get('text')}'",
+                            "reason": f"Redundant restart of '{_word_text(words[i])} {_word_text(words[i + 1])}'",
                             "status": "candidate",
                             "confidence": 0.88,
                         })
@@ -97,7 +167,7 @@ def detect_mechanical_stutters(
                         "source_start": cut_start,
                         "source_end": cut_end,
                         "duration": round(cut_end - cut_start, 3),
-                        "reason": f"Stutter repetition of '{words[i].get('text')}'",
+                        "reason": f"Stutter repetition of '{_word_text(words[i])}'",
                         "status": "candidate",
                         "confidence": 0.82,
                     })
@@ -161,8 +231,11 @@ def analyze_waveform_and_transcript_autocuts(
 
     proposals: List[Dict[str, Any]] = []
 
-    # 1. Check for mechanical stutters
+    # 1. Check for mechanical stutters and context-sensitive filler words.
     stutter_cuts = detect_mechanical_stutters(all_words)
+    proposals.extend(detect_contextual_filler_words(all_words))
+    for sc in stutter_cuts:
+        sc['decision'] = 'REVIEW'
     for sc in stutter_cuts:
         if pcm_bytes:
             sc["source_start"] = snap_boundary_to_waveform_silence(
@@ -182,7 +255,7 @@ def analyze_waveform_and_transcript_autocuts(
         # Check leading silence
         first_w_start = float(all_words[0].get("start", 0.0))
         leading_gap = first_w_start - clip_start
-        if leading_gap >= min_dead_air:
+        if leading_gap >= min_dead_air and (not pcm_bytes or is_waveform_interval_silent(pcm_bytes, clip_start, first_w_start)):
             rem_dur = leading_gap - target_pause
             cut_start = clip_start
             cut_end = clip_start + rem_dur
@@ -201,6 +274,7 @@ def analyze_waveform_and_transcript_autocuts(
                     "reason": f"Prolonged initial silence ({leading_gap:.1f}s)",
                     "status": "candidate",
                     "confidence": 0.95,
+                    "decision": "AUTO-REMOVE" if pcm_bytes else "REVIEW",
                 })
 
         # Check gaps between consecutive words
@@ -209,7 +283,7 @@ def analyze_waveform_and_transcript_autocuts(
             nxt_start = float(all_words[idx + 1].get("start", 0.0))
             gap = nxt_start - w_end
             
-            if gap >= min_dead_air:
+            if gap >= min_dead_air and (not pcm_bytes or is_waveform_interval_silent(pcm_bytes, w_end, nxt_start)):
                 rem_dur = gap - target_pause
                 margin = target_pause / 2.0
                 raw_cut_start = w_end + margin
@@ -240,12 +314,13 @@ def analyze_waveform_and_transcript_autocuts(
                         "reason": f"Extended pause ({gap:.1f}s trimmed down to {target_pause:.1f}s)",
                         "status": "candidate",
                         "confidence": 0.92,
+                        "decision": "AUTO-REMOVE" if pcm_bytes else "REVIEW",
                     })
 
         # Check trailing silence
         last_w_end = float(all_words[-1].get("end", 0.0))
         trailing_gap = clip_end - last_w_end
-        if trailing_gap >= min_dead_air:
+        if trailing_gap >= min_dead_air and (not pcm_bytes or is_waveform_interval_silent(pcm_bytes, last_w_end, clip_end)):
             rem_dur = trailing_gap - target_pause
             raw_cut_start = clip_end - rem_dur
             if pcm_bytes:
@@ -266,6 +341,7 @@ def analyze_waveform_and_transcript_autocuts(
                     "reason": f"Prolonged trailing silence ({trailing_gap:.1f}s)",
                     "status": "candidate",
                     "confidence": 0.95,
+                    "decision": "AUTO-REMOVE" if pcm_bytes else "REVIEW",
                 })
 
     return proposals

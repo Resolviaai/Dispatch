@@ -84,6 +84,22 @@ class TestSubtitleEDLRemapping(unittest.TestCase):
         self.assertAlmostEqual(remapped.groups[1].start, 7.0, places=2)
         self.assertAlmostEqual(remapped.groups[2].start, 16.0, places=2)
 
+
+    def test_single_range_leading_trim_uses_immutable_source_origin(self):
+        # Caption timestamps remain relative to the original source origin (10s)
+        # even when the current EDL contains only one range beginning at 12s.
+        remapped = remap_caption_track_to_timeline(
+            self.track,
+            [(12.0, 30.0)],
+            clip_start=10.0,
+            source_duration=40.0,
+        )
+        self.assertEqual([group.words[0].text for group in remapped.groups], ["PieceOne", "DeletedGap", "PieceTwo"])
+        self.assertAlmostEqual(remapped.groups[0].start, 0.0, places=3)
+        self.assertAlmostEqual(remapped.groups[0].end, 0.5, places=3)
+        self.assertAlmostEqual(remapped.groups[1].start, 5.0, places=3)
+        self.assertAlmostEqual(remapped.groups[2].start, 14.0, places=3)
+
     def test_three_pieces_two_gaps_mapping(self):
         # Spans: [0.0, 5.0], [10.0, 15.0], [20.0, 25.0] -> Total = 15.0s
         spans = [(0.0, 5.0), (10.0, 15.0), (20.0, 25.0)]

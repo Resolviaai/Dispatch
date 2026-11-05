@@ -112,6 +112,33 @@ def find_zero_crossing(
     return round(best_sample / float(sample_rate), 4)
 
 
+
+def is_waveform_interval_silent(
+    raw_bytes: bytes,
+    start_time: float,
+    end_time: float,
+    *,
+    sample_rate: int = 16000,
+    threshold_db: float = -42.0,
+    minimum_silent_ratio: float = 0.80,
+    frame_duration_ms: float = 20.0,
+) -> bool:
+    """VAD-style RMS silence verification for transcript-identified gaps."""
+    if not raw_bytes or end_time <= start_time or start_time < 0:
+        return False
+    total_samples = len(raw_bytes) // 2
+    first_sample = max(0, int(start_time * sample_rate))
+    last_sample = min(total_samples, int(end_time * sample_rate + 0.999999))
+    if last_sample <= first_sample:
+        return False
+    interval_bytes = raw_bytes[first_sample * 2:last_sample * 2]
+    profile = compute_rms_profile(interval_bytes, sample_rate, frame_duration_ms)
+    if not profile:
+        return False
+    silent_ratio = sum(1 for _, db in profile if db <= threshold_db) / len(profile)
+    return silent_ratio >= minimum_silent_ratio
+
+
 def snap_boundary_to_waveform_silence(
     raw_bytes: bytes,
     raw_time: float,
