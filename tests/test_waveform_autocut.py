@@ -9,9 +9,11 @@ from dispatch.video_engine.waveform import (
     compute_rms_profile,
     find_zero_crossing,
     snap_boundary_to_waveform_silence,
+    is_waveform_interval_silent,
 )
 from dispatch.video_engine.autocut import (
     detect_mechanical_stutters,
+    detect_contextual_filler_words,
     analyze_waveform_and_transcript_autocuts,
 )
 
@@ -118,6 +120,58 @@ class TestWaveformAutoCut(unittest.TestCase):
         ]
         proposals = detect_mechanical_stutters(words)
         self.assertEqual(len(proposals), 0, "Self-corrections must never be flagged as stutters")
+
+
+    def test_detect_mechanical_stutters_accepts_canonical_gemini_word_schema(self):
+        canonical = [
+            {"word": "I", "start": 0.0, "end": 0.2},
+            {"word": "mean", "start": 0.25, "end": 0.5},
+            {"word": "I", "start": 0.8, "end": 1.0},
+            {"word": "mean", "start": 1.05, "end": 1.3},
+            {"word": "Dispatch", "start": 1.4, "end": 1.8},
+        ]
+        legacy = [
+            {"text": item["word"], "start": item["start"], "end": item["end"]}
+            for item in canonical
+        ]
+        self.assertEqual(
+            detect_mechanical_stutters(canonical),
+            detect_mechanical_stutters(legacy),
+        )
+        self.assertEqual(len(detect_mechanical_stutters(canonical)), 1)
+
+    def test_contextual_like_classifier_preserves_lexical_uses_and_reviews_ambiguous_uses(self):
+        words = [
+            {"word": "I", "start": 0.0, "end": 0.1},
+            {"word": "like", "start": 0.1, "end": 0.3},
+            {"word": "this", "start": 0.3, "end": 0.5},
+            {"word": "it", "start": 1.0, "end": 1.1},
+            {"word": "was", "start": 1.1, "end": 1.2},
+            {"word": "like,", "start": 1.2, "end": 1.4},
+            {"word": "really", "start": 1.4, "end": 1.7},
+            {"word": "expensive", "start": 1.7, "end": 2.1},
+            {"word": "looks", "start": 2.2, "end": 2.4},
+            {"word": "like", "start": 2.4, "end": 2.6},
+            {"word": "a", "start": 2.6, "end": 2.7},
+            {"word": "deal", "start": 2.7, "end": 3.0},
+        ]
+        proposals = detect_contextual_filler_words(words)
+        like_decisions = [p["decision"] for p in proposals if p["word"].lower().startswith("like")]
+        self.assertEqual(like_decisions, ["PRESERVE", "REVIEW", "PRESERVE"])
+
+    def test_clear_hesitation_vocalization_is_non_destructive_auto_remove_proposal(self):
+        proposals = detect_contextual_filler_words([
+            {"word": "um,", "start": 0.4, "end": 0.7},
+            {"word": "मतलब", "start": 0.8, "end": 1.1},
+        ])
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["decision"], "AUTO-REMOVE")
+        self.assertEqual(proposals[0]["status"], "candidate")
+        self.assertEqual(proposals[0]["word"], "um,")
+
+    def test_rms_vad_verifies_silence_but_not_speech(self):
+        self.assertTrue(is_waveform_interval_silent(self.pcm, 1.2, 3.8, sample_rate=self.sample_rate))
+        self.assertFalse(is_waveform_interval_silent(self.pcm, 0.2, 0.8, sample_rate=self.sample_rate))
 
     def test_autocut_combines_waveform_and_transcript(self):
         # Transcript with a 3.0s dead air gap (1.0s to 4.0s)
