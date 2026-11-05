@@ -83,7 +83,7 @@ console.log('EDL v1 timeline engine shared fixtures...');
 
   const editedAgain = remapCaptionTrackToTimeline(
     sourceTrack,
-    [[12.0, 12.8], [13.2, 14.0]],
+    [[12.0, 12.8], [13.2, 18.0]],
     10.0,
     30.0,
   );
