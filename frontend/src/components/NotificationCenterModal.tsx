@@ -45,6 +45,8 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
     clearAllNotifications,
     refreshActivity,
     isRefreshing,
+    activeDirectUpload,
+    cancelDirectUpload,
   } = useActivity();
 
   if (!isOpen) return null;
@@ -114,6 +116,50 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
         </div>
 
         <div className="flex-1 overflow-y-auto">
+          {/* Background Direct Upload Card if active */}
+          {activeDirectUpload && activeDirectUpload.phase !== 'idle' && (
+            <div className="mb-3 p-3 rounded-xl bg-surface-2 border border-border space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium text-text-main truncate max-w-[200px]">
+                  {activeDirectUpload.fileName}
+                </span>
+                <span className="text-[11px] font-mono tabular-nums text-primary font-semibold">
+                  {activeDirectUpload.phase === 'uploading'
+                    ? `${activeDirectUpload.progressPct}%`
+                    : activeDirectUpload.phase === 'checking'
+                    ? 'Checking…'
+                    : activeDirectUpload.phase === 'submitting'
+                    ? 'Queueing…'
+                    : activeDirectUpload.phase === 'done'
+                    ? 'Uploaded!'
+                    : 'Error'}
+                </span>
+              </div>
+              {activeDirectUpload.phase === 'uploading' && (
+                <div className="h-1.5 rounded-full bg-surface-3 overflow-hidden">
+                  <div
+                    className="h-full bg-primary transition-all duration-150"
+                    style={{ width: `${activeDirectUpload.progressPct}%` }}
+                  />
+                </div>
+              )}
+              {activeDirectUpload.error && (
+                <p className="text-[11px] text-danger leading-tight">{activeDirectUpload.error}</p>
+              )}
+              {(activeDirectUpload.phase === 'uploading' || activeDirectUpload.phase === 'checking') && (
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={cancelDirectUpload}
+                    className="text-[11px] text-danger hover:underline active:scale-95 transition-all"
+                  >
+                    Cancel upload
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Status: one line, only what is happening now. */}
           <div className="py-2.5 flex items-center gap-2 text-xs">
             {activeJobs.length > 0 ? (

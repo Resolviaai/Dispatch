@@ -2787,5 +2787,51 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
         }
     }
 
+    @JavascriptInterface
+    fun showSystemNotification(title: String, message: String): Boolean {
+        return try {
+            val channelId = "dispatch_general_alerts"
+            val notificationManager = activity.getSystemService(android.app.NotificationManager::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val channel = android.app.NotificationChannel(
+                    channelId,
+                    "Dispatch Alerts",
+                    android.app.NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    description = "Alerts and notifications for upload and processing events"
+                }
+                notificationManager?.createNotificationChannel(channel)
+            }
+
+            val launchIntent = activity.packageManager.getLaunchIntentForPackage(activity.packageName)?.apply {
+                flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                activity,
+                0,
+                launchIntent,
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                } else {
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                }
+            )
+
+            val builder = androidx.core.app.NotificationCompat.Builder(activity, channelId)
+                .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+
+            notificationManager?.notify((System.currentTimeMillis() % 100000).toInt(), builder.build())
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("DispatchBridge", "showSystemNotification failed: ${e.message}")
+            false
+        }
+    }
 }
 

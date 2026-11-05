@@ -15,6 +15,8 @@ import {
   Copy,
   Trash2,
   Camera,
+  Upload,
+  FileVideo,
   MoreVertical,
   Check,
   Bell,
@@ -59,7 +61,7 @@ export interface SessionGroup {
 export interface UnifiedSession {
   id: string;
   title: string;
-  origin: 'phone' | 'youtube';
+  origin: 'phone' | 'youtube' | 'direct';
   createdAt: number;
   totalDuration: number;
   totalBytes: number;
@@ -327,7 +329,6 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   useEffect(() => {
     setVideoPlaybackError(null);
   }, [selectedSessionId]);
-
 
 
   // Connection status (LAN vs Cloud Relay)
@@ -693,8 +694,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     if (!c || !sessionId) return false;
     const normSess = sessionId.replace(/^(sess_|dir_)/, '');
 
-    // 1. Exact match on primary session ID
-    if (c.session_id === sessionId || c.chunk_id === sessionId) return true;
+    // 1. Exact match on primary session ID or source video ID
+    if (c.session_id === sessionId || c.chunk_id === sessionId || (c as any).source_video_id === sessionId) return true;
 
     // 2. Normalized prefix-stripped match
     if (c.session_id && c.session_id.replace(/^(sess_|dir_)/, '') === normSess) return true;
@@ -882,7 +883,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       list.push({
         id: item.video_id,
         title: displayTitle,
-        origin: 'youtube',
+        origin: (item.video_id && item.video_id.startsWith('dir_')) ? 'direct' : 'youtube',
         createdAt: item.discovered_at ? new Date(item.discovered_at).getTime() : Date.now(),
         totalDuration: computedDuration,
         totalBytes: 0,
@@ -905,6 +906,45 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     if (!selectedSessionId) return null;
     return unifiedSessions.find(s => s.id === selectedSessionId) || null;
   }, [unifiedSessions, selectedSessionId]);
+
+  useEffect(() => {
+    setVideoPlaybackError(null);
+    setRouteCMediaUrl(null);
+    if (!selectedSessionId) return;
+
+    const s = unifiedSessions.find(item => item.id === selectedSessionId);
+    if (s && s.origin === 'direct') {
+      if (pcHost && pcStatus.online) {
+        setRouteCMediaUrl(apiUrl('/api/clips/' + s.id + '/source', pcHost));
+      } else {
+        // Fetch presigned R2 URL from Cloudflare Worker
+        (async () => {
+          setIsRouteCLoading(true);
+          try {
+            const sess = await currentSession().catch(() => null);
+            const token = sess?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+            if (!token) return;
+
+            // Raw object ID from dir_<object_id>
+            const rawObjId = s.id.replace(/^dir_/, '');
+            const res = await fetch(WORKER_BASE + '/media-url', {
+              method: 'POST',
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ media_object_id: rawObjId }),
+            });
+            const data = await res.json().catch(() => null);
+            if (res.ok && data?.url) {
+              setRouteCMediaUrl(data.url);
+            }
+          } catch (e) {
+            console.warn('Failed to load direct video cloud URL:', e);
+          } finally {
+            setIsRouteCLoading(false);
+          }
+        })();
+      }
+    }
+  }, [selectedSessionId, pcHost, pcStatus.online, unifiedSessions]);
 
   // Tab Filtering (Clean, zero search overhead)
   const filteredSessions = useMemo(() => {
@@ -1095,7 +1135,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 {s.title}
               </h2>
               <div className="text-xs text-text-muted truncate tabular-nums flex items-center gap-1.5">
-                <span>{s.origin === 'phone' ? 'Camera Recording' : 'YouTube Video'}</span>
+                <span>{s.origin === 'phone' ? 'Camera Recording' : s.origin === 'direct' ? 'Direct Upload' : 'YouTube Video'}</span>
                 <span>&middot;</span>
                 <span className="font-mono">#{s.id.slice(0, 8)}</span>
               </div>
@@ -1117,9 +1157,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         <main className="flex-1 min-h-0 flex flex-col px-4 pt-3 pb-4 gap-4 overflow-y-auto">
           {/* VIDEO / MEDIA STAGE */}
           <div className="w-full aspect-video rounded-xl bg-black overflow-hidden border border-border relative flex items-center justify-center shrink-0 shadow-sm">
-            {(s.videoUrl || routeCMediaUrl) && !videoPlaybackError ? (
+            {(s.videoUrl || routeCMediaUrl || (s.origin === 'direct' && pcHost && pcStatus.online)) && !videoPlaybackError ? (
               <video
-                src={(s.videoUrl || routeCMediaUrl)!.startsWith('http') ? (s.videoUrl || routeCMediaUrl)! : apiUrl((s.videoUrl || routeCMediaUrl)!, pcHost)}
+                src={
+                  (s.videoUrl || routeCMediaUrl)
+                    ? ((s.videoUrl || routeCMediaUrl)!.startsWith('http') ? (s.videoUrl || routeCMediaUrl)! : apiUrl((s.videoUrl || routeCMediaUrl)!, pcHost))
+                    : apiUrl(`/api/clips/${s.id}/source`, pcHost)
+                }
                 poster={s.thumbnailUrl
                   ? (s.thumbnailUrl.startsWith('http')
                     ? s.thumbnailUrl
@@ -1665,9 +1709,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
                 Sessions
               </h1>
-              {/* Server status — one state only: green "Online" when the PC
-                  answers the health check, quiet neutral "Offline" (tap to
-                  retry) when it doesn't. Nothing while checking. */}
+              {/* Server status: Green Online if LAN PC reachable, Cyan Cloud if connected to Cloud, Offline otherwise */}
               {pcStatus.checking ? null : pcStatus.online ? (
                 <span
                   className="inline-flex items-center gap-1.5 leading-none"
@@ -1677,6 +1719,20 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   <Server size={13} strokeWidth={1.5} className="text-status-success animate-pulse" />
                   <span className="text-xs font-medium text-status-success">Online</span>
                 </span>
+              ) : pcStatus.isCloudMode ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    checkPcStudio();
+                    showToast('Checking PC LAN status…');
+                  }}
+                  className="inline-flex items-center gap-1.5 leading-none px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary active:scale-[0.98] transition-all"
+                  title="Cloud Connected — media uploads and syncs to cloud. Tap to probe local PC."
+                  aria-label="Cloud Connected"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                  <span className="text-xs font-medium text-primary">Cloud</span>
+                </button>
               ) : (
                 <button
                   type="button"
@@ -1685,12 +1741,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                     showToast('Checking PC status…');
                   }}
                   className="inline-flex items-center gap-1.5 leading-none p-3.5 -m-3.5 rounded-lg text-text-muted hover:text-text-secondary active:scale-[0.98] active:bg-transparent transition-all focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary"
-                  title={pcStatus.isCloudMode
-                    ? 'Server offline — recordings still upload to the cloud, clips wait for your PC. Tap to retry.'
-                    : 'Start Dispatch on your computer to process clips. Tap to retry.'}
-                  aria-label={pcStatus.isCloudMode
-                    ? 'Server offline — clips wait for your PC. Tap to retry.'
-                    : 'Server offline — start Dispatch on your computer to process clips. Tap to retry.'}
+                  title="Start Dispatch on your computer to process clips. Tap to retry."
+                  aria-label="Server offline — start Dispatch on your computer to process clips. Tap to retry."
                 >
                   <Server size={13} strokeWidth={1.5} className="shrink-0" />
                   <span className="text-xs font-medium">Offline</span>
@@ -1899,12 +1951,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   {/* Origin badge: icon-only so repeated source labels don't clutter every row. */}
                   <span
                     className="absolute top-1 left-1 w-4 h-4 rounded bg-black/85 text-white flex items-center justify-center z-20"
-                    title={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                    title={session.origin === 'phone' ? 'Camera recording' : session.origin === 'direct' ? 'Direct upload' : 'YouTube video'}
                     role="img"
                     aria-label={session.origin === 'phone' ? 'Camera recording' : 'YouTube video'}
                   >
                     {session.origin === 'phone'
                       ? <Camera size={10} />
+                      : session.origin === 'direct'
+                      ? <Upload size={10} className="text-primary" />
                       : <Youtube size={10} className="text-danger" />}
                   </span>
 

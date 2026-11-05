@@ -3977,7 +3977,7 @@ export default {
                 available_layout_modes: body?.available_layout_modes || null,
                 caption_data: body?.caption_data || null,
                 caption_revision: Number(body?.caption_revision || 0),
-                ...(body?.session_id ? { session_id: body.session_id } : {}),
+                ...(body?.session_id && UUID_RE.test(body.session_id) ? { session_id: body.session_id } : {}),
                 ...(body?.youtube_video_id ? { youtube_video_id: body.youtube_video_id } : {}),
               }),
             }

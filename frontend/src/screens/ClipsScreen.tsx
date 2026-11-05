@@ -1217,7 +1217,14 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
     // 1. Explicit native widescreen layouts ALWAYS render in 16:9 frame
     if (layoutMode === 'native_169' || layoutMode === 'landscape') return true;
 
-    // 2. Vertical short-form layouts (Fit + Blur, Fit + Black, Crop 9:16) ALWAYS render in 9:16 frame
+    // 2. Vertical short-form layouts:
+    // If sourceOrientation is portrait (vertical input video), Fit + Blur and Fit + Black output 16:9 widescreen with black/blur pillars!
+    if (sourceOrientation === 'portrait' && (layoutMode === 'fit_blur' || layoutMode === 'fit_black')) {
+      return true;
+    }
+    if (targetAspect === '16:9') return true;
+    if (targetAspect === '9:16') return false;
+
     if (layoutMode === 'native_916' || layoutMode === 'crop_916' || layoutMode === 'crop_follow' || layoutMode === 'fit_blur' || layoutMode === 'fit_black') {
       return false;
     }
@@ -1598,6 +1605,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     isNotificationCenterOpen,
     closeNotificationCenter,
     addNotification,
+    activeDirectUpload,
+    startDirectUpload,
+    cancelDirectUpload,
   } = useActivity();
 
   useBackHandler('clips_modals', 40, () => {
@@ -1660,9 +1670,6 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isCloudMode, setIsCloudMode] = useState<boolean>(false);
   const [remoteJobs, setRemoteJobs] = useState<Array<{ id: string; youtube_url?: string; status: string; last_error?: string; created_at?: string; video_id?: string; session_id?: string; source_title?: string }>>([]);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
-  const [directUploadPhase, setDirectUploadPhase] = useState<'idle' | 'checking' | 'uploading' | 'submitting'>('idle');
-  const [directUploadPct, setDirectUploadPct] = useState(0);
-  const [directUploadError, setDirectUploadError] = useState<string | null>(null);
   const directFileInputRef = useRef<HTMLInputElement | null>(null);
   const [submitUrlInput, setSubmitUrlInput] = useState<string>('');
   const [isSubmittingJob, setIsSubmittingJob] = useState<boolean>(false);
@@ -2342,107 +2349,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
    * The 3-minute limit mirrors the PC's hard cap so we fail before any bytes move.
    */
   const handleDirectUpload = async (file: File) => {
-    setDirectUploadError(null);
-    const isMp4 = file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
-    if (!isMp4) {
-      setDirectUploadError('Upload an MP4 video — other formats are not supported.');
-      return;
-    }
-    if (file.size <= 0) {
-      setDirectUploadError('That file is empty.');
-      return;
-    }
-
-    setDirectUploadPhase('checking');
-    const objectUrl = URL.createObjectURL(file);
-    try {
-      const durationSec = await new Promise<number>((resolve, reject) => {
-        const probe = document.createElement('video');
-        probe.preload = 'metadata';
-        probe.onloadedmetadata = () => resolve(probe.duration || 0);
-        probe.onerror = () => reject(new Error('Could not read this video.'));
-        probe.src = objectUrl;
-      });
-      if (!Number.isFinite(durationSec) || durationSec <= 0) throw new Error('Could not read the video duration.');
-      if (durationSec > 180.5) throw new Error('Videos can be at most 3 minutes long.');
-    } catch (err) {
-      URL.revokeObjectURL(objectUrl);
-      setDirectUploadPhase('idle');
-      setDirectUploadError(err instanceof Error ? err.message : 'Could not read this video.');
-      return;
-    }
-    URL.revokeObjectURL(objectUrl);
-
-    const session = await currentSession().catch(() => null);
-    const token = session?.access_token;
-    if (!token) {
-      setDirectUploadPhase('idle');
-      setDirectUploadError('Sign in to upload a video.');
-      return;
-    }
-
-    try {
-      setDirectUploadPhase('uploading');
-      setDirectUploadPct(0);
-      const reserveRes = await fetch(`${WORKER_BASE}/reserve`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: 'clip_video',
-          mime_type: 'video/mp4',
-          expected_bytes: file.size,
-          client_token: idempotencyToken(),
-        }),
-      });
-      const reserve = await reserveRes.json().catch(() => null);
-      if (!reserveRes.ok || !reserve?.upload_url || !reserve?.media_object_id) {
-        throw new Error(reserve?.error || `Upload could not start (HTTP ${reserveRes.status}).`);
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', reserve.upload_url);
-        xhr.setRequestHeader('Content-Type', 'video/mp4');
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) setDirectUploadPct(Math.round((event.loaded / event.total) * 100));
-        };
-        xhr.onload = () =>
-          xhr.status >= 200 && xhr.status < 300
-            ? resolve()
-            : reject(new Error(`Upload failed (HTTP ${xhr.status}).`));
-        xhr.onerror = () => reject(new Error('Upload failed — check your connection.'));
-        xhr.send(file);
-      });
-
-      setDirectUploadPhase('submitting');
-      const completeRes = await fetch(`${WORKER_BASE}/complete`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reservation_id: reserve.reservation_id }),
-      });
-      const complete = await completeRes.json().catch(() => null);
-      if (!completeRes.ok || !complete?.object_id) {
-        throw new Error(complete?.error || `Upload could not be finalized (HTTP ${completeRes.status}).`);
-      }
-
-      const jobRes = await fetch(`${WORKER_BASE}/jobs/direct`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ media_object_id: complete.object_id, title: file.name.replace(/\.mp4$/i, '') }),
-      });
-      const job = await jobRes.json().catch(() => null);
-      if (!jobRes.ok || !job?.job_id) {
-        throw new Error(job?.error || `Processing could not be queued (HTTP ${jobRes.status}).`);
-      }
-
-      setDirectUploadPhase('idle');
-      setDirectUploadPct(0);
+    // Background upload delegator: upload keeps running if modal is closed!
+    const ok = await startDirectUpload(file);
+    if (ok) {
       setShowSubmitModal(false);
       setFeedback('Video uploaded. Your PC will process it into clips.');
       void fetchClips();
-    } catch (err) {
-      setDirectUploadPhase('idle');
-      setDirectUploadError(err instanceof Error ? err.message : 'Upload failed.');
     }
   };
 
@@ -4484,9 +4396,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             <button
               type="button"
               onClick={() => {
-                setDirectUploadError(null);
-                setDirectUploadPhase('idle');
-                setDirectUploadPct(0);
                 setShowSubmitModal(true);
               }}
               disabled={offlineReadOnly}
@@ -4932,9 +4841,16 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             </div>
 
             <div className="pt-3 border-t border-border space-y-2">
-              <p className="text-xs text-text-secondary leading-relaxed">
-                Or upload an MP4 (up to 3 min).
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-text-secondary leading-relaxed">
+                  Or upload an MP4 (up to 3 min).
+                </p>
+                {activeDirectUpload && (activeDirectUpload.phase === 'uploading' || activeDirectUpload.phase === 'checking') && (
+                  <span className="text-[11px] font-mono tabular-nums text-primary font-semibold">
+                    {activeDirectUpload.phase === 'uploading' ? `${activeDirectUpload.progressPct}%` : 'Checking…'}
+                  </span>
+                )}
+              </div>
               <input
                 ref={directFileInputRef}
                 type="file"
@@ -4949,27 +4865,39 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               <button
                 type="button"
                 onClick={() => directFileInputRef.current?.click()}
-                disabled={directUploadPhase !== 'idle'}
+                disabled={Boolean(activeDirectUpload && (activeDirectUpload.phase === 'uploading' || activeDirectUpload.phase === 'checking' || activeDirectUpload.phase === 'submitting'))}
                 className="w-full min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-60"
               >
                 <Upload size={15} />
                 <span>
-                  {directUploadPhase === 'checking'
+                  {activeDirectUpload?.phase === 'checking'
                     ? 'Checking video…'
-                    : directUploadPhase === 'uploading'
-                      ? `Uploading ${directUploadPct}%`
-                      : directUploadPhase === 'submitting'
+                    : activeDirectUpload?.phase === 'uploading'
+                      ? `Uploading ${activeDirectUpload.progressPct}% (runs in bg)`
+                      : activeDirectUpload?.phase === 'submitting'
                         ? 'Queueing…'
                         : 'Choose Video File'}
                 </span>
               </button>
-              {directUploadPhase === 'uploading' && (
-                <div className="h-1 rounded-full bg-surface-3 overflow-hidden">
-                  <div className="h-full bg-primary transition-all" style={{ width: `${directUploadPct}%` }} />
+              {activeDirectUpload?.phase === 'uploading' && (
+                <div className="space-y-1.5">
+                  <div className="h-1 rounded-full bg-surface-3 overflow-hidden">
+                    <div className="h-full bg-primary transition-all" style={{ width: `${activeDirectUpload.progressPct}%` }} />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-text-muted">
+                    <span>You can close this dialog safely</span>
+                    <button
+                      type="button"
+                      onClick={cancelDirectUpload}
+                      className="text-danger hover:underline active:scale-95"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               )}
-              {directUploadError && (
-                <p className="text-xs text-danger leading-relaxed">{directUploadError}</p>
+              {activeDirectUpload?.error && (
+                <p className="text-xs text-danger leading-relaxed">{activeDirectUpload.error}</p>
               )}
             </div>
           </div>

@@ -1,7 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { currentSession } from '../auth/supabase';
 import { WORKER_BASE } from '../accounts/accountsService';
-import { apiUrl, getAuthHeaders } from '../bridge';
+import { apiUrl, getAuthHeaders, Bridge } from '../bridge';
 
 export interface CloudJobItem {
   id: string;
@@ -28,6 +28,15 @@ export interface ActivityNotification {
   read?: boolean;
 }
 
+export interface DirectUploadState {
+  fileName: string;
+  fileSize: number;
+  phase: 'idle' | 'checking' | 'uploading' | 'submitting' | 'done' | 'error';
+  progressPct: number;
+  error: string | null;
+  startedAt: number;
+}
+
 interface ActivityContextValue {
   isNotificationCenterOpen: boolean;
   openNotificationCenter: () => void;
@@ -38,6 +47,12 @@ interface ActivityContextValue {
   cloudJobs: CloudJobItem[];
   queueStats: QueueBacklogStats | null;
   notifications: ActivityNotification[];
+
+  // Direct Upload State & Methods
+  activeDirectUpload: DirectUploadState | null;
+  startDirectUpload: (file: File) => Promise<boolean>;
+  cancelDirectUpload: () => void;
+  clearDirectUpload: () => void;
 
   // Counts & hasActiveActivity
   activeJobsCount: number;
@@ -56,6 +71,12 @@ interface ActivityContextValue {
 
 const ActivityContext = createContext<ActivityContextValue | null>(null);
 
+function idempotencyToken(): string {
+  const c = typeof crypto !== 'undefined' ? crypto : null;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export const ActivityProvider: React.FC<{
   children: React.ReactNode;
   pcHost?: string;
@@ -63,6 +84,9 @@ export const ActivityProvider: React.FC<{
   const [isOpen, setIsOpen] = useState(false);
   const [cloudJobs, setCloudJobs] = useState<CloudJobItem[]>([]);
   const [queueStats, setQueueStats] = useState<QueueBacklogStats | null>(null);
+  const [activeDirectUpload, setActiveDirectUpload] = useState<DirectUploadState | null>(null);
+  const activeXhrRef = useRef<XMLHttpRequest | null>(null);
+
   const [notifications, setNotifications] = useState<ActivityNotification[]>(() => {
     try {
       const saved = localStorage.getItem('dispatch_activity_notifications');
@@ -105,6 +129,161 @@ export const ActivityProvider: React.FC<{
   const clearAllNotifications = useCallback(() => {
     setNotifications([]);
   }, []);
+
+  const clearDirectUpload = useCallback(() => {
+    setActiveDirectUpload(null);
+  }, []);
+
+  const cancelDirectUpload = useCallback(() => {
+    if (activeXhrRef.current) {
+      activeXhrRef.current.abort();
+      activeXhrRef.current = null;
+    }
+    setActiveDirectUpload(null);
+    addNotification('Direct upload was cancelled.', 'info');
+  }, [addNotification]);
+
+  const startDirectUpload = useCallback(async (file: File): Promise<boolean> => {
+    const isMp4 = file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
+    if (!isMp4) {
+      addNotification('Upload an MP4 video — other formats are not supported.', 'error');
+      return false;
+    }
+    if (file.size <= 0) {
+      addNotification('That file is empty.', 'error');
+      return false;
+    }
+
+    const state: DirectUploadState = {
+      fileName: file.name,
+      fileSize: file.size,
+      phase: 'checking',
+      progressPct: 0,
+      error: null,
+      startedAt: Date.now(),
+    };
+    setActiveDirectUpload(state);
+
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const durationSec = await new Promise<number>((resolve, reject) => {
+        const probe = document.createElement('video');
+        probe.preload = 'metadata';
+        probe.onloadedmetadata = () => resolve(probe.duration || 0);
+        probe.onerror = () => reject(new Error('Could not read this video.'));
+        probe.src = objectUrl;
+      });
+      if (!Number.isFinite(durationSec) || durationSec <= 0) throw new Error('Could not read the video duration.');
+      if (durationSec > 180.5) throw new Error('Videos can be at most 3 minutes long.');
+    } catch (err: any) {
+      URL.revokeObjectURL(objectUrl);
+      const msg = err instanceof Error ? err.message : 'Could not read this video.';
+      setActiveDirectUpload({ ...state, phase: 'error', error: msg });
+      addNotification(msg, 'error');
+      return false;
+    }
+    URL.revokeObjectURL(objectUrl);
+
+    const session = await currentSession().catch(() => null);
+    const token = session?.access_token;
+    if (!token) {
+      const msg = 'Sign in to upload a video.';
+      setActiveDirectUpload({ ...state, phase: 'error', error: msg });
+      addNotification(msg, 'error');
+      return false;
+    }
+
+    try {
+      setActiveDirectUpload((prev) => prev ? { ...prev, phase: 'uploading', progressPct: 0 } : null);
+      const reserveRes = await fetch(`${WORKER_BASE}/reserve`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'clip_video',
+          mime_type: 'video/mp4',
+          expected_bytes: file.size,
+          client_token: idempotencyToken(),
+        }),
+      });
+      const reserve = await reserveRes.json().catch(() => null);
+      if (!reserveRes.ok || !reserve?.upload_url || !reserve?.media_object_id) {
+        throw new Error(reserve?.error || `Upload could not start (HTTP ${reserveRes.status}).`);
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        activeXhrRef.current = xhr;
+        xhr.open('PUT', reserve.upload_url);
+        xhr.setRequestHeader('Content-Type', 'video/mp4');
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const pct = Math.round((event.loaded / event.total) * 100);
+            setActiveDirectUpload((prev) => prev ? { ...prev, progressPct: pct } : null);
+          }
+        };
+        xhr.onload = () => {
+          activeXhrRef.current = null;
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+          } else {
+            reject(new Error(`Upload failed (HTTP ${xhr.status}).`));
+          }
+        };
+        xhr.onerror = () => {
+          activeXhrRef.current = null;
+          reject(new Error('Upload failed — check your connection.'));
+        };
+        xhr.onabort = () => {
+          activeXhrRef.current = null;
+          reject(new Error('Upload cancelled.'));
+        };
+        xhr.send(file);
+      });
+
+      setActiveDirectUpload((prev) => prev ? { ...prev, phase: 'submitting', progressPct: 100 } : null);
+      const completeRes = await fetch(`${WORKER_BASE}/complete`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation_id: reserve.reservation_id }),
+      });
+      const complete = await completeRes.json().catch(() => null);
+      if (!completeRes.ok || !complete?.object_id) {
+        throw new Error(complete?.error || `Upload could not be finalized (HTTP ${completeRes.status}).`);
+      }
+
+      const rawTitle = file.name.replace(/\.mp4$/i, '').trim();
+      const jobRes = await fetch(`${WORKER_BASE}/jobs/direct`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ media_object_id: complete.object_id, title: rawTitle || 'Direct video upload' }),
+      });
+      const job = await jobRes.json().catch(() => null);
+      if (!jobRes.ok || !job?.job_id) {
+        throw new Error(job?.error || `Processing could not be queued (HTTP ${jobRes.status}).`);
+      }
+
+      setActiveDirectUpload((prev) => prev ? { ...prev, phase: 'done', progressPct: 100 } : null);
+      addNotification(`Video uploaded: ${rawTitle || 'Direct upload'}. Ready for processing!`, 'success');
+      Bridge.showSystemNotification('Dispatch Upload Complete', `${rawTitle || 'Video'} uploaded successfully! Processing on PC.`);
+      
+      // Auto-clear direct upload after 4 seconds
+      setTimeout(() => {
+        setActiveDirectUpload((prev) => (prev?.phase === 'done' ? null : prev));
+      }, 4000);
+
+      return true;
+    } catch (err: any) {
+      activeXhrRef.current = null;
+      if (err.message === 'Upload cancelled.') {
+        return false;
+      }
+      const msg = err instanceof Error ? err.message : 'Upload failed.';
+      setActiveDirectUpload((prev) => prev ? { ...prev, phase: 'error', error: msg } : null);
+      addNotification(msg, 'error');
+      Bridge.showSystemNotification('Dispatch Upload Failed', msg);
+      return false;
+    }
+  }, [addNotification]);
 
   const refreshActivity = useCallback(async () => {
     setIsRefreshing(true);
@@ -177,9 +356,9 @@ export const ActivityProvider: React.FC<{
     return () => clearInterval(interval);
   }, [refreshActivity]);
 
-  const activeJobsCount = cloudJobs.filter(
-    (j) => j.status === 'queued' || j.status === 'claimed' || j.status === 'processing'
-  ).length;
+  const activeJobsCount =
+    cloudJobs.filter((j) => j.status === 'queued' || j.status === 'claimed' || j.status === 'processing').length +
+    (activeDirectUpload && (activeDirectUpload.phase === 'uploading' || activeDirectUpload.phase === 'checking' || activeDirectUpload.phase === 'submitting') ? 1 : 0);
 
   const hasUnread = notifications.some((n) => !n.read);
   const hasBacklog = (queueStats?.queued_count ?? 0) > 0;
@@ -213,6 +392,10 @@ export const ActivityProvider: React.FC<{
         cloudJobs,
         queueStats,
         notifications,
+        activeDirectUpload,
+        startDirectUpload,
+        cancelDirectUpload,
+        clearDirectUpload,
         activeJobsCount,
         hasActiveActivity,
         addNotification,

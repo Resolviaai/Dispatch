@@ -720,6 +720,23 @@ export const Bridge = {
 
   removeAuthCallbackListener(listener: AuthCallbackListener): void {
     authCallbackListeners.delete(listener);
+  },
+
+  showSystemNotification(title: string, message: string): boolean {
+    if (typeof window !== 'undefined' && (window as any).DispatchBridge?.showSystemNotification) {
+      try {
+        return (window as any).DispatchBridge.showSystemNotification(title, message);
+      } catch (e) {
+        console.warn('Bridge showSystemNotification failed:', e);
+      }
+    }
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(title, { body: message });
+        return true;
+      } catch (_) {}
+    }
+    return false;
   }
 };
 
