@@ -432,6 +432,62 @@ class AndroidClipRenderer(
         fun parseCaptionGroups(docObj: JsonObject): List<CaptionGroup> {
             return parseOverlayGroups(docObj)
         }
+
+        fun remapOverlayGroupsToTimeline(
+            groups: List<CaptionGroup>,
+            segmentSpans: List<Pair<Long, Long>>,
+            clipStartSec: Float
+        ): List<CaptionGroup> {
+            if (groups.isEmpty() || segmentSpans.size <= 1) return groups
+
+            val remapped = mutableListOf<CaptionGroup>()
+            var offsetSec = 0f
+
+            for ((segStartMs, segEndMs) in segmentSpans) {
+                val sSec = segStartMs / 1000f
+                val eSec = segEndMs / 1000f
+                val segDur = eSec - sSec
+
+                for (group in groups) {
+                    val gSrcStart = clipStartSec + group.start
+                    val gSrcEnd = clipStartSec + group.end
+
+                    val overlapStart = maxOf(gSrcStart, sSec)
+                    val overlapEnd = minOf(gSrcEnd, eSec)
+
+                    if (overlapEnd - overlapStart > 0.005f) {
+                        val remappedWords = mutableListOf<CaptionWord>()
+                        for (w in group.words) {
+                            val wSrcStart = clipStartSec + w.start
+                            val wSrcEnd = clipStartSec + w.end
+
+                            val wOverlapStart = maxOf(wSrcStart, sSec)
+                            val wOverlapEnd = minOf(wSrcEnd, eSec)
+
+                            if (wOverlapEnd - wOverlapStart > 0.005f) {
+                                val wMappedStart = offsetSec + (wOverlapStart - sSec)
+                                val wMappedEnd = offsetSec + (wOverlapEnd - sSec)
+                                remappedWords.add(CaptionWord(w.text, wMappedStart, wMappedEnd))
+                            }
+                        }
+
+                        if (remappedWords.isNotEmpty() || group.words.isEmpty()) {
+                            val gMappedStart = if (remappedWords.isNotEmpty()) remappedWords.first().start else offsetSec + (overlapStart - sSec)
+                            val gMappedEnd = if (remappedWords.isNotEmpty()) remappedWords.last().end else offsetSec + (overlapEnd - sSec)
+                            remapped.add(
+                                group.copy(
+                                    start = gMappedStart,
+                                    end = gMappedEnd,
+                                    words = if (remappedWords.isNotEmpty()) remappedWords else group.words
+                                )
+                            )
+                        }
+                    }
+                }
+                offsetSec += segDur
+            }
+            return remapped
+        }
     }
 
     data class RenderOutcome(
@@ -611,8 +667,14 @@ class AndroidClipRenderer(
             val srcW = if (rot == 90 || rot == 270) rawH else rawW
             val srcH = if (rot == 90 || rot == 270) rawW else rawH
 
-            // 2. Parse Caption & Static Text/Overlay Tracks
-            val overlayGroups = parseOverlayGroups(docObj)
+            // 2. Parse Caption & Static Text/Overlay Tracks (remap to presentation time for multi-piece EDL)
+            val rawOverlayGroups = parseOverlayGroups(docObj)
+            val clipStartSec = if (segmentSpans.isNotEmpty()) segmentSpans.first().first / 1000f else 0f
+            val overlayGroups = if (segmentSpans.size > 1) {
+                remapOverlayGroupsToTimeline(rawOverlayGroups, segmentSpans, clipStartSec)
+            } else {
+                rawOverlayGroups
+            }
 
             // 3. Build Video Effects List (Horizontal Crop using cropAnchorX + 9:16 layout + Overlays)
             val is720p = request.targetResolution.equals("720p", ignoreCase = true)

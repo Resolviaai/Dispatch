@@ -54,7 +54,7 @@ import { CaptionStudio, ActivePanel } from '../captions/CaptionStudio';
 import { DispatchCaptionRenderer, applyColorOpacity, applyCaseTransform } from '../captions/DispatchCaptionRenderer';
 import { useCaptionHistory } from '../captions/useCaptionHistory';
 import { preserveWordTimingsOnEdit, splitCaptionGroupAtTime } from '../captions/timingPreservation';
-import { splitAt, roundMs, trimEdge, deletePiece, normalizeRanges } from '../captions/timelineEngine';
+import { splitAt, roundMs, trimEdge, deletePiece, normalizeRanges, keptDuration, concatToSource, sourceToConcat, remapCaptionTrackToTimeline } from '../captions/timelineEngine';
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
@@ -1569,6 +1569,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const rejectUndoTimerRef = useRef<number | null>(null);
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
   const [isVideoSelected, setIsVideoSelected] = useState<boolean>(false);
+  const [selectedPieceIndex, setSelectedPieceIndex] = useState<number | null>(null);
   const [isFullscreenPreview, setIsFullscreenPreview] = useState<boolean>(false);
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
   const [showStudioExitConfirm, setShowStudioExitConfirm] = useState<boolean>(false);
@@ -1891,6 +1892,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const handleClearSelection = useCallback(() => {
     setSelectedGroupId(null);
     setIsVideoSelected(false);
+    setSelectedPieceIndex(null);
     setActivePanel((current) => {
       if ([
         'style',
@@ -1917,6 +1919,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } else {
       setSelectedGroupId(id);
       setIsVideoSelected(false);
+      setSelectedPieceIndex(null);
     }
   }, [handleClearSelection]);
 
@@ -2776,8 +2779,35 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } catch {
       // Ignore parse failure
     }
-    return [];
-  }, [currentClip]);
+    const cStart = Number(currentClip.start_time ?? 0);
+    const cEnd = Number(currentClip.end_time ?? (cStart + clipDuration));
+    return [{
+      id: 'seg_1',
+      start: cStart,
+      end: cEnd,
+      index: 0,
+    }];
+  }, [currentClip, clipDuration]);
+
+  const effectiveRanges: [number, number][] = useMemo(() => {
+    if (activeSegments && activeSegments.length > 0) {
+      return activeSegments.map((s) => [s.start, s.end] as [number, number]);
+    }
+    const start = Number(currentClip?.start_time || 0);
+    const end = Number(currentClip?.end_time || (start + (currentClip?.duration || 40)));
+    return [[start, end]];
+  }, [activeSegments, currentClip?.start_time, currentClip?.end_time, currentClip?.duration]);
+
+  const totalSourceDur = Number(timelineSourceDuration || currentClip?.source_duration || clipEnd || 60);
+
+  // Consumer remapping (T03): Remap caption coordinates to output presentation timeline when multi-segment EDL exists
+  const presentationCaptionTrack = useMemo(() => {
+    if (!visibleCaptionTrack || !currentClip) return visibleCaptionTrack;
+    if (!effectiveRanges || effectiveRanges.length <= 1) return visibleCaptionTrack;
+    const clipStart = Number(currentClip.start_time || 0);
+    const sourceDur = Number(currentClip.source_duration || currentClip.end_time || 60);
+    return remapCaptionTrackToTimeline(visibleCaptionTrack, effectiveRanges, clipStart, sourceDur);
+  }, [visibleCaptionTrack, effectiveRanges, currentClip]);
 
   // 3. Playback Controls & Dual-Layer Video Sync with Adaptive Timebase Mapping
   const handleTogglePlay = () => {
@@ -2789,9 +2819,22 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     if (video.paused) {
       if (effectiveSource) {
-        if (video.currentTime >= clipEnd - 0.1 || video.currentTime < clipStart - 0.2) {
-          video.currentTime = clipStart;
-          if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
+        const firstPieceStart = effectiveRanges[0][0];
+        const lastPieceEnd = effectiveRanges[effectiveRanges.length - 1][1];
+        if (video.currentTime >= lastPieceEnd - 0.1 || video.currentTime < firstPieceStart - 0.2) {
+          video.currentTime = firstPieceStart;
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = firstPieceStart;
+        } else {
+          // If resting inside a gap, jump to next piece start
+          for (let i = 0; i < effectiveRanges.length - 1; i++) {
+            const pieceEnd = effectiveRanges[i][1];
+            const nextPieceStart = effectiveRanges[i + 1][0];
+            if (video.currentTime >= pieceEnd - 0.005 && video.currentTime < nextPieceStart) {
+              video.currentTime = nextPieceStart;
+              if (bgVideoRef.current) bgVideoRef.current.currentTime = nextPieceStart;
+              break;
+            }
+          }
         }
       } else {
         if (video.currentTime >= clipDuration - 0.1 || (video.duration && video.currentTime >= video.duration - 0.1)) {
@@ -2826,7 +2869,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setCurrentTime(safeTarget);
     const video = videoRef.current;
     const effectiveSource = isSourceTimebase && Boolean(video && video.duration >= clipEnd - 1.0);
-    const actualTarget = effectiveSource ? (clipStart + safeTarget) : safeTarget;
+    let actualTarget: number;
+    if (effectiveSource) {
+      try {
+        actualTarget = concatToSource(effectiveRanges, safeTarget, totalSourceDur);
+      } catch {
+        actualTarget = clipStart + safeTarget;
+      }
+    } else {
+      actualTarget = safeTarget;
+    }
     if (video) {
       video.currentTime = actualTarget;
     }
@@ -2913,11 +2965,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const effectiveSource = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
 
     if (effectiveSource) {
-      const localTime = Math.max(0, cur - clipStart);
+      const firstPieceStart = effectiveRanges[0][0];
+      const lastPieceEnd = effectiveRanges[effectiveRanges.length - 1][1];
 
       // Check if preview animation completed
       if (previewAnimRef.current?.active) {
-        if (localTime >= previewAnimRef.current.endTime) {
+        const concatCur = sourceToConcat(effectiveRanges, cur, totalSourceDur);
+        if (concatCur !== null && concatCur >= previewAnimRef.current.endTime) {
           const restore = previewAnimRef.current.restoreTime;
           previewAnimRef.current = null;
           video.pause();
@@ -2928,13 +2982,13 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         }
       }
 
-      // Source bounds: stop when end of clip is reached
-      if (shouldStopSourcePlayback(cur, clipEnd)) {
+      // 1. End-of-clip boundary: stop and reset to start of first piece
+      if (cur >= lastPieceEnd - 0.005) {
         video.pause();
-        video.currentTime = clipStart;
+        video.currentTime = firstPieceStart;
         if (bgVideoRef.current) {
           bgVideoRef.current.pause();
-          bgVideoRef.current.currentTime = clipStart;
+          bgVideoRef.current.currentTime = firstPieceStart;
         }
         setIsPlaying(false);
         lastTimeUpdateRef.current = 0;
@@ -2942,19 +2996,46 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         return;
       }
 
-      if (cur < clipStart - 0.2) {
-        video.currentTime = clipStart;
-        if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
+      // 2. Pre-clip underflow: reset to start of first piece
+      if (cur < firstPieceStart - 0.2) {
+        video.currentTime = firstPieceStart;
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = firstPieceStart;
         lastTimeUpdateRef.current = 0;
         setCurrentTime(0);
         return;
       }
 
-      if (Math.abs(localTime - lastTimeUpdateRef.current) >= 0.12 || cur <= clipStart + 0.05) {
-        lastTimeUpdateRef.current = localTime;
-        setCurrentTime(localTime);
+      // 3. Seam Detection & Deleted Gap Skipping:
+      let jumpedGap = false;
+      for (let i = 0; i < effectiveRanges.length - 1; i++) {
+        const pieceEnd = effectiveRanges[i][1];
+        const nextPieceStart = effectiveRanges[i + 1][0];
+        if (cur >= pieceEnd - 0.005 && cur < nextPieceStart) {
+          video.currentTime = nextPieceStart;
+          if (bgVideoRef.current && layoutMode === 'fit_blur') {
+            bgVideoRef.current.currentTime = nextPieceStart;
+          }
+          const nextConcat = sourceToConcat(effectiveRanges, nextPieceStart, totalSourceDur);
+          if (nextConcat !== null) {
+            setCurrentTime(nextConcat);
+            lastTimeUpdateRef.current = nextConcat;
+          }
+          jumpedGap = true;
+          break;
+        }
+      }
+      if (jumpedGap) return;
+
+      // 4. In-piece presentation time progression
+      const concatTime = sourceToConcat(effectiveRanges, cur, totalSourceDur);
+      if (concatTime !== null) {
+        if (Math.abs(concatTime - lastTimeUpdateRef.current) >= 0.08 || concatTime <= 0.05) {
+          lastTimeUpdateRef.current = concatTime;
+          setCurrentTime(concatTime);
+        }
       }
 
+      // 5. Background video drift correction
       if (bgVideoRef.current && layoutMode === 'fit_blur') {
         const diff = Math.abs(bgVideoRef.current.currentTime - cur);
         if (diff > 1.2) {
@@ -3537,41 +3618,66 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
   };
 
-  const handleSplitClip = async (splitTime: number) => {
+  /**
+   * Transactional timeline update engine (P0-A, P1-C, P2).
+   * Unifies split, delete_piece, trim, and auto_cut into a single reliable state machine:
+   * - Preserves surviving segment IDs (P2 stability)
+   * - Ensures live captionTrack ALWAYS overrides stale parsedDoc?.tracks (P0-A)
+   * - Updates currentClip.duration and kept_duration consistently
+   * - Optimistically updates UI, rolls back on cloud/409 failure with user toast (P1-C)
+   */
+  const commitTimeline = async (
+    newRanges: [number, number][],
+    actionType: 'split' | 'delete_piece' | 'trim_edge' | 'auto_cut',
+    feedbackMsg?: string,
+    rangeOverrides?: { start_time?: number; end_time?: number }
+  ): Promise<boolean> => {
     if (offlineReadOnly) {
-      setFeedback('Reconnect to split clip.');
-      return;
+      setFeedback('Reconnect to edit timeline.');
+      return false;
     }
-    if (!currentClip) return;
-    try {
-      const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
-      const clipStart = Number(currentClip.start_time || 0);
-      const clipEnd = Number(currentClip.end_time || sourceDuration);
+    if (!currentClip) return false;
 
-      // Window-relative to source time mapping (C2 -> C3)
-      const windowStart = Number((currentClip as any).edit_window?.start ?? clipStart);
-      const sourceSplitTime = roundMs(windowStart + splitTime);
+    const previousClip = { ...currentClip };
+    const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
+
+    try {
+      const canonical = normalizeRanges(newRanges, sourceDuration);
+      if (canonical.length === 0) {
+        setFeedback('Cannot remove all segments from clip.');
+        return false;
+      }
 
       const existingDoc = (currentClip as any).project_document;
       const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
-      const rawSegments = parsedDoc?.timeline?.segments || [
-        { id: 'seg_1', source_start: clipStart, source_end: clipEnd }
-      ];
-      const ranges = rawSegments.map((s: any) => [
-        Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
-        Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
-      ]);
+      const prevSegments = parsedDoc?.timeline?.segments || [];
 
-      // Pure segment splitting
-      const newRanges = splitAt(ranges, sourceSplitTime, sourceDuration);
+      // Preserve existing IDs for matching segments (P2 ID stability)
+      const newSegments = canonical.map((r, i) => {
+        const existing = prevSegments.find((s: any) => {
+          const sStart = Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]);
+          const sEnd = Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]);
+          return Math.abs(sStart - r[0]) < 0.01 && Math.abs(sEnd - r[1]) < 0.01;
+        });
+        return {
+          id: existing?.id || `seg_${i + 1}_${Date.now().toString(36)}`,
+          source_start: r[0],
+          source_end: r[1],
+        };
+      });
 
-      const newSegments = newRanges.map((r, i) => ({
-        id: rawSegments[i]?.id || `seg_${i + 1}_${Date.now().toString(36)}`,
-        source_start: r[0],
-        source_end: r[1],
-      }));
+      const newKeptDuration = roundMs(keptDuration(canonical));
 
-      const newKeptDuration = roundMs(newRanges.reduce((acc, r) => acc + (r[1] - r[0]), 0));
+      // P0-A: Ensure live captionTrack takes absolute precedence over stale parsedDoc tracks
+      const activeCaptionTrack = captionTrack
+        ? { ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }
+        : null;
+      const otherTracks = Array.isArray(parsedDoc?.tracks)
+        ? parsedDoc.tracks.filter((t: any) => t && t.kind !== 'captions' && t.type !== 'caption')
+        : [];
+      const mergedTracks = activeCaptionTrack
+        ? [activeCaptionTrack, ...otherTracks]
+        : (parsedDoc?.tracks || []);
 
       const updatedProjectDoc = {
         version: 1,
@@ -3580,27 +3686,34 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           segments: newSegments,
           kept_duration: newKeptDuration,
         },
-        tracks: parsedDoc?.tracks || (captionTrack ? [{ ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }] : []),
+        tracks: mergedTracks,
       };
 
       const baseRevision = Number((currentClip as any).segments_revision ?? 0);
-      const operationId = `op_split_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const operationId = `op_${actionType}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-      // Update clip in-place (Single Library Card: NO second clip card!)
+      const newStart = rangeOverrides?.start_time ?? canonical[0][0];
+      const newEnd = rangeOverrides?.end_time ?? canonical[canonical.length - 1][1];
+
       const updatedClip = {
         ...currentClip,
-        project_document: updatedProjectDoc,
+        start_time: newStart,
+        end_time: newEnd,
+        duration: newKeptDuration,
         kept_duration: newKeptDuration,
+        project_document: updatedProjectDoc,
         segments_revision: baseRevision + 1,
         can_undo: true,
         can_redo: false,
       };
 
+      // Optimistic update
       setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
-      setSaveStatus('saved');
-      setFeedback(`Split clip at ${splitTime.toFixed(1)}s (${newSegments.length} segments).`);
+      setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
+      setDuration(newKeptDuration);
+      if (feedbackMsg) setFeedback(feedbackMsg);
 
-      // Commit asynchronously to Cloudflare Worker
+      // Async persistence to Cloudflare Worker
       const session = await currentSession();
       const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
       if (token) {
@@ -3616,105 +3729,113 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             document: updatedProjectDoc,
             project_document: updatedProjectDoc,
             operation_id: operationId,
-            action_type: 'split',
+            action_type: actionType,
           }),
         });
-        if (res.ok) {
-          const cloudData = await res.json().catch(() => ({}));
-          const rev = cloudData.revision ?? cloudData.segments_revision;
-          if (rev) {
-            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-          }
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData?.detail || `Cloud save failed (${res.status})`);
+        }
+
+        const cloudData = await res.json().catch(() => ({}));
+        const rev = cloudData.revision ?? cloudData.segments_revision;
+        if (rev) {
+          setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
         }
       }
+
+      setSaveStatus('saved');
+      return true;
     } catch (err: any) {
-      setFeedback(err?.message || 'Failed to split segment.');
+      console.error(`Timeline commit failed (${actionType}):`, err);
+      // P1-C: Rollback on failure!
+      setReadyClips((prev) => prev.map((c) => (c.id === previousClip.id ? previousClip : c)));
+      setApprovedClips((prev) => prev.map((c) => (c.id === previousClip.id ? previousClip : c)));
+      setDuration(previousClip.duration || previousClip.kept_duration || 30);
+      setSaveStatus('error');
+      setFeedback(`Failed to ${actionType.replace('_', ' ')}: ${err?.message || 'conflict or network error'}. Reverted.`);
+      return false;
     }
+  };
+
+  const handleSplitClip = async (splitTime: number) => {
+    if (!currentClip) return;
+    const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
+    const clipStart = Number(currentClip.start_time || 0);
+    const clipEnd = Number(currentClip.end_time || sourceDuration);
+
+    const existingDoc = (currentClip as any).project_document;
+    const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+    const rawSegments = parsedDoc?.timeline?.segments || [
+      { id: 'seg_1', source_start: clipStart, source_end: clipEnd }
+    ];
+    const ranges: [number, number][] = rawSegments.map((s: any) => [
+      Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+      Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+    ]);
+
+    let sourceSplitTime: number;
+    if (isSourceTimebase) {
+      try {
+        sourceSplitTime = roundMs(concatToSource(ranges, splitTime, sourceDuration));
+      } catch {
+        const windowStart = Number((currentClip as any).edit_window?.start ?? clipStart);
+        sourceSplitTime = roundMs(windowStart + splitTime);
+      }
+    } else {
+      sourceSplitTime = roundMs(splitTime);
+    }
+
+    const newRanges = splitAt(ranges, sourceSplitTime, sourceDuration);
+    await commitTimeline(newRanges, 'split', `Split clip at ${splitTime.toFixed(1)}s (${newRanges.length} pieces).`);
   };
 
   const handleDeletePiece = async (segmentIndex: number) => {
     if (!currentClip) return;
+    const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
+    const clipStart = Number(currentClip.start_time || 0);
+    const clipEnd = Number(currentClip.end_time || sourceDuration);
+
+    const existingDoc = (currentClip as any).project_document;
+    const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+    const rawSegments = parsedDoc?.timeline?.segments || [
+      { id: 'seg_1', source_start: clipStart, source_end: clipEnd }
+    ];
+    const ranges: [number, number][] = rawSegments.map((s: any) => [
+      Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+      Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+    ]);
+
+    if (ranges.length <= 1) {
+      setFeedback('Cannot delete the only remaining piece of a clip.');
+      return;
+    }
+
+    const newRanges = deletePiece(ranges, segmentIndex, sourceDuration);
+    await commitTimeline(newRanges, 'delete_piece', `Deleted piece (${newRanges.length} remaining).`);
+  };
+
+  const handleTrimPiece = async (pieceIndex: number, side: 'start' | 'end', newSourceTime: number) => {
+    if (!currentClip) return false;
+    const sourceDuration = timelineSourceDuration > 0 ? timelineSourceDuration : (currentClip.source_duration || currentClip.end_time || 40);
+    const existingDoc = (currentClip as any).project_document;
+    const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+    const rawSegments = parsedDoc?.timeline?.segments || [
+      { id: 'seg_1', source_start: currentClip.start_time || 0, source_end: currentClip.end_time || sourceDuration }
+    ];
+    const ranges: [number, number][] = rawSegments.map((s: any) => [
+      Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+      Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+    ]);
+
     try {
-      const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
-      const clipStart = Number(currentClip.start_time || 0);
-      const clipEnd = Number(currentClip.end_time || sourceDuration);
-
-      const existingDoc = (currentClip as any).project_document;
-      const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
-      const rawSegments = parsedDoc?.timeline?.segments || [
-        { id: 'seg_1', source_start: clipStart, source_end: clipEnd }
-      ];
-      const ranges = rawSegments.map((s: any) => [
-        Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
-        Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
-      ]);
-
-      if (ranges.length <= 1) {
-        setFeedback('Cannot delete the only remaining segment of a clip.');
-        return;
-      }
-
-      const newRanges = deletePiece(ranges, segmentIndex, sourceDuration);
-      const newSegments = newRanges.map((r, idx) => ({
-        id: `seg_${idx + 1}_${Date.now().toString(36)}`,
-        source_start: r[0],
-        source_end: r[1],
-      }));
-      const newKeptDuration = roundMs(newRanges.reduce((acc, r) => acc + (r[1] - r[0]), 0));
-
-      const updatedProjectDoc = {
-        version: 1,
-        timeline: {
-          source_duration: sourceDuration,
-          segments: newSegments,
-          kept_duration: newKeptDuration,
-        },
-        tracks: parsedDoc?.tracks || (captionTrack ? [{ ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }] : []),
-      };
-
-      const baseRevision = Number((currentClip as any).segments_revision ?? 0);
-      const operationId = `op_del_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-      const updatedClip = {
-        ...currentClip,
-        project_document: updatedProjectDoc,
-        kept_duration: newKeptDuration,
-        segments_revision: baseRevision + 1,
-        can_undo: true,
-        can_redo: false,
-      };
-
-      setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
-      setFeedback(`Deleted segment piece (${newSegments.length} remaining).`);
-
-      const session = await currentSession();
-      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
-      if (token) {
-        const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            expected_revision: baseRevision,
-            base_revision: baseRevision,
-            document: updatedProjectDoc,
-            project_document: updatedProjectDoc,
-            operation_id: operationId,
-            action_type: 'delete_piece',
-          }),
-        });
-        if (res.ok) {
-          const cloudData = await res.json().catch(() => ({}));
-          const rev = cloudData.revision ?? cloudData.segments_revision;
-          if (rev) {
-            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-          }
-        }
-      }
-    } catch (err: any) {
-      setFeedback(err?.message || 'Failed to delete piece.');
+      const updatedRanges = trimEdge(ranges, pieceIndex, side, newSourceTime, sourceDuration);
+      const success = await commitTimeline(updatedRanges, 'trim_edge', `Trimmed piece ${pieceIndex + 1}.`);
+      return Boolean(success);
+    } catch (err) {
+      console.warn('Trim piece failed:', err);
+      return false;
     }
   };
 
@@ -3732,97 +3853,37 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     bgVideoRef.current?.pause();
     setIsPlaying(false);
 
-    try {
-      const parsedDoc = currentClip.project_document
-        ? (typeof currentClip.project_document === 'string' ? JSON.parse(currentClip.project_document) : currentClip.project_document)
-        : null;
+    const existingDoc = (currentClip as any).project_document;
+    const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+    let currentRanges: [number, number][] = [];
+    if (parsedDoc?.timeline?.segments && Array.isArray(parsedDoc.timeline.segments) && parsedDoc.timeline.segments.length > 0) {
+      currentRanges = parsedDoc.timeline.segments.map((s: any) => [
+        Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
+        Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
+      ]);
+    } else {
+      currentRanges = [[currentClip.start_time, currentClip.end_time]];
+    }
 
-      let currentRanges: [number, number][] = [];
-      if (parsedDoc?.timeline?.segments && Array.isArray(parsedDoc.timeline.segments) && parsedDoc.timeline.segments.length > 0) {
-        currentRanges = parsedDoc.timeline.segments.map((s: any) => [
-          Number(typeof s === 'object' && s !== null ? (s.source_start ?? s.start) : s[0]),
-          Number(typeof s === 'object' && s !== null ? (s.source_end ?? s.end) : s[1]),
-        ]);
-      } else {
-        currentRanges = [[currentClip.start_time, currentClip.end_time]];
-      }
+    let updatedRanges: [number, number][];
+    if (currentRanges.length <= 1) {
+      updatedRanges = [[newStart, newEnd]];
+    } else {
+      updatedRanges = currentRanges.map((r, idx) => {
+        if (idx === 0) return [newStart, r[1]] as [number, number];
+        if (idx === currentRanges.length - 1) return [r[0], newEnd] as [number, number];
+        return r;
+      });
+    }
 
-      let updatedRanges: [number, number][];
-      if (currentRanges.length <= 1) {
-        updatedRanges = [[newStart, newEnd]];
-      } else {
-        updatedRanges = currentRanges.map((r, idx) => {
-          if (idx === 0) return [newStart, r[1]] as [number, number];
-          if (idx === currentRanges.length - 1) return [r[0], newEnd] as [number, number];
-          return r;
-        });
-      }
+    const success = await commitTimeline(
+      updatedRanges,
+      'trim_edge',
+      `Trimmed clip (${(newEnd - newStart).toFixed(1)}s).`,
+      { start_time: newStart, end_time: newEnd }
+    );
 
-      const canonical = normalizeRanges(updatedRanges, sourceDuration);
-      const newSegments = canonical.map((r, idx) => ({
-        id: `seg_${idx + 1}`,
-        source_start: r[0],
-        source_end: r[1],
-      }));
-      const newKeptDuration = roundMs(canonical.reduce((acc, r) => acc + (r[1] - r[0]), 0));
-
-      const updatedProjectDoc = {
-        version: 1,
-        timeline: {
-          source_duration: sourceDuration,
-          segments: newSegments,
-          kept_duration: newKeptDuration,
-        },
-        tracks: parsedDoc?.tracks || (captionTrack ? [{ ...captionTrack, kind: 'captions', id: captionTrack.id || 'caption_primary' }] : []),
-      };
-
-      const baseRevision = Number((currentClip as any).segments_revision ?? 0);
-      const operationId = `op_trim_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-      const updatedClip = {
-        ...currentClip,
-        start_time: canonical[0][0],
-        end_time: canonical[canonical.length - 1][1],
-        duration: newKeptDuration,
-        project_document: updatedProjectDoc,
-        kept_duration: newKeptDuration,
-        segments_revision: baseRevision + 1,
-        can_undo: true,
-        can_redo: false,
-      };
-
-      setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
-      setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
-      setSaveStatus('saved');
-      setFeedback(`Trimmed clip (${newKeptDuration.toFixed(1)}s).`);
-
-      const session = await currentSession();
-      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
-      if (token) {
-        const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            base_revision: baseRevision,
-            expected_revision: baseRevision,
-            document: updatedProjectDoc,
-            project_document: updatedProjectDoc,
-            operation_id: operationId,
-            action_type: 'trim_edge',
-          }),
-        });
-        if (res.ok) {
-          const cloudData = await res.json().catch(() => ({}));
-          const rev = cloudData.revision ?? cloudData.segments_revision;
-          if (rev) {
-            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-          }
-        }
-      }
-
+    if (success) {
       if (pcHost) {
         fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
           method: 'POST',
@@ -3830,7 +3891,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           body: JSON.stringify({ start_time: newStart, end_time: newEnd, range_revision: currentClip.range_revision || 0 }),
         }).catch(() => {});
       }
-
       if (isSourceTimebase && videoRef.current) {
         videoRef.current.currentTime = newStart;
         if (bgVideoRef.current && layoutMode === 'fit_blur') bgVideoRef.current.currentTime = newStart;
@@ -3838,13 +3898,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       if (isSourceTimebase) {
         lastTimeUpdateRef.current = 0;
         setCurrentTime(0);
-        setDuration(newKeptDuration);
       }
-      return true;
-    } catch (err: any) {
-      setFeedback(err?.message || 'Failed to trim clip.');
-      return false;
     }
+    return success;
   };
 
   const handleDeleteGroup = (groupId: string) => {
@@ -3961,9 +4017,38 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         // 1. If running natively on Android, trigger on-device Media3 rendering & background upload
         const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
         if (bridge?.startRenderAndPublish) {
+          // P0-B: Synthesize complete project_document if untouched so Android Media3 renders exact range and live captions
+          const rawDoc = clipToApprove.project_document;
+          const parsedDoc = typeof rawDoc === 'string' ? JSON.parse(rawDoc) : (rawDoc && Object.keys(rawDoc).length > 0 ? rawDoc : null);
+          const clipStart = Number(clipToApprove.start_time || 0);
+          const clipEnd = Number(clipToApprove.end_time || (clipStart + 30));
+          const sourceDur = Number(clipToApprove.source_duration || clipEnd || 60);
+
+          const effectiveDoc = parsedDoc ? { ...parsedDoc } : {
+            version: 1,
+            timeline: {
+              source_duration: sourceDur,
+              segments: [{
+                id: 'seg_1',
+                source_start: clipStart,
+                source_end: clipEnd,
+              }],
+              kept_duration: roundMs(clipEnd - clipStart),
+            },
+            tracks: [],
+          };
+
+          if (captionTrack && (!effectiveDoc.tracks || effectiveDoc.tracks.length === 0)) {
+            effectiveDoc.tracks = [{
+              ...captionTrack,
+              kind: 'captions',
+              id: captionTrack.id || 'caption_primary',
+            }];
+          }
+
           const renderJobPayload = {
             clip_id: clipToApprove.id,
-            project_document: clipToApprove.project_document || {},
+            project_document: effectiveDoc,
             source_video_path: (clipToApprove as any).local_path || (clipToApprove as any).video_path || '',
             layout_mode: optimisticLayout,
             target_resolution: '1080p',
@@ -4763,9 +4848,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                             {clip.title || clip.hook || 'Untitled Clip'}
                           </h3>
                           <p className="text-xs text-text-muted mt-1 tabular-nums truncate">
-                            {typeof clip.virality_score === 'number' && clip.virality_score > 0 && (
-                              <>{clip.virality_score}% &middot; </>
-                            )}
                             {age || (clip.session_id ? `#${clip.session_id.replace('sess_', '')}` : 'Clip')}
                             {isPublished ? (
                               !clip.is_cloud_only && !retention.isExpired ? (
@@ -5005,7 +5087,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             >
               {visibleCaptionTrack && (
                 <DispatchCaptionRenderer
-                  track={visibleCaptionTrack}
+                  track={presentationCaptionTrack}
                   currentTime={currentTime}
                   layoutMode={layoutMode}
                   showBoundingBox={false}
@@ -5585,7 +5667,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             }}
           >
             <InteractiveCaptionCanvas
-              track={visibleCaptionTrack}
+              track={presentationCaptionTrack}
               currentTime={currentTime}
               isPlaying={isPlaying}
               selectedGroupId={selectedGroupId}
@@ -5696,32 +5778,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             </div>
           </div>
 
-          {activeSegments.length > 1 && (
-            <div className="flex items-center gap-1.5 overflow-x-auto py-1.5 px-3 bg-[#0d0f12] border-b border-border z-20 shrink-0">
-              <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider shrink-0">Pieces ({activeSegments.length}):</span>
-              {activeSegments.map((seg) => (
-                <div
-                  key={seg.id || seg.index}
-                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-200 border border-border text-[11px] text-text-secondary shrink-0 shadow-sm"
-                >
-                  <span className="font-mono tabular-nums">{seg.start.toFixed(1)}s&nbsp;–&nbsp;{seg.end.toFixed(1)}s</span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeletePiece(seg.index);
-                    }}
-                    className="w-4 h-4 rounded-full hover:bg-destructive/20 hover:text-destructive flex items-center justify-center text-text-muted active:scale-90 transition-all"
-                    title={`Delete piece ${seg.index + 1}`}
-                    aria-label={`Delete piece ${seg.index + 1}`}
-                  >
-                    <X size={10} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
           {activePanel === 'none' ? (
             <>
               {/* 4. MULTI-TRACK TIMELINE (Seamless edge-to-edge surface filling available workspace) */}
@@ -5825,6 +5881,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     timeMode={isSourceTimebase ? 'source' : 'clip'}
                     selectedGroupId={selectedGroupId}
                     isVideoSelected={isVideoSelected}
+                    segments={activeSegments}
+                    selectedPieceIndex={selectedPieceIndex}
+                    onSelectPiece={(idx) => {
+                      setSelectedPieceIndex(idx);
+                      setIsVideoSelected(true);
+                      setSelectedGroupId(null);
+                    }}
+                    onTrimPiece={handleTrimPiece}
                     isPlaying={isPlaying}
                     filmstrip={filmstripData}
                     mediaElementRef={videoRef}
@@ -5839,6 +5903,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     onSelectVideo={() => {
                       setIsVideoSelected(true);
                       setSelectedGroupId(null);
+                      if (selectedPieceIndex === null) {
+                        setSelectedPieceIndex(0);
+                      }
                     }}
                     onUpdateGroup={handleUpdateGroup}
                     onSplitGroup={handleSplitGroup}
@@ -5853,6 +5920,22 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   duration={duration || currentClip.duration || 40}
                   selectedGroupId={selectedGroupId}
                   isVideoSelected={isVideoSelected}
+                  canDeletePiece={activeSegments.length > 1}
+                  piecesCount={activeSegments.length}
+                  selectedPieceIndex={selectedPieceIndex}
+                  onDeletePiece={() => {
+                    const targetIndex = (selectedPieceIndex !== null && selectedPieceIndex !== undefined)
+                      ? selectedPieceIndex
+                      : activeSegments.findIndex((s) => {
+                          const t = isSourceTimebase
+                            ? (videoRef.current ? videoRef.current.currentTime : currentTime)
+                            : currentTime;
+                          return t >= s.start && t <= s.end;
+                        });
+                    if (targetIndex >= 0) {
+                      handleDeletePiece(targetIndex);
+                    }
+                  }}
                   layoutMode={layoutMode}
                   availableLayoutModes={currentClip.available_layout_modes || []}
                   mainVideoVolume={mainVideoVolume}
@@ -5863,7 +5946,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   onSelectGroup={handleSelectGroup}
                   onSelectVideo={(sel) => {
                     setIsVideoSelected(sel);
-                    if (sel) setSelectedGroupId(null);
+                    if (sel) {
+                      setSelectedGroupId(null);
+                      if (selectedPieceIndex === null) setSelectedPieceIndex(0);
+                    }
                   }}
                   onUpdateTrack={(updated, commit = true) => {
                     setCaptionTrack(updated, commit);
@@ -5891,6 +5977,22 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 duration={duration || currentClip.duration || 40}
                 selectedGroupId={selectedGroupId}
                 isVideoSelected={isVideoSelected}
+                canDeletePiece={activeSegments.length > 1}
+                piecesCount={activeSegments.length}
+                selectedPieceIndex={selectedPieceIndex}
+                onDeletePiece={() => {
+                  const targetIndex = (selectedPieceIndex !== null && selectedPieceIndex !== undefined)
+                    ? selectedPieceIndex
+                    : activeSegments.findIndex((s) => {
+                        const t = isSourceTimebase
+                          ? (videoRef.current ? videoRef.current.currentTime : currentTime)
+                          : currentTime;
+                        return t >= s.start && t <= s.end;
+                      });
+                  if (targetIndex >= 0) {
+                    handleDeletePiece(targetIndex);
+                  }
+                }}
                 layoutMode={layoutMode}
                 availableLayoutModes={currentClip.available_layout_modes || []}
                 mainVideoVolume={mainVideoVolume}
@@ -5901,7 +6003,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 onSelectGroup={handleSelectGroup}
                 onSelectVideo={(sel) => {
                   setIsVideoSelected(sel);
-                  if (sel) setSelectedGroupId(null);
+                  if (sel) {
+                    setSelectedGroupId(null);
+                    if (selectedPieceIndex === null) setSelectedPieceIndex(0);
+                  }
                 }}
                 onUpdateTrack={(updated, commit = true) => {
                   setCaptionTrack(updated, commit);
@@ -5970,7 +6075,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               >
                 {visibleCaptionTrack && (
                   <DispatchCaptionRenderer
-                    track={visibleCaptionTrack}
+                    track={presentationCaptionTrack}
                     currentTime={currentTime}
                     layoutMode={layoutMode}
                     showBoundingBox={false}

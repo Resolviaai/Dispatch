@@ -1,0 +1,166 @@
+"""Unit tests for Waveform Analysis and Style-Aware Auto-Cut Engine."""
+
+import math
+import struct
+import unittest
+from pathlib import Path
+
+from dispatch.video_engine.waveform import (
+    compute_rms_profile,
+    find_zero_crossing,
+    snap_boundary_to_waveform_silence,
+)
+from dispatch.video_engine.autocut import (
+    detect_mechanical_stutters,
+    analyze_waveform_and_transcript_autocuts,
+)
+
+
+def generate_synthetic_pcm(
+    sample_rate: int = 16000,
+    tone_duration: float = 1.0,
+    silence_duration: float = 3.0,
+    frequency: float = 440.0
+) -> bytes:
+    """Generate synthetic 16-bit mono PCM: tone -> silence -> tone."""
+    samples = []
+    
+    # 1. Tone 1
+    total_tone_samples = int(tone_duration * sample_rate)
+    for i in range(total_tone_samples):
+        # Apply exponential decay at end
+        decay = 1.0
+        if i > total_tone_samples - int(0.2 * sample_rate):
+            decay = max(0.0, 1.0 - (i - (total_tone_samples - int(0.2 * sample_rate))) / (0.2 * sample_rate))
+        val = int(16000 * decay * math.sin(2 * math.pi * frequency * (i / sample_rate)))
+        samples.append(val)
+        
+    # 2. Silence
+    total_silence_samples = int(silence_duration * sample_rate)
+    for _ in range(total_silence_samples):
+        samples.append(0)
+        
+    # 3. Tone 2
+    for i in range(total_tone_samples):
+        val = int(16000 * math.sin(2 * math.pi * frequency * (i / sample_rate)))
+        samples.append(val)
+        
+    raw_bytes = struct.pack(f"<{len(samples)}h", *samples)
+    return raw_bytes
+
+
+class TestWaveformAutoCut(unittest.TestCase):
+    def setUp(self):
+        self.sample_rate = 16000
+        self.pcm = generate_synthetic_pcm(
+            sample_rate=self.sample_rate,
+            tone_duration=1.0,
+            silence_duration=3.0,
+            frequency=440.0
+        )
+
+    def test_compute_rms_profile(self):
+        profile = compute_rms_profile(self.pcm, sample_rate=self.sample_rate, frame_duration_ms=20.0)
+        self.assertTrue(len(profile) > 0)
+        # Tone at 0.5s should have high energy (approx -6 to -12 dB)
+        speech_frame = [p for p in profile if 0.4 <= p[0] <= 0.6][0]
+        self.assertGreater(speech_frame[1], -20.0)
+        
+        # Silence at 2.5s should have low energy (< -80 dB)
+        silence_frame = [p for p in profile if 2.4 <= p[0] <= 2.6][0]
+        self.assertLess(silence_frame[1], -60.0)
+
+    def test_zero_crossing_snapping(self):
+        # Target time 1.0s
+        snap_time = find_zero_crossing(self.pcm, 1.0, search_window_ms=25.0, sample_rate=self.sample_rate)
+        # Verify sample at snap_time is near zero
+        sample_idx = int(snap_time * self.sample_rate)
+        chunk = self.pcm[sample_idx * 2 : (sample_idx + 2) * 2]
+        s1, s2 = struct.unpack("<2h", chunk)
+        # Zero-crossing condition: product <= 0 or magnitude is very small
+        self.assertTrue(s1 * s2 <= 0 or abs(s1) < 500)
+
+    def test_snap_boundary_preserves_speech_release_padding(self):
+        # Speech ended nominally at 0.95s, but acoustic decay persists
+        snapped = snap_boundary_to_waveform_silence(
+            self.pcm,
+            raw_time=0.95,
+            mode="speech_release",
+            silence_threshold_db=-32.0,
+            min_speech_padding_ms=150.0,
+            sample_rate=self.sample_rate
+        )
+        # Snapped time must be AT LEAST raw_time + 150ms padding (>= 1.10s)
+        self.assertGreaterEqual(snapped, 1.09)
+
+    def test_detect_mechanical_stutters(self):
+        words = [
+            {"text": "I", "start": 0.0, "end": 0.2},
+            {"text": "mean", "start": 0.25, "end": 0.5},
+            {"text": "I", "start": 0.8, "end": 1.0},
+            {"text": "mean", "start": 1.05, "end": 1.3},
+            {"text": "Dispatch", "start": 1.4, "end": 1.8},
+        ]
+        proposals = detect_mechanical_stutters(words)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["type"], "false_start")
+        self.assertEqual(proposals[0]["source_start"], 0.0)
+        self.assertEqual(proposals[0]["source_end"], 0.8)
+        self.assertEqual(proposals[0]["status"], "candidate")
+
+    def test_preserve_self_corrections(self):
+        words = [
+            {"text": "I", "start": 0.0, "end": 0.2},
+            {"text": "think", "start": 0.25, "end": 0.5},
+            {"text": "actually", "start": 0.7, "end": 1.0},
+            {"text": "no", "start": 1.05, "end": 1.2},
+            {"text": "it's", "start": 1.3, "end": 1.5},
+        ]
+        proposals = detect_mechanical_stutters(words)
+        self.assertEqual(len(proposals), 0, "Self-corrections must never be flagged as stutters")
+
+    def test_autocut_combines_waveform_and_transcript(self):
+        # Transcript with a 3.0s dead air gap (1.0s to 4.0s)
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "First thought here.",
+                "words": [
+                    {"text": "First", "start": 0.0, "end": 0.3},
+                    {"text": "thought", "start": 0.35, "end": 0.7},
+                    {"text": "here.", "start": 0.75, "end": 1.0},
+                ]
+            },
+            {
+                "start": 4.0,
+                "end": 5.0,
+                "text": "Second thought starts.",
+                "words": [
+                    {"text": "Second", "start": 4.0, "end": 4.4},
+                    {"text": "thought", "start": 4.45, "end": 4.7},
+                    {"text": "starts.", "start": 4.75, "end": 5.0},
+                ]
+            }
+        ]
+        proposals = analyze_waveform_and_transcript_autocuts(
+            media_path=None,
+            transcript_segments=segments,
+            clip_start=0.0,
+            clip_end=5.0,
+            raw_pcm_bytes=self.pcm,
+            min_dead_air=2.5,
+            target_pause=0.8
+        )
+        self.assertEqual(len(proposals), 1)
+        prop = proposals[0]
+        self.assertEqual(prop["type"], "dead_air")
+        self.assertEqual(prop["status"], "candidate")
+        # Ensure cut starts AFTER the word ending with acoustic release padding >= 150ms
+        self.assertGreaterEqual(prop["source_start"], 1.15)
+        # Ensure cut ends BEFORE the next word with attack padding
+        self.assertLessEqual(prop["source_end"], 4.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

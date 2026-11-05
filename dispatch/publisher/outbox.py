@@ -178,7 +178,15 @@ def _processing_deadline_exceeded(job: Dict[str, Any]) -> bool:
             )
             conn.commit()
         logger.warning("Processing job %s exceeded the deadline; moved to reconciliation", job["id"])
-        check_and_finalize_clip(job["clip_id"], Path(job.get("video_path") or f"storage/clips/{job['clip_id']}.mp4"))
+        clip_id = job.get("clip_id")
+        if not clip_id:
+            with db.get_db_connection() as conn:
+                r = conn.execute("SELECT clip_id FROM publishing_outbox WHERE id = ?", (job["id"],)).fetchone()
+                if r:
+                    clip_id = r["clip_id"]
+                    
+        if clip_id:
+            check_and_finalize_clip(clip_id, Path(job.get("video_path") or f"storage/clips/{clip_id}.mp4"))
         return True
     return False
 

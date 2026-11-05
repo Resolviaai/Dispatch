@@ -1,6 +1,6 @@
 """YouTube Inbox Catcher & Video Processing Pipeline.
 Polls or accepts YouTube video URLs/IDs, downloads media via yt-dlp, extracts timestamped transcripts
-(fetching YouTube auto-captions with an automatic fallback to local faster-whisper), runs semantic highlight
+(fetching YouTube auto-captions with canonical Gemini transcription), runs semantic highlight
 detection, renders vertical 9:16 clips, and populates the Review Dashboard idempotently.
 """
 import re
@@ -19,7 +19,7 @@ from dispatch import db
 from dispatch.youtube_inbox.vtt_parser import parse_vtt_file, parse_vtt_content
 from dispatch.ai_clips.highlight_finder import identify_and_save_highlights
 from dispatch.video_engine.renderer import render_clip
-from dispatch.transcription.transcriber import transcribe_video
+from dispatch.transcription.gemini_engine import transcribe_media
 
 logger = logging.getLogger("dispatch.youtube_inbox.catcher")
 
@@ -284,7 +284,7 @@ class YouTubeInboxCatcher:
 
         existing = db.get_youtube_video(video_id)
         # Idempotency check: If already DOWNLOADED or completed downstream, return existing record.
-        # CAPTIONS_UNAVAILABLE with an intact file is skipped too: a bounded whisper
+        # CAPTIONS_UNAVAILABLE with an intact file is skipped too: a bounded Gemini transcription
         # retry must not trigger a full yt-dlp re-download each time.
         if existing and existing["status"] in (
             "DOWNLOADED", "WAITING_FOR_TRANSCRIPT", "TRANSCRIBED",
@@ -636,7 +636,6 @@ class YouTubeInboxCatcher:
         url_or_id: str,
         session_id: Optional[str] = None,
         dispatch_id: Optional[str] = None,
-        force_whisper: bool = False,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """[LEGACY DOWNSTREAM DEMO] Full end-to-end processing pipeline for a single YouTube video.
@@ -648,7 +647,7 @@ class YouTubeInboxCatcher:
         2. Idempotent check in SQLite DB.
         3. Fetch metadata and register in youtube_inbox with dispatch_id.
         4. Download video media (DOWNLOADING).
-        5. Fetch transcript (TRANSCRIBING: YouTube captions / VTT with Whisper fallback).
+        5. Fetch transcript (TRANSCRIBING: YouTube captions / VTT with canonical Gemini transcription).
         6. Detect semantic highlights (ANALYZING: Gemini Flash / heuristic).
         7. Render vertical 9:16 candidate clips (RENDERING: FFmpeg + ASS).
         8. Mark completed (CLIPS_CREATED -> ready_review) and return result summary.
@@ -727,38 +726,37 @@ class YouTubeInboxCatcher:
             db.update_youtube_video(video_id, status="FAILED", last_error=error_msg)
             raise
 
-        # 3. Fetch Transcript (YouTube captions first -> Whisper fallback)
+        # 3. Fetch Transcript (Canonical Gemini transcription: Primary 3.5-transcribe, Fallback 3.5-flash-lite)
         segments: Optional[List[Dict[str, Any]]] = None
         transcript_source = "none"
 
-        if not force_whisper:
-            logger.info("Attempting to retrieve YouTube auto/manual captions for %s", video_id)
-            segments = self.fetch_youtube_captions(video_id, user_id=user_id)
-            if segments:
-                transcript_source = "youtube"
-                logger.info("Successfully loaded %d segments from YouTube captions", len(segments))
-
-        if not segments:
-            if force_whisper:
-                logger.info("force_whisper requested. Running local faster-whisper on %s", local_video_path.name)
-                whisper_result = transcribe_video(local_video_path)
-                segments = whisper_result.get("segments", [])
-                transcript_source = "whisper"
-                logger.info("Local faster-whisper generated %d segments", len(segments))
-            else:
-                logger.info("YouTube captions unavailable for %s and automatic Whisper fallback is disabled.", video_id)
-                db.update_youtube_video(
-                    video_id,
-                    status="CAPTIONS_UNAVAILABLE",
-                    transcript_source="none",
-                    last_error="YouTube captions unavailable",
-                    segments_json="[]"
-                )
-                return {
-                    "video_id": video_id,
-                    "status": "CAPTIONS_UNAVAILABLE",
-                    "error": "YouTube captions unavailable"
-                }
+        logger.info("Transcribing %s with canonical Gemini transcription engine...", local_video_path.name)
+        try:
+            user_gemini_key = ""
+            if user_id:
+                try:
+                    from dispatch.youtube_connections import get_user_gemini_key
+                    user_gemini_key = get_user_gemini_key(user_id) or ""
+                except Exception:
+                    pass
+            gemini_res = transcribe_media(local_video_path, api_key=user_gemini_key or None)
+            segments = gemini_res.get("segments", [])
+            transcript_source = gemini_res.get("source", "gemini_transcribe")
+            logger.info("Canonical Gemini transcription generated %d segments (source=%s)", len(segments), transcript_source)
+        except Exception as e:
+            logger.error("Gemini transcription failed for %s: %s", video_id, e)
+            db.update_youtube_video(
+                video_id,
+                status="FAILED",
+                transcript_source="none",
+                last_error=f"Gemini transcription failed: {e}",
+                segments_json="[]"
+            )
+            return {
+                "video_id": video_id,
+                "status": "FAILED",
+                "error": str(e)
+            }
 
         db.update_youtube_video(
             video_id,
@@ -852,7 +850,6 @@ class YouTubeInboxCatcher:
             # 1. Generate CaptionTrack and save to DB for interactive live UI overlay
             if segments:
                 try:
-                    import json
                     from dispatch.captions import group_words_into_captions, apply_template_to_track
                     from dispatch.captions.presets import get_default_preset_id
                     clip_row = db.get_clip_by_id(cid) if cid else None

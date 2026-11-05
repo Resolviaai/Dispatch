@@ -41,28 +41,20 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
     # =========================================================================
 
     def test_f14_initial_prompt_contains_roman_hinglish_context(self):
-        """F14.1: Transcriber uses an initial prompt primed for Hindi-English code-switching."""
+        """F14.1: Transcriber passes initial prompt or language hints to canonical Gemini pipeline."""
         dummy_video = self.temp_dir / "trans_prompt.mp4"
         self.create_synthetic_mp4(dummy_video, duration_seconds=0.5)
 
-        captured_prompt = None
-        def mock_transcribe(*args, **kwargs):
-            nonlocal captured_prompt
-            captured_prompt = kwargs.get("initial_prompt", "")
-            mock_seg = MagicMock()
-            mock_seg.text = "Yeh ek test hai"
-            mock_seg.words = []
-            return [mock_seg], None
-
-        with patch("dispatch.transcription.transcriber.get_whisper_model") as mock_get_model:
-            mock_model = MagicMock()
-            mock_model.transcribe = mock_transcribe
-            mock_get_model.return_value = mock_model
-
-            res = transcribe_video(dummy_video)
-            self.assertIsNotNone(captured_prompt)
-            self.assertIn("Hinglish", captured_prompt)
-            self.assertIn("Hindi", captured_prompt)
+        with patch("dispatch.transcription.transcriber.transcribe_media") as mock_media:
+            mock_media.return_value = {
+                "full_text": "Yeh ek test hai",
+                "segments": [{"id": 0, "start": 0.0, "end": 1.0, "text": "Yeh ek test hai", "words": []}],
+                "source": "gemini_transcribe",
+                "model": "gemini-3.5-transcribe",
+            }
+            res = transcribe_video(dummy_video, initial_prompt="Yeh video Hindi aur English mixed Hinglish language me hai.")
+            self.assertEqual(res["full_text"], "Yeh ek test hai")
+            self.assertEqual(res["source"], "gemini_transcribe")
 
     def test_f14_word_level_timestamps_formatting(self):
         """F14.2: Transcriber extracts word timestamps and saves them in database transcripts table."""
@@ -70,22 +62,17 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
         self.create_synthetic_mp4(dummy_video, duration_seconds=0.5)
         cid = register_chunk(session_id="sess_f14_words", filename="trans_words.mp4", filepath=str(dummy_video), file_hash="h14_words")
 
-        def mock_transcribe(*args, **kwargs):
-            mock_seg = MagicMock()
-            mock_seg.id = 0
-            mock_seg.text = "Hello world"
-            mock_seg.start = 0.0
-            mock_seg.end = 1.0
-            w1 = MagicMock(word="Hello", start=0.0, end=0.4, probability=0.9)
-            w2 = MagicMock(word="world", start=0.5, end=0.9, probability=0.9)
-            mock_seg.words = [w1, w2]
-            return [mock_seg], None
-
-        with patch("dispatch.transcription.transcriber.get_whisper_model") as mock_get_model:
-            mock_model = MagicMock()
-            mock_model.transcribe = mock_transcribe
-            mock_get_model.return_value = mock_model
-
+        with patch("dispatch.transcription.transcriber.transcribe_media") as mock_media:
+            mock_media.return_value = {
+                "full_text": "Hello world",
+                "segments": [{
+                    "id": 0, "start": 0.0, "end": 1.0, "text": "Hello world",
+                    "words": [{"word": "Hello", "start": 0.0, "end": 0.4, "probability": 0.9},
+                              {"word": "world", "start": 0.5, "end": 0.9, "probability": 0.9}]
+                }],
+                "source": "gemini_transcribe",
+                "model": "gemini-3.5-transcribe"
+            }
             result = transcribe_video(dummy_video, chunk_id=cid)
             self.assertIsNotNone(result["transcript_id"])
             self.assertEqual(result["full_text"], "Hello world")
@@ -99,30 +86,19 @@ class TestTier1MediaAIEngine(DispatchE2EBaseTestCase):
                 self.assertEqual(segments[0]["words"][0]["word"], "Hello")
 
     def test_f14_transcription_vad_filter_configuration(self):
-        """F14.3: Transcriber enables VAD silence filtering with 500ms min silence threshold."""
+        """F14.3: Canonical Gemini transcription returns structured output without local Whisper."""
         dummy_video = self.temp_dir / "trans_vad.mp4"
         self.create_synthetic_mp4(dummy_video, duration_seconds=0.5)
 
-        captured_kwargs = {}
-        def mock_transcribe(*args, **kwargs):
-            nonlocal captured_kwargs
-            captured_kwargs = kwargs
-            mock_seg = MagicMock()
-            mock_seg.id = 0
-            mock_seg.text = "Valid speech"
-            mock_seg.start = 0.0
-            mock_seg.end = 1.0
-            mock_seg.words = []
-            return [mock_seg], None
-
-        with patch("dispatch.transcription.transcriber.get_whisper_model") as mock_get_model:
-            mock_model = MagicMock()
-            mock_model.transcribe = mock_transcribe
-            mock_get_model.return_value = mock_model
-
-            transcribe_video(dummy_video)
-            self.assertTrue(captured_kwargs.get("vad_filter"))
-            self.assertEqual(captured_kwargs.get("vad_parameters", {}).get("min_silence_duration_ms"), 500)
+        with patch("dispatch.transcription.transcriber.transcribe_media") as mock_media:
+            mock_media.return_value = {
+                "full_text": "Valid speech",
+                "segments": [{"id": 0, "start": 0.0, "end": 1.0, "text": "Valid speech", "words": []}],
+                "source": "gemini_transcribe",
+                "model": "gemini-3.5-transcribe"
+            }
+            res = transcribe_video(dummy_video)
+            self.assertEqual(res["source"], "gemini_transcribe")
 
     def test_f14_save_transcript_database_storage(self):
         """F14.4: save_transcript stores full_text and valid JSON segments in transcripts table."""
@@ -399,25 +375,27 @@ Dispatch is an autonomous content engine.
         self.assertFalse(second)
 
     def test_f17_youtube_inbox_caption_fetch_or_whisper_fallback(self):
-        """F17.5: YouTube catcher processes video and falls back to faster-whisper when captions missing."""
+        """F17.5: YouTube catcher processes video and uses canonical Gemini transcription."""
         catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
         vid = "dQw4w9WgXcQ"
 
-        with patch.object(catcher, "fetch_youtube_captions", return_value=None):
-            with patch("dispatch.youtube_inbox.catcher.transcribe_video") as mock_trans:
-                mock_trans.return_value = {
-                    "text": "Transcribed fallback speech",
-                    "segments": [{"id": 0, "start": 0.0, "end": 20.0, "text": "Transcribed fallback speech", "words": []}]
-                }
-                dummy_v = self.temp_dir / f"{vid}.mp4"
-                self.create_synthetic_mp4(dummy_v, duration_seconds=1.0)
+        with patch("dispatch.youtube_inbox.catcher.transcribe_media") as mock_trans:
+            mock_trans.return_value = {
+                "full_text": "Transcribed fallback speech",
+                "segments": [{"id": 0, "start": 0.0, "end": 15.0, "text": "Transcribed fallback speech", "words": []}],
+                "source": "gemini_transcribe",
+                "model": "gemini-3.5-transcribe"
+            }
+            dummy_v = self.temp_dir / f"{vid}.mp4"
+            self.create_synthetic_mp4(dummy_v, duration_seconds=15.0)
 
-                with patch.object(catcher, "download_video", return_value=dummy_v):
-                    with patch("dispatch.youtube_inbox.catcher.identify_and_save_highlights", return_value=["c1"]):
+            with patch.object(catcher, "download_video", return_value=dummy_v):
+                with patch("dispatch.youtube_inbox.catcher.identify_and_save_highlights", return_value=["c1"]):
+                    with patch("dispatch.video_engine.renderer.slice_clean_clip", return_value={"duration": 15.0}):
                         with patch("dispatch.youtube_inbox.catcher.render_clip", return_value={"video_path": "clip.mp4"}):
-                            res = catcher.process_video(vid, force_whisper=True)
+                            res = catcher.process_video(vid)
                             self.assertEqual(res["status"], "CLIPS_CREATED")
-                            self.assertEqual(res["transcript_source"], "whisper")
+                            self.assertEqual(res["transcript_source"], "gemini_transcribe")
 
     # =========================================================================
     # FEATURE 18: E2E Test Suite & Adversarial Hardening

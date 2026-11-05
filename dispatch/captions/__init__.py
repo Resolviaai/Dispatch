@@ -16,7 +16,8 @@ from dispatch.captions.exporter import (
     export_to_ass,
     export_to_srt,
     export_to_json,
-    hex_to_ass_color
+    hex_to_ass_color,
+    remap_caption_track_to_timeline
 )
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "export_to_ass",
     "export_to_srt",
     "export_to_json",
-    "hex_to_ass_color"
+    "hex_to_ass_color",
+    "remap_caption_track_to_timeline"
 ]

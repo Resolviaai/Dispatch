@@ -60,6 +60,13 @@ import {
 
 export type TimelineTimeMode = 'source' | 'clip';
 
+export interface TimelineSegmentPiece {
+  id: string;
+  start: number;
+  end: number;
+  index?: number;
+}
+
 interface CaptionTimelineProps {
   timeMode?: TimelineTimeMode;
 
@@ -72,6 +79,14 @@ interface CaptionTimelineProps {
   selectedGroupId: string | null;
 
   isVideoSelected?: boolean;
+
+  segments?: TimelineSegmentPiece[];
+
+  selectedPieceIndex?: number | null;
+
+  onSelectPiece?: (pieceIndex: number) => void;
+
+  onTrimPiece?: (pieceIndex: number, side: 'start' | 'end', newSourceTime: number) => Promise<boolean | void> | boolean | void;
 
   isPlaying: boolean;
 
@@ -174,6 +189,14 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   selectedGroupId,
 
   isVideoSelected = false,
+
+  segments,
+
+  selectedPieceIndex,
+
+  onSelectPiece,
+
+  onTrimPiece,
 
   isPlaying,
 
@@ -304,6 +327,35 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   }, [selectedGroupId, onSplitGroup, track?.groups, currentTime]);
 
 
+
+  const pieces: TimelineSegmentPiece[] = useMemo(() => {
+    if (segments && segments.length > 0) {
+      return segments.map((s, idx) => ({ ...s, index: s.index ?? idx }));
+    }
+    const defStart = Math.max(0, clipStart);
+    const defEnd = clipEnd ?? (clipStart + duration);
+    return [{
+      id: 'seg_1',
+      start: defStart,
+      end: defEnd,
+      index: 0,
+    }];
+  }, [segments, clipStart, clipEnd, duration]);
+
+  interface PieceTrimDragState {
+    pieceIndex: number;
+    side: 'start' | 'end';
+    pointerId: number;
+    startX: number;
+    origStart: number;
+    origEnd: number;
+    currentStart: number;
+    currentEnd: number;
+  }
+
+  const [pieceTrimDrag, setPieceTrimDrag] = useState<PieceTrimDragState | null>(null);
+  const pieceTrimDragRef = useRef<PieceTrimDragState | null>(null);
+  pieceTrimDragRef.current = pieceTrimDrag;
 
   // Trim boundaries and the filmstrip use source time. Caption words stay clip-relative.
 
@@ -1909,6 +1961,112 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   };
 
+  const handlePieceTrimPointerDown = (pieceIndex: number, side: 'start' | 'end', e: React.PointerEvent) => {
+    e.stopPropagation();
+    const targetPiece = pieces[pieceIndex];
+    if (!targetPiece) return;
+
+    const drag: PieceTrimDragState = {
+      pieceIndex,
+      side,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      origStart: targetPiece.start,
+      origEnd: targetPiece.end,
+      currentStart: targetPiece.start,
+      currentEnd: targetPiece.end,
+    };
+    pieceTrimDragRef.current = drag;
+    setPieceTrimDrag(drag);
+
+    try {
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    } catch {
+      /* pointer can end before capture */
+    }
+  };
+
+  const handlePieceTrimPointerMove = (e: React.PointerEvent) => {
+    const drag = pieceTrimDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.stopPropagation();
+
+    const deltaPx = e.clientX - drag.startX;
+    const deltaTime = deltaPx / pxPerSec;
+    const targetPiece = pieces[drag.pieceIndex];
+    if (!targetPiece) return;
+
+    const MIN_PIECE_DURATION = 0.1;
+    let newStart = drag.origStart;
+    let newEnd = drag.origEnd;
+
+    if (drag.side === 'start') {
+      const rawStart = drag.origStart + deltaTime;
+      const minBound = drag.pieceIndex > 0 ? pieces[drag.pieceIndex - 1].end : 0;
+      const maxBound = drag.origEnd - MIN_PIECE_DURATION;
+      newStart = clamp(rawStart, minBound, maxBound);
+    } else {
+      const rawEnd = drag.origEnd + deltaTime;
+      const minBound = drag.origStart + MIN_PIECE_DURATION;
+      const maxBound = drag.pieceIndex < pieces.length - 1
+        ? pieces[drag.pieceIndex + 1].start
+        : ((sourceDuration && sourceDuration > 0) ? sourceDuration : Infinity);
+      newEnd = clamp(rawEnd, minBound, maxBound);
+    }
+
+    newStart = Number(newStart.toFixed(2));
+    newEnd = Number(newEnd.toFixed(2));
+
+    const updatedDrag: PieceTrimDragState = {
+      ...drag,
+      currentStart: newStart,
+      currentEnd: newEnd,
+    };
+    pieceTrimDragRef.current = updatedDrag;
+    setPieceTrimDrag(updatedDrag);
+
+    // Live scrub preview to trimmed edge
+    const sourceSeek = drag.side === 'start' ? newStart : newEnd;
+    scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration));
+  };
+
+  const handlePieceTrimPointerUp = async (e: React.PointerEvent) => {
+    const drag = pieceTrimDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.stopPropagation();
+
+    try {
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {}
+
+    const finalTime = drag.side === 'start' ? drag.currentStart : drag.currentEnd;
+    const targetIndex = drag.pieceIndex;
+    const side = drag.side;
+    setPieceTrimDrag(null);
+    pieceTrimDragRef.current = null;
+
+    if (onTrimPiece) {
+      await onTrimPiece(targetIndex, side, finalTime);
+    } else if (onTrimChange && pieces.length === 1) {
+      if (side === 'start') {
+        await onTrimChange(finalTime, drag.origEnd);
+      } else {
+        await onTrimChange(drag.origStart, finalTime);
+      }
+    }
+  };
+
+  const handlePieceTrimPointerCancel = (e: React.PointerEvent) => {
+    const drag = pieceTrimDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.stopPropagation();
+    try {
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {}
+    setPieceTrimDrag(null);
+    pieceTrimDragRef.current = null;
+  };
+
 
 
   const toggleTrackVisibility = (idx: number) => {
@@ -2567,17 +2725,11 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
 
 
-              {/* 1. MAIN VIDEO TRACK WITH CAPCUT-STYLE SAFETY HANDLES & DUAL DRAG TRIMMING */}
+              {/* 1. MAIN VIDEO TRACK WITH CAPCUT-STYLE PIECE BLOCKS & DUAL 44PX TRIM HANDLES */}
 
               {(() => {
 
-                const trimLeftPx = Math.max(0, activeTrim.start * pxPerSec);
-
-                const trimRightPx = Math.max(trimLeftPx + 20, activeTrim.end * pxPerSec);
-
-                const trimWidthPx = Math.max(20, trimRightPx - trimLeftPx);
-
-
+                let cumulativeConcat = 0;
 
                 return (
 
@@ -2589,197 +2741,285 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                       e.stopPropagation();
 
-                      onSelectVideo?.();
+                      if (onSelectPiece) {
+
+                        onSelectPiece(0);
+
+                      } else {
+
+                        onSelectVideo?.();
+
+                      }
 
                     }}
 
-                    className={`h-10 shrink-0 border-b border-[#232832] relative p-0.5 overflow-visible cursor-pointer transition-colors ${isVideoSelected ? 'bg-primary/10 ring-1 ring-primary' : ''
-
-                      }`}
+                    className={`h-10 shrink-0 border-b border-[#232832] relative p-0.5 overflow-visible cursor-pointer transition-colors ${isVideoSelected ? 'bg-primary/10' : ''}`}
 
                     style={{ width: `${totalTimelineWidth}px` }}
 
                   >
 
-                    <div className="w-full h-full rounded bg-[#090C0F] border border-[#232832]/60 flex items-center overflow-hidden relative">
+                    {pieces.map((piece, pieceIdx) => {
 
-                      {(() => {
+                      const isPieceSelected =
 
-                        if (filmstrip && filmstrip.frames.length > 0) {
+                        selectedPieceIndex === pieceIdx ||
 
-                          return filmstrip.frames.map((frame, idx) => {
+                        (selectedPieceIndex === null && Boolean(isVideoSelected) && pieces.length === 1);
 
-                            const box = filmstripFrameBox(frame, filmstrip, { pxPerSec, clipStart, isSourceMode });
+                      const activeStart =
 
-                            if (!box) return null;
+                        pieceTrimDrag && pieceTrimDrag.pieceIndex === pieceIdx
 
-                            // Time-anchored slot: absolute geometry from the shared plan — never stretched.
+                          ? pieceTrimDrag.currentStart
 
-                            return (
+                          : piece.start;
 
-                              <div
+                      const activeEnd =
 
-                                key={`${idx}-${frame.t}`}
+                        pieceTrimDrag && pieceTrimDrag.pieceIndex === pieceIdx
 
-                                className="absolute top-0 bottom-0 overflow-hidden"
+                          ? pieceTrimDrag.currentEnd
 
-                                style={{ left: `${box.left}px`, width: `${box.width}px` }}
+                          : piece.end;
 
-                              >
+                      const pieceDur = Math.max(0, activeEnd - activeStart);
 
-                                <img
+                      const concatStart = cumulativeConcat;
 
-                                  src={frame.url}
+                      cumulativeConcat += pieceDur;
 
-                                  alt=""
+                      const leftSec = isSourceMode ? activeStart : concatStart;
 
-                                  loading="eager"
+                      const leftPx = Math.round(leftSec * pxPerSec);
 
-                                  decoding="async"
+                      const widthPx = Math.max(8, Math.round(pieceDur * pxPerSec));
 
-                                  draggable={false}
+                      return (
 
-                                  className="h-full w-full object-cover object-center pointer-events-none select-none"
+                        <div
 
-                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                          key={piece.id || `piece_${pieceIdx}`}
 
-                                />
+                          data-piece-block="true"
 
-                              </div>
+                          data-piece-index={pieceIdx}
 
-                            );
+                          onClick={(e) => {
 
-                          });
+                            e.stopPropagation();
 
-                        }
+                            if (onSelectPiece) {
 
-                        return (
+                              onSelectPiece(pieceIdx);
 
-                          <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
+                            } else {
 
-                            {Array.from({ length: 8 }).map((_, i) => (
+                              onSelectVideo?.();
 
-                              <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
+                            }
 
-                            ))}
+                          }}
 
-                          </div>
+                          className={`absolute top-0 bottom-0 overflow-visible cursor-pointer select-none transition-all ${isPieceSelected ? 'z-20' : 'z-10'}`}
 
-                        );
+                          style={{
 
-                      })()}
+                            left: `${leftPx}px`,
 
+                            width: `${widthPx}px`,
 
+                          }}
 
-                      {/* Safety Handles & Dim Overlays: Rendered ONLY when source trimming is allowed and not hidden */}
+                        >
 
-                      {canEditSelection && !hideTrimControls && (
-
-                        <>
-
-                          {/* Head Margin Dimmed Overlay (Safety Handle) */}
-
-                          {trimLeftPx > 0 && (
-
-                            <div
-
-                              className="absolute left-0 top-0 bottom-0 bg-black/75 backdrop-blur-[1px] border-r border-dashed border-amber-400/60 pointer-events-none z-10"
-
-                              style={{ width: `${trimLeftPx}px` }}
-
-                            />
-
-                          )}
-
-
-
-                          {/* Tail Margin Dimmed Overlay (Safety Handle) */}
-
-                          {trimRightPx < totalTimelineWidth && (
-
-                            <div
-
-                              className="absolute top-0 bottom-0 right-0 bg-black/75 backdrop-blur-[1px] border-l border-dashed border-amber-400/60 pointer-events-none z-10"
-
-                              style={{ left: `${trimRightPx}px` }}
-
-                            />
-
-                          )}
-
-
-
-                          {/* Active Video Bounding Box with Dual Drag Handles (CapCut Style) */}
+                          {/* Inner filmstrip card with overflow-hidden */}
 
                           <div
 
-                            className="absolute top-0 bottom-0 rounded border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.35)] pointer-events-none z-20"
-
-                            style={{ left: `${trimLeftPx}px`, width: `${trimWidthPx}px` }}
+                            className={`w-full h-full rounded-md overflow-hidden relative ${isPieceSelected ? 'ring-2 ring-white shadow-lg bg-[#090C0F]' : 'hover:brightness-110 bg-[#090C0F] border border-[#232832]/60'}`}
 
                           >
 
-                            {/* Left Trim Handle (Head Padding Expansion) */}
+                            {/* Inner filmstrip container */}
 
                             <div
 
-                              onPointerDown={(e) => handleTrimPointerDown('start', e)}
+                              className="absolute top-0 bottom-0 pointer-events-none select-none"
 
-                              onPointerMove={handleTrimPointerMove}
+                              style={{
 
-                              onPointerUp={handleTrimPointerUp}
+                                left: `-${leftPx}px`,
 
-                              onPointerCancel={handleTrimPointerCancel}
+                                width: `${totalTimelineWidth}px`,
 
-                              onLostPointerCapture={handleTrimPointerCancel}
-
-                              className="absolute left-0 top-0 bottom-0 w-3.5 -translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-l cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
-
-                              title="Drag to trim start (reveals earlier speech in safety handle)"
+                              }}
 
                             >
 
-                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                              {filmstrip && filmstrip.frames.length > 0 ? (
 
-                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+                                filmstrip.frames.map((frame, idx) => {
+
+                                  const box = filmstripFrameBox(frame, filmstrip, { pxPerSec, clipStart, isSourceMode });
+
+                                  if (!box) return null;
+
+                                  return (
+
+                                    <div
+
+                                      key={`${idx}-${frame.t}`}
+
+                                      className="absolute top-0 bottom-0 overflow-hidden"
+
+                                      style={{ left: `${box.left}px`, width: `${box.width}px` }}
+
+                                    >
+
+                                      <img
+
+                                        src={frame.url}
+
+                                        alt=""
+
+                                        loading="eager"
+
+                                        decoding="async"
+
+                                        draggable={false}
+
+                                        className="h-full w-full object-cover object-center pointer-events-none select-none"
+
+                                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+
+                                      />
+
+                                    </div>
+
+                                  );
+
+                                })
+
+                              ) : (
+
+                                <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
+
+                                  {Array.from({ length: 8 }).map((_, i) => (
+
+                                    <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
+
+                                  ))}
+
+                                </div>
+
+                              )}
 
                             </div>
 
+                            {/* Duration pill */}
 
+                            <span className="absolute bottom-1 left-1.5 text-[9px] font-mono tabular-nums text-white/90 bg-black/60 px-1 py-0.5 rounded pointer-events-none select-none z-10">
 
-                            {/* Right Trim Handle (Tail Padding Expansion) */}
+                              {pieceDur.toFixed(1)}s
 
-                            <div
+                            </span>
 
-                              onPointerDown={(e) => handleTrimPointerDown('end', e)}
+                            {/* 2px Cut Seam (Right edge of piece if not last) */}
 
-                              onPointerMove={handleTrimPointerMove}
+                            {pieceIdx < pieces.length - 1 && (
 
-                              onPointerUp={handleTrimPointerUp}
+                              <div
 
-                              onPointerCancel={handleTrimPointerCancel}
+                                className="absolute right-0 top-0 bottom-0 w-[2px] bg-[#121418] z-20 pointer-events-none"
 
-                              onLostPointerCapture={handleTrimPointerCancel}
+                                aria-hidden="true"
 
-                              className="absolute right-0 top-0 bottom-0 w-3.5 translate-x-1/2 bg-amber-400 hover:bg-amber-300 rounded-r cursor-ew-resize pointer-events-auto flex items-center justify-center shadow-md active:scale-105 transition-transform touch-none"
+                              />
 
-                              title="Drag to trim end (extends ending speech into safety handle)"
-
-                            >
-
-                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
-
-                              <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
-
-                            </div>
+                            )}
 
                           </div>
 
-                        </>
+                          {/* CapCut Dual 44px Trim Handles (Rendered only on the selected piece) */}
 
-                      )}
+                          {isPieceSelected && !hideTrimControls && (
 
-                    </div>
+                            <>
+
+                              {/* Left Trim Handle: 44px touch bounding box */}
+
+                              <div
+
+                                onPointerDown={(e) => handlePieceTrimPointerDown(pieceIdx, 'start', e)}
+
+                                onPointerMove={handlePieceTrimPointerMove}
+
+                                onPointerUp={handlePieceTrimPointerUp}
+
+                                onPointerCancel={handlePieceTrimPointerCancel}
+
+                                onLostPointerCapture={handlePieceTrimPointerCancel}
+
+                                className="absolute left-0 top-0 bottom-0 w-[44px] -translate-x-1/2 flex items-center justify-center cursor-ew-resize pointer-events-auto touch-none z-30 group"
+
+                                title={`Trim start of piece ${pieceIdx + 1}`}
+
+                                aria-label={`Trim start handle piece ${pieceIdx + 1}`}
+
+                              >
+
+                                <div className="w-3.5 h-full bg-white group-hover:bg-slate-100 rounded-l shadow-md flex items-center justify-center border border-black/20 transition-colors">
+
+                                  <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+
+                                  <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+
+                                </div>
+
+                              </div>
+
+                              {/* Right Trim Handle: 44px touch bounding box */}
+
+                              <div
+
+                                onPointerDown={(e) => handlePieceTrimPointerDown(pieceIdx, 'end', e)}
+
+                                onPointerMove={handlePieceTrimPointerMove}
+
+                                onPointerUp={handlePieceTrimPointerUp}
+
+                                onPointerCancel={handlePieceTrimPointerCancel}
+
+                                onLostPointerCapture={handlePieceTrimPointerCancel}
+
+                                className="absolute right-0 top-0 bottom-0 w-[44px] translate-x-1/2 flex items-center justify-center cursor-ew-resize pointer-events-auto touch-none z-30 group"
+
+                                title={`Trim end of piece ${pieceIdx + 1}`}
+
+                                aria-label={`Trim end handle piece ${pieceIdx + 1}`}
+
+                              >
+
+                                <div className="w-3.5 h-full bg-white group-hover:bg-slate-100 rounded-r shadow-md flex items-center justify-center border border-black/20 transition-colors">
+
+                                  <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+
+                                  <div className="w-[1px] h-3 bg-black/80 rounded-full mx-[0.5px]" />
+
+                                </div>
+
+                              </div>
+
+                            </>
+
+                          )}
+
+                        </div>
+
+                      );
+
+                    })}
 
                   </div>
 
@@ -3013,21 +3253,6 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                               </span>
 
-                            )}
-
-                            {isSelected && canSplit && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onSplitGroup?.(grp.id, currentTime);
-                                }}
-                                className="w-4 h-4 rounded bg-white/20 hover:bg-white/40 active:bg-white text-white flex items-center justify-center shrink-0 ml-1 transition-colors"
-                                title={`Split at playhead ${currentTime.toFixed(2)}s (S)`}
-                                aria-label="Split layer at playhead"
-                              >
-                                <Scissors size={9} />
-                              </button>
                             )}
 
                           </div>

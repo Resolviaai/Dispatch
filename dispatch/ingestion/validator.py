@@ -107,7 +107,7 @@ def normalize_video_orientation(
     """Deterministically normalize physical pixel orientation.
     If the video contains rotation metadata (e.g. 90, 180, 270 degrees from mobile recording),
     transcodes once to physically upright orientation with rotate=0 metadata, so all downstream
-    processors (Whisper, highlight finder, ffmpeg filter complex, web video players) receive
+    processors (Gemini transcriber, highlight finder, ffmpeg filter complex, web video players) receive
     physically upright frames without orientation drift.
 
     Logs:

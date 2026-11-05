@@ -160,7 +160,9 @@ class TestYouTubeCatcher(unittest.TestCase):
 
     @patch("dispatch.youtube_inbox.catcher.identify_and_save_highlights")
     @patch("dispatch.youtube_inbox.catcher.render_clip")
-    def test_process_video_mock_pipeline(self, mock_render, mock_highlights):
+    @patch("dispatch.video_engine.renderer.slice_clean_clip")
+    def test_process_video_mock_pipeline(self, mock_slice, mock_render, mock_highlights):
+        mock_slice.return_value = {"duration": 15.0, "video_path": Path("storage/clips/mock.mp4")}
         catcher = YouTubeInboxCatcher()
         test_id = "mock_vid_99"
 

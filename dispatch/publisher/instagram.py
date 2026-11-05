@@ -38,7 +38,7 @@ def upload_instagram_reel(
     base_url = (api_base or os.getenv("INSTAGRAM_API_BASE") or GRAPH_BASE_URL).rstrip("/")
 
     if not token or not user_id:
-        raise PermissionError("Instagram API credentials missing (access token and account id).")
+        raise PermissionError("Instagram Graph API credentials missing (access token and account id).")
 
     if not video_path.exists():
         raise FileNotFoundError(f"Video file missing: {video_path}")

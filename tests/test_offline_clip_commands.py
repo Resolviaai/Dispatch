@@ -71,6 +71,9 @@ class TestOfflineClipCommands(unittest.TestCase):
         init_db()
         self._tmp = tempfile.mkdtemp(prefix="dispatch_offline_reject_")
         self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
+        p_tok = patch.object(cloud_sync, "get_worker_token", return_value="mock_worker_token")
+        p_tok.start()
+        self.addCleanup(p_tok.stop)
 
     def _make_media_files(self, clip_id: str):
         video = os.path.join(self._tmp, f"{clip_id}.mp4")

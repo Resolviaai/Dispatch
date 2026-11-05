@@ -23,6 +23,7 @@ async function run() {
     await server.ssrLoadModule('/frontend/test_editor_audit_regressions.ts');
     await server.ssrLoadModule('/frontend/test_update_service.js');
     await server.ssrLoadModule('/frontend/test_back_handler.ts');
+    await server.ssrLoadModule('/frontend/test_edl_playback_gap_skip.ts');
   } catch (err) {
     console.error('Test execution failed:', err);
     process.exit(1);

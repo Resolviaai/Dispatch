@@ -1,8 +1,9 @@
-# Dispatch Canonical Architecture & Invariants
+# Dispatch Canonical Architecture & Invariants (V2)
 **Status:** Authoritative Repository Standard  
-**Effective Date:** 2026-10-30  
+**Effective Date:** 2026-11-05  
+**Version:** Dispatch V2 (`v1.7.29-alpha`, Android `versionCode = 97`)  
 **Scope:** Ingestion, Video Engine, Mobile UI / Studio Review, Captions, and Publishing Outbox.  
-> **Infrastructure Application:** This 4-step lifecycle governs all media processing across both local PC execution (`dispatch/`) and Cloud Staging (Supabase + Cloudflare Worker R2).
+> **Master Reference:** Full V2 topology, execution boundaries, and speech pipeline are documented in [DISPATCH_V2_ARCHITECTURE.md](docs/architecture/DISPATCH_V2_ARCHITECTURE.md).
 
 ---
 
@@ -12,7 +13,7 @@ Dispatch enforces a strict separation between **Interactive Review** and **Deliv
 
 ```mermaid
 flowchart TD
-    A["Raw Ingestion & AI Intelligence"] --> B["Clean Source Slice (No Baked Filters, No Baked Subtitles)"]
+    A["Raw Ingestion & Gemini AI Intelligence"] --> B["Clean Source Slice (No Baked Filters, No Baked Subtitles)"]
     B --> C["Mobile / Studio Review (Clean Video + Live Dynamic Overlays)"]
     C --> D["User Adjustments (Framing Switch, Text Edits, Template Customization)"]
     D --> E["Publish / Export Action"]
@@ -24,8 +25,9 @@ flowchart TD
 
 ### Step 1: Ingestion (Clean Source Slice)
 1. **AI Discovery:**
-   - Whisper transcribes the audio chunk.
-   - Gemini analyzes the transcript and identifies high-engagement hooks and candidate clip boundaries (`start_time` to `end_time`).
+   - Canonical Gemini Speech Pipeline (Primary: `gemini-3.5-transcribe`, Fallback: `gemini-3.5-flash-lite`) transcribes the audio chunk with word-level millisecond timestamps and speaker diarization.
+   - Zero local Whisper fallback. Zero YouTube captions fallback.
+   - Gemini analyzes the transcript and identifies cohesive, thoughtful standalone candidate clip boundaries (`start_time` to `end_time`).
 2. **Clean Slice Generation:**
    - The video engine slices an **untouched, progressive MP4 segment** (`+faststart`) directly from the source video.
    - **Zero Layout Baking:** The slice retains the pristine native aspect ratio (e.g., 16:9 widescreen 1920x1080) without pre-baked blurred bars, letterboxing, or pillarboxing.
@@ -49,37 +51,20 @@ flowchart TD
 
 ---
 
-### Step 3: Live Captions (Editable UI Overlay)
-1. **Default Template Application:**
-   - Captions are rendered as a **live vector/HTML UI overlay** (`DispatchCaptionRenderer`) directly on top of the video stage.
-   - The overlay defaults to the user's active template configured in Template Studio (font family, colors, shadows, positioning, animation presets), strictly superseding any hardcoded fallbacks.
-2. **Interactive Editing:**
-   - Words, timestamps, colors, and layout positions are fully interactive and editable in real time.
-   - Toggling caption visibility or modifying styling immediately reflects in the live UI overlay without modifying the underlying video file.
+### Step 3: Interactive Review Studio (Live Captions)
+1. **Live Preview Overlays:**
+   - Subtitles render in real time directly over the clean video via HTML/Canvas.
+   - Font family, size, line breaks, word highlighting, pop/slide animations, and colors update immediately with 0 ms re-render lag.
+2. **Deterministic EDL Timeline:**
+   - Trimming, splitting, and ripple deletes manipulate the unified source-time EDL (`[start, end)`).
+   - Stored captions remain anchored to source timeline time, allowing non-destructive cuts and timeline revisions.
 
 ---
 
-### Step 4: Final Delivery Render (Deferred Strictly to Publish / Export)
-1. **Single Heavy Render:**
-   - FFmpeg rendering with baked-in subtitles and aspect-ratio filter complexes is deferred **strictly until the user taps Publish or Export**.
-2. **Delivery Pipeline:**
-   - At publish time, the publisher outbox checks if a delivery-ready artifact matching the user's final approved settings exists.
-   - If not, it executes a single delivery render:
-     1. Trims the exact approved `start_time` and `end_time`.
-     2. Builds the target layout framing filter (`fit_blur`, `fit_black`, or `crop_916`) for 1080x1920 (9:16) or target dimensions.
-     3. Exports the user's customized `CaptionTrack` to an ASS subtitle file and burns it into the delivery stream.
-     4. Normalizes audio to broadcast standards (`loudnorm=I=-14:LRA=11:TP=-1.5`).
-     5. Uploads the final rendered artifact to the destination platform (YouTube Shorts, Instagram Reels, etc.).
-
----
-
-## Architectural Invariants for Agents & Developers
-1. **Never bake filters into review clips:** Any ingestion pathway (`catcher.py`, `worker.py`, manual upload) that saves a video for user review must produce an unbaked clean slice.
-2. **Never burn subtitles into review clips:** Subtitle burning is exclusive to final delivery exports.
-3. **Database Column Semantics:**
-   - `layout_mode`: The user's intended target framing (e.g., `'fit_blur'`, `'fit_black'`, `'crop_916'`, `'native_169'`).
-   - `rendered_layout_mode`: `NULL` for clean unbaked review slices; populated with layout string only if a delivery artifact has been baked.
-4. **Biomechanical & Visual Standards:**
-   - Mobile interactive elements must adhere to the 44px hitbox requirement.
-   - Text hierarchy: 14px mobile body font, 12px metadata-only.
-   - Timestamps and numeric values must strictly enforce `font-mono tabular-nums` and right alignment.
+### Step 4: Final Delivery Render
+1. **Single Delivery Bake:**
+   - Only upon user approval (`POST /api/clips/{id}/approve` or Android on-device export) is the final delivery video rendered.
+   - Bakes the chosen aspect ratio framing and ASS subtitle tracks atomically with FFmpeg / Android Media3.
+   - Validates that the rendered duration matches the effective kept duration of the EDL before transitioning the clip to `approved`.
+2. **Outbox Publishing:**
+   - The publishing outbox worker claims the finalized MP4 and uploads it to configured platforms (YouTube Shorts, Instagram Reels, etc.).

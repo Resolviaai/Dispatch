@@ -1,12 +1,14 @@
 # AGENT_HANDOFF — Dispatch working-state index
 
 Single source of truth for the next coding agent. Keep this short; link, don't copy.
-Updated: 2026-11-03 (Release v1.7.25-alpha, versionCode 93).
+Updated: 2026-11-05 (Release v1.7.30-alpha, versionCode 98).
+Authoritative Architecture: `docs/architecture/DISPATCH_V2_ARCHITECTURE.md` (Canonical Cloud-First Architecture)
+Active Master Roadmap: `docs/2026-11-05_MASTER_TASK_LIST.md`
 
-Detailed docs: `PROGRESS.md` (verification log) · `docs/2026-11-02_MASTER_TASK_LIST.md` (active roadmap & audit log) · `docs/architecture/cloud-migration-plan.md` (cloud architecture) · `AGENTS.md` (UI invariants) · `design.md` (Design System v3) · `docs/CANONICAL_ARCHITECTURE.md`.
+Detailed docs: `PROGRESS.md` (verification log) · `AGENTS.md` (UI invariants) · `design.md` (Design System v3) · `docs/CANONICAL_ARCHITECTURE.md`.
 
 ## 1. Project overview
-Dispatch is an autonomous AI-native video clipping workstation and creator studio. The POCO C65 Android app records sessions, reviews clips, and customizes animated captions in a mobile-optimized studio. The cloud control plane (Supabase Postgres + Cloudflare Worker API gateway + R2 distributed storage) manages multi-user authentication, cloud sessions, and 720p edit windows for remote editing on cellular. An optional local Windows PC daemon (`python -m dispatch.main`) provides high-speed local media acceleration (faster-whisper Hinglish transcription, Gemini highlight extraction, FFmpeg delivery rendering, and multi-platform publishing outbox).
+Dispatch is an autonomous AI-native video clipping workstation and creator studio. The POCO C65 Android app records sessions, reviews clips, and customizes animated captions in a mobile-optimized studio. The cloud control plane (Supabase Postgres + Cloudflare Worker API gateway + R2 distributed storage) manages multi-user authentication, cloud sessions, and 720p edit windows for remote editing on cellular. An optional local Windows PC daemon (`python -m dispatch.main`) provides local media acceleration (Gemini speech transcription, Gemini semantic highlight extraction, hardware FFmpeg delivery rendering, and multi-platform publishing outbox). Zero local Whisper.
 
 ## 2. Current objective
 Continuous stabilization, mobile UI/UX ergonomics (Dispatch Design System v3), release governance monotonicity, and multi-platform publishing integrity.

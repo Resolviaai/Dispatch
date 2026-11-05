@@ -13,7 +13,9 @@ def get_negative_feedback_prompt(user_id: str | None = None) -> str:
       1. Explains why clips were rejected (pacing, speech boundary cutoffs, lack of context, duplication)
          to guide editorial selection and boundary setting.
       2. Strictly instructs the model NOT to blacklist entire subject matters or topics.
-      3. Preserves compatibility with existing database schema and tests.
+      3. Ignores generic uninformative default reasons ('Rejected from review studio', 'No reason provided')
+         to prevent token bloat and unhelpful negative conditioning (T07).
+      4. Preserves compatibility with existing database schema and tests.
     """
     rejections = db.get_all_rejections(limit=15, user_id=user_id)
     if not rejections:
@@ -29,23 +31,39 @@ def get_negative_feedback_prompt(user_id: str | None = None) -> str:
     duplicate_critiques = []
     other_critiques = []
 
-    for idx, r in enumerate(rejections, 1):
-        title = r.get("title") or "Untitled"
-        reason = r.get("reason") or "No reason provided"
-        snippet = r.get("transcript_snippet") or ""
-        lines.append(f"- Rejected Example {idx}: '{title}' | Reason: {reason} | Excerpt: \"{snippet[:100]}...\"")
+    meaningful_count = 0
+    for r in rejections:
+        title = (r.get("title") or "Untitled").strip()
+        raw_reason = (r.get("reason") or "").strip()
+        snippet = (r.get("transcript_snippet") or "").strip()
 
-        r_lower = reason.lower()
+        # T07: Skip generic default rejection reasons that contain no editorial feedback
+        if not raw_reason or raw_reason.lower() in (
+            "rejected from review studio",
+            "no reason provided",
+            "rejected",
+            "none",
+            "n/a",
+        ):
+            continue
+
+        meaningful_count += 1
+        lines.append(f"- Rejected Example {meaningful_count}: '{title}' | Reason: {raw_reason} | Excerpt: \"{snippet[:100]}...\"")
+
+        r_lower = raw_reason.lower()
         if any(w in r_lower for w in ("slow", "boring", "fast", "pace", "energy", "talking")):
-            pacing_critiques.append(reason)
+            pacing_critiques.append(raw_reason)
         elif any(w in r_lower for w in ("cut", "mid-sentence", "start", "end", "boundary", "incomplete", "unfinished")):
-            boundary_critiques.append(reason)
+            boundary_critiques.append(raw_reason)
         elif any(w in r_lower for w in ("context", "confusing", "understand", "standalone", "setup")):
-            context_critiques.append(reason)
+            context_critiques.append(raw_reason)
         elif any(w in r_lower for w in ("repeat", "duplicate", "again", "similar", "redundant")):
-            duplicate_critiques.append(reason)
+            duplicate_critiques.append(raw_reason)
         else:
-            other_critiques.append(reason)
+            other_critiques.append(raw_reason)
+
+    if meaningful_count == 0:
+        return ""
 
     lines.append("\nHOW TO APPLY THIS FEEDBACK (DO NOT OVERFIT OR BLACKLIST TOPICS):")
     lines.append(

@@ -465,3 +465,127 @@ def export_to_json(track: CaptionTrack, output_path: Path) -> Path:
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(track.to_dict(), f, indent=2)
     return output_path
+
+
+def remap_caption_track_to_timeline(
+    track: CaptionTrack,
+    spans: Any,
+    clip_start: float = 0.0,
+    source_duration: Optional[float] = None,
+) -> CaptionTrack:
+    """Remap a source/clip-relative CaptionTrack to output presentation time for cut EDL clips.
+
+    Words and groups inside removed footage are omitted.
+    Word and group boundaries are clipped to segment boundaries.
+    """
+    if not track or not track.groups or not spans:
+        return track
+
+    from dispatch.segments import normalize_ranges, intersect_source_interval
+
+    max_end = 0.0
+    for s in spans:
+        if isinstance(s, (list, tuple)) and len(s) == 2:
+            max_end = max(max_end, float(s[1]))
+        elif isinstance(s, dict):
+            max_end = max(max_end, float(s.get("source_end", s.get("end", 0.0))))
+    effective_dur = float(source_duration) if source_duration else (max_end + 10.0)
+
+    try:
+        canonical = normalize_ranges(spans, effective_dur)
+    except Exception:
+        return track
+
+    if len(canonical) == 0:
+        return track
+
+    remapped_groups: List[CaptionGroup] = []
+
+    for grp in track.groups:
+        grp_type = getattr(grp, "type", "caption") or "caption"
+        if grp_type in ("audio", "voiceover"):
+            remapped_groups.append(grp)
+            continue
+
+        g_start = float(grp.start or 0.0)
+        g_end = float(grp.end or 0.0)
+
+        grp_src_start = clip_start + g_start
+        grp_src_end = clip_start + g_end
+
+        if grp_src_end <= grp_src_start:
+            continue
+
+        fragments = intersect_source_interval(canonical, grp_src_start, grp_src_end, effective_dur)
+        if not fragments:
+            continue
+
+        for f_idx, frag in enumerate(fragments):
+            frag_src_s = frag["source_start"]
+            frag_src_e = frag["source_end"]
+            frag_tl_s = frag["timeline_start"]
+            frag_tl_e = frag["timeline_end"]
+
+            remapped_words: List[Word] = []
+            if grp.words:
+                for w in grp.words:
+                    w_s = float(w.start or 0.0)
+                    w_e = float(w.end or 0.0)
+                    w_src_s = clip_start + w_s
+                    w_src_e = clip_start + w_e
+
+                    overlap_s = max(w_src_s, frag_src_s)
+                    overlap_e = min(w_src_e, frag_src_e)
+                    if overlap_e - overlap_s > 0.005:
+                        w_tl_s = frag_tl_s + (overlap_s - frag_src_s)
+                        w_tl_e = frag_tl_s + (overlap_e - frag_src_s)
+                        remapped_words.append(Word(
+                            id=w.id,
+                            text=w.text,
+                            start=round(w_tl_s, 3),
+                            end=round(w_tl_e, 3),
+                            confidence=w.confidence,
+                            is_exact=w.is_exact,
+                            style_override=w.style_override,
+                        ))
+
+            if not remapped_words and grp.has_word_timing and grp.words:
+                continue
+
+            mapped_g_start = remapped_words[0].start if remapped_words else round(frag_tl_s, 3)
+            mapped_g_end = remapped_words[-1].end if remapped_words else round(frag_tl_e, 3)
+
+            gid = f"{grp.id}_{f_idx}" if len(fragments) > 1 else grp.id
+            remapped_groups.append(CaptionGroup(
+                id=gid,
+                start=mapped_g_start,
+                end=mapped_g_end,
+                words=remapped_words if remapped_words else grp.words,
+                layout=grp.layout,
+                style=grp.style,
+                animation=grp.animation,
+                trackIndex=grp.trackIndex,
+                type=grp.type,
+                volume=grp.volume,
+                is_muted=grp.is_muted,
+                audio_url=grp.audio_url,
+                overlay_url=grp.overlay_url,
+                overlay_type=grp.overlay_type,
+                opacity=grp.opacity,
+                label=grp.label,
+                flip_h=grp.flip_h,
+                flip_v=grp.flip_v,
+                overlay_animation=grp.overlay_animation,
+                has_word_timing=grp.has_word_timing,
+                timing_mode=grp.timing_mode,
+            ))
+
+    return CaptionTrack(
+        id=track.id,
+        clip_id=track.clip_id,
+        language=track.language,
+        default_style=track.default_style,
+        default_layout=track.default_layout,
+        default_animation=track.default_animation,
+        groups=remapped_groups,
+    )

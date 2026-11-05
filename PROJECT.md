@@ -1,97 +1,77 @@
-# Project: Dispatch — Autonomous Personal Content Engine
+# Project: CapCut-Style Mobile Timeline & EDL Playback
 
-## Canonical Architecture
-
-Dispatch is an autonomous AI-native video clipping workstation and creator studio built on a hybrid cloud-and-device architecture:
-
-1. **Android Mobile Client (Native CameraX + WebView Studio)**:
-   - Continuous 1080p FHD video capture with CameraX and background segmenting.
-   - Studio workstation for interactive review, dynamic framing, and live animated caption editing.
-   - Direct cloud authentication via Supabase JWT with biometric/credential safety.
-
-2. **Cloud Infrastructure (Supabase + Cloudflare Worker + R2)**:
-   - **Supabase (PostgreSQL with RLS)**: Multi-user authentication, user profiles, `clips_cloud`, `processing_jobs`, and quotas.
-   - **Cloudflare Worker (`dispatch-cloud`)**: Edge API gateway, OAuth ticketing, token vault for social credentials, and presigned R2 URLs.
-   - **Cloudflare R2 (`dispatch-clips`)**: Distributed storage for bounded 720p edit windows, rendered clips, and thumbnails.
-
-3. **PC Media Acceleration Tier (Optional Hybrid Workstation)**:
-   - Local AI transcription engine (`faster-whisper`, base, int8) with Hinglish vocabulary support.
-   - Gemini highlight extraction with engagement scoring and title generation.
-   - High-throughput FFmpeg delivery rendering and multi-platform publishing outbox (YouTube Shorts, Instagram, LinkedIn, X).
-   - *Note: Legacy single-user UDP beacon discovery (port 8765) and local Wi-Fi pairing have been completely superseded by Supabase authentication and Cloudflare Workers.*
-
----
+## Architecture
+- **Captions & Timeline Module (`frontend/src/captions/`)**:
+  - `CaptionTimeline.tsx`: Main video filmstrip track, segment piece rendering, 2px cut seams, piece selection state, dual 44px trim handles, layer tracks.
+  - `CaptionStudio.tsx`: Edge-to-edge docked contextual bottom thumb bar, tool categorization (`edit`, `text`, `overlay`), 44px [ Split ] and [ Delete ] buttons, audio button gating.
+  - `timelineEngine.ts`: Deterministic mathematical core (`splitAt`, `trimEdge`, `deletePiece`, `concatToSource`, `sourceToConcat`, `normalizeRanges`, `keptDuration`).
+- **Screen Controller (`frontend/src/screens/ClipsScreen.tsx`)**:
+  - State management for active EDL pieces (`activeSegments`), selection (`selectedPieceIndex`, `isVideoSelected`, `selectedGroupId`).
+  - Playback engine: `handleTimeUpdate` with frame-accurate gap skipping via `requestVideoFrameCallback`.
+  - Seeking engine: `handleSeek` mapping presentation time to source time via `concatToSource`.
+  - Mutation handlers: `handleSplitClip` (using `concatToSource` and `splitAt`), `handleDeletePiece` (using `deletePiece`), `handleTrimPiece` (using `trimEdge`).
+- **Master Task Tracker (`docs/2026-11-05_MASTER_TASK_LIST.md`)**:
+  - Authoritative status tracking for Stages 1-4 tasks (T01, UI-01, UI-02, P0-A, P0-B, P1-C, etc.).
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| 1 | Pairing Security Hardening | Require auth or mask credentials on `/api/sync/pairing/config`; prevent token leak to LAN sniffers; secure UDP discovery beacon. | M1 | R2 / Acceptance Criteria |
-| 2 | Cryptographic Verification & Pruning | LAN chunked upload with offset check; cryptographic SHA-256 verification via `/api/sync/verify-chunk` before local segment pruning. | M1 | R2 / Survey |
-| 3 | UDP & Subnet Auto-Discovery | Broadcast on UDP 8765 and /24 subnet sweep for seamless laptop server pairing. | M1 | R2 / Survey |
-| 4 | Pipeline Checkpointing & Stage Reset | Checkpoint each stage in DB; reset `attempt_count = 0` across stages in `complete_stage_checkpoint()` to prevent premature lockouts. | M2 | R1 / Survey |
-| 5 | Raw Source Video Preservation | Never delete raw source videos in `storage/incoming/` during the finalize stage (`_run_finalize_stage`). | M2 | R1 / R4 / Acceptance Criteria |
-| 6 | Retry Cap & Permanent Failure Classification | Transition failing jobs to `FAILED_PERMANENT` after max attempts (5) and classify fatal container corruption immediately. | M2 | R1 / Acceptance Criteria |
-| 7 | Non-Blocking Segment Roll | Decouple SHA-256 hashing in `SegmenterEngine.kt` to background IO; immediately start next segment to guarantee zero dropped footage. | M3 | R3 / Acceptance Criteria |
-| 8 | Screen-Off / Dim Wake Lock | Add `WAKE_LOCK` permission in `AndroidManifest.xml` and acquire/release `PowerManager.WakeLock` in `RecordingForegroundService.kt`. | M3 | R3 / Survey |
-| 9 | 6-Screen Compose UI Polish | Wire camera flip stub, tap-to-focus/AE/AF gestures on Active Viewfinder, real-time pipeline polling on Sessions, and clip video playback. | M3 | R3 / Survey |
-| 10 | Gradle Build & Compiler Cleanliness | Configure JDK 17 in Gradle properties/wrapper; fix all 14 Kotlin compiler warnings so `assembleDebug` passes with 0 errors and 0 warnings. | M3 | R3 / Acceptance Criteria |
-| 11 | Authentic Publishing & `blocked_needs_auth` | Reject missing credentials with `PermissionError` and mark jobs as `blocked_needs_auth` across all 4 platforms (YouTube, IG, LinkedIn, X). | M4 | R5 / Survey |
-| 12 | Web Control Dashboard & APK Distribution | Real-time pipeline visualizer, 9:16 clip playback, integration modals, and verified `/download/dispatch.apk` download link. | M4 | R5 / Acceptance Criteria |
-| 13 | Python Test Suite Synchronization | Align test assertions with raw retention and `blocked_needs_auth`; make all test files discoverable via `unittest.TestCase`; 100% pass rate. | M4 | R1 / Acceptance Criteria |
-| 14 | Roman Hinglish Whisper Transcription | Whisper configured with Roman Hinglish initial prompt, word timestamps, and VAD filter. | M2 | R4 / Survey |
-| 15 | Gemini Flash Highlight Extraction | Authenticated header API call, complete thought 20-90s, Roman Hinglish titles/hooks, zero fake titles, local heuristic fallback. | M2 | R4 / Survey |
-| 16 | 9:16 Vertical Video & ASS Karaoke Subtitles | ASS subtitle generator with yellow active-word illumination, FFmpeg fit_blur / crop_follow 9:16 rendering. | M2 | R1 / Survey |
-| 17 | YouTube Cloud Inbox Polling & Catcher | Background poller for `[DISPATCH]` private uploads, WebVTT caption parsing with deduplication, and video download. | M1 | R2 / Survey |
-| 18 | E2E Test Suite & Adversarial Hardening | Comprehensive opaque-box test suite across Tiers 1-4, published via `TEST_READY.md`, followed by Tier 5 adversarial hardening. | M5 | Acceptance Criteria / E2E Track |
-
----
+| 1 | Visual Piece Blocks & 2px Seams | Main video track renders discrete visual piece blocks separated by 2px `#121418` cut seams | M1 | ORIGINAL_REQUEST §1, Explorer 1 |
+| 2 | Piece Selection Frame | Tapping a piece selects it with high-contrast `ring-2 ring-white rounded-md` | M1 | ORIGINAL_REQUEST §1, Explorer 1 |
+| 3 | Dual 44px Trim Handles | Selected piece renders dual 44px touch bounding boxes (`w-[44px]`) with white visual bars | M1 | ORIGINAL_REQUEST §1, Explorer 1 |
+| 4 | Remove Pieces Chip Strip | Remove redundant `Pieces (N)` auxiliary chip strip from `ClipsScreen.tsx` | M1 | ORIGINAL_REQUEST §1, Explorer 1 |
+| 5 | Remove In-Layer Scissors | Remove embedded 16px scissors button from timeline caption/overlay blocks | M1 | ORIGINAL_REQUEST §1, Explorer 1 |
+| 6 | Prominent 44px Split & Delete | Contextual thumb bar provides 44px [ Split ] and [ Delete ] buttons at positions 1 & 2 | M1 | ORIGINAL_REQUEST §2, Explorer 2 |
+| 7 | Relax Video Split Guard | Relax split guard threshold from 1.0s to 0.1s in `CaptionStudio.tsx` | M1 | ORIGINAL_REQUEST §2, Explorer 2 |
+| 8 | Multi-Piece Split Mapping | `handleSplitClip` maps presentation time to source time via `concatToSource` | M1 | ORIGINAL_REQUEST §2, Explorer 2 |
+| 9 | Ripple Delete Integration | Wire [ Delete ] in video edit mode to `handleDeletePiece` (disabled if piecesCount <= 1) | M1 | ORIGINAL_REQUEST §2, Explorer 2 |
+| 10 | Split/Delete Context Routing | Split/Delete acts strictly on active layer (selected piece vs caption group) | M1 | ORIGINAL_REQUEST §2, Explorer 2 |
+| 11 | Hide Unsupported Audio Buttons | Gate non-functional Import Audio and Voiceover buttons behind feature flag | M1 | ORIGINAL_REQUEST §2, Explorer 2 |
+| 12 | EDL Playback Gap Skipping | `handleTimeUpdate` detects segment ends (`cur >= piece.source_end`) and jumps to next piece `source_start` | M1 | ORIGINAL_REQUEST §3, Explorer 3 |
+| 13 | Concat-to-Source Seeking | `handleSeek` maps presentation time to source time via `concatToSource()` | M1 | ORIGINAL_REQUEST §3, Explorer 3 |
+| 14 | Master Task List Verification | Update `docs/2026-11-05_MASTER_TASK_LIST.md` marking completed tasks with evidence | M1 | ORIGINAL_REQUEST §4, Explorer 3 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Ingestion, Transport & Pairing Security | Secure `/api/sync/pairing/config` against unauthenticated secret leakage; secure UDP beacon; verify LAN chunked upload and YouTube Cloud Inbox. | None | PLANNED |
-| M2 | Media Pipeline Resilience & Stage Checkpointing | Reset `attempt_count` across stage checkpoints in `job_queue.py`; verify raw video retention; verify retry cap (5 attempts -> `FAILED_PERMANENT`). | None | PLANNED |
-| M3 | Android Mobile Engine & UI Hardening | Fix `SegmenterEngine.kt` non-blocking segment rolling; add `WAKE_LOCK` to manifest and foreground service; resolve 14 compiler warnings; verify Gradle build with 0 warnings. | M1 | PLANNED |
-| M4 | Publishing Outbox, Web Dashboard & Unit Test Sync | Align test assertions (`test_pipeline_runner.py`, `test_destructive.py`); wrap standalone test files into `unittest.TestCase`; ensure `blocked_needs_auth` is asserted; verify web dashboard & APK endpoint. | M1, M2 | PLANNED |
-| M5 | Final Milestone: 100% E2E Integration & Verification | Pass 100% of E2E test suite (Tiers 1-4); Tier 5 adversarial hardening; execute end-to-end 5-stage media pipeline with real sample video; verify APK build. | M1, M2, M3, M4, TEST_READY.md | PLANNED |
-
----
+| M1 | CapCut Mobile Timeline & EDL Playback | UI-01 (Piece rendering & trim handles), UI-02 (Contextual toolbar & split/delete), T01 (Gap skipping & seeking), Master Task List update | Phase 0 Survey Complete | DONE (13/13 tests pass, build code 0, 2 Reviewers APPROVE, 2 Challengers APPROVE, Auditor CLEAN) |
 
 ## Interface Contracts
+### `CaptionTimeline.tsx` ↔ `ClipsScreen.tsx`
+- **Props Added to `CaptionTimelineProps`:**
+  - `segments?: TimelineSegmentPiece[]` where `TimelineSegmentPiece = { id: string; start: number; end: number; index?: number }`
+  - `selectedPieceIndex?: number | null`
+  - `onSelectPiece?: (pieceIndex: number) => void`
+  - `onTrimPiece?: (pieceIndex: number, side: 'start' | 'end', newSourceTime: number) => Promise<boolean | void> | boolean | void`
+- **Behavior:**
+  - When `segments` is empty or undefined, defaults to single piece `[{ id: 'seg_1', start: clipStart, end: clipEnd, index: 0 }]`.
+  - Tapping piece `i` calls `onSelectPiece(i)` and `onSelectVideo?.()`.
+  - Dragging left handle calls `onTrimPiece(i, 'start', newSourceTime)`.
+  - Dragging right handle calls `onTrimPiece(i, 'end', newSourceTime)`.
 
-### 1. Ingestion / Sync ↔ Receiver (`dispatch/sync/receiver.py`)
-- `POST /api/sync/upload/init`: Headers `x-auth-token` (required). Body: `InitUploadRequest`. Returns `{status: str, remote_offset: int, verified: bool}`.
-- `PATCH /api/sync/upload/chunk`: Headers `x-auth-token`, `x-segment-id`, `x-upload-offset`, `x-file-size`, `x-sha256`, `x-session-id`. Returns `{status: "chunk_appended" | "completed", current_offset: int}`.
-- `GET /api/sync/verify-chunk`: Headers `x-auth-token`, query `segment_id`, `sha256`, `file_size`. Returns `{verified: bool, status: "VERIFIED" | "HASH_MISMATCH" | "NOT_FOUND"}`.
-- `GET /api/sync/pairing/config`: Must NOT return plaintext master auth token or cloud OAuth secrets to unauthenticated clients. If unauthenticated, returns pairing prompt or masked discovery endpoint.
+### `CaptionStudio.tsx` ↔ `ClipsScreen.tsx`
+- **Props Added to `CaptionStudioProps`:**
+  - `onDeletePiece?: () => void`
+  - `canDeletePiece?: boolean`
+  - `piecesCount?: number`
+  - `selectedPieceIndex?: number | null`
+- **Comparator `areCaptionStudioPropsEqual`:**
+  - Must compare `canDeletePiece`, `piecesCount`, `selectedPieceIndex`.
+- **Toolbar Layout:**
+  - In `edit` category: `[ Back ]`, `[ Split ]`, `[ Delete ]`, `[ Framing ]`, `[ Volume ]`, `[ Reset Crop ]`.
+  - In `text` category: `[ Back ]`, `[ Split ]`, `[ Delete ]`, `[ Transcript ]`, `[ Add Text ]`, `[ Style ]`, `[ Presets ]`, `[ Position ]`, ...
 
-### 2. Orchestrator Job Queue ↔ Pipeline Stages (`dispatch/orchestrator/`)
-- `claim_job(worker_id, lease_duration_seconds=60)`: Returns claimed job dictionary.
-- `complete_stage_checkpoint(job_id, completed_stage, worker_id)`: Advances job to next stage; resets `attempt_count = 0`.
-- `fail_stage_job(job_id, worker_id, error_message, max_attempts=5)`: Marks retry or sets `status = 'FAILED_PERMANENT'` if `attempts >= max_attempts` or unrecoverable fatal error.
-- Raw video files in `storage/incoming/` MUST NOT be deleted during `_run_finalize_stage`.
-
-### 3. Publishing Outbox ↔ Platform Adapters (`dispatch/publisher/`)
-- `upload_*_*(clip, ...)`: If credentials missing, raises `PermissionError`.
-- `process_outbox_queue()`: Catches `PermissionError` and sets outbox job status to `'blocked_needs_auth'`.
-
-### 4. Android App ↔ Hardware / Service
-- `SegmenterEngine`: Rolls segments without stopping CameraX capture during hashing. Background coroutine handles disk hashing and database updates.
-- `RecordingForegroundService`: Holds `PARTIAL_WAKE_LOCK` throughout active capture session.
-
----
+### `timelineEngine.ts` ↔ `ClipsScreen.tsx`
+- `concatToSource(ranges: [number, number][], concatTime: number, sourceDuration: number): number`
+- `sourceToConcat(ranges: [number, number][], sourceTime: number, sourceDuration: number): number | null`
+- `splitAt(ranges: [number, number][], sourceTime: number, sourceDuration: number): [number, number][]`
+- `trimEdge(ranges: [number, number][], index: number, edge: 'start' | 'end', newSourceTime: number, sourceDuration: number): [number, number][]`
+- `deletePiece(ranges: [number, number][], index: number, sourceDuration: number): [number, number][]`
 
 ## Code Layout
-- `android/`: Android Studio project (Compose, CameraX, Room, WorkManager).
-- `dispatch/`: Python media engine, FastAPI dashboard, pipeline orchestrator, publishers.
-  - `ai_clips/`: Gemini Flash highlight extractor and prompt templates.
-  - `orchestrator/`: Pipeline runner, state machine, job queue, retry engine.
-  - `publisher/`: Multi-platform publishers (YouTube, IG, LinkedIn, X) and outbox processor.
-  - `sync/`: Receiver for chunked uploads and pairing endpoints.
-  - `transcription/`: Faster-whisper transcriber with Roman Hinglish prompts.
-  - `transport/`: Discovery beacon server and network probing.
-  - `video_engine/`: Subtitle generator (ASS karaoke), reframer (9:16), and renderer (FFmpeg).
-  - `web/`: FastAPI dashboard and templates.
-  - `youtube_inbox/`: YouTube Cloud Inbox poller, catcher, and VTT parser.
-- `tests/`: Automated unit and integration test suites.
-- `storage/`: Media storage directories (`incoming`, `processing`, `clips`, `quarantine`, `youtube_inbox`, `database`).
+- `frontend/src/captions/CaptionTimeline.tsx` — Owned by Worker (UI-01 changes)
+- `frontend/src/captions/CaptionStudio.tsx` — Owned by Worker (UI-02 changes)
+- `frontend/src/screens/ClipsScreen.tsx` — Owned by Worker (T01 playback & seeking, UI-01 & UI-02 wiring)
+- `frontend/test_edl_playback_gap_skip.ts` — Owned by Worker (T01 unit test suite)
+- `frontend/run_tests.js` — Owned by Worker (registration of new test suite)
+- `docs/2026-11-05_MASTER_TASK_LIST.md` — Owned by Worker (task status update)

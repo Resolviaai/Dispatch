@@ -111,6 +111,10 @@ export interface CaptionStudioProps {
   onSplitClip?: (splitTime: number) => void;
   /** Playhead position in CLIP-relative seconds (0 = clip start). Falls back to currentTime when omitted. */
   splitClipTime?: number;
+  onDeletePiece?: () => void;
+  canDeletePiece?: boolean;
+  piecesCount?: number;
+  selectedPieceIndex?: number | null;
   onFeedback?: (msg: string) => void;
 }
 
@@ -970,7 +974,7 @@ function ToolButton({
       disabled={disabled}
       aria-disabled={disabled}
       title={title || label}
-      className={`flex flex-col items-center justify-center min-w-[54px] h-12 px-1 text-center select-none transition-colors active:scale-95 shrink-0 ${
+      className={`flex flex-col items-center justify-center min-w-[54px] h-12 px-1 text-center select-none active:scale-[0.98] transition-all duration-150 shrink-0 ${
         disabled
           ? 'opacity-30 cursor-not-allowed pointer-events-none'
           : active
@@ -1091,10 +1095,16 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   onRedo: _onRedo,
   onSplitClip,
   splitClipTime,
+  onDeletePiece,
+  canDeletePiece,
+  piecesCount,
+  selectedPieceIndex,
   onFeedback,
 }) => {
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
+
+  const ENABLE_EXPERIMENTAL_AUDIO_LAYERS = false;
 
   const [activeCategory, setActiveCategory] = useState<ToolbarCategory>('none');
   const [internalActivePanel, setInternalActivePanel] = useState<ActivePanel>('none');
@@ -1819,41 +1829,21 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
         onFeedback?.('Split text segment at playhead.');
         return;
       }
+      const msg = `To split this text segment, move playhead inside it (${currentGroup.start.toFixed(1)}s – ${currentGroup.end.toFixed(1)}s).`;
+      if (onFeedback) onFeedback(msg);
+      else alert(msg);
+      return;
     }
 
-    // 2. If any other group on the active track covers the playhead, auto-target and split it
-    if (track && Array.isArray(track.groups)) {
-      const overlapping = track.groups.find(
-        (g) => currentPlayhead > g.start + 0.05 && currentPlayhead < g.end - 0.05
-      );
-      if (overlapping) {
-        const splitResult = splitCaptionGroupAtTime(overlapping, currentPlayhead);
-        if (splitResult) {
-          const [firstGroup, secondGroup] = splitResult;
-          onUpdateTrack({
-            ...track,
-            groups: track.groups.flatMap((g) => (g.id === overlapping.id ? [firstGroup, secondGroup] : [g])),
-          }, true);
-          onSelectGroup?.(secondGroup.id);
-          onFeedback?.('Split text segment at playhead.');
-          return;
-        }
-      }
-    }
-
-    // 3. Fallback: split the underlying video clip at the playhead
-    if (onSplitClip && splitTime >= 1.0 && splitTime <= duration - 1.0) {
+    // 2. Fallback / Video selected: split the underlying video clip at the playhead (0.1s guard)
+    if (onSplitClip && splitTime >= 0.1 && splitTime <= duration - 0.1) {
       onSplitClip(splitTime);
       return;
     }
 
-    // 4. Actionable feedback if split cannot proceed
-    if (splitTime < 1.0 || splitTime > duration - 1.0) {
-      const msg = `Cannot split within 1.0s of the clip start or end (${splitTime.toFixed(1)}s / ${duration.toFixed(1)}s).`;
-      if (onFeedback) onFeedback(msg);
-      else alert(msg);
-    } else if (currentGroup) {
-      const msg = `To split this text segment, move playhead inside it (${currentGroup.start.toFixed(1)}s – ${currentGroup.end.toFixed(1)}s).`;
+    // 3. Actionable feedback if split cannot proceed
+    if (splitTime < 0.1 || splitTime > duration - 0.1) {
+      const msg = `Cannot split within 0.1s of the clip start or end (${splitTime.toFixed(1)}s / ${duration.toFixed(1)}s).`;
       if (onFeedback) onFeedback(msg);
       else alert(msg);
     } else {
@@ -4695,7 +4685,19 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
             <ChevronLeft size={20} />
           </button>
 
-          {/* Add Text · Transcript · Presets · Style · Animation · Split · Merge · Export SRT · Lasting · Duplicate · Layers · Delete */}
+          {/* Split · Delete · Transcript · Add Text · Presets · Style · Position · Merge Next · Span Video · Export SRT · Duplicate · Layers */}
+          <ToolButton
+            icon={<Scissors size={18} />}
+            label="Split"
+            disabled={!isTextLayerSelected}
+            onClick={handleSplit}
+          />
+          <ToolButton
+            icon={<Trash2 size={18} className="text-red-400" />}
+            label="Delete"
+            disabled={!isTextLayerSelected}
+            onClick={handleDelete}
+          />
           <ToolButton
             icon={<FileText size={18} className="text-primary" />}
             label="Transcript"
@@ -4748,18 +4750,6 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
               setStyleTab('spacing');
               setActivePanel('style');
             }}
-          />
-          <ToolButton
-            icon={<Scissors size={18} />}
-            label="Split"
-            disabled={!isTextLayerSelected && !onSplitClip}
-            onClick={handleSplit}
-          />
-          <ToolButton
-            icon={<Trash2 size={18} className="text-red-400" />}
-            label="Delete"
-            disabled={!isTextLayerSelected}
-            onClick={handleDelete}
           />
           <ToolButton
             icon={<Combine size={18} />}
@@ -4841,22 +4831,26 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 label={isMainVideoMuted ? 'Unmute' : 'Mute'}
                 onClick={() => onUpdateMainVideoAudio?.(mainVideoVolume, !isMainVideoMuted)}
               />
-              <ToolButton
-                icon={<Music size={18} />}
-                label="Import Audio"
-                onClick={() => handleImportAudio()}
-              />
-              <ToolButton
-                icon={
-                  isRecordingVoiceover ? (
-                    <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
-                  ) : (
-                    <Mic size={18} />
-                  )
-                }
-                label={isRecordingVoiceover ? 'Stop Rec' : 'Voiceover'}
-                onClick={() => handleRecordVoiceover()}
-              />
+              {ENABLE_EXPERIMENTAL_AUDIO_LAYERS && (
+                <>
+                  <ToolButton
+                    icon={<Music size={18} />}
+                    label="Import Audio"
+                    onClick={() => handleImportAudio()}
+                  />
+                  <ToolButton
+                    icon={
+                      isRecordingVoiceover ? (
+                        <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
+                      ) : (
+                        <Mic size={18} />
+                      )
+                    }
+                    label={isRecordingVoiceover ? 'Stop Rec' : 'Voiceover'}
+                    onClick={() => handleRecordVoiceover()}
+                  />
+                </>
+              )}
             </>
           )}
         </div>
@@ -4868,24 +4862,30 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
           <button
             type="button"
             onClick={handleBackToPrimary}
-            className="w-9 h-12 flex items-center justify-center text-text-secondary hover:text-text-main active:scale-95 transition-colors shrink-0 border-r border-[#232832]/80 pr-1 mr-1"
+            className="w-9 h-12 flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.98] transition-all shrink-0 border-r border-[#232832]/80 pr-1 mr-1"
             title="Back to main tools"
             aria-label="Back"
           >
             <ChevronLeft size={20} />
           </button>
 
+          <ToolButton
+            icon={<Scissors size={18} />}
+            label="Split"
+            disabled={!onSplitClip || (splitClipTime ?? currentTime) < 0.1 || (splitClipTime ?? currentTime) > duration - 0.1}
+            onClick={() => onSplitClip?.(splitClipTime ?? currentTime)}
+          />
+          <ToolButton
+            icon={<Trash2 size={18} className="text-red-400" />}
+            label="Delete"
+            disabled={!onDeletePiece || canDeletePiece === false || (piecesCount !== undefined && piecesCount <= 1)}
+            onClick={() => onDeletePiece?.()}
+          />
           <ToolButton icon={<Crop size={18} />} label="Framing" onClick={() => setActivePanel('framing')} />
           <ToolButton
             icon={isMainVideoMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
             label="Volume"
             onClick={() => setActivePanel('main_volume')}
-          />
-          <ToolButton
-            icon={<Scissors size={18} />}
-            label="Split"
-            disabled={!onSplitClip || (splitClipTime ?? currentTime) < 1.0 || (splitClipTime ?? currentTime) > duration - 1.0}
-            onClick={() => onSplitClip?.(splitClipTime ?? currentTime)}
           />
           <ToolButton
             icon={<RotateCcw size={18} />}
@@ -4952,6 +4952,9 @@ function areCaptionStudioPropsEqual(prev: CaptionStudioProps, next: CaptionStudi
   if (prev.duration !== next.duration) return false;
   if (prev.canUndo !== next.canUndo) return false;
   if (prev.canRedo !== next.canRedo) return false;
+  if (prev.canDeletePiece !== next.canDeletePiece) return false;
+  if (prev.piecesCount !== next.piecesCount) return false;
+  if (prev.selectedPieceIndex !== next.selectedPieceIndex) return false;
 
   return true;
 }

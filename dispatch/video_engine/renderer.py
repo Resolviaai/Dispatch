@@ -120,11 +120,16 @@ def render_clip(
     else:
         captured_track = sub_opts.get("caption_track")
         existing_cap_json = db.get_clip_caption_data(clip_id) if captured_track is None else None
+        effective_spans = timeline_spans if (timeline_spans and len(timeline_spans) > 1) else (
+            build_silence_keep_intervals(start_time, end_time, cuts) if has_silence_cuts else None
+        )
         if captured_track is not None and not has_silence_cuts:
             try:
                 from dispatch.captions.model import CaptionTrack
-                from dispatch.captions.exporter import export_to_ass
+                from dispatch.captions.exporter import export_to_ass, remap_caption_track_to_timeline
                 track = CaptionTrack.from_dict(captured_track)
+                if effective_spans:
+                    track = remap_caption_track_to_timeline(track, effective_spans, clip_start=start_time)
                 export_to_ass(track, ass_path)
             except Exception as e:
                 logger.warning("Failed to export captured CaptionTrack for clip %s: %s", clip_id, e)
@@ -134,8 +139,10 @@ def render_clip(
             try:
                 import json
                 from dispatch.captions.model import CaptionTrack
-                from dispatch.captions.exporter import export_to_ass
+                from dispatch.captions.exporter import export_to_ass, remap_caption_track_to_timeline
                 track = CaptionTrack.from_dict(json.loads(existing_cap_json))
+                if effective_spans:
+                    track = remap_caption_track_to_timeline(track, effective_spans, clip_start=start_time)
                 export_to_ass(track, ass_path)
             except Exception as e:
                 logger.error("Failed to export existing CaptionTrack for clip %s: %s", clip_id, e)
@@ -163,6 +170,9 @@ def render_clip(
                     preset_id=effective_preset_id
                 )
                 apply_template_to_track(track, tpl_captions)
+                if effective_spans and not has_silence_cuts:
+                    from dispatch.captions.exporter import remap_caption_track_to_timeline
+                    track = remap_caption_track_to_timeline(track, effective_spans, clip_start=start_time)
                 export_to_ass(track, ass_path)
                 saved = db.save_clip_caption_data(
                     clip_id, json.dumps(track.to_dict()),
@@ -398,6 +408,7 @@ def render_clip(
         "video_path": output_video_path,
         "thumbnail_path": output_thumb_path if output_thumb_path.exists() else None,
         "duration": actual_duration,
+        "expected_duration": eff_duration,
         "render_fingerprint": computed_render_fp,
     }
 

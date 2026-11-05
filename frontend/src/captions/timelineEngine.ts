@@ -570,3 +570,116 @@ export function c2ToC3Time(proxyTime: number, windowStart: number): number {
 export function c3ToC2Time(sourceTime: number, windowStart: number): number {
   return roundMs(roundMs(sourceTime) - roundMs(windowStart));
 }
+
+/**
+ * Remap a source/clip-relative CaptionTrack to output presentation time for cut EDL clips.
+ * Words and groups inside removed footage are omitted.
+ * Word and group boundaries are clipped to segment boundaries.
+ */
+export function remapCaptionTrackToTimeline<T extends { groups?: any[]; [key: string]: any }>(
+  track: T,
+  ranges: unknown,
+  clipStart: number = 0.0,
+  sourceDuration?: number,
+): T {
+  if (!track || !Array.isArray(track.groups) || track.groups.length === 0 || !ranges) {
+    return track;
+  }
+  let maxEnd = 0;
+  if (Array.isArray(ranges)) {
+    for (const r of ranges) {
+      if (Array.isArray(r) && r.length === 2) {
+        maxEnd = Math.max(maxEnd, Number(r[1]));
+      } else if (r && typeof r === 'object') {
+        const obj = r as any;
+        maxEnd = Math.max(maxEnd, Number(obj.source_end ?? obj.end ?? 0));
+      }
+    }
+  }
+  const effectiveDur = typeof sourceDuration === 'number' && sourceDuration > 0
+    ? sourceDuration
+    : Math.max(10, maxEnd + 10);
+
+  let canonical: TimeRange[];
+  try {
+    canonical = normalizeRanges(ranges, effectiveDur);
+  } catch {
+    return track;
+  }
+
+  if (canonical.length === 0) return track;
+
+  const remappedGroups: any[] = [];
+
+  for (const grp of track.groups) {
+    const grpType = grp.type ?? 'caption';
+    if (grpType === 'audio' || grpType === 'voiceover') {
+      remappedGroups.push(grp);
+      continue;
+    }
+
+    const gStart = typeof grp.start === 'number' ? grp.start : 0;
+    const gEnd = typeof grp.end === 'number' ? grp.end : gStart + 0.5;
+
+    const grpSrcStart = clipStart + gStart;
+    const grpSrcEnd = clipStart + gEnd;
+
+    if (grpSrcEnd <= grpSrcStart) continue;
+
+    let fragments: TimelineFragment[];
+    try {
+      fragments = intersectSourceInterval(canonical, grpSrcStart, grpSrcEnd, effectiveDur);
+    } catch {
+      continue;
+    }
+    if (!fragments || fragments.length === 0) continue;
+
+    for (let fIdx = 0; fIdx < fragments.length; fIdx++) {
+      const frag = fragments[fIdx];
+      const remappedWords: any[] = [];
+
+      if (Array.isArray(grp.words) && grp.words.length > 0) {
+        for (const w of grp.words) {
+          const wStart = typeof w.start === 'number' ? w.start : gStart;
+          const wEnd = typeof w.end === 'number' ? w.end : wStart + 0.1;
+
+          const wSrcStart = clipStart + wStart;
+          const wSrcEnd = clipStart + wEnd;
+
+          const overlapStart = Math.max(wSrcStart, frag.source_start);
+          const overlapEnd = Math.min(wSrcEnd, frag.source_end);
+
+          if (overlapEnd - overlapStart > 0.005) {
+            const mappedStart = frag.timeline_start + (overlapStart - frag.source_start);
+            const mappedEnd = frag.timeline_start + (overlapEnd - frag.source_start);
+            remappedWords.push({
+              ...w,
+              start: Number(mappedStart.toFixed(3)),
+              end: Number(mappedEnd.toFixed(3)),
+            });
+          }
+        }
+      }
+
+      if (remappedWords.length === 0 && grp.has_word_timing !== false && (grp.words && grp.words.length > 0)) {
+        continue;
+      }
+
+      const nextStart = remappedWords.length > 0 ? remappedWords[0].start : Number(frag.timeline_start.toFixed(3));
+      const nextEnd = remappedWords.length > 0 ? remappedWords[remappedWords.length - 1].end : Number(frag.timeline_end.toFixed(3));
+
+      remappedGroups.push({
+        ...grp,
+        id: fragments.length > 1 ? `${grp.id}_${fIdx}` : grp.id,
+        start: nextStart,
+        end: nextEnd,
+        words: remappedWords.length > 0 ? remappedWords : grp.words,
+      });
+    }
+  }
+
+  return {
+    ...track,
+    groups: remappedGroups,
+  };
+}

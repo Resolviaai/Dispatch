@@ -118,7 +118,7 @@ class TestTier3CrossFeatureCombinations(DispatchE2EBaseTestCase):
         catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
         vid = "dQw4w9WgXcQ"  # Valid 11-char ID
         dummy_v = self.temp_dir / f"{vid}.mp4"
-        self.create_synthetic_mp4(dummy_v, duration_seconds=1.0)
+        self.create_synthetic_mp4(dummy_v, duration_seconds=15.0)
 
         mock_captions = [
             {"id": 0, "start": 0.0, "end": 15.0, "text": "Dispatch automates your workflow.", "words": []},

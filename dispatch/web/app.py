@@ -39,6 +39,7 @@ from dispatch.config import (
 )
 from dispatch import db
 from dispatch.video_engine.filmstrip import load_filmstrip_payload
+from dispatch.video_engine.autocut import analyze_waveform_and_transcript_autocuts
 from dispatch.video_engine import (
     render_clip,
     ensure_clip_thumbnail,
@@ -504,7 +505,6 @@ class LayoutModeRequest(BaseModel):
 
 class YouTubeIngestRequest(BaseModel):
     url: str
-    force_whisper: Optional[bool] = False
 
 
 class SettingsRequest(BaseModel):
@@ -1467,6 +1467,51 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
     }
 
 
+@app.get("/api/clips/{clip_id}/autocut/proposals")
+async def get_autocut_proposals(clip_id: str, request: Request):
+    verify_dashboard_auth(request)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip_start = float(clip.get("start_time") or 0.0)
+    clip_end = float(clip.get("end_time") or (clip_start + 30.0))
+    
+    segments = []
+    cap_data = clip.get("caption_data")
+    if cap_data:
+        try:
+            parsed = json.loads(cap_data) if isinstance(cap_data, str) else cap_data
+            groups = parsed.get("groups") or []
+            for g in groups:
+                segments.append({
+                    "start": g.get("start", 0.0),
+                    "end": g.get("end", 0.0),
+                    "text": g.get("text", ""),
+                    "words": g.get("words", []),
+                })
+        except Exception:
+            pass
+            
+    source_path = None
+    try:
+        source_path = resolve_clip_source_path(clip)
+    except Exception:
+        pass
+
+    proposals = analyze_waveform_and_transcript_autocuts(
+        media_path=source_path,
+        transcript_segments=segments,
+        clip_start=clip_start,
+        clip_end=clip_end,
+    )
+    return {
+        "clip_id": clip_id,
+        "proposals": proposals,
+        "count": len(proposals),
+    }
+
+
 @app.post("/api/clips/{clip_id}/split")
 @_serialize_clip_mutation
 async def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Request):
@@ -1643,7 +1688,7 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
         if not is_valid:
             raise RuntimeError(f"Final render failed playback validation: {validation_error or 'invalid media'}")
         actual_duration = float(probe_data.get("duration") or 0.0) if isinstance(probe_data, dict) else 0.0
-        expected_duration = end_t - start_t
+        expected_duration = float(render_res.get("expected_duration") or (end_t - start_t))
         if actual_duration > 0 and abs(actual_duration - expected_duration) > 1.0:
             raise RuntimeError(
                 f"Final render duration {actual_duration:.2f}s does not match selected range {expected_duration:.2f}s"
@@ -2290,9 +2335,23 @@ async def save_clip_captions(clip_id: str, request: Request):
             detail="Captions or the selected range changed while editing. Reload the clip before saving.",
         )
 
-    # Export ASS file with exact parity
+    # Export ASS file with exact parity (remap to presentation time if multi-segment EDL)
     ass_path = PROCESSING_DIR / f"{clip_id}.ass"
-    export_to_ass(track, ass_path)
+    export_track = track
+    if clip.get("project_document"):
+        try:
+            raw_doc = clip["project_document"]
+            p_doc = json.loads(raw_doc) if isinstance(raw_doc, str) else raw_doc
+            doc_segs = p_doc.get("timeline", {}).get("segments", []) if isinstance(p_doc, dict) else []
+            if doc_segs:
+                from dispatch.segments import canonical_media_spans
+                timeline_spans = canonical_media_spans(doc_segs)
+                if timeline_spans and len(timeline_spans) > 1:
+                    from dispatch.captions.exporter import remap_caption_track_to_timeline
+                    export_track = remap_caption_track_to_timeline(track, timeline_spans, clip_start=float(clip["start_time"]))
+        except Exception:
+            export_track = track
+    export_to_ass(export_track, ass_path)
 
     return {
         "status": "success",

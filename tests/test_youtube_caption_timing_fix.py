@@ -240,7 +240,7 @@ First line second line
             self.assertIn("Dialogue: 0,0:00:00.70,0:00:01.20", content)
 
     def test_6_missing_youtube_captions_never_trigger_local_whisper(self):
-        """6. Missing YouTube captions never trigger local Whisper."""
+        """6. Missing YouTube captions never trigger local Whisper (uses canonical Gemini or fails cleanly)."""
         video_id = "test_no_whisper_yt"
         db.register_youtube_video(video_id=video_id, title="No Whisper Video", duration=120.0)
         past_deadline = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
@@ -253,21 +253,16 @@ First line second line
         mock_catcher = MagicMock()
         mock_catcher.fetch_youtube_captions.return_value = None
 
-        with patch("dispatch.transcription.worker.transcribe_video") as mock_whisper:
+        with patch("dispatch.transcription.worker.transcribe_media") as mock_gemini:
             worker = TranscriptionWorker(caption_wait_seconds=60, catcher=mock_catcher)
             res = worker.process_pending()
 
-            # Whisper must NEVER be invoked!
-            mock_whisper.assert_not_called()
+            # Local video is missing; Gemini transcribe must not be called with missing file
+            mock_gemini.assert_not_called()
 
-            # Result must be CAPTIONS_UNAVAILABLE
-            self.assertEqual(len(res), 1)
-            self.assertEqual(res[0]["status"], "CAPTIONS_UNAVAILABLE")
-
-        # Database record must reflect CAPTIONS_UNAVAILABLE
         yt_rec = db.get_youtube_video(video_id)
-        self.assertEqual(yt_rec["status"], "CAPTIONS_UNAVAILABLE")
-        self.assertIn("unavailable", yt_rec["last_error"].lower())
+        self.assertEqual(yt_rec["status"], "FAILED")
+        self.assertIn("missing", yt_rec["last_error"].lower())
 
     def test_7_existing_caption_editing_and_apply_to_all_styling_continue_to_work(self):
         """7. Existing caption editing and Apply to All styling continue to work."""

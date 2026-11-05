@@ -297,7 +297,7 @@ def init_db():
                 duration REAL DEFAULT 0.0,
                 status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, DOWNLOADING, VALIDATING, DOWNLOADED, WAITING_FOR_TRANSCRIPT, TRANSCRIBED, CLIPS_CREATED, COMPLETED, FAILED
                 local_video_path TEXT,
-                transcript_source TEXT,                    -- 'youtube' or 'whisper'
+                transcript_source TEXT,                    -- 'gemini_transcribe', 'gemini_flash_lite', or 'youtube' (legacy)
                 segments_json TEXT,                        -- JSON array of timestamped segments
                 last_error TEXT,
                 retry_count INTEGER DEFAULT 0,

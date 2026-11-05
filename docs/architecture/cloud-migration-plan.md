@@ -1,6 +1,15 @@
-# Dispatch Cloud Migration — Architecture & Migration Plan
+> [!WARNING]
+> **SUPERSEDED — HISTORICAL REFERENCE ONLY**  
+> This migration plan represents an earlier October 2026 blueprint where all video processing was pinned to the owner's Windows PC.  
+> Under **Dispatch V2** (`docs/architecture/DISPATCH_V2_ARCHITECTURE.md`), the architecture is cloud-first:
+> - Speech transcription is 100% Gemini (`gemini-3.5-transcribe` + `gemini-3.5-flash-lite`), eliminating local Whisper.
+> - Multi-user state and authorization live in Supabase.
+> - The local PC acts solely as an optional execution worker for heavy FFmpeg rendering.
+> Useful security, R2 storage, Supabase RLS, and quota contracts below remain valid reference material.
 
-Status: **Plan approved as working baseline (2026-10-23). Implementation in progress.**
+# Dispatch Cloud Migration — Architecture & Migration Plan (Historical)
+
+Status: **SUPERSEDED by Dispatch V2 Architecture (2026-11-05). Preserved for contract reference.**
 Owner brief: Principal Architect Implementation Brief (Steps 0–9). This doc is the authoritative decision record + migration checklist. Current-state index: root `AGENT_HANDOFF.md`.
 
 **Principle:** extend Dispatch into a small multi-user cloud-connected app while ALL video processing stays on the owner's Windows PC. No cloud rendering. Originals stay on YouTube. Free-tier only.

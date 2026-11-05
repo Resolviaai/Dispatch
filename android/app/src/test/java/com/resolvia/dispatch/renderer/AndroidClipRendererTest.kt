@@ -262,4 +262,37 @@ class AndroidClipRendererTest {
         assertEquals(140, g.activeAnimDurationMs)
         assertEquals(1.2f, g.activeScaleMax, 0.001f)
     }
+
+    @Test
+    fun remapOverlayGroupsToTimeline_multiSegment_shiftsSurvivingWordsAndDropsGaps() {
+        val w1 = AndroidClipRenderer.CaptionWord("PieceOne", 1.0f, 2.5f)
+        val g1 = AndroidClipRenderer.CaptionGroup(id = "g1", start = 1.0f, end = 2.5f, words = listOf(w1))
+
+        val w2 = AndroidClipRenderer.CaptionWord("DeletedGap", 7.0f, 8.5f)
+        val g2 = AndroidClipRenderer.CaptionGroup(id = "g2", start = 7.0f, end = 8.5f, words = listOf(w2))
+
+        val w3 = AndroidClipRenderer.CaptionWord("PieceTwo", 16.0f, 17.5f)
+        val g3 = AndroidClipRenderer.CaptionGroup(id = "g3", start = 16.0f, end = 17.5f, words = listOf(w3))
+
+        val groups = listOf(g1, g2, g3)
+        // Segment 0: 10.0s - 15.0s (dur 5.0s = 5000ms)
+        // Segment 1: 25.0s - 30.0s (dur 5.0s = 5000ms)
+        val spans = listOf(Pair(10000L, 15000L), Pair(25000L, 30000L))
+        val clipStartSec = 10.0f
+
+        val remapped = AndroidClipRenderer.remapOverlayGroupsToTimeline(groups, spans, clipStartSec)
+
+        assertEquals(2, remapped.size)
+        // Group 1
+        assertEquals("g1", remapped[0].id)
+        assertEquals("PieceOne", remapped[0].words[0].text)
+        assertEquals(1.0f, remapped[0].start, 0.01f)
+        assertEquals(2.5f, remapped[0].end, 0.01f)
+
+        // Group 3: shifted to 6.0s (5.0s offset + 1.0s into segment 1)
+        assertEquals("g3", remapped[1].id)
+        assertEquals("PieceTwo", remapped[1].words[0].text)
+        assertEquals(6.0f, remapped[1].start, 0.01f)
+        assertEquals(7.5f, remapped[1].end, 0.01f)
+    }
 }

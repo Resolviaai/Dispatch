@@ -1,7 +1,8 @@
-"""Pillar 2: Autonomous Transcription Worker for YouTube Inbox.
+"""Pillar 2: Autonomous Transcription Worker for YouTube Inbox and Direct Uploads.
+
 Consumes items in status 'DOWNLOADED' and 'WAITING_FOR_TRANSCRIPT',
-implements an explicit asynchronous wait for YouTube captions,
-and falls back to local faster-whisper only after the deadline.
+running canonical Gemini transcription (Primary: 3.5-transcribe, Fallback: 3.5-flash-lite).
+Zero local Whisper fallback. Zero YouTube captions fallback.
 """
 import os
 import json
@@ -14,7 +15,11 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
 from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
-from dispatch.transcription.transcriber import transcribe_video
+from dispatch.transcription.gemini_engine import (
+    transcribe_media,
+    PermanentAuthError,
+    RecoverableTranscriptionError,
+)
 
 logger = logging.getLogger("dispatch.transcription.worker")
 
@@ -23,7 +28,6 @@ def _parse_iso_or_sqlite_timestamp(ts_str: Optional[str]) -> Optional[datetime]:
     """Parse timestamp string from SQLite (YYYY-MM-DD HH:MM:SS or ISO-8601)."""
     if not ts_str:
         return None
-    # Replace space with T if needed
     clean_ts = ts_str.strip().replace(" ", "T")
     try:
         dt = datetime.fromisoformat(clean_ts)
@@ -32,7 +36,6 @@ def _parse_iso_or_sqlite_timestamp(ts_str: Optional[str]) -> Optional[datetime]:
         return dt
     except Exception:
         pass
-    # Fallback formats
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
         try:
             dt = datetime.strptime(ts_str.strip(), fmt)
@@ -46,7 +49,7 @@ class TranscriptionWorker:
     """Standalone worker for Pillar 2 transcription contract.
     
     States:
-      DOWNLOADED -> WAITING_FOR_TRANSCRIPT -> TRANSCRIBED (source: 'youtube' or 'whisper')
+      DOWNLOADED -> TRANSCRIBING -> TRANSCRIBED (source: 'gemini_transcribe' or 'gemini_flash_lite')
     """
 
     def __init__(
@@ -56,18 +59,10 @@ class TranscriptionWorker:
         caption_reprobe_seconds: Optional[int] = None,
         catcher: Optional[YouTubeInboxCatcher] = None
     ):
-        # Poll interval: check DB for downloadable/transcribable items every 15s by default
         env_interval = os.getenv("DISPATCH_TRANSCRIPTION_POLL_INTERVAL")
         self.poll_interval = poll_interval_seconds or (int(env_interval) if env_interval and env_interval.isdigit() else 15)
-
-        # Wait window for YouTube captions before Whisper fallback (default 4 hours = 14400s)
-        env_wait = os.getenv("DISPATCH_TRANSCRIPT_WAIT_SECONDS")
-        self.caption_wait_seconds = caption_wait_seconds or (int(env_wait) if env_wait and env_wait.isdigit() else 14400)
-
-        # Reprobe interval for checking YouTube captions (default 5 minutes = 300s)
-        env_reprobe = os.getenv("DISPATCH_CAPTION_REPROBE_SECONDS")
-        self.caption_reprobe_seconds = caption_reprobe_seconds or (int(env_reprobe) if env_reprobe and env_reprobe.isdigit() else 300)
-
+        self.caption_wait_seconds = caption_wait_seconds or 0
+        self.caption_reprobe_seconds = caption_reprobe_seconds or 300
         self.catcher = catcher or YouTubeInboxCatcher()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -83,8 +78,8 @@ class TranscriptionWorker:
         self._thread = threading.Thread(target=self._run_loop, name="TranscriptionWorkerThread", daemon=True)
         self._thread.start()
         logger.info(
-            "Transcription worker started (Poll interval: %ds, Caption wait window: %ds / %.1fh, Reprobe interval: %ds)",
-            self.poll_interval, self.caption_wait_seconds, self.caption_wait_seconds / 3600.0, self.caption_reprobe_seconds
+            "Transcription worker started with Gemini pipeline (Poll interval: %ds)",
+            self.poll_interval
         )
 
     def stop(self):
@@ -96,7 +91,6 @@ class TranscriptionWorker:
 
     def _run_loop(self):
         """Periodic loop scanning for DOWNLOADED and WAITING_FOR_TRANSCRIPT records."""
-        # Initial run on boot
         try:
             self.process_pending()
         except Exception as e:
@@ -124,14 +118,14 @@ class TranscriptionWorker:
             except Exception as e:
                 logger.error("Error running drain_queued_transcriptions: %s", e)
 
-            # 1. Promote DOWNLOADED items to WAITING_FOR_TRANSCRIPT
+            # 1. Process DOWNLOADED items immediately with Gemini
             downloaded_items = db.list_youtube_inbox(status="DOWNLOADED", limit=20)
             for item in downloaded_items:
                 res = self.process_downloaded_item(item)
                 if res:
                     processed.append(res)
 
-            # 2. Check WAITING_FOR_TRANSCRIPT items
+            # 2. Process any legacy WAITING_FOR_TRANSCRIPT items
             waiting_items = db.list_youtube_inbox(status="WAITING_FOR_TRANSCRIPT", limit=20)
             for item in waiting_items:
                 res = self.process_waiting_item(item)
@@ -140,222 +134,75 @@ class TranscriptionWorker:
 
             return processed
 
+    def _resolve_api_key_for_item(self, item: Dict[str, Any]) -> str:
+        """Resolve Gemini API key: user-specific key if vaulted, else system GEMINI_API_KEY."""
+        user_id = item.get("user_id")
+        vaulted_key = ""
+        if user_id:
+            try:
+                from dispatch.youtube_connections import get_user_gemini_key
+                vaulted_key = get_user_gemini_key(user_id) or ""
+            except Exception as e:
+                logger.debug("Failed to retrieve user gemini key: %s", e)
+        from dispatch.config import GEMINI_API_KEY
+        return vaulted_key if vaulted_key else (os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY)
+
     def process_downloaded_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Transition DOWNLOADED item into WAITING_FOR_TRANSCRIPT and probe captions immediately."""
+        """Transcribe DOWNLOADED item directly via canonical Gemini engine."""
         video_id = item["video_id"]
-        now_dt = datetime.now(timezone.utc)
-        # Route C (direct uploads, dir_* ids): there IS no YouTube caption track to
-        # wait for — the deadline is now, so the whisper fallback runs immediately
-        # when the Stage 1 Gemini fast path is unavailable.
-        wait_seconds = 0 if video_id.startswith("dir_") else self.caption_wait_seconds
-        deadline_dt = now_dt + timedelta(seconds=wait_seconds)
-        next_probe_dt = now_dt + timedelta(seconds=self.caption_reprobe_seconds)
+        local_path_str = item.get("local_video_path")
+        duration = item.get("duration", 0.0)
 
-        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-        deadline_str = deadline_dt.strftime("%Y-%m-%d %H:%M:%S")
-        next_probe_str = next_probe_dt.strftime("%Y-%m-%d %H:%M:%S")
+        if not local_path_str or not Path(local_path_str).exists() or Path(local_path_str).stat().st_size == 0:
+            err = f"Local video file missing or empty for {video_id}: {local_path_str}"
+            logger.warning(err)
+            db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
+            return None
 
-        logger.info(
-            "Video %s: Entering WAITING_FOR_TRANSCRIPT (Deadline: %s, Wait window: %ds, Reprobe: %ds)",
-            video_id, deadline_str, wait_seconds, self.caption_reprobe_seconds
-        )
+        api_key = self._resolve_api_key_for_item(item)
+        video_path = Path(local_path_str)
+
         try:
             from dispatch.youtube_connections import update_job_stage_by_video_id
             update_job_stage_by_video_id(video_id, "transcribing")
         except Exception:
             pass
 
-        # Stage 1 Fast Funnel: If local video exists and Gemini API key is configured,
-        # transcribe immediately with gemini-3.5-flash-lite in ~3s without waiting for YouTube captions!
-        local_path_str = item.get("local_video_path")
-        if local_path_str and Path(local_path_str).exists():
-            from dispatch.config import GEMINI_API_KEY
-            user_id = item.get("user_id")
-            vaulted_key = ""
-            if user_id:
-                try:
-                    from dispatch.youtube_connections import get_user_gemini_key
-                    vaulted_key = get_user_gemini_key(user_id) or ""
-                except Exception as e:
-                    logger.debug("Failed to retrieve user gemini key: %s", e)
-            api_key = vaulted_key if user_id else (os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY)
-            if api_key:
-                try:
-                    db.update_youtube_video(video_id=video_id, status="TRANSCRIBING")
-                    logger.info("Stage 1 Fast Ingestion: Transcribing %s with gemini-3.5-flash-lite...", video_id)
-                    from dispatch.transcription.gemini_engine import transcribe_stage1_flash_lite
-                    stage1_segments = transcribe_stage1_flash_lite(Path(local_path_str), api_key=api_key)
-                    if stage1_segments:
-                        logger.info("Stage 1 Gemini transcription succeeded for %s (%d segments). Finalizing immediately.",
-                                    video_id, len(stage1_segments))
-                        return self._finalize_transcription(
-                            video_id=video_id,
-                            local_video_path=local_path_str,
-                            duration=item.get("duration", 0.0),
-                            source="gemini_stage1",
-                            segments=stage1_segments
-                        )
-                except Exception as e:
-                    logger.warning("Gemini Stage 1 transcription failed for %s: %s. Falling back to caption wait / Whisper.", video_id, e)
-
-        db.update_youtube_video(
-            video_id=video_id,
-            status="WAITING_FOR_TRANSCRIPT",
-            transcript_wait_started_at=now_str,
-            transcript_wait_deadline=deadline_str,
-            next_caption_probe_at=next_probe_str
-        )
-
-        # Check YouTube captions immediately once
-        return self._try_fetch_captions_or_wait(
-            video_id=video_id,
-            local_video_path=item.get("local_video_path"),
-            duration=item.get("duration", 0.0),
-            deadline_dt=deadline_dt,
-            is_probe_due=True
-        )
-
-    def process_waiting_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Check captions for WAITING_FOR_TRANSCRIPT item, or fall back to Whisper if deadline passed."""
-        video_id = item["video_id"]
-        deadline_str = item.get("transcript_wait_deadline")
-        deadline_dt = _parse_iso_or_sqlite_timestamp(deadline_str)
-
-        now_dt = datetime.now(timezone.utc)
-        if deadline_dt is None:
-            # If no deadline was set, calculate from started_at or set to now + wait window
-            deadline_dt = now_dt + timedelta(seconds=self.caption_wait_seconds)
-            db.update_youtube_video(
-                video_id=video_id,
-                status="WAITING_FOR_TRANSCRIPT",
-                transcript_wait_deadline=deadline_dt.strftime("%Y-%m-%d %H:%M:%S")
-            )
-
-        # Check if caption re-probe is due based on persisted next_caption_probe_at
-        next_probe_str = item.get("next_caption_probe_at")
-        next_probe_dt = _parse_iso_or_sqlite_timestamp(next_probe_str)
-        is_probe_due = (next_probe_dt is None or now_dt >= next_probe_dt)
-
-        return self._try_fetch_captions_or_wait(
-            video_id=video_id,
-            local_video_path=item.get("local_video_path"),
-            duration=item.get("duration", 0.0),
-            deadline_dt=deadline_dt,
-            is_probe_due=is_probe_due
-        )
-
-    def _try_fetch_captions_or_wait(
-        self,
-        video_id: str,
-        local_video_path: Optional[str],
-        duration: float,
-        deadline_dt: datetime,
-        is_probe_due: bool = True
-    ) -> Optional[Dict[str, Any]]:
-        """Attempt to fetch YouTube captions if probe is due. If unavailable and past deadline, run Whisper."""
-        now_dt = datetime.now(timezone.utc)
-        remaining = (deadline_dt - now_dt).total_seconds()
-
-        # 1. Attempt to fetch YouTube captions only if probe is due.
-        # Route C (dir_* direct uploads): no YouTube source exists; never probe.
-        if is_probe_due and not video_id.startswith("dir_"):
-            logger.info("Caption probe is due for %s. Probing YouTube captions...", video_id)
-            segments = None
-            try:
-                segments = self.catcher.fetch_youtube_captions(video_id)
-            except Exception as e:
-                logger.warning("Error probing YouTube captions for %s: %s", video_id, e)
-                segments = None
-
-            # Schedule the next caption probe timestamp durably
-            next_probe_dt = now_dt + timedelta(seconds=self.caption_reprobe_seconds)
-            db.update_youtube_video(
-                video_id=video_id,
-                status="WAITING_FOR_TRANSCRIPT",
-                next_caption_probe_at=next_probe_dt.strftime("%Y-%m-%d %H:%M:%S")
-            )
-
-            if segments is not None:
-                logger.info("Found YouTube captions for %s (%d segments). Transitioning to TRANSCRIBED.",
-                            video_id, len(segments))
-                return self._finalize_transcription(
-                    video_id=video_id,
-                    local_video_path=local_video_path,
-                    duration=duration,
-                    source="youtube",
-                    segments=segments
-                )
-        else:
-            logger.debug("Caption probe is NOT yet due for %s (rate-limiting YouTube checks).", video_id)
-
-        # 2. Captions unavailable. Check deadline.
-        if remaining > 0:
-            logger.info(
-                "YouTube captions not yet available for %s. Waiting (%.1f minutes / %.0fs remaining).",
-                video_id, remaining / 60.0, remaining
-            )
-            return None
-
-        # 3. Deadline passed → fall back to local Whisper transcription
-        logger.info(
-            "Caption wait deadline passed for %s. Falling back to local Whisper transcription.",
-            video_id
-        )
-        return self._run_whisper_fallback(
-            video_id=video_id,
-            local_video_path=local_video_path,
-            duration=duration
-        )
-
-    def _run_whisper_fallback(
-        self,
-        video_id: str,
-        local_video_path: Optional[str],
-        duration: float
-    ) -> Dict[str, Any]:
-        """Execute local faster-whisper transcription on the downloaded video."""
-        if not local_video_path:
-            err = f"YouTube captions unavailable and cannot run Whisper fallback for {video_id}: local_video_path is missing"
-            logger.warning(err)
-            db.update_youtube_video(video_id=video_id, status="CAPTIONS_UNAVAILABLE", last_error=err)
-            return {
-                "video_id": video_id,
-                "status": "CAPTIONS_UNAVAILABLE",
-                "source": "none",
-                "segments": []
-            }
-
-        video_path = Path(local_video_path)
-        if not video_path.exists() or video_path.stat().st_size == 0:
-            err = f"YouTube captions unavailable and cannot run Whisper fallback for {video_id}: local file not found at {video_path}"
-            logger.warning(err)
-            db.update_youtube_video(video_id=video_id, status="CAPTIONS_UNAVAILABLE", last_error=err)
-            return {
-                "video_id": video_id,
-                "status": "CAPTIONS_UNAVAILABLE",
-                "source": "none",
-                "segments": []
-            }
+        db.update_youtube_video(video_id=video_id, status="TRANSCRIBING")
+        logger.info("Transcribing %s with canonical Gemini engine (Primary: 3.5-transcribe, Fallback: 3.5-flash-lite)...", video_id)
 
         try:
-            logger.info("Running local faster-whisper on %s (%.2f MB)...",
-                        video_path.name, video_path.stat().st_size / (1024 * 1024))
-            whisper_result = transcribe_video(video_path=video_path)
-            segments = whisper_result.get("segments", [])
-            logger.info("Whisper finished for %s with %d segments.", video_id, len(segments))
+            res = transcribe_media(video_path, api_key=api_key)
+            segments = res.get("segments", [])
+            source = res.get("source", "gemini_transcribe")
+
+            if not segments:
+                err = f"Gemini returned 0 transcript segments for {video_id}"
+                logger.warning(err)
+                db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
+                return None
 
             return self._finalize_transcription(
                 video_id=video_id,
-                local_video_path=local_video_path,
+                local_video_path=local_path_str,
                 duration=duration,
-                source="whisper",
+                source=source,
                 segments=segments
             )
-        except Exception as e:
-            err = f"Whisper transcription failed for {video_id}: {e}"
+        except PermanentAuthError as auth_err:
+            err = f"Gemini authentication failed for {video_id}: {auth_err}"
             logger.error(err)
             db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
-            raise RuntimeError(err) from e
+            return None
+        except Exception as e:
+            err = f"Gemini transcription failed for {video_id}: {e}"
+            logger.error(err)
+            db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
+            return None
+
+    def process_waiting_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Legacy WAITING_FOR_TRANSCRIPT items are immediately stepped to Gemini transcription."""
+        return self.process_downloaded_item(item)
 
     def _resolve_source_media_metadata(
         self,
@@ -390,17 +237,9 @@ class TranscriptionWorker:
         source: str,
         segments: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """P0 & P1: Resolve authoritative chunk, persist transcript, then update status = TRANSCRIBED.
-        
-        Strict order:
-          1. Resolve / create authoritative chunk preserving real media metadata.
-          2. Save authoritative transcript idempotently.
-          3. Confirm transcript persistence succeeded.
-          4. Only then update youtube_inbox to status = 'TRANSCRIBED'.
-        """
+        """Resolve authoritative chunk, persist transcript, then update status = TRANSCRIBED."""
         full_text = " ".join(seg.get("text", "").strip() for seg in segments if seg.get("text")).strip()
 
-        # Resolve session_id from youtube_inbox if present
         yt_record = db.get_youtube_video(video_id)
         session_id = yt_record.get("session_id") if yt_record else None
 
@@ -449,14 +288,13 @@ class TranscriptionWorker:
             db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
             raise RuntimeError(err) from e
 
-        # 3. Confirm transcript persistence succeeded
         if not transcript_id:
             err = f"db.save_transcript returned empty ID for {video_id} (chunk {chunk_id})"
             logger.error(err)
             db.update_youtube_video(video_id=video_id, status="FAILED", last_error=err)
             raise RuntimeError(err)
 
-        # 4. Only after successful persistence, update youtube_inbox to TRANSCRIBED
+        # 3. Only after successful persistence, update youtube_inbox to TRANSCRIBED
         db.update_youtube_video(
             video_id=video_id,
             status="TRANSCRIBED",
@@ -470,7 +308,7 @@ class TranscriptionWorker:
         except Exception:
             pass
 
-        # 5. Post-transcription AI metadata enrichment (Route A YouTube uploads)
+        # 4. Post-transcription AI metadata enrichment (Route A YouTube uploads)
         if full_text and not video_id.startswith("dir_"):
             try:
                 from dispatch.youtube_inbox.enricher import enrich_youtube_video_metadata

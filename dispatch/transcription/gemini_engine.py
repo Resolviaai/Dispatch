@@ -1,9 +1,11 @@
-"""Gemini Two-Stage Transcription Engine.
+"""Gemini Transcription Engine for Dispatch V2.
 
-Provides:
-- Stage 1: Coarse sentence-level transcription via gemini-3.5-flash-lite (high quota: 500 RPD)
-- Stage 2: Precision word-level millisecond alignment via gemini-3.5-transcribe (25 RPD)
-- Quota tracking & safety guard
+Canonical transcription contract:
+- Primary: gemini-3.5-transcribe (full transcript generation, word timestamps, diarization)
+- Fallback: gemini-3.5-flash-lite (verbatim phrase/segment transcription, timestamp normalization)
+- Zero local Whisper fallback. Zero YouTube captions fallback.
+- Quota tracking & safety guard (daily limit for transcribe model).
+- Strict error classification (PermanentAuthError vs RecoverableTranscriptionError).
 """
 import os
 import json
@@ -17,26 +19,46 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
-from dispatch.config import GEMINI_API_KEY
+from dispatch.config import GEMINI_API_KEY, MAX_CLIP_DURATION, PROCESSING_DIR
 from dispatch.transcription.audio import (
     _probe_audio_duration,
     extract_compressed_audio,
     split_audio_for_transcription,
 )
-from dispatch.config import MAX_CLIP_DURATION, PROCESSING_DIR
 
 logger = logging.getLogger("dispatch.transcription.gemini")
 
 # Five seconds preserves ordinary sentence context at ten-minute seams with
-# less than 1% additional audio per Stage 1 window.
+# less than 1% additional audio per window.
 STAGE1_WINDOW_OVERLAP_SECONDS = 5.0
+
+
+class PermanentAuthError(RuntimeError):
+    """Raised when Gemini API key is missing or permanently invalid (401/403)."""
+    pass
+
+
+class RecoverableTranscriptionError(RuntimeError):
+    """Raised when transcription fails for recoverable reasons (429, 503, quota, etc.)."""
+    pass
+
+
+def is_permanent_auth_error(exc: Exception) -> bool:
+    """Check if an exception indicates a permanent authentication or authorization failure."""
+    if isinstance(exc, PermanentAuthError):
+        return True
+    msg = str(exc).lower()
+    return any(term in msg for term in [
+        "401", "403", "api_key_invalid", "permission_denied",
+        "api key not valid", "unauthenticated", "invalid api key"
+    ])
 
 
 def get_gemini_client(api_key: Optional[str] = None):
     """Lazy initialize and return Google GenAI Client with active API key."""
     key = api_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
     if not key:
-        raise ValueError("GEMINI_API_KEY is not configured in environment or .env")
+        raise PermanentAuthError("GEMINI_API_KEY is not configured in environment or .env")
     from google import genai
     return genai.Client(api_key=key)
 
@@ -56,14 +78,27 @@ def _parse_offset_to_seconds(offset_str: Any) -> float:
         return 0.0
 
 
-def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> bool:
-    """Check if gemini-3.5-transcribe is within the daily limit and atomically reserve one request.
+def _parse_stage1_time(value: Any) -> float:
+    """Parse Gemini seconds or MM:SS / HH:MM:SS timestamps."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if text.endswith("s"):
+        text = text[:-1]
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            if len(parts) == 2:
+                return float(parts[0]) * 60 + float(parts[1])
+            if len(parts) == 3:
+                return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+        except ValueError:
+            return 0.0
+    return _parse_offset_to_seconds(text)
 
-    Single conditional UPDATE replaces the old two-setting read-modify-write, which
-    let two worker threads both observe 24/25 and both fire the API call. Returns
-    True if the slot is reserved, False if the daily limit is reached.
-    """
-    from datetime import datetime, timezone
+
+def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> bool:
+    """Check if gemini-3.5-transcribe is within the daily limit and atomically reserve one request."""
     import sqlite3
 
     today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -77,11 +112,6 @@ def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> 
             cursor.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('transcribe_quota_count', '0')"
             )
-            # Read the stored date; if it is stale, reset the counter and ADVANCE
-            # THE DATE inside the same transaction, then take the slot with a
-            # conditional increment. (The date must be written on roll-over:
-            # resetting the counter while leaving yesterday's date would zero
-            # the counter on EVERY call and defeat the limit entirely.)
             cursor.execute("SELECT value FROM settings WHERE key = 'transcribe_quota_date'")
             stored_date_row = cursor.fetchone()
             if stored_date_row and stored_date_row["value"] != today_utc:
@@ -98,23 +128,14 @@ def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> 
         except sqlite3.Error as e:
             logger.error("Daily transcribe quota reservation failed: %s", e)
             conn.rollback()
-            # Reserve nothing on failure so we never spend on a broken counter.
             return False
 
 
 def refund_daily_transcribe_quota() -> None:
-    """Return a reserved transcribe slot (floor 0) when the request never reached Gemini.
-
-    Called after a Stage-2 failure that happened before/without the provider call,
-    so a stuck render cannot race the daily counter upward (audit 2026-10-27).
-    """
-    from datetime import datetime, timezone
-
+    """Return a reserved transcribe slot (floor 0) when the request never reached Gemini."""
     today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
-        # Only refund against today's counter to avoid gifting yesterday's
-        # unused slot to a different day by accident.
         cursor.execute(
             "UPDATE settings SET value = MAX(CAST(value AS INTEGER) - 1, 0) "
             "WHERE key = 'transcribe_quota_count' AND value IS NOT NULL "
@@ -125,37 +146,260 @@ def refund_daily_transcribe_quota() -> None:
         conn.commit()
 
 
-def transcribe_stage1_flash_lite(
-    media_path: Path,
-    prompt: Optional[str] = None,
-    api_key: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """Stage 1: Coarse sentence-level transcription using gemini-3.5-flash-lite.
-    
-    Args:
-        media_path: Local path to .mp4 video or .mp3 audio file.
-        prompt: Optional custom transcription prompt.
-        api_key: Optional Gemini API key override (e.g. user vaulted key).
-        
-    Returns:
-        List of segment dicts: [{'start': float, 'end': float, 'text': str, 'speaker': str}]
-    """
-    client = get_gemini_client(api_key=api_key)
+def _group_words_into_segments(words: List[Dict[str, Any]], max_gap_seconds: float = 0.8) -> List[Dict[str, Any]]:
+    """Group consecutive words into sentence-level phrase segments."""
+    if not words:
+        return []
+    segments = []
+    current_words: List[Dict[str, Any]] = []
+    current_start = words[0]["start"]
+    current_speaker = words[0].get("speaker", "spk:0")
+
+    for idx, w in enumerate(words):
+        w_start = w["start"]
+        w_end = w["end"]
+        w_word = w["word"].strip()
+        w_spk = w.get("speaker", "spk:0")
+
+        # Check segment break conditions
+        is_break = False
+        if current_words:
+            prev_end = current_words[-1]["end"]
+            gap = w_start - prev_end
+            if gap > max_gap_seconds or w_spk != current_speaker or len(current_words) >= 12:
+                is_break = True
+            elif current_words[-1]["word"].rstrip().endswith((".", "?", "!")):
+                is_break = True
+
+        if is_break and current_words:
+            seg_text = " ".join(item["word"] for item in current_words)
+            segments.append({
+                "id": len(segments),
+                "start": current_start,
+                "end": current_words[-1]["end"],
+                "text": seg_text,
+                "speaker": current_speaker,
+                "words": current_words,
+            })
+            current_words = []
+            current_start = w_start
+            current_speaker = w_spk
+
+        current_words.append({
+            "word": w_word,
+            "start": w_start,
+            "end": w_end,
+            "probability": w.get("probability", 1.0),
+            "speaker": w_spk,
+        })
+
+    if current_words:
+        seg_text = " ".join(item["word"] for item in current_words)
+        segments.append({
+            "id": len(segments),
+            "start": current_start,
+            "end": current_words[-1]["end"],
+            "text": seg_text,
+            "speaker": current_speaker,
+            "words": current_words,
+        })
+
+    return segments
+
+
+def _transcribe_chunk_primary(
+    client: Any,
+    audio_part_path: Path,
+    prompt: Optional[str] = None
+) -> Dict[str, Any]:
+    """Primary: Full transcript generation via gemini-3.5-transcribe with word timestamps."""
     from google.genai import types
 
-    system_instruction = (
-        "You are an expert audio transcription engine. "
-        "Transcribe the spoken audio verbatim in original language (detect Hindi, English, Hinglish). "
-        "Provide precise timestamps for each spoken segment/phrase in valid JSON format: "
-        '[{"start": "00:00.00", "end": "00:02.50", "text": "...", "speaker": "Speaker 1"}]. '
-        "Return ONLY the JSON array."
-    )
-    normalized_segments: List[Dict[str, Any]] = []
+    if not check_and_increment_daily_transcribe_quota(max_daily_requests=25):
+        raise RecoverableTranscriptionError("Daily transcribe quota limit (25/25) reached for gemini-3.5-transcribe")
+
+    uploaded_file = None
+    try:
+        uploaded_file = client.files.upload(file=str(audio_part_path), config=dict(mime_type="audio/mp3"))
+        t0 = time.time()
+        response = client.models.generate_content(
+            model="gemini-3.5-transcribe",
+            contents=[uploaded_file],
+            config=types.GenerateContentConfig(
+                audio_transcription_config=types.AudioTranscriptionConfig(
+                    word_timestamp=True,
+                    diarization=True
+                )
+            )
+        )
+        logger.info("Primary gemini-3.5-transcribe completed in %.2fs", time.time() - t0)
+
+        words: List[Dict[str, Any]] = []
+        full_text = getattr(response, "text", "") or ""
+
+        for cand in getattr(response, "candidates", []) or []:
+            for part in getattr(getattr(cand, "content", None), "parts", []) or []:
+                trans = getattr(part, "audio_transcription", None)
+                if trans:
+                    spk = getattr(trans, "speaker_label", "") or "spk:0"
+                    for w in getattr(trans, "words", []) or []:
+                        w_start = _parse_offset_to_seconds(getattr(w, "start_offset", 0.0))
+                        w_end = _parse_offset_to_seconds(getattr(w, "end_offset", 0.0))
+                        words.append({
+                            "word": getattr(w, "word", ""),
+                            "speaker": spk,
+                            "start": w_start,
+                            "end": w_end,
+                            "probability": 1.0
+                        })
+
+        if not words and not full_text:
+            refund_daily_transcribe_quota()
+            raise RecoverableTranscriptionError("gemini-3.5-transcribe returned empty transcript")
+
+        if not full_text and words:
+            full_text = " ".join(w["word"] for w in words)
+
+        segments = _group_words_into_segments(words)
+        return {
+            "full_text": full_text,
+            "segments": segments,
+            "words": words,
+            "source": "gemini_transcribe",
+            "model": "gemini-3.5-transcribe"
+        }
+    except Exception as exc:
+        if is_permanent_auth_error(exc):
+            refund_daily_transcribe_quota()
+            raise PermanentAuthError(f"Gemini authentication failed on primary: {exc}") from exc
+        refund_daily_transcribe_quota()
+        raise RecoverableTranscriptionError(f"gemini-3.5-transcribe failed: {exc}") from exc
+    finally:
+        if uploaded_file is not None:
+            try:
+                client.files.delete(name=uploaded_file.name)
+            except Exception:
+                pass
+
+
+def _transcribe_chunk_fallback(
+    client: Any,
+    audio_part_path: Path,
+    prompt: Optional[str] = None
+) -> Dict[str, Any]:
+    """Fallback: Transcription via gemini-3.5-flash-lite normalized to canonical schema."""
+    from google.genai import types
+
+    uploaded_file = None
+    try:
+        uploaded_file = client.files.upload(file=str(audio_part_path), config=dict(mime_type="audio/mp3"))
+        t0 = time.time()
+        system_instruction = prompt or (
+            "You are an expert audio transcription engine. "
+            "Transcribe the spoken audio verbatim in original language (detect Hindi, English, Hinglish). "
+            "Provide precise timestamps for each spoken segment/phrase in valid JSON format: "
+            '[{"start": "00:00.00", "end": "00:02.50", "text": "...", "speaker": "Speaker 1"}]. '
+            "Return ONLY the JSON array."
+        )
+        response = client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            contents=[uploaded_file, system_instruction],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+            ),
+        )
+        logger.info("Fallback gemini-3.5-flash-lite completed in %.2fs", time.time() - t0)
+
+        raw_segments = json.loads(getattr(response, "text", "") or "[]")
+        if not isinstance(raw_segments, list):
+            raise RecoverableTranscriptionError("gemini-3.5-flash-lite returned non-list transcript")
+
+        segments: List[Dict[str, Any]] = []
+        all_words: List[Dict[str, Any]] = []
+        full_text_pieces = []
+
+        for idx, seg in enumerate(raw_segments):
+            if not isinstance(seg, dict):
+                continue
+            st = _parse_stage1_time(seg.get("start", 0.0))
+            en = _parse_stage1_time(seg.get("end", 0.0))
+            if en < st:
+                continue
+            text = str(seg.get("text", "")).strip()
+            spk = str(seg.get("speaker", "spk:0")).strip()
+            if text:
+                full_text_pieces.append(text)
+
+            # Interpolate word timings if words not provided
+            seg_words = []
+            tokens = text.split()
+            if tokens:
+                duration = max(0.05, en - st)
+                step = duration / len(tokens)
+                for w_idx, tok in enumerate(tokens):
+                    w_st = round(st + w_idx * step, 3)
+                    w_en = round(st + (w_idx + 1) * step, 3)
+                    seg_words.append({
+                        "word": tok,
+                        "start": w_st,
+                        "end": w_en,
+                        "probability": 0.9,
+                        "speaker": spk,
+                    })
+                    all_words.append(seg_words[-1])
+
+            segments.append({
+                "id": idx,
+                "start": st,
+                "end": en,
+                "text": text,
+                "speaker": spk,
+                "words": seg_words,
+            })
+
+        full_text = " ".join(full_text_pieces)
+        return {
+            "full_text": full_text,
+            "segments": segments,
+            "words": all_words,
+            "source": "gemini_flash_lite",
+            "model": "gemini-3.5-flash-lite"
+        }
+    except Exception as exc:
+        if is_permanent_auth_error(exc):
+            raise PermanentAuthError(f"Gemini authentication failed on fallback: {exc}") from exc
+        raise RecoverableTranscriptionError(f"gemini-3.5-flash-lite failed: {exc}") from exc
+    finally:
+        if uploaded_file is not None:
+            try:
+                client.files.delete(name=uploaded_file.name)
+            except Exception:
+                pass
+
+
+def transcribe_media(
+    media_path: Path,
+    api_key: Optional[str] = None,
+    prompt: Optional[str] = None,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Single canonical transcription interface for Dispatch.
+    
+    Tries PRIMARY (gemini-3.5-transcribe) first.
+    If recoverable failure, falls back to FALLBACK (gemini-3.5-flash-lite).
+    Zero Whisper fallback. Zero YouTube captions fallback.
+    
+    Returns:
+        Dict with 'full_text', 'segments' (with word timings), 'source', 'model'.
+    """
+    if not media_path.exists():
+        raise FileNotFoundError(f"Media file not found: {media_path}")
+
+    client = get_gemini_client(api_key=api_key)
     is_video = media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm")
 
-    # Keep the original source and its single inbox job intact. Bound each Gemini
-    # request to ten minutes and restore each part's timestamps to source time.
-    with tempfile.TemporaryDirectory(prefix="dispatch_stage1_") as work_dir:
+    with tempfile.TemporaryDirectory(prefix="dispatch_transcribe_") as work_dir:
         work_path = Path(work_dir)
         audio_path = (
             extract_compressed_audio(media_path, work_path / "source.mp3")
@@ -165,54 +409,81 @@ def transcribe_stage1_flash_lite(
             audio_path, work_path / "parts", chunk_seconds=600,
             overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS,
         )
-        logger.info("Stage 1: Transcribing %s as %d bounded audio part(s)", media_path.name, len(chunks))
+        logger.info("Transcribing %s as %d bounded audio part(s) using Gemini", media_path.name, len(chunks))
+
+        all_segments: List[Dict[str, Any]] = []
+        full_text_pieces: List[str] = []
+        effective_source = "gemini_transcribe"
+        effective_model = "gemini-3.5-transcribe"
 
         for part_index, (part_path, source_offset) in enumerate(chunks):
-            uploaded_file = None
+            chunk_result = None
+
+            # 1. Attempt Primary: gemini-3.5-transcribe
             try:
-                logger.info("Stage 1: Uploading %s (part %d/%d) to Gemini Files API...",
-                            part_path.name, part_index + 1, len(chunks))
-                uploaded_file = client.files.upload(file=str(part_path), config=dict(mime_type="audio/mp3"))
-                t0 = time.time()
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=[uploaded_file, prompt or system_instruction],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.0,
-                    ),
-                )
-                logger.info("Stage 1 part %d/%d completed in %.2fs",
-                            part_index + 1, len(chunks), time.time() - t0)
-                segments_raw = json.loads(response.text or "[]")
-                if not isinstance(segments_raw, list):
-                    raise ValueError(f"Gemini returned a non-list transcript for part {part_index + 1}")
+                logger.info("Part %d/%d: Calling primary gemini-3.5-transcribe...", part_index + 1, len(chunks))
+                chunk_result = _transcribe_chunk_primary(client, part_path, prompt=prompt)
+            except PermanentAuthError:
+                raise
+            except RecoverableTranscriptionError as primary_err:
+                logger.warning("Part %d/%d: Primary failed (%s). Attempting fallback gemini-3.5-flash-lite...",
+                               part_index + 1, len(chunks), primary_err)
+                # 2. Attempt Fallback: gemini-3.5-flash-lite
+                try:
+                    chunk_result = _transcribe_chunk_fallback(client, part_path, prompt=prompt)
+                    effective_source = "gemini_flash_lite"
+                    effective_model = "gemini-3.5-flash-lite"
+                except PermanentAuthError:
+                    raise
+                except RecoverableTranscriptionError as fallback_err:
+                    logger.error("Part %d/%d: Fallback also failed: %s", part_index + 1, len(chunks), fallback_err)
+                    raise RecoverableTranscriptionError(
+                        f"Both Gemini transcription providers failed for part {part_index + 1}: "
+                        f"Primary: {primary_err} | Fallback: {fallback_err}"
+                    ) from fallback_err
 
-                for segment in segments_raw:
-                    if not isinstance(segment, dict):
-                        continue
-                    start = _parse_stage1_time(segment.get("start", 0.0)) + source_offset
-                    end = _parse_stage1_time(segment.get("end", 0.0)) + source_offset
-                    if end < start:
-                        continue
-                    normalized_segments.append({
-                        "start": start,
-                        "end": end,
-                        "text": str(segment.get("text", "")).strip(),
-                        "speaker": str(segment.get("speaker", "spk:0")).strip(),
-                        "_source_part_index": part_index,
-                    })
-            finally:
-                if uploaded_file is not None:
-                    try:
-                        client.files.delete(name=uploaded_file.name)
-                    except Exception as cleanup_error:
-                        logger.warning("Could not delete Gemini file for part %d: %s",
-                                        part_index + 1, cleanup_error)
+            if not chunk_result:
+                raise RecoverableTranscriptionError(f"No transcription produced for part {part_index + 1}")
 
-    return _deduplicate_overlapping_segments(
-        normalized_segments, overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS
+            if chunk_result.get("full_text"):
+                full_text_pieces.append(chunk_result["full_text"])
+
+            for seg in chunk_result.get("segments", []):
+                seg_copy = dict(seg)
+                seg_copy["start"] = round(seg_copy["start"] + source_offset, 3)
+                seg_copy["end"] = round(seg_copy["end"] + source_offset, 3)
+                seg_copy["_source_part_index"] = part_index
+                if "words" in seg_copy:
+                    seg_copy["words"] = [
+                        {
+                            **w,
+                            "start": round(w["start"] + source_offset, 3),
+                            "end": round(w["end"] + source_offset, 3),
+                        }
+                        for w in seg_copy["words"]
+                    ]
+                all_segments.append(seg_copy)
+
+    # Deduplicate overlapping segments at part seams
+    deduped_segments = _deduplicate_overlapping_segments(
+        all_segments, overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS
     )
+
+    full_text = " ".join(full_text_pieces).strip()
+    if not full_text and deduped_segments:
+        full_text = " ".join(s["text"] for s in deduped_segments)
+
+    # Re-index segments sequentially
+    for i, s in enumerate(deduped_segments):
+        s["id"] = i
+
+    return {
+        "full_text": full_text,
+        "segments": deduped_segments,
+        "source": effective_source,
+        "model": effective_model,
+        "language": language or "auto",
+    }
 
 
 def _deduplicate_overlapping_segments(
@@ -245,6 +516,9 @@ def _deduplicate_overlapping_segments(
             duplicate["end"] = max(duplicate["end"], segment["end"])
             if len(segment.get("text", "")) > len(duplicate.get("text", "")):
                 duplicate["text"] = segment["text"]
+            if "words" in segment and "words" in duplicate:
+                if len(segment["words"]) > len(duplicate["words"]):
+                    duplicate["words"] = segment["words"]
 
     return [
         {key: value for key, value in segment.items() if key != "_source_part_index"}
@@ -252,23 +526,35 @@ def _deduplicate_overlapping_segments(
     ]
 
 
-def _parse_stage1_time(value: Any) -> float:
-    """Parse Gemini seconds or MM:SS / HH:MM:SS timestamps."""
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value or "").strip()
-    if text.endswith("s"):
-        text = text[:-1]
-    if ":" in text:
-        parts = text.split(":")
-        try:
-            if len(parts) == 2:
-                return float(parts[0]) * 60 + float(parts[1])
-            if len(parts) == 3:
-                return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-        except ValueError:
-            return 0.0
-    return _parse_offset_to_seconds(text)
+# Backward compatibility aliases for existing callers/tests
+def transcribe_stage1_flash_lite(
+    media_path: Path,
+    prompt: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Backward compatibility helper for coarse transcription (uses fallback flash-lite)."""
+    client = get_gemini_client(api_key=api_key)
+    is_video = media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm")
+    with tempfile.TemporaryDirectory(prefix="dispatch_stage1_") as work_dir:
+        work_path = Path(work_dir)
+        audio_path = (
+            extract_compressed_audio(media_path, work_path / "source.mp3")
+            if is_video else media_path
+        )
+        chunks = split_audio_for_transcription(
+            audio_path, work_path / "parts", chunk_seconds=600,
+            overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS,
+        )
+        all_segments = []
+        for part_index, (part_path, source_offset) in enumerate(chunks):
+            res = _transcribe_chunk_fallback(client, part_path, prompt=prompt)
+            for seg in res.get("segments", []):
+                seg_copy = dict(seg)
+                seg_copy["start"] = round(seg_copy["start"] + source_offset, 3)
+                seg_copy["end"] = round(seg_copy["end"] + source_offset, 3)
+                seg_copy["_source_part_index"] = part_index
+                all_segments.append(seg_copy)
+    return _deduplicate_overlapping_segments(all_segments, overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS)
 
 
 def transcribe_stage2_precision_words(
@@ -276,22 +562,7 @@ def transcribe_stage2_precision_words(
     max_input_seconds: Optional[float] = None,
     api_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Stage 2: Precision word-level alignment using gemini-3.5-transcribe.
-    
-    Args:
-        media_path: Local path to sliced 30-60s clip video or audio file.
-        max_input_seconds: Optional override for max audio length.
-        api_key: Optional Gemini API key override (e.g. user vaulted key).
-        
-    Returns:
-        Dict with:
-          - full_text: complete verbatim transcription
-          - words: list of [{'word': str, 'speaker': str, 'start': float, 'end': float}]
-          - speech_start: float timestamp of first spoken word
-          - speech_end: float timestamp of last spoken word
-    """
-    # Final clips use MAX_CLIP_DURATION + headroom; bounded edit windows pass
-    # their own 300 s bound explicitly. Full-source transcription stays disabled.
+    """Precision word-level alignment for cut clip audio (primary: transcribe, fallback: flash-lite)."""
     max_stage2_seconds = max_input_seconds if max_input_seconds else MAX_CLIP_DURATION + 16.0
     if media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
         from dispatch.ingestion.validator import inspect_video_orientation
@@ -306,135 +577,31 @@ def transcribe_stage2_precision_words(
         )
 
     client = get_gemini_client(api_key=api_key)
-    from google.genai import types
-
-    if media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
+    is_video = media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm")
+    if is_video:
         audio_path = extract_compressed_audio(media_path)
-        cleanup_audio = True
+        cleanup = True
     else:
         audio_path = media_path
-        cleanup_audio = False
+        cleanup = False
 
     try:
-        logger.info("Stage 2: Uploading cut clip audio %s to Gemini...", audio_path.name)
-        uploaded_file = client.files.upload(file=str(audio_path), config=dict(mime_type="audio/mp3"))
-
-        logger.info("Stage 2: Calling gemini-3.5-transcribe with word timestamps...")
-        t0 = time.time()
-        words: List[Dict[str, Any]] = []
-        full_text = ""
-        transcribe_err = None
-
         try:
-            response = client.models.generate_content(
-                model="gemini-3.5-transcribe",
-                contents=[uploaded_file],
-                config=types.GenerateContentConfig(
-                    audio_transcription_config=types.AudioTranscriptionConfig(
-                        word_timestamp=True,
-                        diarization=True
-                    )
-                )
-            )
-            elapsed = time.time() - t0
-            logger.info("Stage 2 completed in %.2fs", elapsed)
-            full_text = response.text or ""
+            res = _transcribe_chunk_primary(client, audio_path)
+        except RecoverableTranscriptionError:
+            res = _transcribe_chunk_fallback(client, audio_path)
 
-            for cand in getattr(response, "candidates", []) or []:
-                for part in getattr(getattr(cand, "content", None), "parts", []) or []:
-                    trans = getattr(part, "audio_transcription", None)
-                    if trans:
-                        spk = getattr(trans, "speaker_label", "")
-                        for w in getattr(trans, "words", []) or []:
-                            w_start = _parse_offset_to_seconds(getattr(w, "start_offset", 0.0))
-                            w_end = _parse_offset_to_seconds(getattr(w, "end_offset", 0.0))
-                            words.append({
-                                "word": getattr(w, "word", ""),
-                                "speaker": spk,
-                                "start": w_start,
-                                "end": w_end
-                            })
-        except Exception as e:
-            transcribe_err = e
-            logger.warning("Stage 2 gemini-3.5-transcribe failed (%s). Attempting fallback to gemini-3.5-flash-lite...", e)
-
-        # Fallback to gemini-3.5-flash-lite if gemini-3.5-transcribe produced no words or failed
-        if not words:
-            try:
-                logger.info("Stage 2 Fallback: Calling gemini-3.5-flash-lite for clip timestamps...")
-                fallback_prompt = (
-                    "You are an expert audio transcription engine. "
-                    "Transcribe the audio verbatim in original language (Hindi, English, Hinglish). "
-                    "Provide millisecond word-level timestamps in valid JSON array format: "
-                    '[{"word": "word", "start": 0.12, "end": 0.45, "speaker": "spk:0"}]. '
-                    "If word-level is unavailable, return phrase segments: "
-                    '[{"start": 0.0, "end": 2.5, "text": "phrase words here", "speaker": "spk:0"}]. '
-                    "Return ONLY valid JSON."
-                )
-                fb_resp = client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=[uploaded_file, fallback_prompt],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.0,
-                    ),
-                )
-                if fb_resp and fb_resp.text:
-                    parsed_fb = json.loads(fb_resp.text)
-                    if isinstance(parsed_fb, list):
-                        for item in parsed_fb:
-                            if not isinstance(item, dict):
-                                continue
-                            if "word" in item:
-                                w_str = str(item.get("word", "")).strip()
-                                if w_str:
-                                    words.append({
-                                        "word": w_str,
-                                        "speaker": str(item.get("speaker", "spk:0")),
-                                        "start": _parse_stage1_time(item.get("start", 0.0)),
-                                        "end": _parse_stage1_time(item.get("end", 0.0)),
-                                    })
-                            elif "text" in item:
-                                s_st = _parse_stage1_time(item.get("start", 0.0))
-                                s_en = _parse_stage1_time(item.get("end", 0.0))
-                                seg_txt = str(item.get("text", "")).strip()
-                                spk = str(item.get("speaker", "spk:0"))
-                                sws = seg_txt.split()
-                                if sws:
-                                    s_dur = max(0.01, s_en - s_st)
-                                    step = s_dur / len(sws)
-                                    for i, sw in enumerate(sws):
-                                        words.append({
-                                            "word": sw,
-                                            "speaker": spk,
-                                            "start": round(s_st + i * step, 3),
-                                            "end": round(s_st + (i + 1) * step, 3),
-                                        })
-                    if words and not full_text:
-                        full_text = " ".join(w["word"] for w in words)
-            except Exception as fb_err:
-                logger.warning("Stage 2 gemini-3.5-flash-lite fallback also failed: %s", fb_err)
-                if transcribe_err:
-                    raise transcribe_err
-
-        speech_start = words[0]["start"] if words else 0.0
-        speech_end = words[-1]["end"] if words else 0.0
-
-        # Cleanup remote cloud file
-        try:
-            client.files.delete(name=uploaded_file.name)
-        except Exception:
-            pass
-
+        words = res.get("words", [])
         return {
-            "full_text": full_text,
+            "full_text": res.get("full_text", ""),
             "words": words,
-            "speech_start": speech_start,
-            "speech_end": speech_end
+            "speech_start": words[0]["start"] if words else 0.0,
+            "speech_end": words[-1]["end"] if words else 0.0,
+            "source": res.get("source", "gemini_transcribe"),
+            "model": res.get("model", "gemini-3.5-transcribe"),
         }
-
     finally:
-        if cleanup_audio and audio_path.exists() and audio_path != media_path:
+        if cleanup and audio_path.exists() and audio_path != media_path:
             try:
                 audio_path.unlink()
             except Exception:
@@ -487,24 +654,18 @@ def extract_stage2_clip_audio(
 
 
 def drain_queued_transcriptions(max_batch: int = 10) -> int:
-    """FIFO Rolling Backlog Auto-Drain.
-    
-    Checks if quota is available today, and drains yesterday's leftover
-    queued_transcription clips first before processing new incoming recordings.
-    """
+    """FIFO Rolling Backlog Auto-Drain."""
     queued_clips = db.get_queued_transcription_clips(limit=max_batch)
     if not queued_clips:
         return 0
 
-    from dispatch.captions.grouper import group_words_into_captions
+    from dispatch.captions.grouper import group_words_into_captions, apply_template_to_track
     from dispatch.captions.presets import get_default_preset_id
     from dispatch.video_engine.renderer import render_clip
-    import subprocess
 
     drained = 0
     for clip in queued_clips:
         clip_id = clip["id"]
-
         chunk_id = clip.get("chunk_id")
         chunk = db.get_chunk_by_id(chunk_id) if chunk_id else None
         source_path = Path(chunk["filepath"]) if chunk and chunk.get("filepath") else None
@@ -532,19 +693,12 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                     active_key = get_user_gemini_key(user_id) or ""
                 except Exception:
                     pass
-            from dispatch.config import GEMINI_API_KEY
             active_key = active_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
             PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix=f"dispatch_stage2_{clip_id}_", dir=str(PROCESSING_DIR)) as temp_dir:
                 slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
                 extract_stage2_clip_audio(source_path, p_start, p_end, slice_mp3)
-                # Charge the daily quota only after the source and bounded
-                # audio slice are known-good; missing sources must never burn
-                # the 25 request/day budget.
-                if not check_and_increment_daily_transcribe_quota(max_daily_requests=25):
-                    logger.info("Drain halted: daily transcribe quota exhausted (25/25 requests reached).")
-                    break
                 stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=active_key)
 
             words = stage2_res.get("words", [])
@@ -565,11 +719,6 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                     logger.info("Skipping stale Stage 2 result for %s after its range changed", clip_id)
                     continue
                 range_revision = int(latest.get("range_revision") or 0)
-                if not range_trimmed:
-                    logger.info(
-                        "Keeping original clip range for %s because the speech-tightened range "
-                        "is outside source or product limits.", clip_id
-                    )
 
                 clean_words = []
                 for w in words:
@@ -593,7 +742,6 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                 preset_cand = tpl_captions.get("preset_id")
                 effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
 
-                from dispatch.captions.grouper import apply_template_to_track
                 track = group_words_into_captions(
                     raw_segments=[{"id": 0, "start": c_start, "end": c_end, "words": clean_words}],
                     clip_start=c_start,
@@ -638,4 +786,3 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             logger.error("Failed to drain queued clip %s: %s", clip_id, e)
 
     return drained
-

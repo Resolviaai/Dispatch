@@ -152,11 +152,11 @@ def start_dispatch(run_web: bool = True):
 
     # 5. Video ingestion is driven autonomously via RemoteJobPoller from the cloud queue.
 
-    # 6. Pillar 2: Autonomous Transcription Worker (YouTube captions with Whisper fallback)
+    # 6. Pillar 2: Autonomous Transcription Worker (Gemini 3.5 Transcribe with Flash-Lite fallback)
     from dispatch.transcription.worker import TranscriptionWorker
     transcription_worker = TranscriptionWorker()
     transcription_worker.start()
-    logger.info("Autonomous Transcription worker active (Consumes DOWNLOADED -> WAITING_FOR_TRANSCRIPT -> TRANSCRIBED)")
+    logger.info("Autonomous Transcription worker active (Consumes DOWNLOADED -> TRANSCRIBED via Gemini)")
 
     # 7. Pillar 3: Autonomous AI Highlight Selection Worker (Gemini Semantic Extraction)
     from dispatch.ai_clips.worker import HighlightWorker
