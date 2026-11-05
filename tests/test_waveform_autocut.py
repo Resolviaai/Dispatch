@@ -10,6 +10,9 @@ from dispatch.video_engine.waveform import (
     find_zero_crossing,
     snap_boundary_to_waveform_silence,
     is_waveform_interval_silent,
+    detect_audio_clipping,
+    detect_transient_clicks,
+    detect_breaths_and_coughs,
 )
 from dispatch.video_engine.autocut import (
     detect_mechanical_stutters,
@@ -215,6 +218,83 @@ class TestWaveformAutoCut(unittest.TestCase):
         # Ensure cut ends BEFORE the next word with attack padding
         self.assertLessEqual(prop["source_end"], 4.0)
 
+
+
+    def test_detect_audio_clipping(self):
+        """Audio clipping events are flagged as REVIEW defects with sample count."""
+        samples = [500] * 16000
+        # Inject 10 clipped samples at 0.5s
+        for i in range(8000, 8010):
+            samples[i] = 32767
+        pcm = struct.pack("<16000h", *samples)
+        events = detect_audio_clipping(pcm, sample_rate=16000, threshold_db=-0.5)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "clipping")
+        self.assertEqual(events[0]["decision"], "REVIEW")
+        self.assertAlmostEqual(events[0]["source_start"], 0.5, delta=0.01)
+        self.assertEqual(events[0]["samples_clipped"], 10)
+
+    def test_detect_transient_clicks(self):
+        """High-crest spikes in low-noise background are flagged as transient clicks."""
+        samples = [100] * 16000
+        # Inject isolated 5-sample spike at 0.25s
+        for i in range(4000, 4005):
+            samples[i] = 22000
+        pcm = struct.pack("<16000h", *samples)
+        clicks = detect_transient_clicks(pcm, sample_rate=16000)
+        self.assertEqual(len(clicks), 1)
+        self.assertEqual(clicks[0]["type"], "transient_click")
+        self.assertEqual(clicks[0]["decision"], "REVIEW")
+        self.assertAlmostEqual(clicks[0]["source_start"], 0.25, delta=0.02)
+
+    def test_detect_breaths_in_pause(self):
+        """Turbulent airflow in non-speech pause is classified as a breath candidate."""
+        import random
+        random.seed(123)
+        samples = [0] * 32000
+        # Breath noise between 0.6s and 0.9s (samples 9600 to 14400)
+        for i in range(9600, 14400):
+            samples[i] = int(random.uniform(-1400, 1400))
+        pcm = struct.pack("<32000h", *samples)
+        speech = [(0.0, 0.5), (1.1, 2.0)]
+        events = detect_breaths_and_coughs(pcm, speech, sample_rate=16000)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "breath")
+        self.assertEqual(events[0]["decision"], "REVIEW")
+        self.assertAlmostEqual(events[0]["source_start"], 0.6, delta=0.06)
+
+    def test_autocut_complete_triage_mix(self):
+        """Mixed input produces all 3 triage decisions: AUTO-REMOVE, PRESERVE, REVIEW."""
+        transcript = [
+            {
+                "start": 0.0,
+                "end": 3.0,
+                "text": "Um I really like coding but like I don't know.",
+                "words": [
+                    {"word": "Um", "start": 0.0, "end": 0.3},
+                    {"word": "I", "start": 0.4, "end": 0.6},
+                    {"word": "really", "start": 0.65, "end": 0.9},
+                    {"word": "like", "start": 0.95, "end": 1.2},      # Lexical verb -> PRESERVE
+                    {"word": "coding", "start": 1.25, "end": 1.6},
+                    {"word": "but", "start": 1.65, "end": 1.8},
+                    {"word": "like", "start": 1.85, "end": 2.1},     # Hesitation -> REVIEW
+                    {"word": "I", "start": 2.2, "end": 2.4},
+                    {"word": "don't", "start": 2.45, "end": 2.7},
+                    {"word": "know.", "start": 2.75, "end": 3.0},
+                ]
+            }
+        ]
+        proposals = analyze_waveform_and_transcript_autocuts(
+            media_path=None,
+            transcript_segments=transcript,
+            clip_start=0.0,
+            clip_end=3.0,
+            raw_pcm_bytes=None,
+        )
+        decisions = {p["decision"] for p in proposals}
+        self.assertIn("AUTO-REMOVE", decisions)
+        self.assertIn("PRESERVE", decisions)
+        self.assertIn("REVIEW", decisions)
 
 if __name__ == "__main__":
     unittest.main()

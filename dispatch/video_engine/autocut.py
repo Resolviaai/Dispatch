@@ -23,6 +23,9 @@ from dispatch.video_engine.waveform import (
     snap_boundary_to_waveform_silence,
     find_zero_crossing,
     is_waveform_interval_silent,
+    detect_audio_clipping,
+    detect_transient_clicks,
+    detect_breaths_and_coughs,
 )
 
 logger = logging.getLogger("dispatch.video_engine.autocut")
@@ -54,6 +57,8 @@ def _meaningful_like_context(words: List[Dict[str, Any]], index: int) -> Optiona
         return "Meaningful comparison, approximation, or noun phrase."
     if before_previous in {"kind", "sort", "bit", "lot"}:
         return "Meaningful comparison phrase."
+    if before_previous in {"i", "you", "we", "they", "he", "she"} and previous in {"really", "actually", "definitely", "truly", "always", "also", "just", "quite"}:
+        return "Meaningful adverb + lexical verb construction."
     if previous in {"i", "you", "we", "they", "he", "she"} and following:
         return "Likely lexical verb, not a filler."
     if following in {"a", "an", "the", "this", "that", "these", "those", "me", "him", "her", "them", "it", "to"}:
@@ -247,6 +252,59 @@ def analyze_waveform_and_transcript_autocuts(
             sc["duration"] = round(sc["source_end"] - sc["source_start"], 3)
         if sc["duration"] >= 0.1:
             proposals.append(sc)
+
+    # 1b. Acoustic defect and breath detection via waveform analysis
+    if pcm_bytes:
+        clipping_events = detect_audio_clipping(pcm_bytes, sample_rate=16000)
+        for ev in clipping_events:
+            if ev["source_end"] > clip_start and ev["source_start"] < clip_end:
+                proposals.append({
+                    "id": f"clip_{len(proposals) + 1}",
+                    "type": "audio_defect",
+                    "source_start": max(clip_start, ev["source_start"]),
+                    "source_end": min(clip_end, ev["source_end"]),
+                    "duration": round(min(clip_end, ev["source_end"]) - max(clip_start, ev["source_start"]), 3),
+                    "reason": ev["reason"],
+                    "status": "candidate",
+                    "confidence": ev["confidence"],
+                    "decision": "REVIEW",
+                })
+
+        click_events = detect_transient_clicks(pcm_bytes, sample_rate=16000)
+        for ev in click_events:
+            if ev["source_end"] > clip_start and ev["source_start"] < clip_end:
+                proposals.append({
+                    "id": f"transient_{len(proposals) + 1}",
+                    "type": "audio_defect",
+                    "source_start": max(clip_start, ev["source_start"]),
+                    "source_end": min(clip_end, ev["source_end"]),
+                    "duration": ev["duration"],
+                    "reason": ev["reason"],
+                    "status": "candidate",
+                    "confidence": ev["confidence"],
+                    "decision": "REVIEW",
+                })
+
+        if all_words:
+            speech_intervals = [
+                (float(w.get("start", 0.0)), float(w.get("end", 0.0)))
+                for w in all_words
+                if float(w.get("end", 0.0)) > float(w.get("start", 0.0))
+            ]
+            breath_events = detect_breaths_and_coughs(pcm_bytes, speech_intervals, sample_rate=16000)
+            for ev in breath_events:
+                if ev["source_end"] > clip_start and ev["source_start"] < clip_end:
+                    proposals.append({
+                        "id": f"{ev['type']}_{len(proposals) + 1}",
+                        "type": ev["type"],
+                        "source_start": max(clip_start, ev["source_start"]),
+                        "source_end": min(clip_end, ev["source_end"]),
+                        "duration": ev["duration"],
+                        "reason": ev["reason"],
+                        "status": "candidate",
+                        "confidence": ev["confidence"],
+                        "decision": ev["decision"],
+                    })
 
     # 2. Check for dead air pauses (> min_dead_air)
     if all_words:

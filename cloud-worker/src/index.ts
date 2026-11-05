@@ -2840,7 +2840,7 @@ export default {
       // Supabase round trip previously degraded to an empty 200 response, which
       // wipe-cleaned; now it returns 502 so clients can keep their last data.
       const clipsRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after,source_orientation,source_aspect_ratio,layout_mode,available_layout_modes,session_id,youtube_video_id&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after,source_orientation,source_aspect_ratio,layout_mode,available_layout_modes,session_id,youtube_video_id,project_document,segments_revision,active_state_revision,kept_duration,can_undo,can_redo,media_fingerprint,render_fingerprint&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
       );
       if (!clipsRes.ok) {
@@ -3021,7 +3021,15 @@ export default {
           end_time: Number(c.end_time || 0),
           ai_suggested_start_time: Number(c.ai_suggested_start_time || c.start_time || 0),
           ai_suggested_end_time: Number(c.ai_suggested_end_time || c.end_time || 0),
-          duration: Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
+          duration: (c.kept_duration != null && Number(c.kept_duration) > 0) ? Number(c.kept_duration) : Math.max(0, Number(c.end_time || 0) - Number(c.start_time || 0)),
+          kept_duration: c.kept_duration != null ? Number(c.kept_duration) : undefined,
+          project_document: c.project_document as Record<string, unknown> | undefined,
+          segments_revision: Number(c.segments_revision || 0),
+          active_state_revision: Number(c.active_state_revision || 0),
+          can_undo: Boolean(c.can_undo),
+          can_redo: Boolean(c.can_redo),
+          media_fingerprint: c.media_fingerprint as string | undefined,
+          render_fingerprint: c.render_fingerprint as string | undefined,
           range_revision: Number(c.range_revision || 0),
           is_render_stale: Boolean(c.render_stale),
           source_orientation: (c.source_orientation as string) || "landscape",

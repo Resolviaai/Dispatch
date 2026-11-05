@@ -209,6 +209,19 @@ export const DEFAULT_LANDSCAPE_MODES: AvailableLayoutMode[] = [
   { id: 'native_169', label: 'Native 16:9', target_aspect: '16:9', description: '100% full original horizontal 16:9 (no bars, no crop)' },
 ];
 
+
+export interface AutoCutProposal {
+  id: string;
+  type: 'filler' | 'stutter' | 'dead_air' | 'breath' | 'cough' | 'audio_defect' | 'filler_word' | 'repetition';
+  source_start: number;
+  source_end: number;
+  duration: number;
+  reason: string;
+  confidence: number;
+  decision: 'AUTO-REMOVE' | 'REVIEW' | 'PRESERVE';
+  userOverride?: 'accept' | 'reject';
+}
+
 export interface ClipItem {  id: string;
   cloud_id?: string;
   session_id?: string | null;
@@ -218,6 +231,8 @@ export interface ClipItem {  id: string;
   padded_start?: number;
   padded_end?: number;
   source_duration?: number | null;
+  extraction_source?: string;
+  extraction_model?: string;
   range_revision?: number;
   captions_revision?: number;
   segments_revision?: number;
@@ -1615,6 +1630,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       closeNotificationCenter();
       return true;
     }
+    if (showAutoCutDrawer) {
+      setShowAutoCutDrawer(false);
+      return true;
+    }
     if (showStudioExitConfirm) {
       setShowStudioExitConfirm(false);
       return true;
@@ -1727,6 +1746,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [selectedAccountMap, setSelectedAccountMap] = useState<Record<string, string>>({});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastFailedAction, setLastFailedAction] = useState<'timeline' | 'captions' | null>(null);
+  const lastFailedTimelineCommitRef = useRef<{
+    newRanges: [number, number][];
+    actionType: 'split' | 'delete_piece' | 'trim_edge' | 'auto_cut';
+    feedbackMsg?: string;
+    rangeOverrides?: { start_time?: number; end_time?: number };
+  } | null>(null);
+
+  const [autoCutProposals, setAutoCutProposals] = useState<AutoCutProposal[]>([]);
+  const [showAutoCutDrawer, setShowAutoCutDrawer] = useState<boolean>(false);
+  const [autoCutLoading, setAutoCutLoading] = useState<boolean>(false);
+  const [autoCutFilter, setAutoCutFilter] = useState<'all' | 'AUTO-REMOVE' | 'REVIEW' | 'PRESERVE'>('all');
 
   useEffect(() => {
     import('../auth/supabase').then(({ currentSession }) =>
@@ -3447,6 +3478,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           localCaptionsRevisionRef.current.set(currentClip.id, Math.floor(nextRevision));
         }
         setSaveStatus('saved');
+        setLastFailedAction(null);
         setFeedback('Captions saved successfully.');
         setTimeout(() => setFeedback(null), 2500);
         return true;
@@ -3455,7 +3487,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }
     } catch (e) {
       setSaveStatus('error');
-      setFeedback('Failed to save captions to server. Click Retry.');
+      setLastFailedAction('captions');
+      setFeedback('Failed to save captions to server. Click Retry Save.');
       return false;
     }
   };
@@ -3672,7 +3705,12 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
-          throw new Error(errData?.detail || `Cloud save failed (${res.status})`);
+          const conflictRev = typeof errData?.revision === 'number' ? errData.revision : (typeof errData?.segments_revision === 'number' ? errData.segments_revision : null);
+          if (res.status === 409 && conflictRev !== null) {
+            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: conflictRev } : c)));
+            setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: conflictRev } : c)));
+          }
+          throw new Error(errData?.detail || errData?.error || `Cloud save failed (${res.status})`);
         }
 
         const cloudData = await res.json().catch(() => ({}));
@@ -3683,6 +3721,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }
 
       setSaveStatus('saved');
+      setLastFailedAction(null);
+      lastFailedTimelineCommitRef.current = null;
       return true;
     } catch (err: any) {
       console.error(`Timeline commit failed (${actionType}):`, err);
@@ -3691,8 +3731,184 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       setApprovedClips((prev) => prev.map((c) => (c.id === previousClip.id ? previousClip : c)));
       setDuration(previousClip.duration || previousClip.kept_duration || 30);
       setSaveStatus('error');
-      setFeedback(`Failed to ${actionType.replace('_', ' ')}: ${err?.message || 'conflict or network error'}. Reverted.`);
+      setLastFailedAction('timeline');
+      lastFailedTimelineCommitRef.current = { newRanges, actionType, feedbackMsg, rangeOverrides };
+      setFeedback(`Failed to ${actionType.replace('_', ' ')}: ${err?.message || 'conflict or network error'}. Click Retry Save.`);
       return false;
+    }
+  };
+
+  const generateLocalAutoCutProposals = (): AutoCutProposal[] => {
+    if (!captionTrack || !captionTrack.groups || captionTrack.groups.length === 0) return [];
+    const proposals: AutoCutProposal[] = [];
+    const allWords = captionTrack.groups
+      .flatMap((g) => g.words || [])
+      .filter((w) => w && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+      .sort((a, b) => a.start - b.start);
+
+    // 1. Contextual filler words & obvious hesitation sounds
+    allWords.forEach((w, idx) => {
+      const clean = w.text.toLowerCase().replace(/[^\w]/g, '');
+      if (['um', 'uh', 'umm', 'uhh', 'er', 'ah'].includes(clean)) {
+        proposals.push({
+          id: `local_filler_${idx}`,
+          type: 'filler',
+          source_start: roundMs(w.start),
+          source_end: roundMs(w.end),
+          duration: roundMs(w.end - w.start),
+          reason: `Hesitation filler '${w.text}'`,
+          confidence: 0.95,
+          decision: 'AUTO-REMOVE',
+        });
+      } else if (clean === 'like') {
+        const prev = idx > 0 ? allWords[idx - 1].text.toLowerCase().replace(/[^\w]/g, '') : '';
+        const nxt = idx < allWords.length - 1 ? allWords[idx + 1].text.toLowerCase().replace(/[^\w]/g, '') : '';
+        const isLexical = ['i', 'we', 'they', 'you'].includes(prev) || ['to', 'a', 'this', 'that'].includes(nxt);
+        proposals.push({
+          id: `local_like_${idx}`,
+          type: 'filler',
+          source_start: roundMs(w.start),
+          source_end: roundMs(w.end),
+          duration: roundMs(w.end - w.start),
+          reason: isLexical ? "Meaningful usage of 'like'" : "Ambiguous discourse marker 'like'",
+          confidence: isLexical ? 0.9 : 0.7,
+          decision: isLexical ? 'PRESERVE' : 'REVIEW',
+        });
+      }
+    });
+
+    // 2. Extended pause gaps
+    for (let i = 0; i < allWords.length - 1; i++) {
+      const currEnd = allWords[i].end;
+      const nextStart = allWords[i + 1].start;
+      const gap = nextStart - currEnd;
+      if (gap >= 2.5) {
+        const cutStart = currEnd + 0.4;
+        const cutEnd = nextStart - 0.4;
+        if (cutEnd > cutStart + 0.2) {
+          proposals.push({
+            id: `local_gap_${i}`,
+            type: 'dead_air',
+            source_start: roundMs(cutStart),
+            source_end: roundMs(cutEnd),
+            duration: roundMs(cutEnd - cutStart),
+            reason: `Extended pause (${gap.toFixed(1)}s trimmed down to 0.8s)`,
+            confidence: 0.9,
+            decision: 'REVIEW',
+          });
+        }
+      }
+    }
+
+    return proposals;
+  };
+
+  const fetchAutoCutProposals = async () => {
+    if (!currentClip) return;
+    setAutoCutLoading(true);
+    setFeedback('Analyzing speech & waveform for clean cuts...');
+    try {
+      const session = await currentSession();
+      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+      const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+      const res = await fetch(`/api/clips/${encodeURIComponent(currentClip.id)}/autocut/proposals`, {
+        headers: authHeaders,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const rawProposals: any[] = data.proposals || [];
+        const mapped: AutoCutProposal[] = rawProposals.map((p, idx) => ({
+          id: p.id || `cut_${idx + 1}`,
+          type: p.type || 'filler',
+          source_start: Number(p.source_start ?? p.start ?? 0),
+          source_end: Number(p.source_end ?? p.end ?? 0),
+          duration: Number(p.duration ?? (p.source_end - p.source_start)),
+          reason: String(p.reason || 'Speech cleanup proposal'),
+          confidence: Number(p.confidence ?? 0.9),
+          decision: (p.decision === 'AUTO-REMOVE' || p.decision === 'PRESERVE') ? p.decision : 'REVIEW',
+          userOverride: undefined,
+        }));
+        setAutoCutProposals(mapped);
+        setShowAutoCutDrawer(true);
+        setFeedback(`Found ${mapped.length} auto-cut suggestions.`);
+      } else {
+        const localProposals = generateLocalAutoCutProposals();
+        setAutoCutProposals(localProposals);
+        setShowAutoCutDrawer(true);
+        setFeedback(`Loaded ${localProposals.length} client-side suggestions (offline mode).`);
+      }
+    } catch {
+      const localProposals = generateLocalAutoCutProposals();
+      setAutoCutProposals(localProposals);
+      setShowAutoCutDrawer(true);
+      setFeedback(`Loaded ${localProposals.length} client-side suggestions (offline mode).`);
+    } finally {
+      setAutoCutLoading(false);
+    }
+  };
+
+  const handleApplyAutoCut = async () => {
+    if (!currentClip || autoCutProposals.length === 0) return;
+
+    const cutsToApply = autoCutProposals.filter((p) =>
+      p.userOverride === 'accept' || (p.decision === 'AUTO-REMOVE' && p.userOverride !== 'reject')
+    );
+
+    if (cutsToApply.length === 0) {
+      setFeedback('No cuts selected to apply.');
+      return;
+    }
+
+    const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
+    const existingDoc = (currentClip as any).project_document;
+    const parsedDoc = typeof existingDoc === 'string' ? JSON.parse(existingDoc) : (existingDoc || null);
+    const docSegments = parsedDoc?.timeline?.segments || [];
+    let currentRanges: [number, number][] = docSegments.length > 0
+      ? docSegments.map((s: any) => [Number(s.source_start ?? s.start), Number(s.source_end ?? s.end)] as [number, number])
+      : [[Number(currentClip.start_time || 0), Number(currentClip.end_time || sourceDuration)]];
+
+    for (const cut of cutsToApply) {
+      const cutStart = cut.source_start;
+      const cutEnd = cut.source_end;
+      const nextRanges: [number, number][] = [];
+
+      for (const [rStart, rEnd] of currentRanges) {
+        if (cutEnd <= rStart || cutStart >= rEnd) {
+          nextRanges.push([rStart, rEnd]);
+        } else if (cutStart <= rStart && cutEnd >= rEnd) {
+          continue;
+        } else if (cutStart <= rStart && cutEnd < rEnd) {
+          if (rEnd - cutEnd >= 0.2) {
+            nextRanges.push([roundMs(cutEnd), rEnd]);
+          }
+        } else if (cutStart > rStart && cutEnd >= rEnd) {
+          if (cutStart - rStart >= 0.2) {
+            nextRanges.push([rStart, roundMs(cutStart)]);
+          }
+        } else {
+          if (cutStart - rStart >= 0.2) {
+            nextRanges.push([rStart, roundMs(cutStart)]);
+          }
+          if (rEnd - cutEnd >= 0.2) {
+            nextRanges.push([roundMs(cutEnd), rEnd]);
+          }
+        }
+      }
+      currentRanges = nextRanges;
+    }
+
+    const canonical = normalizeRanges(currentRanges, sourceDuration);
+    if (canonical.length === 0) {
+      setFeedback('Applying these cuts would remove the entire clip.');
+      return;
+    }
+
+    const success = await commitTimeline(canonical, 'auto_cut', `Applied Auto-Cut: ${cutsToApply.length} cuts removed.`);
+    if (success) {
+      setShowAutoCutDrawer(false);
+      setAutoCutProposals([]);
     }
   };
 
@@ -4781,8 +4997,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                           <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
                             {clip.title || clip.hook || 'Untitled Clip'}
                           </h3>
-                          <p className="text-xs text-text-muted mt-1 tabular-nums truncate">
-                            {age || (clip.session_id ? `#${clip.session_id.replace('sess_', '')}` : 'Clip')}
+                          <p className="text-xs text-text-muted mt-1 tabular-nums truncate flex items-center gap-1.5">
+                            <span>{age || (clip.session_id ? `#${clip.session_id.replace('sess_', '')}` : 'Clip')}</span>
                             {isPublished ? (
                               !clip.is_cloud_only && !retention.isExpired ? (
                                 <> &middot; {retention.label}</>
@@ -4791,6 +5007,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                               )
                             ) : isUploaded ? (
                               <> &middot; <span className="inline-flex items-center gap-1 text-primary font-medium"><span className="w-2.5 h-2.5 rounded-full border border-primary/30 border-t-primary animate-spin inline-block" /><span>Uploading…</span></span></>
+                            ) : null}
+                            {clip.extraction_source === 'heuristic_fallback' ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                                Heuristic
+                              </span>
+                            ) : clip.extraction_source === 'gemini' ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                                AI
+                              </span>
                             ) : null}
                           </p>
                         </div>
@@ -5545,7 +5770,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             {saveStatus === 'error' && (
               <button
                 type="button"
-                onClick={() => handleSaveCaptions()}
+                onClick={async () => {
+                  if (lastFailedAction === 'timeline' && lastFailedTimelineCommitRef.current) {
+                    const { newRanges, actionType, feedbackMsg, rangeOverrides } = lastFailedTimelineCommitRef.current;
+                    await commitTimeline(newRanges, actionType, feedbackMsg, rangeOverrides);
+                  } else {
+                    await handleSaveCaptions();
+                  }
+                }}
                 className="h-6 px-2 rounded-md bg-red-500/20 text-red-300 border border-red-500/40 text-[10px] font-semibold flex items-center gap-1 active:scale-95 hover:bg-red-500/30"
                 title="Save failed. Click to retry"
               >
@@ -5558,9 +5790,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               disabled={saveStatus === 'saving'}
               onClick={async () => {
                 if (saveStatus === 'unsaved' || saveStatus === 'error') {
-                  const success = await handleSaveCaptions();
-                  if (!success) {
-                    return; // Retain on screen if save failed
+                  if (lastFailedAction === 'timeline' && lastFailedTimelineCommitRef.current) {
+                    const { newRanges, actionType, feedbackMsg, rangeOverrides } = lastFailedTimelineCommitRef.current;
+                    const success = await commitTimeline(newRanges, actionType, feedbackMsg, rangeOverrides);
+                    if (!success) return;
+                  } else {
+                    const success = await handleSaveCaptions();
+                    if (!success) {
+                      return; // Retain on screen if save failed
+                    }
                   }
                 }
                 setViewMode('detail');
@@ -5918,6 +6156,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   canRedo={Boolean((currentClip as any)?.can_redo) || canRedo}
                   onUndo={handleTimelineUndo}
                   onRedo={handleTimelineRedo}
+                  onOpenAutoCut={fetchAutoCutProposals}
                 />
               </div>
             </>
@@ -5975,6 +6214,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 canRedo={canRedo}
                 onUndo={undo}
                 onRedo={redo}
+                onOpenAutoCut={fetchAutoCutProposals}
               />
             </div>
           )}
@@ -6060,6 +6300,181 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             </div>
           </div>
         )}
+        {/* Auto-Cut Review Drawer */}
+        {showAutoCutDrawer && (
+          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex flex-col justify-end animate-in fade-in duration-200">
+            <div className="w-full max-h-[80vh] bg-surface-100 border-t border-border rounded-t-2xl flex flex-col overflow-hidden shadow-2xl">
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <Scissors size={16} className="text-primary" />
+                  <h3 className="text-sm font-semibold text-text-main">Auto-Cut Speech Cleanup</h3>
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-medium bg-surface-200 text-text-secondary border border-border">
+                    {autoCutProposals.length}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAutoCutDrawer(false)}
+                  className="w-7 h-7 rounded-lg bg-surface-200 hover:bg-surface-300 flex items-center justify-center text-text-secondary hover:text-text-main transition-colors"
+                  aria-label="Close"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1.5 px-4 py-2 border-b border-border bg-surface-200/50 overflow-x-auto no-scrollbar">
+                {(['all', 'AUTO-REMOVE', 'REVIEW', 'PRESERVE'] as const).map((tab) => {
+                  const count = tab === 'all'
+                    ? autoCutProposals.length
+                    : autoCutProposals.filter((p) => p.decision === tab).length;
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setAutoCutFilter(tab)}
+                      className={`h-7 px-2.5 rounded-md text-[11px] font-medium flex items-center gap-1 transition-all shrink-0 ${
+                        autoCutFilter === tab
+                          ? 'bg-primary text-white shadow-hero-sm'
+                          : 'bg-surface-200 text-text-muted hover:text-text-main border border-border/60'
+                      }`}
+                    >
+                      <span>{tab === 'all' ? 'All' : tab.replace('_', ' ')}</span>
+                      <span className="opacity-75 font-mono text-[10px]">({count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Proposals Scrollable List */}
+              <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5 min-h-[160px] max-h-[48vh]">
+                {autoCutProposals
+                  .filter((p) => autoCutFilter === 'all' || p.decision === autoCutFilter)
+                  .length === 0 ? (
+                  <div className="text-center py-8 text-xs text-text-muted">
+                    No proposals match the current filter.
+                  </div>
+                ) : (
+                  autoCutProposals
+                    .filter((p) => autoCutFilter === 'all' || p.decision === autoCutFilter)
+                    .map((prop) => {
+                      const isAccepted = prop.userOverride === 'accept' || (prop.decision === 'AUTO-REMOVE' && prop.userOverride !== 'reject');
+                      const isRejected = prop.userOverride === 'reject';
+                      return (
+                        <div
+                          key={prop.id}
+                          className={`p-3 rounded-xl border transition-all ${
+                            isAccepted
+                              ? 'bg-surface-200 border-primary/30'
+                              : isRejected
+                              ? 'bg-surface-200/40 border-border opacity-60'
+                              : 'bg-surface-200/80 border-border'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${
+                                prop.type === 'filler' || prop.type === 'filler_word' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
+                                prop.type === 'dead_air' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                                prop.type === 'audio_defect' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
+                                prop.type === 'stutter' || prop.type === 'repetition' ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30' :
+                                'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                              }`}>
+                                {prop.type.replace('_', ' ')}
+                              </span>
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                prop.decision === 'AUTO-REMOVE' ? 'bg-red-500/20 text-red-300' :
+                                prop.decision === 'PRESERVE' ? 'bg-emerald-500/20 text-emerald-300' :
+                                'bg-amber-500/20 text-amber-300'
+                              }`}>
+                                {prop.userOverride ? (prop.userOverride === 'accept' ? 'ACCEPTED' : 'REJECTED') : prop.decision}
+                              </span>
+                            </div>
+                            <span className="font-mono text-xs text-text-muted tabular-nums">
+                              {prop.source_start.toFixed(2)}s – {prop.source_end.toFixed(2)}s ({prop.duration.toFixed(2)}s)
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-text-main line-clamp-2 mb-2 leading-relaxed">
+                            {prop.reason}
+                          </p>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-border/50">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleSeek(prop.source_start);
+                              }}
+                              className="h-6 px-2 rounded-md bg-surface-300 hover:bg-surface-400 text-[10px] font-medium text-text-secondary hover:text-text-main flex items-center gap-1 active:scale-95"
+                            >
+                              <Play size={10} />
+                              <span>Preview</span>
+                            </button>
+
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAutoCutProposals((prev) =>
+                                    prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'reject' ? undefined : 'reject' } : p))
+                                  );
+                                }}
+                                className={`h-6 px-2 rounded-md text-[10px] font-medium flex items-center gap-1 active:scale-95 border ${
+                                  prop.userOverride === 'reject'
+                                    ? 'bg-red-500/30 text-red-200 border-red-500/50'
+                                    : 'bg-surface-300 text-text-muted hover:text-text-main border-transparent'
+                                }`}
+                              >
+                                <X size={10} />
+                                <span>Keep</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAutoCutProposals((prev) =>
+                                    prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'accept' ? undefined : 'accept' } : p))
+                                  );
+                                }}
+                                className={`h-6 px-2 rounded-md text-[10px] font-semibold flex items-center gap-1 active:scale-95 border ${
+                                  isAccepted
+                                    ? 'bg-primary text-white border-primary shadow-hero-sm'
+                                    : 'bg-surface-300 text-text-secondary hover:text-text-main border-transparent'
+                                }`}
+                              >
+                                <Check size={10} />
+                                <span>Cut</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+
+              {/* Bottom Sticky Action Bar */}
+              <div className="p-4 border-t border-border bg-surface-100 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAutoCutDrawer(false)}
+                  className="flex-1 h-9 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-xs font-medium active:scale-98 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApplyAutoCut}
+                  className="flex-2 h-9 px-4 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-98 transition-all shadow-hero-glow"
+                >
+                  <Scissors size={13} />
+                  <span>Apply Auto-Cut ({autoCutProposals.filter((p) => p.userOverride === 'accept' || (p.decision === 'AUTO-REMOVE' && p.userOverride !== 'reject')).length})</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Exit Confirmation Modal */}
         {showStudioExitConfirm && (
           <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">

@@ -852,6 +852,9 @@ def identify_and_save_highlights(
         raw_clips = extract_clips_local_heuristic(segments, total_duration)
         model_used = "heuristic_fallback"
 
+    extraction_source = "heuristic_fallback" if model_used == "heuristic_fallback" else "gemini"
+    extraction_model = model_used
+
     # Validate and filter
     validated_clips = validate_and_filter_candidates(
         raw_candidates=raw_clips,
@@ -885,7 +888,9 @@ def identify_and_save_highlights(
             video_id=video_id,
             clip_defs=validated_clips,
             publish_mode=publish_mode,
-            user_id=eff_user_id
+            user_id=eff_user_id,
+            extraction_source=extraction_source,
+            extraction_model=extraction_model
         )
     else:
         saved_ids = []
@@ -909,10 +914,13 @@ def identify_and_save_highlights(
                 publish_mode=publish_mode,
                 padded_start=c.get("padded_start"),
                 padded_end=c.get("padded_end"),
-                user_id=eff_user_id
+                user_id=eff_user_id,
+                extraction_source=extraction_source,
+                extraction_model=extraction_model
             )
             saved_ids.append(cid)
 
     logger.info("Highlight processing complete (Model: %s): %d clips accepted and saved.",
                 model_used, len(saved_ids))
     return saved_ids
+

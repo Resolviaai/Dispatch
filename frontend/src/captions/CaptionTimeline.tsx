@@ -291,9 +291,15 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const effectiveTimeMode: TimelineTimeMode = timeMode ?? (sourceTimebase && (sourceDuration ?? 0) > duration + 2.0 ? 'source' : 'clip');
   const isSourceMode = effectiveTimeMode === 'source';
 
-  const safeClipDuration = Math.max(1, duration);
+  const piecesFallbackEnd = (segments && segments.length > 0)
+    ? segments.reduce((max: number, s: any) => Math.max(max, Number(s.end ?? s.source_end ?? 0)), 0)
+    : (clipEnd ?? (clipStart + duration));
 
-  const timelineDuration = isSourceMode ? Math.max(safeClipDuration, sourceDuration || 0) : safeClipDuration;
+  const safeClipDuration = Math.max(1, duration, piecesFallbackEnd);
+
+  const timelineDuration = isSourceMode
+    ? Math.max(safeClipDuration, sourceDuration || 0, piecesFallbackEnd)
+    : safeClipDuration;
 
   const timelineCurrentTime = isSourceMode ? clipTimeToSourceTime(currentTime, clipStart) : currentTime;
 
@@ -341,6 +347,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       index: 0,
     }];
   }, [segments, clipStart, clipEnd, duration]);
+
+  const piecesMaxEnd = useMemo(() => {
+    return pieces.reduce((max, p) => Math.max(max, p.end), 0);
+  }, [pieces]);
 
   interface PieceTrimDragState {
     pieceIndex: number;

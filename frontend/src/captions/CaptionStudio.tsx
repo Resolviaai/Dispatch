@@ -116,6 +116,7 @@ export interface CaptionStudioProps {
   piecesCount?: number;
   selectedPieceIndex?: number | null;
   onFeedback?: (msg: string) => void;
+  onOpenAutoCut?: () => void;
 }
 
 export type ToolbarCategory = 'none' | 'edit' | 'audio' | 'text' | 'overlay';
@@ -1100,6 +1101,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   piecesCount,
   selectedPieceIndex,
   onFeedback,
+  onOpenAutoCut,
 }) => {
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
@@ -4891,6 +4893,11 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
             icon={<RotateCcw size={18} />}
             label="Reset Crop"
             onClick={() => onLayoutChange?.('crop_916')}
+          />
+          <ToolButton
+            icon={<Scissors size={18} className="text-primary" />}
+            label="Auto-Cut"
+            onClick={() => onOpenAutoCut?.()}
           />
         </div>
       )}

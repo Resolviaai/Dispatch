@@ -432,6 +432,10 @@ def init_db():
             cursor.execute("ALTER TABLE clips ADD COLUMN render_fingerprint TEXT;")
         if "rendered_fingerprint" not in clip_cols:
             cursor.execute("ALTER TABLE clips ADD COLUMN rendered_fingerprint TEXT;")
+        if "extraction_source" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_source TEXT;")
+        if "extraction_model" not in clip_cols:
+            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_model TEXT;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS clip_revisions (
@@ -556,6 +560,31 @@ def init_db():
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_user ON editing_templates (user_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_default ON editing_templates (user_id, is_default);")
+
+        # AI highlight provenance
+        try:
+            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_source TEXT;")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_model TEXT;")
+        except Exception:
+            pass
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS clip_feedback_events (
+                id TEXT PRIMARY KEY,
+                clip_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                extraction_source TEXT,
+                extraction_model TEXT,
+                details TEXT,
+                user_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_feedback_clip ON clip_feedback_events (clip_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_feedback_event ON clip_feedback_events (event_type);")
+
         cursor.execute("PRAGMA user_version = 3;")
 
         # Default settings if not already present
@@ -688,7 +717,9 @@ def save_clip(
     duration: Optional[float] = None,
     padded_start: Optional[float] = None,
     padded_end: Optional[float] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    extraction_source: Optional[str] = None,
+    extraction_model: Optional[str] = None
 ) -> str:
     clip_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     final_duration = round(float(duration), 2) if duration is not None else round(end_time - start_time, 2)
@@ -713,14 +744,14 @@ def save_clip(
                 ai_suggested_start_time, ai_suggested_end_time, range_revision, duration,
                 title, hook, description, hashtags, virality_score,
                 layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
-                padded_start, padded_end, user_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?, ?)
+                padded_start, padded_end, user_id, extraction_source, extraction_model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, ?, ?, ?, ?, ?)
         """, (
             clip_id, session_id, chunk_id, start_time, end_time,
             start_time, end_time, final_duration,
             title, hook, description, hashtags, virality_score,
             layout_mode, rendered_layout_mode, publish_mode, platform_targets,
-            p_start, p_end, eff_user_id
+            p_start, p_end, eff_user_id, extraction_source, extraction_model
         ))
         conn.commit()
     return clip_id
@@ -1965,7 +1996,9 @@ def save_clip_definitions(
     clip_defs: List[Dict[str, Any]],
     publish_mode: str = "private",
     platform_targets: str = "youtube",
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    extraction_source: Optional[str] = None,
+    extraction_model: Optional[str] = None
 ) -> List[str]:
     """Atomically persist validated clip definitions in a single transaction.
     
@@ -2024,14 +2057,16 @@ def save_clip_definitions(
                     ai_suggested_start_time, ai_suggested_end_time, range_revision,
                     title, hook, description, hashtags, virality_score,
                     layout_mode, status, publish_mode, platform_targets,
-                    video_path, thumbnail_path, padded_start, padded_end, user_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?, ?)
+                    video_path, thumbnail_path, padded_start, padded_end, user_id,
+                    extraction_source, extraction_model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready_review', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
             """, (
                 clip_id, session_id, chunk_id, start_t, end_t, duration,
                 start_t, end_t,
                 title, hook, description, hashtags, virality_score,
                 layout_mode, publish_mode, platform_targets,
-                p_start, p_end, effective_user_id
+                p_start, p_end, effective_user_id,
+                extraction_source, extraction_model
             ))
             saved_clip_ids.append(clip_id)
 
@@ -2346,3 +2381,33 @@ def split_clip(
         cursor.execute("SELECT * FROM clips WHERE id = ?", (new_clip_id,))
         c2 = dict(cursor.fetchone())
         return c1, c2
+
+
+import uuid as _uuid
+
+
+def record_clip_feedback(clip_id: str, event_type: str, details=None, extraction_source=None, extraction_model=None, user_id=None) -> str:
+    import json as _json
+    fid = str(_uuid.uuid4())
+    with get_db_connection() as conn:
+        conn.execute(
+            "INSERT INTO clip_feedback_events (id, clip_id, event_type, extraction_source, extraction_model, details, user_id) VALUES (?,?,?,?,?,?,?)",
+            (fid, clip_id, event_type, extraction_source, extraction_model, _json.dumps(details) if details else None, user_id)
+        )
+        conn.commit()
+    return fid
+
+
+def get_clip_feedback_stats(user_id=None) -> dict:
+    with get_db_connection() as conn:
+        where = "WHERE user_id = ?" if user_id else ""
+        params = (user_id,) if user_id else ()
+        rows = conn.execute(f"SELECT event_type, extraction_source, extraction_model, COUNT(*) as cnt FROM clip_feedback_events {where} GROUP BY event_type, extraction_source, extraction_model", params).fetchall()
+    stats: dict = {"total": 0, "by_event": {}, "by_source": {}}
+    for r in rows:
+        et, es, em, cnt = r["event_type"], r["extraction_source"], r["extraction_model"], r["cnt"]
+        stats["total"] += cnt
+        stats["by_event"][et] = stats["by_event"].get(et, 0) + cnt
+        key = es or "unknown"
+        stats["by_source"][key] = stats["by_source"].get(key, 0) + cnt
+    return stats

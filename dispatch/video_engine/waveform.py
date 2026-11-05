@@ -200,3 +200,185 @@ def snap_boundary_to_waveform_silence(
         
     else:
         return find_zero_crossing(raw_bytes, raw_time, search_window_ms=25.0, sample_rate=sample_rate)
+
+
+def detect_audio_clipping(
+    raw_bytes: bytes,
+    sample_rate: int = 16000,
+    threshold_db: float = -0.5
+) -> List[dict]:
+    """Detect audio clipping events where sample amplitudes saturate near 0 dBFS."""
+    if not raw_bytes:
+        return []
+    threshold_amp = int(32768.0 * (10.0 ** (threshold_db / 20.0)))
+    total_samples = len(raw_bytes) // 2
+    samples = struct.unpack(f"<{total_samples}h", raw_bytes)
+    events = []
+    in_clip = False
+    start_idx = 0
+    count = 0
+    for i, smp in enumerate(samples):
+        if abs(smp) >= threshold_amp:
+            if not in_clip:
+                in_clip = True
+                start_idx = i
+                count = 1
+            else:
+                count += 1
+        else:
+            if in_clip:
+                if count >= 3:
+                    start_t = round(start_idx / float(sample_rate), 3)
+                    end_t = round(i / float(sample_rate), 3)
+                    events.append({
+                        "type": "clipping",
+                        "source_start": start_t,
+                        "source_end": end_t,
+                        "duration": round(end_t - start_t, 3),
+                        "samples_clipped": count,
+                        "confidence": 0.95,
+                        "decision": "REVIEW",
+                        "reason": f"Audio clipping defect ({count} saturated samples, > {threshold_db} dBFS)",
+                    })
+                in_clip = False
+                count = 0
+    if in_clip and count >= 3:
+        start_t = round(start_idx / float(sample_rate), 3)
+        end_t = round(total_samples / float(sample_rate), 3)
+        events.append({
+            "type": "clipping",
+            "source_start": start_t,
+            "source_end": end_t,
+            "duration": round(end_t - start_t, 3),
+            "samples_clipped": count,
+            "confidence": 0.95,
+            "decision": "REVIEW",
+            "reason": f"Audio clipping defect ({count} saturated samples, > {threshold_db} dBFS)",
+        })
+    return events
+
+
+def detect_transient_clicks(
+    raw_bytes: bytes,
+    sample_rate: int = 16000
+) -> List[dict]:
+    """Detect brief transient clicks, mouth pops, or mic bumps using peak-to-RMS crest factor."""
+    if not raw_bytes:
+        return []
+    total_samples = len(raw_bytes) // 2
+    samples = struct.unpack(f"<{total_samples}h", raw_bytes)
+    frame_len = int(sample_rate * 0.010)  # 10ms frame
+    if frame_len <= 0:
+        frame_len = 160
+    clicks = []
+    for offset in range(0, total_samples - frame_len, frame_len):
+        frame = samples[offset:offset + frame_len]
+        peak = max(abs(s) for s in frame)
+        if peak < 3200:
+            continue
+        rms = math.sqrt(sum(s * s for s in frame) / float(len(frame)))
+        crest = peak / (rms + 1e-6)
+        if crest > 4.5 and peak > 5000:
+            t = round(offset / float(sample_rate), 3)
+            clicks.append({
+                "type": "transient_click",
+                "source_start": t,
+                "source_end": round(t + 0.025, 3),
+                "duration": 0.025,
+                "confidence": 0.78,
+                "decision": "REVIEW",
+                "reason": f"Transient mouth click / mic pop (crest factor {crest:.1f})",
+            })
+    return clicks
+
+
+def detect_breaths_and_coughs(
+    raw_bytes: bytes,
+    speech_intervals: List[Tuple[float, float]],
+    sample_rate: int = 16000
+) -> List[dict]:
+    """Detect audible breath intakes and coughs / throat-clears in non-speech intervals."""
+    if not raw_bytes:
+        return []
+    total_samples = len(raw_bytes) // 2
+    samples = struct.unpack(f"<{total_samples}h", raw_bytes)
+    total_dur = total_samples / float(sample_rate)
+
+    gaps = []
+    prev_end = 0.0
+    for s_start, s_end in sorted(speech_intervals):
+        if s_start > prev_end + 0.15:
+            gaps.append((prev_end, s_start))
+        prev_end = max(prev_end, s_end)
+    if total_dur > prev_end + 0.15:
+        gaps.append((prev_end, total_dur))
+
+    results = []
+    frame_ms = 50.0
+    samples_per_frame = int(sample_rate * (frame_ms / 1000.0))
+
+    for gap_start, gap_end in gaps:
+        if gap_end - gap_start < 0.20:
+            continue
+        g_start_idx = int(gap_start * sample_rate)
+        g_end_idx = int(gap_end * sample_rate)
+        gap_samples = samples[g_start_idx:g_end_idx]
+
+        active_breath_start = None
+        breath_frames = 0
+
+        for f_idx in range(0, len(gap_samples) - samples_per_frame, samples_per_frame):
+            frame = gap_samples[f_idx:f_idx + samples_per_frame]
+            rms = math.sqrt(sum(s * s for s in frame) / float(len(frame)))
+            db = 20.0 * math.log10(rms / 32768.0) if rms > 0.0001 else -96.0
+
+            zcr = sum(
+                1 for i in range(len(frame) - 1)
+                if (frame[i] <= 0 and frame[i + 1] > 0) or (frame[i] >= 0 and frame[i + 1] < 0)
+            ) / float(len(frame))
+            t_frame = gap_start + (f_idx / float(sample_rate))
+
+            if db > -18.0:
+                results.append({
+                    "type": "cough",
+                    "source_start": round(t_frame, 3),
+                    "source_end": round(t_frame + 0.25, 3),
+                    "duration": 0.25,
+                    "confidence": 0.85,
+                    "decision": "REVIEW",
+                    "reason": f"Acoustic cough/throat-clear burst ({db:.1f} dBFS)",
+                })
+            elif -45.0 <= db <= -22.0 and zcr >= 0.08:
+                if active_breath_start is None:
+                    active_breath_start = t_frame
+                breath_frames += 1
+            else:
+                if active_breath_start is not None:
+                    b_dur = breath_frames * (frame_ms / 1000.0)
+                    if 0.18 <= b_dur <= 1.2:
+                        results.append({
+                            "type": "breath",
+                            "source_start": round(active_breath_start, 3),
+                            "source_end": round(active_breath_start + b_dur, 3),
+                            "duration": round(b_dur, 3),
+                            "confidence": 0.80,
+                            "decision": "REVIEW",
+                            "reason": f"Audible breath intake ({b_dur:.2f}s)",
+                        })
+                    active_breath_start = None
+                    breath_frames = 0
+
+        if active_breath_start is not None:
+            b_dur = breath_frames * (frame_ms / 1000.0)
+            if 0.18 <= b_dur <= 1.2:
+                results.append({
+                    "type": "breath",
+                    "source_start": round(active_breath_start, 3),
+                    "source_end": round(active_breath_start + b_dur, 3),
+                    "duration": round(b_dur, 3),
+                    "confidence": 0.80,
+                    "decision": "REVIEW",
+                    "reason": f"Audible breath intake ({b_dur:.2f}s)",
+                })
+
+    return results

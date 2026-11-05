@@ -1725,6 +1725,11 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
         except Exception as e:
             logger.warning("Could not trigger immediate outbox pass for clip %s: %s", clip_id, e)
 
+    try:
+        db.record_clip_feedback(clip_id=clip_id, event_type="approve", user_id=caller_user_id)
+    except Exception as _fb_err:
+        logger.debug("record_clip_feedback approve failed (non-fatal): %s", _fb_err)
+
     return {"status": "success", "message": f"Clip {clip_id} approved and enqueued for publishing", "layout_mode": target_layout}
 
 
@@ -1752,7 +1757,19 @@ async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Requ
     # listing the clip as ready_review whenever it falls back to Cloud Mode.
     from dispatch.cloud.sync import sync_clip_to_cloud
     await asyncio.to_thread(sync_clip_to_cloud, clip_id, None, True)
+    try:
+        db.record_clip_feedback(clip_id=clip_id, event_type="reject", user_id=caller_user_id)
+    except Exception as _fb_err:
+        logger.debug("record_clip_feedback reject failed (non-fatal): %s", _fb_err)
     return {"status": "success", "message": f"Clip {clip_id} rejected"}
+
+
+@app.get("/api/analytics/feedback")
+async def get_feedback_analytics(request: Request):
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
+    return db.get_clip_feedback_stats(user_id=caller_user_id)
+
 
 
 @app.post("/api/clips/{clip_id}/metadata")
