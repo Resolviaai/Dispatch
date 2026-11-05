@@ -504,8 +504,8 @@ export default function App() {
               </div>
 
               <div className="access-unlocked" style={{ marginTop: '1.5rem', marginBottom: '2rem' }}>
-                <div className="unlocked-pill">Latest Build &bull; v1.7.30-alpha (Build 98)</div>
-                <h3>Dispatch Build 1.7.30-alpha</h3>
+                <div className="unlocked-pill">Latest Build &bull; v1.7.31-alpha (Build 99)</div>
+                <h3>Dispatch Build 1.7.31-alpha</h3>
                 <p>Long sessions in. Short captioned clips out. Download the free Android app.</p>
                 <div className="unlocked-buttons" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                   <a className="btn-hero-primary" href={DIRECT_APK} download="Dispatch.apk">
