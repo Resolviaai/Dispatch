@@ -1,5 +1,5 @@
 import { useState, useEffect, type FormEvent } from 'react';
-import { RELEASES } from './data/site';
+import { RELEASE, DIRECT_APK } from './data/site';
 
 export const PREVIEW_INVITE_CODE = 'DSP-ALPHA';
 
@@ -503,24 +503,26 @@ export default function App() {
                 <p className="access-sub">Enter your invite code below to download the app.</p>
               </div>
 
-              {inviteAccepted ? (
-                <div className="access-unlocked">
-                  <div className="unlocked-pill">Access Granted &bull; Invite Verified</div>
-                  <h3>Dispatch Build 1.7.29-alpha</h3>
-                  <p>Download the free Android app and start recording.</p>
-                  <div className="unlocked-buttons">
-                    <a className="btn-hero-primary" href={RELEASES} target="_blank" rel="noreferrer">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" y1="15" x2="12" y2="3"/>
-                      </svg>
-                      <span>Download Android APK (21 MB)</span>
-                    </a>
-
-                  </div>
+              <div className="access-unlocked" style={{ marginTop: '1.5rem', marginBottom: '2rem' }}>
+                <div className="unlocked-pill">Latest Build &bull; v1.7.30-alpha (Build 98)</div>
+                <h3>Dispatch Build 1.7.30-alpha</h3>
+                <p>Long sessions in. Short captioned clips out. Download the free Android app.</p>
+                <div className="unlocked-buttons" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <a className="btn-hero-primary" href={DIRECT_APK} download="Dispatch.apk">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="7 10 12 15 17 10"/>
+                      <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    <span>Download Android APK (25.4 MB)</span>
+                  </a>
+                  <a className="btn-hero-secondary" href={RELEASE} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem 1.25rem', borderRadius: '9999px', border: '1px solid #2e2e2e', background: '#1c1c1c', color: '#fff', textDecoration: 'none', fontSize: '0.875rem' }}>
+                    <span>GitHub Release Notes</span>
+                  </a>
                 </div>
-              ) : (
+              </div>
+
+              {inviteAccepted ? null : (
                 <div className="access-forms">
                   <div className="form-box">
                     <h4>Have an invite code?</h4>
