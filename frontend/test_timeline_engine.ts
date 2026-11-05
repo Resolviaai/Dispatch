@@ -89,9 +89,7 @@ console.log('EDL v1 timeline engine shared fixtures...');
   );
   assert.deepEqual(
     editedAgain.groups[0].words.map((word: any) => [word.id, word.start, word.end]),
-    [['crossing', 0, 0.5], ['after', 0.5, 0.8], ['after', 0.8, 1.3]].filter((row: any[], i: number, rows: any[]) =>
-      rows.findIndex((candidate: any[]) => candidate[0] === row[0] && candidate[1] === row[1]) === i
-    ),
+    [['crossing', 0, 0.5], ['after', 0.5, 0.8]],
     'source-origin remapping remains deterministic across EDL revisions',
   );
 }
