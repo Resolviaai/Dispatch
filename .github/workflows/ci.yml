@@ -63,6 +63,8 @@ jobs:
             tests.test_transcript_persistence_20261028 \
             tests.test_rejection_reliability_20261028 \
             tests.test_edit_windows \
+            tests.test_segments \
+            tests.test_waveform_autocut \
             tests.test_cloud_caption_reconciliation \
             tests.test_caption_range_sync \
             tests.test_caption_approval_contract \
