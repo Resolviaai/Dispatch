@@ -1914,7 +1914,7 @@ export default {
 
     if (url.pathname === "/youtube/duration" && request.method === "GET") {
       const vId = (url.searchParams.get("video_id") || "").trim();
-      if (!vId) return json(400, { error: "missing video_id" }, reqOrigin);
+      if (!vId) return json(400, { error: "missing video_id" }, '*');
       const [dur, title] = await Promise.all([
         probeYouTubeDuration(vId),
         probeYouTubeTitle(vId),
@@ -1934,10 +1934,10 @@ export default {
         }).catch(() => null);
       }
       if (dur && dur > 0) {
-        return json(200, { duration: dur, title: title || null }, reqOrigin);
+        return json(200, { duration: dur, title: title || null }, '*');
       }
       const dbg = await probeYouTubeDurationDebug(vId);
-      return json(200, { duration: null, title: title || null, debug: dbg }, reqOrigin);
+      return json(200, { duration: null, title: title || null, debug: dbg }, '*');
     }
 
     // ---- Per-User Gemini API Keys Vault ----
