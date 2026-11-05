@@ -248,3 +248,25 @@ Rohit's recordings feature real-time thinking, associative idea development, sel
   - Full Python regression test suite: 34/34 tests passed.
   - Frontend test suite: All 13 suites passed in `node frontend/run_tests.js`.
   - Frontend build: `npm run build` (`tsc --noEmit && vite build`) succeeded in 17.5s.
+
+
+---
+
+## 4. Release & Distribution Deployment Verification (Build 98 / v1.7.30-alpha)
+
+### [x] Production Release & In-App / Landing Page Distribution
+- **Version Governance Monotonicity:**
+  - Bumped to `v1.7.30-alpha` (`versionCode = 98`) across `android/app/build.gradle.kts`, `frontend/package.json`, `site/update.json`, `site/index.html`, `README.md`, and `dispatch-landing-page/src/data/site.ts`.
+- **Release Verification & Keystore Identity:**
+  - Signed release APK built via `scripts/prepare_release.ps1` with trusted certificate SHA-256 ending in `...3804`.
+  - APK size: `26,594,331` bytes.
+  - APK SHA-256: `d78f5cdeb7cabc0dcf394c7b6df508e3755f063c1977eceebf00ad5cf7b88b76`.
+- **GitHub Release Created & Published:**
+  - Tag: `v1.7.30-alpha`.
+  - Assets attached: `Dispatch.apk` (26,594,331 bytes), `update.json`.
+  - Release URL: `https://github.com/Resolviaai/Dispatch/releases/tag/v1.7.30-alpha`.
+- **GitHub Pages Deployed (`gh-pages` branch):**
+  - Executed `scripts/deploy_gh_pages.ps1 -Tag v1.7.30-alpha`.
+  - Manifest URL verified live: `https://resolviaai.github.io/Dispatch/update.json` (returns HTTP 200, versionCode 98).
+  - Landing page APK download verified live: `https://resolviaai.github.io/Dispatch/Dispatch.apk` (returns HTTP 200, Content-Length 26594331).
+  - Landing page UI updated: `https://resolviaai.github.io/Dispatch/` features direct 1-tap download button for `Dispatch v1.7.30-alpha (Build 98)` alongside GitHub release link.
