@@ -6,9 +6,12 @@
 
 ---
 
+> [!IMPORTANT]
+> **Implementation vs. Design Specification Note:** Documented architectural requirements and milestone specifications represent approved technical contracts. They do not constitute proof of implementation completion until the corresponding test suites, release builds, and exit gates are run, passed, and independently verified.
+
 ## 1. Executive Summary & Verified UI/UX Fixes
 
-All 5 core UI/UX blockers reported on the Android Studio emulator (`emulator-5554`) have been implemented, tested, and verified live on-device:
+All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) reported on Android Emulator (`emulator-5554`) have been implemented, tested, and verified live on-device:
 
 1. **Server Status Badge (Issue 1):**
    - In `frontend/src/screens/RecordingsScreen.tsx`, the header now strictly displays **Server Online** (green icon + pulsing text when PC studio is reachable) or **Server Offline** (muted icon + tap-to-retry when offline).
@@ -69,10 +72,10 @@ All 5 core UI/UX blockers reported on the Android Studio emulator (`emulator-555
 - Expose via `DispatchNativeBridge.extractAudioTrack(videoUri: String, outputM4aPath: String): String`.
 - Allows Android to extract speech audio in ~100ms without PC involvement.
 
-### Task 3: Mobile-Direct Gemini Audio Transcription (BYOK)
-- Stored key: `PairingManager.kt` (`geminiApiKey` stored via Android Keystore `EncryptedSharedPreferences`).
-- Endpoint: Gemini REST endpoint (`generateContent` with audio attachment or File API).
-- Returns word-level timestamps (`[{"word": "Hello", "start": 0.1, "end": 0.4}]`) directly to `CaptionStudio`.
+### Task 3: Cloudflare Workflow Gemini Audio Transcription (Cloud-First Authoritative)
+- Selected Single Architecture: Android uploads small audio (.m4a) to private R2; Cloudflare Workflow authoritatively coordinates Gemini processing using the user's decrypted BYOK key from the Supabase vault.
+- Android does NOT call Gemini directly, preserving phone battery, preventing key exposure in mobile memory, and ensuring jobs complete reliably when the app is backgrounded or closed.
+- Workflow persists word-level timestamps and AI highlights directly into Supabase schema.
 
 ### Task 4: Port Waveform & Silence Triage to Kotlin (`AutoCutEngine.kt`)
 - Location: `android/app/src/main/java/com/resolvia/dispatch/media/AutoCutEngine.kt`
