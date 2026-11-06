@@ -100,3 +100,43 @@ Before releasing new builds:
    `powershell scripts/prepare_release.ps1`
 5. On-device emulator check:
    `adb install -r android/app/build/outputs/apk/release/app-release.apk`
+
+
+---
+
+## 5. Architectural Invariants & Governance (Final Review Corrections)
+
+1. **Job Queue Execution Target (No Dual-Consumer Race):**
+   - Add explicit execution_target ('cloud' | 'pc') to processing_jobs.
+   - PC daemon claims ONLY execution_target = 'pc'.
+   - Cloudflare Workflow / Worker dispatches ONLY execution_target = 'cloud'.
+   - Uses transactional outbox, deterministic workflow IDs, database leases, and fencing tokens to prevent double processing and duplicate Gemini charges.
+
+2. **Route A Source Video Retention:**
+   - Native audio extraction (.m4a) is strictly for cloud transcription/highlights.
+   - Original local MP4 video segments MUST NEVER be deleted upon audio upload or transcription.
+   - Local source segments remain available until clip rendering and verified export upload to R2 succeed, governed by an explicit retention policy.
+
+3. **Multi-Source Segment EDL:**
+   - Route A recordings comprise multiple physical video files (e.g. 10-minute segments).
+   - EDL schema and AndroidClipRenderer must support multi-source video composition with absolute timeline offsets and seam-crossing bounds.
+
+4. **R2 Multipart & Checksum Integrity:**
+   - Client calculates per-part MD5, R2 validates via Content-MD5.
+   - Reconcile uploaded parts via R2 ListParts before completion.
+   - Whole-file SHA-256 stored as client source fingerprint, never falsely claimed as server-verified without actual streaming verification.
+   - Automated cleanup of abandoned multipart sessions.
+
+5. **Durable Android Background Rendering:**
+   - Room as local job journal (QUEUED, CLAIMED, RENDERING, RENDER_COMPLETE, UPLOAD_PENDING, UPLOAD_VERIFIED, COMPLETED).
+   - WorkManager as persistent scheduler + foreground service for active rendering.
+   - Prevent new render requests from interrupting active jobs; renewal of WakeLock.
+
+6. **Streaming Cloud Publishing:**
+   - Eliminate 
+2Object.arrayBuffer() in Cloudflare Worker (prevents 128 MB RAM exhaustion on 512 MB videos).
+   - Use streaming and resumable external platform uploads.
+
+7. **Milestone Governance:**
+   - Scope implementation approval to Milestone 1 (Cloud Foundation & Media Reliability) first.
+   - Subsequent milestones gated on verifiable exit criteria.
