@@ -40,8 +40,10 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 ### The Three Ingestion Routes
 * **Route A (Android Camera Recording — Restored V2 Workflow):**
   - **YouTube Channel Identity Alignment & Enforcement:** PC local YouTube credentials (`youtube_token.json`) must match the phone's cloud vault channel identity. Enforced via `verify_channel_alignment(user_id=...)`.
-  - **Poller Hard Abort on Mismatch:** In `dispatch/youtube_inbox/poller.py`, if `alignment.get("matched")` is False (`mismatch`, `unauthenticated`, or `ambiguous_owner`), `poll_once()` actively halts and returns `[]`, preventing silent polling on mismatched accounts.
-  - **User-Scoped Cloud Query:** In `dispatch/youtube_connections.py`, `get_cloud_connected_youtube_channel()` resolves against `user_id`, `DISPATCH_USER_ID`, or `authorized_pc_owner_ids()`. If multiple accounts exist in the vault without an explicit user configured, it returns `status: "ambiguous_owner"` rather than arbitrarily selecting an account with an unconstrained `LIMIT 1`.
+  - **Fail-Closed Poller Guard:** In `dispatch/youtube_inbox/poller.py`, if `alignment.get("matched")` is False (`mismatch`, `unauthenticated`, `cloud_unavailable`, `ambiguous_owner`, or `legacy_account_needs_reconnect`), `poll_once()` actively halts and returns `[]`, preventing silent polling or orphaned recordings.
+  - **Strict Multi-Account & Multi-Owner Disambiguation:** In `dispatch/youtube_connections.py`, multiple YouTube accounts for the same user return `ambiguous_owner` unless `DISPATCH_YOUTUBE_CHANNEL_ID` is explicitly configured. Multiple PC owners in `DISPATCH_PC_OWNER_USER_IDS` require `DISPATCH_USER_ID` rather than arbitrarily picking `owners[0]`.
+  - **Fail-Closed Cloud Resilience:** HTTP 500, request timeouts, and connection errors return `status: "cloud_unavailable"` and halt Route A. Intentional offline operation requires explicit opt-in via `DISPATCH_STANDALONE=1`.
+  - **Legacy Migrated Account Guard:** Accounts with email or UUID identities in `connected_accounts.account_id` without channel metadata return `status: "legacy_account_needs_reconnect"` with explicit instructions to reconnect in Settings, preventing false channel mismatch errors. Cloud Worker OAuth callback enforces genuine YouTube channel retrieval.
   - Android records 1080p/30 fps MP4 via CameraX, rolling long sessions into ~10-minute segments (~600 MB each at 8 Mbps).
   - Room stores session and segment state (`SegmentEntity`, `RecordingOutboxEntity`).
   - WorkManager resumably uploads each segment to YouTube as unlisted, tagged `[DISPATCH]`.
@@ -79,7 +81,7 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 
 Automated regression verification:
 1. `npm --prefix cloud-worker test`: **102/102 PASS (100%)**
-2. `python -m unittest tests.test_youtube_channel_identity tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **57/57 PASS (100%)**
+2. `python -m unittest tests.test_youtube_channel_identity tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **65/65 PASS (100%)** (168 tests pass across full CI Python suite)
 3. `npm --prefix frontend test -- --run`: **ALL PASS (100%)**
 4. CI Workflow Integration: Added `tests.test_youtube_channel_identity` to `.github/workflows/ci.yml`.
 4. Android build & keystore verification:

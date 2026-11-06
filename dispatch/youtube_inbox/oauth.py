@@ -201,12 +201,57 @@ def verify_channel_alignment(service=None, user_id: Optional[str] = None) -> Dic
         }
 
     try:
-        from dispatch.youtube_connections import get_cloud_connected_youtube_channel
+        from dispatch.youtube_connections import get_cloud_connected_youtube_channel, VaultUnavailable
         cloud_acc = get_cloud_connected_youtube_channel(user_id=user_id)
-    except Exception:
-        cloud_acc = None
+    except VaultUnavailable as e:
+        logger.error("Route A channel alignment check failed: vault unavailable: %s", e)
+        return {
+            "matched": False,
+            "status": "cloud_unavailable",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+            "error": f"Route A verification aborted: cloud vault unavailable ({e}).",
+        }
+    except Exception as e:
+        logger.error("Route A channel alignment check failed: %s", e)
+        return {
+            "matched": False,
+            "status": "cloud_unavailable",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+            "error": f"Route A verification aborted: unexpected error ({e}).",
+        }
 
     if not cloud_acc:
+        return {
+            "matched": False,
+            "status": "cloud_unavailable",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+            "error": "Route A verification aborted: cloud account lookup returned empty response.",
+        }
+
+    status = cloud_acc.get("status")
+
+    if status == "standalone_mode":
+        return {
+            "matched": True,
+            "status": "standalone_mode",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+            "standalone": True,
+        }
+
+    if status == "cloud_unavailable":
+        return {
+            "matched": False,
+            "status": "cloud_unavailable",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+            "error": f"Route A verification aborted: {cloud_acc.get('error', 'Cloud vault unavailable.')}",
+        }
+
+    if status == "no_cloud_account":
         return {
             "matched": True,
             "status": "no_cloud_account",
@@ -214,18 +259,32 @@ def verify_channel_alignment(service=None, user_id: Optional[str] = None) -> Dic
             "pc_channel_title": pc_id["channel_title"],
         }
 
-    if cloud_acc.get("status") == "ambiguous_owner":
+    if status == "ambiguous_owner":
         return {
             "matched": False,
             "status": "ambiguous_owner",
             "pc_channel_id": pc_id["channel_id"],
             "pc_channel_title": pc_id["channel_title"],
-            "error": (
-                f"Multiple YouTube accounts ({cloud_acc.get('account_count')}) exist in cloud vault. "
-                "Set DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS to disambiguate."
+            "error": cloud_acc.get(
+                "error",
+                f"Multiple YouTube accounts ({cloud_acc.get('account_count')}) or owners exist in cloud vault. Set DISPATCH_USER_ID or DISPATCH_YOUTUBE_CHANNEL_ID."
             ),
         }
 
+    if status == "legacy_account_needs_reconnect":
+        return {
+            "matched": False,
+            "status": "legacy_account_needs_reconnect",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+            "cloud_account_name": cloud_acc.get("account_name", ""),
+            "error": cloud_acc.get(
+                "error",
+                f"Cloud account '{cloud_acc.get('account_name')}' uses a legacy identity. Please reconnect YouTube in Dispatch Settings."
+            ),
+        }
+
+    # status is 'ok'
     cloud_channel_id = (cloud_acc.get("account_id") or "").strip()
     pc_channel_id = (pc_id.get("channel_id") or "").strip()
 
@@ -247,7 +306,7 @@ def verify_channel_alignment(service=None, user_id: Optional[str] = None) -> Dic
             "error": (
                 f"Channel mismatch: PC is signed in to '{pc_id['channel_title']}' ({pc_channel_id}), "
                 f"while phone/cloud uploads to '{cloud_name}' ({cloud_channel_id})."
-            )
+            ),
         }
 
     return {

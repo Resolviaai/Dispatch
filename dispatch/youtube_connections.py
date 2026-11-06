@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("dispatch.youtube_connections")
@@ -292,80 +293,224 @@ def get_account_id_for_video(video_id: str, user_id: Optional[str] = None) -> Op
     return None
 
 
-def get_cloud_connected_youtube_channel(user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+_UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def is_valid_youtube_channel_id(val: Any) -> bool:
+    """Validate whether an identifier is an authentic YouTube channel ID vs email or user UUID."""
+    if not val or not isinstance(val, str):
+        return False
+    val = val.strip()
+    if "@" in val or " " in val:
+        return False
+    if _UUID_PATTERN.match(val):
+        return False
+    if val.startswith("UC"):
+        return True
+    if val.startswith("ch-") or val.startswith("channel-"):
+        return True
+    return len(val) >= 8 and not val.endswith(".com")
+
+
+def get_cloud_connected_youtube_channel(
+    user_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Look up bound YouTube account/channel from connected_accounts in Supabase.
 
-    Scoped strictly:
-    1. If user_id is provided, queries connected_accounts for that specific user_id.
-    2. If user_id is not provided, checks DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS.
-    3. If no user configured, queries connected_accounts. If multiple accounts exist, refuses
-       to guess and returns a status dict indicating ambiguous_owner.
-    4. If exactly one connected account exists, returns that account.
+    Enforces strict Route A identity invariant:
+    1. Standalone Mode: If DISPATCH_STANDALONE or DISPATCH_OFFLINE_MODE is enabled,
+       allows local operation without cloud vault verification.
+    2. Cloud Configuration: If Supabase credentials are missing without standalone mode,
+       fails closed with status 'cloud_unavailable'.
+    3. User Resolution: Resolves against explicit user_id, DISPATCH_USER_ID, or
+       authorized_pc_owner_ids(). If multiple owners exist in DISPATCH_PC_OWNER_USER_IDS
+       without DISPATCH_USER_ID, returns 'ambiguous_owner' rather than picking owners[0].
+    4. Account Query: Queries connected_accounts with is_verified=eq.true.
+       HTTP errors, timeouts, or network failures return 'cloud_unavailable' (fail-closed).
+    5. Multi-Account Ambiguity: If multiple accounts exist for the user (or vault) without
+       an explicit DISPATCH_YOUTUBE_CHANNEL_ID/DISPATCH_YOUTUBE_ACCOUNT_ID matching exactly one,
+       returns 'ambiguous_owner'.
+    6. Legacy Account Detection: If the account_id is an email (contains '@') or UUID and
+       metadata lacks a valid channel ID, returns 'legacy_account_needs_reconnect' instead of
+       causing a misleading mismatch error.
     """
+    standalone_flag = (
+        os.getenv("DISPATCH_STANDALONE", "").strip().lower() in ("1", "true", "yes")
+        or os.getenv("DISPATCH_OFFLINE_MODE", "").strip().lower() in ("1", "true", "yes")
+    )
+
+    url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        if standalone_flag:
+            return {"status": "standalone_mode", "matched": True}
+        return {
+            "status": "cloud_unavailable",
+            "error": "Cloud vault not configured (missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY). Set credentials or enable DISPATCH_STANDALONE=1.",
+        }
+
+    # Resolve target user_id
+    target_user_id = user_id or os.getenv("DISPATCH_USER_ID", "").strip() or None
+    if not target_user_id:
+        try:
+            from dispatch.cloud.sync import authorized_pc_owner_ids
+            owners = authorized_pc_owner_ids()
+            if len(owners) == 1:
+                target_user_id = owners[0]
+            elif len(owners) > 1:
+                logger.warning(
+                    "Multiple PC owners configured (%d owners found in DISPATCH_PC_OWNER_USER_IDS: %s). "
+                    "Cannot arbitrarily bind Route A to one user. Set DISPATCH_USER_ID to bind Route A.",
+                    len(owners), owners
+                )
+                return {
+                    "status": "ambiguous_owner",
+                    "account_count": len(owners),
+                    "owners": owners,
+                    "error": (
+                        f"Multiple PC owners configured ({len(owners)} users in DISPATCH_PC_OWNER_USER_IDS). "
+                        "Set DISPATCH_USER_ID to explicitly select the Route A creator."
+                    ),
+                }
+        except Exception as e:
+            logger.debug("Failed to inspect authorized_pc_owner_ids: %s", e)
+
+    # Check for explicit channel/account binding
+    explicit_channel = (
+        channel_id
+        or os.getenv("DISPATCH_YOUTUBE_CHANNEL_ID", "").strip()
+        or os.getenv("DISPATCH_YOUTUBE_ACCOUNT_ID", "").strip()
+        or None
+    )
+
     try:
         import httpx
-        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
-        if not url or not key:
-            return None
-
-        # Resolve target user_id
-        target_user_id = user_id or os.getenv("DISPATCH_USER_ID", "").strip() or None
-        if not target_user_id:
-            try:
-                from dispatch.cloud.sync import authorized_pc_owner_ids
-                owners = authorized_pc_owner_ids()
-                if owners:
-                    target_user_id = owners[0]
-            except Exception:
-                pass
-
         if target_user_id:
-            resp = httpx.get(
-                f"{url}/rest/v1/connected_accounts?user_id=eq.{target_user_id}&provider=eq.youtube&select=id,account_id,account_name,user_id&limit=2",
-                headers={"apikey": key, "Authorization": f"Bearer {key}"},
-                timeout=5.0
+            query_url = (
+                f"{url}/rest/v1/connected_accounts?"
+                f"user_id=eq.{target_user_id}&provider=eq.youtube&is_verified=eq.true&"
+                f"select=id,account_id,account_name,user_id,account_email,metadata,is_verified&limit=10"
             )
-            if resp.status_code == 200:
-                rows = resp.json()
-                if rows and isinstance(rows, list) and len(rows) > 0:
-                    return {
-                        "account_id": str(rows[0].get("account_id") or ""),
-                        "account_name": str(rows[0].get("account_name") or ""),
-                        "user_id": str(rows[0].get("user_id") or ""),
-                        "status": "ok",
-                    }
-            return None
+        else:
+            query_url = (
+                f"{url}/rest/v1/connected_accounts?"
+                f"provider=eq.youtube&is_verified=eq.true&"
+                f"select=id,account_id,account_name,user_id,account_email,metadata,is_verified&limit=10"
+            )
 
-        # No target user_id configured - query all connected YouTube accounts up to limit=5 to check ambiguity
         resp = httpx.get(
-            f"{url}/rest/v1/connected_accounts?provider=eq.youtube&select=id,account_id,account_name,user_id&limit=5",
+            query_url,
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
             timeout=5.0
         )
-        if resp.status_code == 200:
-            rows = resp.json()
-            if isinstance(rows, list):
-                if len(rows) == 1:
-                    return {
-                        "account_id": str(rows[0].get("account_id") or ""),
-                        "account_name": str(rows[0].get("account_name") or ""),
-                        "user_id": str(rows[0].get("user_id") or ""),
-                        "status": "ok",
-                    }
-                elif len(rows) > 1:
-                    logger.warning(
-                        "Multiple YouTube accounts connected in cloud vault (%d found). "
-                        "Set DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS to bind this PC to a specific creator.",
-                        len(rows)
-                    )
-                    return {
-                        "status": "ambiguous_owner",
-                        "account_count": len(rows),
-                        "accounts": [r.get("account_id") for r in rows],
-                    }
+    except httpx.TimeoutException as e:
+        logger.error("Supabase YouTube account lookup timed out: %s", e)
+        return {"status": "cloud_unavailable", "error": f"Supabase lookup timed out: {e}"}
+    except httpx.RequestError as e:
+        logger.error("Supabase YouTube account lookup request failed: %s", e)
+        return {"status": "cloud_unavailable", "error": f"Supabase request failed: {e}"}
     except Exception as e:
-        logger.debug("Failed to query cloud connected YouTube channel: %s", e)
-    return None
+        logger.error("Supabase YouTube account lookup unexpected error: %s", e)
+        return {"status": "cloud_unavailable", "error": f"Supabase lookup error: {e}"}
+
+    if resp.status_code != 200:
+        logger.error("Supabase YouTube account lookup returned HTTP %d: %s", resp.status_code, resp.text[:200])
+        return {"status": "cloud_unavailable", "error": f"Supabase returned HTTP {resp.status_code}"}
+
+    try:
+        rows = resp.json()
+    except Exception as e:
+        logger.error("Failed to parse JSON from Supabase YouTube account response: %s", e)
+        return {"status": "cloud_unavailable", "error": f"Invalid JSON response from Supabase: {e}"}
+
+    if not isinstance(rows, list):
+        return {"status": "cloud_unavailable", "error": "Invalid response format from Supabase"}
+
+    if len(rows) == 0:
+        return {"status": "no_cloud_account", "user_id": target_user_id}
+
+    # If explicit_channel is configured, attempt to filter
+    if explicit_channel:
+        filtered = [
+            r for r in rows
+            if str(r.get("account_id") or "").strip() == explicit_channel
+            or (isinstance(r.get("metadata"), dict) and str(r.get("metadata", {}).get("channel_id") or "").strip() == explicit_channel)
+        ]
+        if len(filtered) == 1:
+            rows = filtered
+        elif len(filtered) > 1:
+            rows = filtered
+        else:
+            return {
+                "status": "ambiguous_owner",
+                "account_count": len(rows),
+                "accounts": [r.get("account_id") for r in rows],
+                "user_id": target_user_id,
+                "error": f"Explicit channel '{explicit_channel}' not found among {len(rows)} connected accounts.",
+            }
+
+    if len(rows) > 1:
+        if target_user_id:
+            msg = (
+                f"User {target_user_id} has {len(rows)} connected YouTube accounts. "
+                "Set DISPATCH_YOUTUBE_CHANNEL_ID or DISPATCH_YOUTUBE_ACCOUNT_ID to select the active channel."
+            )
+        else:
+            msg = (
+                f"Multiple YouTube accounts connected in cloud vault ({len(rows)} found). "
+                "Set DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS to bind this PC to a specific creator."
+            )
+        logger.warning(msg)
+        return {
+            "status": "ambiguous_owner",
+            "account_count": len(rows),
+            "accounts": [r.get("account_id") for r in rows],
+            "user_id": target_user_id,
+            "error": msg,
+        }
+
+    # Exactly one connected account row
+    row = rows[0]
+    raw_acc_id = str(row.get("account_id") or "").strip()
+    acc_name = str(row.get("account_name") or "")
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    row_user_id = str(row.get("user_id") or "")
+    db_id = str(row.get("id") or "")
+
+    # Reconcile channel identity
+    meta_channel_id = str(metadata.get("channel_id") or "").strip()
+    effective_channel_id = None
+
+    if is_valid_youtube_channel_id(raw_acc_id):
+        effective_channel_id = raw_acc_id
+    elif meta_channel_id and is_valid_youtube_channel_id(meta_channel_id):
+        effective_channel_id = meta_channel_id
+    else:
+        # Legacy account: account_id is an email address or UUID and metadata has no channel ID
+        is_email = "@" in raw_acc_id
+        err_msg = (
+            f"Cloud connected account '{acc_name}' has a legacy "
+            f"{'email' if is_email else 'UUID'} identifier ({raw_acc_id}) instead of a verified YouTube Channel ID. "
+            "Please reconnect your YouTube channel in Dispatch Settings."
+        )
+        logger.warning(err_msg)
+        return {
+            "status": "legacy_account_needs_reconnect",
+            "account_id": raw_acc_id,
+            "account_name": acc_name,
+            "user_id": row_user_id,
+            "id": db_id,
+            "error": err_msg,
+        }
+
+    return {
+        "status": "ok",
+        "account_id": effective_channel_id,
+        "raw_account_id": raw_acc_id,
+        "account_name": acc_name,
+        "user_id": row_user_id,
+        "id": db_id,
+    }
 
 
 def update_job_stage_by_video_id(video_id: str, stage: str) -> None:

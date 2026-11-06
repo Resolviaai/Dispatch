@@ -2163,7 +2163,7 @@ export default {
       } catch { /* id_token optional */ }
 
       let channelTitle = "YouTube Channel";
-      let channelId = uid;
+      let channelId: string | null = null;
       let avatarUrl: string | null = null;
       try {
         const chRes = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", {
@@ -2171,13 +2171,17 @@ export default {
         });
         if (chRes.ok) {
           const chData = await chRes.json() as { items?: Array<{ id: string; snippet?: { title?: string; thumbnails?: { default?: { url?: string } } } }> };
-          if (chData.items && chData.items.length > 0) {
-            channelId = chData.items[0].id || channelId;
+          if (chData.items && chData.items.length > 0 && chData.items[0].id) {
+            channelId = chData.items[0].id;
             channelTitle = chData.items[0].snippet?.title || channelTitle;
             avatarUrl = chData.items[0].snippet?.thumbnails?.default?.url || null;
           }
         }
-      } catch { /* channel fetch optional */ }
+      } catch { /* channel fetch error */ }
+
+      if (!channelId) {
+        return renderOAuthResultHtml("YouTube Channel Not Found", "Failed to retrieve your YouTube channel identity from Google. Please ensure your Google account has an active YouTube channel.", true);
+      }
 
       const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
