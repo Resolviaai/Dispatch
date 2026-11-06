@@ -110,21 +110,40 @@ class TestYouTubeChannelIdentity(unittest.TestCase):
     # -------------------------------------------------------------------------
 
     @patch("httpx.get")
-    def test_genuine_no_cloud_account_connected(self, mock_http):
+    def test_no_cloud_account_fails_closed_without_standalone(self, mock_http):
         os.environ["SUPABASE_URL"] = "https://test.supabase.co"
         os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-key"
         os.environ["DISPATCH_USER_ID"] = "user-123"
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = []  # Verified empty list
+        mock_resp.json.return_value = []  # Verified empty list from cloud
+        mock_http.return_value = mock_resp
+
+        svc = self._mock_youtube_service("UC_TEST_123")
+        result = verify_channel_alignment(svc)
+        # Empty cloud account must fail closed to prevent unverified Route A ingestion
+        self.assertFalse(result["matched"])
+        self.assertEqual(result["status"], "no_cloud_account")
+        self.assertEqual(result["pc_channel_id"], "UC_TEST_123")
+        self.assertIn("No YouTube account connected", result["error"])
+
+    @patch("httpx.get")
+    def test_no_cloud_account_with_standalone_mode_allows_route_a(self, mock_http):
+        os.environ["SUPABASE_URL"] = "https://test.supabase.co"
+        os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-key"
+        os.environ["DISPATCH_USER_ID"] = "user-123"
+        os.environ["DISPATCH_STANDALONE"] = "1"
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = []
         mock_http.return_value = mock_resp
 
         svc = self._mock_youtube_service("UC_TEST_123")
         result = verify_channel_alignment(svc)
         self.assertTrue(result["matched"])
-        self.assertEqual(result["status"], "no_cloud_account")
-        self.assertEqual(result["pc_channel_id"], "UC_TEST_123")
+        self.assertEqual(result["status"], "standalone_mode")
 
     @patch("httpx.get")
     def test_matching_channel_identity(self, mock_http):
@@ -341,6 +360,7 @@ class TestYouTubeChannelIdentity(unittest.TestCase):
         unsafe_statuses = [
             "unauthenticated",
             "cloud_unavailable",
+            "no_cloud_account",
             "ambiguous_owner",
             "legacy_account_needs_reconnect",
             "mismatch",

@@ -253,10 +253,15 @@ def verify_channel_alignment(service=None, user_id: Optional[str] = None) -> Dic
 
     if status == "no_cloud_account":
         return {
-            "matched": True,
+            "matched": False,
             "status": "no_cloud_account",
             "pc_channel_id": pc_id["channel_id"],
             "pc_channel_title": pc_id["channel_title"],
+            "error": cloud_acc.get(
+                "error",
+                "Route A verification aborted: No YouTube account connected in Dispatch Cloud Vault. "
+                "Connect your YouTube channel in Dispatch Settings or enable DISPATCH_STANDALONE=1 for offline mode."
+            ),
         }
 
     if status == "ambiguous_owner":

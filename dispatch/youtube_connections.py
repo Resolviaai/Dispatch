@@ -427,7 +427,16 @@ def get_cloud_connected_youtube_channel(
         return {"status": "cloud_unavailable", "error": "Invalid response format from Supabase"}
 
     if len(rows) == 0:
-        return {"status": "no_cloud_account", "user_id": target_user_id}
+        if standalone_flag:
+            return {"status": "standalone_mode", "matched": True}
+        return {
+            "status": "no_cloud_account",
+            "user_id": target_user_id,
+            "error": (
+                "No YouTube account connected in Dispatch Cloud Vault. "
+                "Connect your YouTube channel in Dispatch Settings or enable DISPATCH_STANDALONE=1 for local offline mode."
+            ),
+        }
 
     # If explicit_channel is configured, attempt to filter
     if explicit_channel:

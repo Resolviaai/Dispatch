@@ -40,7 +40,7 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 ### The Three Ingestion Routes
 * **Route A (Android Camera Recording — Restored V2 Workflow):**
   - **YouTube Channel Identity Alignment & Enforcement:** PC local YouTube credentials (`youtube_token.json`) must match the phone's cloud vault channel identity. Enforced via `verify_channel_alignment(user_id=...)`.
-  - **Fail-Closed Poller Guard:** In `dispatch/youtube_inbox/poller.py`, if `alignment.get("matched")` is False (`mismatch`, `unauthenticated`, `cloud_unavailable`, `ambiguous_owner`, or `legacy_account_needs_reconnect`), `poll_once()` actively halts and returns `[]`, preventing silent polling or orphaned recordings.
+  - **Fail-Closed Poller Guard:** In `dispatch/youtube_inbox/poller.py`, if `alignment.get("matched")` is False (`mismatch`, `unauthenticated`, `cloud_unavailable`, `no_cloud_account`, `ambiguous_owner`, or `legacy_account_needs_reconnect`), `poll_once()` actively halts and returns `[]`, preventing silent unverified polling or orphaned recordings. Empty cloud accounts (`no_cloud_account`) fail closed unless standalone mode is explicitly enabled.
   - **Strict Multi-Account & Multi-Owner Disambiguation:** In `dispatch/youtube_connections.py`, multiple YouTube accounts for the same user return `ambiguous_owner` unless `DISPATCH_YOUTUBE_CHANNEL_ID` is explicitly configured. Multiple PC owners in `DISPATCH_PC_OWNER_USER_IDS` require `DISPATCH_USER_ID` rather than arbitrarily picking `owners[0]`.
   - **Fail-Closed Cloud Resilience:** HTTP 500, request timeouts, and connection errors return `status: "cloud_unavailable"` and halt Route A. Intentional offline operation requires explicit opt-in via `DISPATCH_STANDALONE=1`.
   - **Legacy Migrated Account Guard:** Accounts with email or UUID identities in `connected_accounts.account_id` without channel metadata return `status: "legacy_account_needs_reconnect"` with explicit instructions to reconnect in Settings, preventing false channel mismatch errors. Cloud Worker OAuth callback enforces genuine YouTube channel retrieval.
@@ -80,8 +80,8 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 ## 4. Verification Checkpoints & Results
 
 Automated regression verification:
-1. `npm --prefix cloud-worker test`: **102/102 PASS (100%)**
-2. `python -m unittest tests.test_youtube_channel_identity tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **65/65 PASS (100%)** (168 tests pass across full CI Python suite)
+1. `npm --prefix cloud-worker test`: **104/104 PASS (100%)** (includes Google OAuth channel verification regression tests)
+2. `python -m unittest tests.test_youtube_channel_identity tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **66/66 PASS (100%)** (169 tests pass across full CI Python suite)
 3. `npm --prefix frontend test -- --run`: **ALL PASS (100%)**
 4. CI Workflow Integration: Added `tests.test_youtube_channel_identity` to `.github/workflows/ci.yml`.
 4. Android build & keystore verification:

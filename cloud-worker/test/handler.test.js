@@ -1727,6 +1727,71 @@ test("instagram authorize URL targets Instagram Login with the two business scop
   ]);
 });
 
+test("google callback refuses to store account when youtube channel identity cannot be retrieved", async () => {
+  mockConsentState();
+  supabase.set("oauth2.googleapis.com/token", {
+    method: "POST",
+    fn: () => ({ body: { refresh_token: "1//0gMockRefreshToken1234567890abcdef", access_token: "mock-access-tok" } }),
+  });
+  // Simulate YouTube channels endpoint returning empty items
+  supabase.set("youtube/v3/channels", {
+    fn: () => ({ body: { items: [] } }),
+  });
+  let stored = false;
+  supabase.set("/rpc/cloud_store_connected_account", {
+    method: "POST",
+    fn: () => { stored = true; return { body: "row-1" }; },
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/oauth/google/callback?code=abc&state=st-google-fail"), env());
+  assert.equal(res.status, 400);
+  const html = await res.text();
+  assert.match(html, /YouTube Channel Not Found/);
+  // Invariant: Must NEVER store the account or silently fall back to user UUID
+  assert.equal(stored, false);
+});
+
+test("google callback successfully stores verified youtube channel identity", async () => {
+  mockConsentState();
+  supabase.set("oauth2.googleapis.com/token", {
+    method: "POST",
+    fn: () => ({ body: { refresh_token: "1//0gMockRefreshToken1234567890abcdef", access_token: "mock-access-tok" } }),
+  });
+  supabase.set("youtube/v3/channels", {
+    fn: () => ({
+      body: {
+        items: [
+          {
+            id: "UC_VERIFIED_CHANNEL_123",
+            snippet: {
+              title: "Verified Creator Channel",
+              thumbnails: { default: { url: "https://img.test/thumb.jpg" } },
+            },
+          },
+        ],
+      },
+    }),
+  });
+  let stored = null;
+  supabase.set("/rpc/cloud_store_connected_account", {
+    method: "POST",
+    fn: (_url, init) => { stored = JSON.parse(init.body); return { body: "row-1" }; },
+  });
+  supabase.set("/rpc/cloud_store_refresh_token", {
+    method: "POST",
+    fn: () => ({ body: null }),
+  });
+
+  const res = await worker.fetch(new Request("https://w.test/oauth/google/callback?code=abc&state=st-google-success"), env());
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /YouTube Connected/);
+  assert.equal(stored?.p_provider, "youtube");
+  assert.equal(stored?.p_account_id, "UC_VERIFIED_CHANNEL_123");
+  assert.equal(stored?.p_account_name, "Verified Creator Channel");
+  assert.equal(stored?.p_metadata?.channel_id, "UC_VERIFIED_CHANNEL_123");
+});
+
 
 
 // ---- Cloud storage manager ----
