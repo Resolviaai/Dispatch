@@ -2,7 +2,7 @@
 **Date:** November 5–7, 2026  
 **Status:** Architecture Reconciled & Verified / Ready for Production Continuation  
 **Current Release:** v1.7.32 (Build 100) — Built, signed, verified, and pushed to GitHub `origin/main`.  
-**Latest Git Hash:** Tracking HEAD on `main` (includes Route A identity enforcement, poller abort guard, and CI suite)
+**Latest Git Hash:** `881ae20` (Route A poller abort guard, user-scoped channel identity lookup, and CI suite)
 
 ---
 
