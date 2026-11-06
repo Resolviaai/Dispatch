@@ -81,7 +81,8 @@ export type ActivePanel =
   | 'overlay_animation'
   | 'overlay_transform'
   | 'layer_opacity'
-  | 'transcript';
+  | 'transcript'
+  | 'transcribe_mode';
 
 export type TextMainTab = 'templates' | 'fonts' | 'styles' | 'effects' | 'animations';
 
@@ -2420,6 +2421,93 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
             unit="%"
             onChange={(val) => onUpdateMainVideoAudio?.(val, isMainVideoMuted)}
           />
+        </div>
+      </div>
+    );
+  }
+
+  // 5b. TRANSCRIBE AUDIO SOURCE MODE PANEL (3-Mode Selector)
+  if (activePanel === 'transcribe_mode') {
+    const currentMode = track?.transcribe_source_mode || 'full_mix';
+    const modes: { id: 'full_mix' | 'voiceover_only' | 'main_video'; title: string; desc: string }[] = [
+      {
+        id: 'full_mix',
+        title: 'Full Mix (Default)',
+        desc: 'Combines camera audio, voiceover, and background overlays.',
+      },
+      {
+        id: 'voiceover_only',
+        title: 'Voiceover Only',
+        desc: 'Isolates recorded mic / voiceover track for highest speech clarity.',
+      },
+      {
+        id: 'main_video',
+        title: 'Main Video Dialogue Only',
+        desc: 'Direct video dialogue; strips background music and sound effects.',
+      },
+    ];
+
+    return (
+      <div className="w-full h-full bg-[#16191E] flex flex-col p-3 space-y-3 select-none overflow-hidden animate-in fade-in duration-150">
+        <div className="flex items-center justify-between pb-1.5 border-b border-[#232832] shrink-0">
+          <button
+            type="button"
+            onClick={() => setActivePanel('none')}
+            className="flex items-center gap-1 text-[12px] font-semibold text-text-secondary hover:text-text-main"
+          >
+            <ChevronLeft size={16} />
+            <span>Audio Tools</span>
+          </button>
+          <span className="text-[12px] font-semibold text-text-main">Transcription Source</span>
+          <button
+            type="button"
+            onClick={() => setActivePanel('none')}
+            className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-white active:scale-95"
+            title="Done"
+          >
+            <Check size={14} />
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-2 py-1">
+          <p className="text-[11px] text-text-muted">
+            Select which audio stream Gemini transcribes into word-level timestamps:
+          </p>
+
+          <div className="space-y-1.5">
+            {modes.map((m) => {
+              const isSelected = currentMode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    if (track) {
+                      onUpdateTrack({ ...track, transcribe_source_mode: m.id }, true);
+                    }
+                    onFeedback?.(`Transcription audio source set to: ${m.title}`);
+                  }}
+                  className={`w-full p-2.5 rounded-xl border text-left flex items-start gap-2.5 transition-all active:scale-[0.99] ${
+                    isSelected
+                      ? 'bg-primary/10 border-primary text-text-main shadow-hero-glow'
+                      : 'bg-surface-200 border-border text-text-muted hover:text-text-main'
+                  }`}
+                >
+                  <div
+                    className={`w-4 h-4 rounded-full border mt-0.5 flex items-center justify-center shrink-0 ${
+                      isSelected ? 'border-primary bg-primary' : 'border-[#3A4350]'
+                    }`}
+                  >
+                    {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-xs font-semibold block text-text-main">{m.title}</span>
+                    <span className="text-[10px] text-text-muted block mt-0.5">{m.desc}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     );
@@ -4832,6 +4920,11 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 icon={isMainVideoMuted ? <Volume2 size={18} /> : <VolumeX size={18} />}
                 label={isMainVideoMuted ? 'Unmute' : 'Mute'}
                 onClick={() => onUpdateMainVideoAudio?.(mainVideoVolume, !isMainVideoMuted)}
+              />
+              <ToolButton
+                icon={<Mic size={18} className="text-primary" />}
+                label="Audio Source"
+                onClick={() => setActivePanel('transcribe_mode')}
               />
               {ENABLE_EXPERIMENTAL_AUDIO_LAYERS && (
                 <>

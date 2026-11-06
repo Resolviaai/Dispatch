@@ -154,4 +154,5 @@ export interface CaptionTrack {
   groups: CaptionGroup[];
   range_revision?: number;
   timing_warning?: string | null;
+  transcribe_source_mode?: 'full_mix' | 'voiceover_only' | 'main_video';
 }

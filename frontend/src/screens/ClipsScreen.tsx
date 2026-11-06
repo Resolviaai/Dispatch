@@ -3807,6 +3807,35 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     if (!currentClip) return;
     setAutoCutLoading(true);
     setFeedback('Analyzing speech & waveform for clean cuts...');
+
+    // 1. On-device hardware-accelerated silence & waveform detection via Android native bridge
+    const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
+    const mediaPath = (currentClip as any)?.local_path || (currentClip as any)?.source_video_path || (currentClip as any)?.filepath;
+    if (bridge?.analyzeAudioWaveformAndSilences && mediaPath) {
+      try {
+        const raw = bridge.analyzeAudioWaveformAndSilences(
+          mediaPath,
+          Number(currentClip.start_time ?? 0),
+          Number(currentClip.end_time ?? 1e6)
+        );
+        if (raw && raw !== '[]') {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const textProposals = generateLocalAutoCutProposals();
+            const fillers = textProposals.filter((p) => p.type === 'filler');
+            const combined: AutoCutProposal[] = [...parsed, ...fillers];
+            setAutoCutProposals(combined);
+            setShowAutoCutDrawer(true);
+            setFeedback(`Found ${combined.length} on-device auto-cut suggestions.`);
+            setAutoCutLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Native AutoCut waveform detection fallback:', err);
+      }
+    }
+
     try {
       const session = await currentSession();
       const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
