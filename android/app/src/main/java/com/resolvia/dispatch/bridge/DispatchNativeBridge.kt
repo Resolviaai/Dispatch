@@ -2833,5 +2833,58 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
             false
         }
     }
+
+    @JavascriptInterface
+    fun extractAudioTrack(videoPathOrUri: String, outputFileName: String?): String {
+        return try {
+            val audioDir = java.io.File(activity.cacheDir, "extracted_audio").apply { mkdirs() }
+            val name = if (!outputFileName.isNullOrBlank()) outputFileName else "audio_${System.currentTimeMillis()}.m4a"
+            val targetFile = java.io.File(audioDir, name)
+            val res = com.resolvia.dispatch.media.AudioExtractorHelper.extractAudioTrack(
+                context = activity,
+                inputUriOrPath = videoPathOrUri,
+                outputM4aFile = targetFile
+            )
+            com.google.gson.JsonObject().apply {
+                addProperty("success", res.success)
+                if (res.success && res.outputFile != null) {
+                    addProperty("audio_path", res.outputFile.absolutePath)
+                    addProperty("duration_us", res.durationUs)
+                    addProperty("sample_rate", res.sampleRate)
+                    addProperty("channel_count", res.channelCount)
+                    addProperty("mime_type", res.mimeType)
+                    addProperty("file_size", res.outputFile.length())
+                } else {
+                    addProperty("error", res.error ?: "Audio extraction failed")
+                }
+            }.toString()
+        } catch (e: Exception) {
+            android.util.Log.e("DispatchBridge", "extractAudioTrack failed: ${e.message}", e)
+            com.google.gson.JsonObject().apply {
+                addProperty("success", false)
+                addProperty("error", e.message ?: "Audio extraction exception")
+            }.toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun analyzeAudioWaveformAndSilences(
+        videoOrAudioPath: String,
+        clipStartSec: Double = 0.0,
+        clipEndSec: Double = 1e6
+    ): String {
+        return try {
+            val proposals = com.resolvia.dispatch.media.AutoCutEngine.analyzeMedia(
+                context = activity,
+                inputUriOrPath = videoOrAudioPath,
+                clipStartSec = clipStartSec,
+                clipEndSec = clipEndSec
+            )
+            com.resolvia.dispatch.media.AutoCutEngine.toJsonString(proposals)
+        } catch (e: Exception) {
+            android.util.Log.e("DispatchBridge", "analyzeAudioWaveformAndSilences failed: ${e.message}", e)
+            "[]"
+        }
+    }
 }
 
