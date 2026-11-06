@@ -188,7 +188,7 @@ def get_channel_identity(service=None) -> Optional[Dict[str, str]]:
     return None
 
 
-def verify_channel_alignment(service=None) -> Dict[str, Any]:
+def verify_channel_alignment(service=None, user_id: Optional[str] = None) -> Dict[str, Any]:
     """Verify that the PC's authenticated YouTube channel matches the cloud-vault connected account.
     Enforces Route A identity contract so PC never silently misses phone uploads.
     """
@@ -197,16 +197,16 @@ def verify_channel_alignment(service=None) -> Dict[str, Any]:
         return {
             "matched": False,
             "status": "unauthenticated",
-            "error": "PC is not authenticated to YouTube (missing or expired youtube_token.json)",
+            "error": "PC is not authenticated to YouTube (missing or expired youtube_token.json).",
         }
 
     try:
         from dispatch.youtube_connections import get_cloud_connected_youtube_channel
-        cloud_acc = get_cloud_connected_youtube_channel()
+        cloud_acc = get_cloud_connected_youtube_channel(user_id=user_id)
     except Exception:
         cloud_acc = None
 
-    if not cloud_acc or not cloud_acc.get("account_id"):
+    if not cloud_acc:
         return {
             "matched": True,
             "status": "no_cloud_account",
@@ -214,8 +214,20 @@ def verify_channel_alignment(service=None) -> Dict[str, Any]:
             "pc_channel_title": pc_id["channel_title"],
         }
 
-    cloud_channel_id = cloud_acc["account_id"].strip()
-    pc_channel_id = pc_id["channel_id"].strip()
+    if cloud_acc.get("status") == "ambiguous_owner":
+        return {
+            "matched": False,
+            "status": "ambiguous_owner",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+            "error": (
+                f"Multiple YouTube accounts ({cloud_acc.get('account_count')}) exist in cloud vault. "
+                "Set DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS to disambiguate."
+            ),
+        }
+
+    cloud_channel_id = (cloud_acc.get("account_id") or "").strip()
+    pc_channel_id = (pc_id.get("channel_id") or "").strip()
 
     if pc_channel_id != cloud_channel_id:
         cloud_name = cloud_acc.get("account_name") or cloud_channel_id

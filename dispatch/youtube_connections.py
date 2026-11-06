@@ -292,26 +292,77 @@ def get_account_id_for_video(video_id: str, user_id: Optional[str] = None) -> Op
     return None
 
 
-def get_cloud_connected_youtube_channel() -> Optional[Dict[str, str]]:
-    """Look up bound YouTube account/channel from connected_accounts in Supabase."""
+def get_cloud_connected_youtube_channel(user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Look up bound YouTube account/channel from connected_accounts in Supabase.
+
+    Scoped strictly:
+    1. If user_id is provided, queries connected_accounts for that specific user_id.
+    2. If user_id is not provided, checks DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS.
+    3. If no user configured, queries connected_accounts. If multiple accounts exist, refuses
+       to guess and returns a status dict indicating ambiguous_owner.
+    4. If exactly one connected account exists, returns that account.
+    """
     try:
         import httpx
         url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
         if not url or not key:
             return None
+
+        # Resolve target user_id
+        target_user_id = user_id or os.getenv("DISPATCH_USER_ID", "").strip() or None
+        if not target_user_id:
+            try:
+                from dispatch.cloud.sync import authorized_pc_owner_ids
+                owners = authorized_pc_owner_ids()
+                if owners:
+                    target_user_id = owners[0]
+            except Exception:
+                pass
+
+        if target_user_id:
+            resp = httpx.get(
+                f"{url}/rest/v1/connected_accounts?user_id=eq.{target_user_id}&provider=eq.youtube&select=id,account_id,account_name,user_id&limit=2",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                rows = resp.json()
+                if rows and isinstance(rows, list) and len(rows) > 0:
+                    return {
+                        "account_id": str(rows[0].get("account_id") or ""),
+                        "account_name": str(rows[0].get("account_name") or ""),
+                        "user_id": str(rows[0].get("user_id") or ""),
+                        "status": "ok",
+                    }
+            return None
+
+        # No target user_id configured - query all connected YouTube accounts up to limit=5 to check ambiguity
         resp = httpx.get(
-            f"{url}/rest/v1/connected_accounts?provider=eq.youtube&select=id,account_id,account_name,user_id&limit=1",
+            f"{url}/rest/v1/connected_accounts?provider=eq.youtube&select=id,account_id,account_name,user_id&limit=5",
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
             timeout=5.0
         )
         if resp.status_code == 200:
             rows = resp.json()
-            if rows and isinstance(rows, list) and len(rows) > 0:
-                return {
-                    "account_id": str(rows[0].get("account_id") or ""),
-                    "account_name": str(rows[0].get("account_name") or ""),
-                    "user_id": str(rows[0].get("user_id") or ""),
-                }
+            if isinstance(rows, list):
+                if len(rows) == 1:
+                    return {
+                        "account_id": str(rows[0].get("account_id") or ""),
+                        "account_name": str(rows[0].get("account_name") or ""),
+                        "user_id": str(rows[0].get("user_id") or ""),
+                        "status": "ok",
+                    }
+                elif len(rows) > 1:
+                    logger.warning(
+                        "Multiple YouTube accounts connected in cloud vault (%d found). "
+                        "Set DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS to bind this PC to a specific creator.",
+                        len(rows)
+                    )
+                    return {
+                        "status": "ambiguous_owner",
+                        "account_count": len(rows),
+                        "accounts": [r.get("account_id") for r in rows],
+                    }
     except Exception as e:
         logger.debug("Failed to query cloud connected YouTube channel: %s", e)
     return None

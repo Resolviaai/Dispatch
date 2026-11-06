@@ -46,13 +46,15 @@ class YouTubeInboxPoller:
     def __init__(
         self,
         poll_interval_seconds: Optional[int] = None,
-        catcher: Optional[YouTubeInboxCatcher] = None
+        catcher: Optional[YouTubeInboxCatcher] = None,
+        user_id: Optional[str] = None
     ):
         # Default 10 minutes (600 seconds)
         env_interval = os.getenv("DISPATCH_YOUTUBE_POLL_INTERVAL")
         default_val = int(env_interval) if env_interval and env_interval.isdigit() else 600
         self.poll_interval = poll_interval_seconds or default_val
 
+        self.user_id = user_id or os.getenv("DISPATCH_USER_ID") or None
         self.catcher = catcher or YouTubeInboxCatcher()
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
@@ -118,9 +120,10 @@ class YouTubeInboxPoller:
             discovered_videos: List[Dict[str, Any]] = []
 
             # Verify Route A channel alignment between PC OAuth and Cloud Vault
-            alignment = verify_channel_alignment()
-            if alignment.get("status") == "mismatch":
-                logger.error("Route A Poller paused for channel mismatch: %s", alignment.get("error"))
+            alignment = verify_channel_alignment(user_id=self.user_id)
+            if not alignment.get("matched"):
+                logger.error("Route A Poller ABORTED: %s", alignment.get("error"))
+                return []
 
             # 1. Fetch recent authenticated uploads
             try:

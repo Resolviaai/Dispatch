@@ -11,8 +11,8 @@
 # AGENT_HANDOFF — Dispatch working-state index
 
 Single source of truth for the next coding agent. Keep this short; link, don't copy.
-Updated: 2026-11-05 (Release v1.7.30-alpha, versionCode 98).
-Authoritative Architecture: `docs/architecture/DISPATCH_V2_ARCHITECTURE.md` (Canonical Cloud-First Architecture)
+Updated: 2026-11-07 (Release v1.7.32, versionCode 100).
+Authoritative Architecture: `docs/architecture/DISPATCH_V2_ARCHITECTURE.md` (Canonical Hybrid Architecture — PC-Only Processing & Rendering)
 Active Master Roadmap: `docs/2026-11-05_MASTER_TASK_LIST.md`
 
 Detailed docs: `PROGRESS.md` (verification log) · `AGENTS.md` (UI invariants) · `design.md` (Design System v3) · `docs/CANONICAL_ARCHITECTURE.md`.

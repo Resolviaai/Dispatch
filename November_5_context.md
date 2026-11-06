@@ -2,7 +2,7 @@
 **Date:** November 5–7, 2026  
 **Status:** Architecture Reconciled & Verified / Ready for Production Continuation  
 **Current Release:** v1.7.32 (Build 100) — Built, signed, verified, and pushed to GitHub `origin/main`.  
-**Latest Git Hash:** `2309269` (architecture reconciliation & channel identity enforcement commit)  
+**Latest Git Hash:** Tracking HEAD on `main` (includes Route A identity enforcement, poller abort guard, and CI suite)
 
 ---
 
@@ -39,7 +39,9 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 
 ### The Three Ingestion Routes
 * **Route A (Android Camera Recording — Restored V2 Workflow):**
-  - **YouTube Channel Identity Alignment:** PC local YouTube credentials (`youtube_token.json`) must match the phone's cloud vault channel identity. Enforced via `verify_channel_alignment()`.
+  - **YouTube Channel Identity Alignment & Enforcement:** PC local YouTube credentials (`youtube_token.json`) must match the phone's cloud vault channel identity. Enforced via `verify_channel_alignment(user_id=...)`.
+  - **Poller Hard Abort on Mismatch:** In `dispatch/youtube_inbox/poller.py`, if `alignment.get("matched")` is False (`mismatch`, `unauthenticated`, or `ambiguous_owner`), `poll_once()` actively halts and returns `[]`, preventing silent polling on mismatched accounts.
+  - **User-Scoped Cloud Query:** In `dispatch/youtube_connections.py`, `get_cloud_connected_youtube_channel()` resolves against `user_id`, `DISPATCH_USER_ID`, or `authorized_pc_owner_ids()`. If multiple accounts exist in the vault without an explicit user configured, it returns `status: "ambiguous_owner"` rather than arbitrarily selecting an account with an unconstrained `LIMIT 1`.
   - Android records 1080p/30 fps MP4 via CameraX, rolling long sessions into ~10-minute segments (~600 MB each at 8 Mbps).
   - Room stores session and segment state (`SegmentEntity`, `RecordingOutboxEntity`).
   - WorkManager resumably uploads each segment to YouTube as unlisted, tagged `[DISPATCH]`.
@@ -77,8 +79,9 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 
 Automated regression verification:
 1. `npm --prefix cloud-worker test`: **102/102 PASS (100%)**
-2. `python -m unittest tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **PASS (100%)**
-3. `npm --prefix frontend test -- --run`: **PASS (100%)**
+2. `python -m unittest tests.test_youtube_channel_identity tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **57/57 PASS (100%)**
+3. `npm --prefix frontend test -- --run`: **ALL PASS (100%)**
+4. CI Workflow Integration: Added `tests.test_youtube_channel_identity` to `.github/workflows/ci.yml`.
 4. Android build & keystore verification:
    `powershell scripts/prepare_release.ps1`
    - Release APK compiled and signed: `v1.7.32` (Build 100).
@@ -93,3 +96,4 @@ Automated regression verification:
 3. **Queue Disambiguation:** `processing_jobs` is exclusively used by Route B (`source='youtube'`) and Route C (`source='direct'`). Route A does **NOT** use `processing_jobs`.
 4. **Single-Consumer Authority:** Supabase `cloud_claim_job` is called exclusively by the PC `RemoteJobPoller`. Cloudflare Workers never claim or execute jobs.
 5. **Zero Premature Phone Deletion:** Local video files on Android are never deleted without cryptographic HMAC-SHA256 receipt verification from PC `/api/sync/youtube-ack`.
+6. **Route A Identity Lock:** Poller immediately aborts discovery if local PC YouTube channel does not match the cloud vault channel or if multiple accounts exist without explicit configuration.
