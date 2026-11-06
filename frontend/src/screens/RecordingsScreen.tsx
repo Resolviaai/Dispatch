@@ -1383,7 +1383,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             <div className="space-y-0.5 text-center">
               <span className="text-[10px] uppercase font-semibold text-text-muted block">Storage</span>
               <span className="font-mono font-semibold tabular-nums text-text-main">
-                {s.totalBytes > 0 ? formatBytes(s.totalBytes) : 'YouTube'}
+                {s.totalBytes > 0
+                  ? formatBytes(s.totalBytes)
+                  : s.origin === 'direct'
+                    ? 'Direct Upload'
+                    : s.origin === 'phone'
+                      ? 'Device'
+                      : 'YouTube'}
               </span>
             </div>
 
@@ -1994,7 +2000,15 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   </h3>
 
                   <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted tabular-nums truncate">
-                    <span>{session.totalBytes > 0 ? formatBytes(session.totalBytes) : 'YouTube'}</span>
+                    <span>
+                      {session.totalBytes > 0
+                        ? formatBytes(session.totalBytes)
+                        : session.origin === 'direct'
+                          ? 'Direct'
+                          : session.origin === 'phone'
+                            ? 'Device'
+                            : 'YouTube'}
+                    </span>
                     <span>&middot;</span>
                     {(() => {
                       const stageInfo = resolveSessionStage(session);
