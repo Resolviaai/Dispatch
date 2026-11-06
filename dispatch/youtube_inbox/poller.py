@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from datetime import datetime, timezone
 from dispatch import db
-from dispatch.youtube_inbox.oauth import list_authenticated_user_uploads
+from dispatch.youtube_inbox.oauth import list_authenticated_user_uploads, verify_channel_alignment
 from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
 
 logger = logging.getLogger("dispatch.youtube_inbox.poller")
@@ -116,6 +116,11 @@ class YouTubeInboxPoller:
         with self._lock:
             self.last_poll_time = time.time()
             discovered_videos: List[Dict[str, Any]] = []
+
+            # Verify Route A channel alignment between PC OAuth and Cloud Vault
+            alignment = verify_channel_alignment()
+            if alignment.get("status") == "mismatch":
+                logger.error("Route A Poller paused for channel mismatch: %s", alignment.get("error"))
 
             # 1. Fetch recent authenticated uploads
             try:

@@ -170,6 +170,84 @@ def get_youtube_service(token_path: Optional[Path] = None):
     return None
 
 
+def get_channel_identity(service=None) -> Optional[Dict[str, str]]:
+    """Return the authenticated PC YouTube channel ID and title."""
+    svc = service or get_youtube_service()
+    if not svc:
+        return None
+    try:
+        channel_resp = svc.channels().list(mine=True, part="id,snippet").execute()
+        items = channel_resp.get("items", [])
+        if items:
+            return {
+                "channel_id": items[0]["id"],
+                "channel_title": items[0].get("snippet", {}).get("title", ""),
+            }
+    except Exception as e:
+        logger.debug("Failed to retrieve PC channel identity: %s", e)
+    return None
+
+
+def verify_channel_alignment(service=None) -> Dict[str, Any]:
+    """Verify that the PC's authenticated YouTube channel matches the cloud-vault connected account.
+    Enforces Route A identity contract so PC never silently misses phone uploads.
+    """
+    pc_id = get_channel_identity(service)
+    if not pc_id:
+        return {
+            "matched": False,
+            "status": "unauthenticated",
+            "error": "PC is not authenticated to YouTube (missing or expired youtube_token.json)",
+        }
+
+    try:
+        from dispatch.youtube_connections import get_cloud_connected_youtube_channel
+        cloud_acc = get_cloud_connected_youtube_channel()
+    except Exception:
+        cloud_acc = None
+
+    if not cloud_acc or not cloud_acc.get("account_id"):
+        return {
+            "matched": True,
+            "status": "no_cloud_account",
+            "pc_channel_id": pc_id["channel_id"],
+            "pc_channel_title": pc_id["channel_title"],
+        }
+
+    cloud_channel_id = cloud_acc["account_id"].strip()
+    pc_channel_id = pc_id["channel_id"].strip()
+
+    if pc_channel_id != cloud_channel_id:
+        cloud_name = cloud_acc.get("account_name") or cloud_channel_id
+        logger.error(
+            "ROUTE A YOUTUBE CHANNEL MISMATCH: PC is authenticated to channel '%s' (%s), "
+            "but Dispatch cloud vault is connected to channel '%s' (%s). "
+            "Phone uploads will NOT be discovered on this PC until both are signed in to the same channel!",
+            pc_id["channel_title"], pc_channel_id, cloud_name, cloud_channel_id
+        )
+        return {
+            "matched": False,
+            "status": "mismatch",
+            "pc_channel_id": pc_channel_id,
+            "pc_channel_title": pc_id["channel_title"],
+            "cloud_channel_id": cloud_channel_id,
+            "cloud_channel_name": cloud_acc.get("account_name", ""),
+            "error": (
+                f"Channel mismatch: PC is signed in to '{pc_id['channel_title']}' ({pc_channel_id}), "
+                f"while phone/cloud uploads to '{cloud_name}' ({cloud_channel_id})."
+            )
+        }
+
+    return {
+        "matched": True,
+        "status": "matched",
+        "pc_channel_id": pc_channel_id,
+        "pc_channel_title": pc_id["channel_title"],
+        "cloud_channel_id": cloud_channel_id,
+        "cloud_channel_name": cloud_acc.get("account_name", ""),
+    }
+
+
 def list_authenticated_user_uploads(
     max_results_per_page: int = 50,
     stop_on_known_page: bool = True

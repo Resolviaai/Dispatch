@@ -57,8 +57,8 @@ Dispatch V2 operates on a **hybrid control-plane / local-workstation execution t
  │    • Route C: RemoteJobPoller (Claims job, calls POST /media-url, streams dir_<id>.mp4)    │
  │                                                                                            │
  │ 2. AI Processing Pipeline:                                                                 │
- │    • gemini-3.5-flash-lite (Stage 1 full audio transcription & semantic highlight mining) │
- │    • gemini-3.5-transcribe (Stage 2 millisecond-accurate word-level timestamps)            │
+ │    • Speech Transcription: gemini-3.5-transcribe (Primary) / gemini-3.5-flash-lite (Fallback)  │
+ │    • Semantic Highlight Mining: gemini-3.5-flash-lite (Independent Stage 2 AI highlight miner)│
  │    • Waveform energy auto-cut (-32dB RMS floor, 100ms attack, 150ms release)               │
  │                                                                                            │
  │ 3. Media Rendering:                                                                        │
@@ -94,6 +94,7 @@ Dispatch V2 operates on a **hybrid control-plane / local-workstation execution t
 4. **Queue Isolation:** Route A does **NOT** use `processing_jobs`. The PC background daemon `YouTubeInboxPoller` polls YouTube Data API v3, downloads the segment to `YOUTUBE_INBOX_DIR`, and persists it in `youtube_inbox`.
 5. PC executes Gemini transcription, highlight extraction, dynamic captions, and FFmpeg rendering.
 6. Android verifies PC ingestion via `GET /api/sync/youtube-ack` and only deletes local footage upon receiving a valid HMAC-SHA256 receipt.
+7. **Channel Identity Alignment Contract:** The PC background poller's local YouTube OAuth credentials (`youtube_token.json`) must be authenticated to the identical YouTube channel bound in the creator's cloud vault. The PC actively checks channel alignment via `verify_channel_alignment()`; if a mismatch is detected, the poller flags an error to prevent silent discovery failure and phone storage exhaustion.
 
 ### 2.2 Route B Ingestion Protocol
 1. User submits YouTube link via Dispatch Studio or Android client.
@@ -135,7 +136,7 @@ Finalized segments are queued and uploaded immediately by WorkManager. However, 
    - Android's `reconcileYouTubeProcessingStatuses()` periodically polls YouTube status up to 96 checks (~3.2 hours) at 2-minute intervals.
 4. **Emergency Storage Stop Floor:**
    - `RecordingSafetyPolicy.MINIMUM_FREE_BYTES = 512 MB` (536,870,912 bytes) is an **emergency safety stop floor**, NOT a capacity guarantee.
-   - `SegmenterEngine` checks disk space every 5 seconds. If free space drops below 512 MB, recording safely halts immediately with `RecordingStorageException`, safely finalizing and committing the active segment to prevent corruption or system lockups.
+   - `SegmenterEngine` checks disk space every 15 seconds. If free space drops below 512 MB, recording safely halts immediately with `RecordingStorageException`, safely finalizing and committing the active segment to prevent corruption or system lockups.
 
 ### 3.3 Phone Deletion vs. PC Retention Law
 - **Phone-Side Deletion:** The phone deletes local video segments **only** when `GET /api/sync/youtube-ack` returns `acknowledged=true`, `ingested=true`, matching SHA-256 checksum, and a valid HMAC-SHA256 receipt signed with the paired secret.

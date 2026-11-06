@@ -3,13 +3,14 @@
 > **Document Status:** Active & Canonical Master Tracker  
 > **Date:** November 5, 2026  
 > **Milestone:** Stage 3 CapCut-Grade Timeline Engine, Unified EDL & Style-Aware Auto-Edit  
+> **Authoritative Architecture:** `docs/architecture/DISPATCH_V2_ARCHITECTURE.md` (Current Release: `v1.7.32`, Build 100)  
 > **Protocol Rule:** This document is updated incrementally after every single completed task. Any incoming AI agent or developer can resume work directly from this file without context loss.
 
 ---
 
 ## 1. Executive Summary & Product Architecture
 
-Dispatch is in production (`v1.7.29-alpha`, versionCode 97). A rigorous audit of the main branch at commit `e219074` verified that while Dispatch has a capable timeline math engine (`timelineEngine.ts`, `segments.py`), its UI presentation and editing ergonomics fail to match modern standards (CapCut / Premiere).
+Dispatch is in production (`v1.7.32`, versionCode 100). A rigorous audit of the main branch at commit `e219074` verified that while Dispatch has a capable timeline math engine (`timelineEngine.ts`, `segments.py`), its UI presentation and editing ergonomics fail to match modern standards (CapCut / Premiere).
 
 ### 1.1 The Core UI/UX Shift: CapCut Interaction Model
 * **The Problem:** 

@@ -2888,6 +2888,8 @@ async def get_integrations_status():
     gemini_key = GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
     gemini_configured = bool(gemini_key and len(gemini_key) > 15 and (gemini_key.startswith("AIzaSy") or gemini_key.startswith("AQ.")))
 
+    from dispatch.youtube_inbox.oauth import verify_channel_alignment
+    alignment = verify_channel_alignment(yt_service)
     return {
         "youtube": {
             "connected": yt_connected,
@@ -2896,6 +2898,7 @@ async def get_integrations_status():
             "has_client_secrets": client_secrets_exist,
             "has_token": token_exists,
             "error": youtube_error,
+            "channel_alignment": alignment,
         },
         "gemini": {
             "configured": gemini_configured,

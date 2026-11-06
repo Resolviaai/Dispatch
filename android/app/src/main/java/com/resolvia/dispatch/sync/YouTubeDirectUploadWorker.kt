@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Autonomous Direct YouTube Cloud Uploader for Dispatch Mobile.
- * Uploads finalized video recordings directly to YouTube Data API v3 as Private,
+ * Uploads finalized video recordings directly to YouTube Data API v3 as Unlisted,
  * using chunked resumable PUT (8 MB chunks) with byte offset tracking in SQLite Room.
  * If network drops, queries Content-Range: bytes * /total and resumes without repeating data.
  */

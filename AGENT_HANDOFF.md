@@ -1,3 +1,13 @@
+> [!IMPORTANT]
+> **SUPERSEDED ARCHITECTURE NOTICE (November 7, 2026):**
+> Historical sections of this handoff referring to a "cloud-first architecture with optional PC acceleration" have been superseded by the canonical **Dispatch V2 Hybrid Architecture** (`docs/architecture/DISPATCH_V2_ARCHITECTURE.md`).
+> Under the authoritative V2 architecture:
+> - **Windows PC Workstation is the sole AI-processing and FFmpeg-rendering engine.**
+> - **Cloudflare Workers + Supabase act strictly as the control plane (auth, job queueing, R2 storage).**
+> - **Route A:** Android recording → ~10m segments → unlisted YouTube uploads → PC `YouTubeInboxPoller` (does NOT use `processing_jobs`). Phone retains media until PC returns verified HMAC receipt from `/api/sync/youtube-ack`.
+> - **Route B & C:** Queue jobs into `processing_jobs`, consumed exclusively by PC `RemoteJobPoller`. Route C is capped at 512 MiB and 180.5s, producing one full-length captioned clip.
+> - **Channel Identity:** PC YouTube OAuth credentials must match the phone's cloud vault channel identity.
+
 # AGENT_HANDOFF — Dispatch working-state index
 
 Single source of truth for the next coding agent. Keep this short; link, don't copy.
@@ -8,7 +18,7 @@ Active Master Roadmap: `docs/2026-11-05_MASTER_TASK_LIST.md`
 Detailed docs: `PROGRESS.md` (verification log) · `AGENTS.md` (UI invariants) · `design.md` (Design System v3) · `docs/CANONICAL_ARCHITECTURE.md`.
 
 ## 1. Project overview
-Dispatch is an autonomous AI-native video clipping workstation and creator studio. The POCO C65 Android app records sessions, reviews clips, and customizes animated captions in a mobile-optimized studio. The cloud control plane (Supabase Postgres + Cloudflare Worker API gateway + R2 distributed storage) manages multi-user authentication, cloud sessions, and 720p edit windows for remote editing on cellular. An optional local Windows PC daemon (`python -m dispatch.main`) provides local media acceleration (Gemini speech transcription, Gemini semantic highlight extraction, hardware FFmpeg delivery rendering, and multi-platform publishing outbox). Zero local Whisper.
+Dispatch is an autonomous AI-native video clipping workstation and creator studio. The POCO C65 Android app records sessions, reviews clips, and customizes animated captions in a mobile-optimized studio. The cloud control plane (Supabase Postgres + Cloudflare Worker API gateway + R2 distributed storage) manages multi-user authentication, cloud sessions, and 720p edit windows for remote editing on cellular. The authoritative Windows PC Workstation daemon (`python -m dispatch.main`) provides all AI processing and media rendering (Gemini speech transcription, Gemini semantic highlight extraction, hardware FFmpeg delivery rendering, and multi-platform publishing outbox). Zero local Whisper.
 
 ## 2. Current objective
 Continuous stabilization, mobile UI/UX ergonomics (Dispatch Design System v3), release governance monotonicity, and multi-platform publishing integrity.

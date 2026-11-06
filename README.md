@@ -25,13 +25,15 @@ Dispatch turns long speaking or work sessions into short, reviewable videos. It 
 
 The phone does not transfer recordings to the PC over LAN. A YouTube upload alone is not confirmation that the PC has safely ingested a segment.
 
+8. **YouTube Channel Identity Alignment:** The PC's local YouTube OAuth credentials (`youtube_token.json`) must be authenticated to the **EXACT SAME YouTube channel** that the phone uploads to via the cloud credential vault. If the accounts mismatch, the PC cannot discover the phone's unlisted uploads, and the phone will indefinitely retain its source footage awaiting ingestion verification.
+
 ### Route B — Submit a YouTube link (Remote URL → PC)
 
 1. Submit a public or unlisted video URL through Dispatch Studio or the mobile client.
 2. The submission creates a row in Supabase `processing_jobs` (`source = 'youtube'`).
 3. The PC `RemoteJobPoller` atomically claims the job via `cloud_claim_job`.
 4. The PC downloads the source via `catcher.py` (`yt-dlp`), probes the video, and persists its processing state.
-5. Dispatch obtains YouTube captions where available or uses **`gemini-3.5-flash-lite`** for Stage 1 full audio transcription and viral highlight analysis.
+5. Dispatch uses Google Gemini speech-to-text directly for verbatim audio transcription (`gemini-3.5-transcribe` primary with `gemini-3.5-flash-lite` fallback). YouTube caption downloading is not used as a transcription fallback.
 6. Gemini proposes highlight ranges. FFmpeg extracts bounded candidate audio, which is aligned at exact millisecond word levels using **`gemini-3.5-transcribe`** (with **`gemini-3.5-flash-lite`** word-timestamp fallback).
 7. Dynamic caption grouping and layout rendering format the clip into the user's choice of 4 framing options: **Crop 9:16**, **Fit + Blur**, **Fit + Black**, or **Native 16:9**.
 8. Review the candidate in Studio, adjust its range or captions, and approve or reject it.

@@ -1,10 +1,11 @@
 > [!WARNING]
 > **SUPERSEDED — HISTORICAL REFERENCE ONLY**  
-> This migration plan represents an earlier October 2026 blueprint where all video processing was pinned to the owner's Windows PC.  
-> Under **Dispatch V2** (`docs/architecture/DISPATCH_V2_ARCHITECTURE.md`), the architecture is cloud-first:
-> - Speech transcription is 100% Gemini (`gemini-3.5-transcribe` + `gemini-3.5-flash-lite`), eliminating local Whisper.
-> - Multi-user state and authorization live in Supabase.
-> - The local PC acts solely as an optional execution worker for heavy FFmpeg rendering.
+> This migration plan represents an earlier blueprint.  
+> Under authoritative **Dispatch V2** (`docs/architecture/DISPATCH_V2_ARCHITECTURE.md`), the architecture is a canonical hybrid:
+> - Windows PC Workstation is the sole AI processing and FFmpeg rendering engine.
+> - Speech transcription is 100% Google Gemini (`gemini-3.5-transcribe` primary, `gemini-3.5-flash-lite` fallback), eliminating local Whisper.
+> - Multi-user state, storage quotas, and auth live in Supabase + Cloudflare Workers (control plane only).
+> - Route A uploads unlisted to YouTube; Route B and Route C use `processing_jobs` consumed by PC `RemoteJobPoller`.
 > Useful security, R2 storage, Supabase RLS, and quota contracts below remain valid reference material.
 
 # Dispatch Cloud Migration — Architecture & Migration Plan (Historical)

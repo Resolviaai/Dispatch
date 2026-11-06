@@ -39,6 +39,7 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 
 ### The Three Ingestion Routes
 * **Route A (Android Camera Recording — Restored V2 Workflow):**
+  - **YouTube Channel Identity Alignment:** PC local YouTube credentials (`youtube_token.json`) must match the phone's cloud vault channel identity. Enforced via `verify_channel_alignment()`.
   - Android records 1080p/30 fps MP4 via CameraX, rolling long sessions into ~10-minute segments (~600 MB each at 8 Mbps).
   - Room stores session and segment state (`SegmentEntity`, `RecordingOutboxEntity`).
   - WorkManager resumably uploads each segment to YouTube as unlisted, tagged `[DISPATCH]`.

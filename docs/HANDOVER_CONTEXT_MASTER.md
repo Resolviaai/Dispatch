@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **SUPERSEDED ARCHITECTURE NOTICE (November 7, 2026):**  
+> This document contains historical references to Whisper, PyTorch, and older release versions (`v1.7.25-alpha`).  
+> In current Dispatch V2 (`v1.7.32`, versionCode 100), all transcription is 100% Google Gemini (`gemini-3.5-transcribe` primary, `gemini-3.5-flash-lite` fallback). Zero local Whisper or PyTorch. The authoritative specification is `docs/architecture/DISPATCH_V2_ARCHITECTURE.md`.
+
 # Dispatch Master Architecture & Agent Handover Constitution
 > **Target Audience:** Next Agent (`Z code GLM 5.3 flash`) / Engineering Lead  
 > **Repository:** `c:\CODE\Dispatch` (`https://github.com/Resolviaai/Dispatch`)  
@@ -15,7 +20,7 @@
  ┌──────────────────────┐        Direct LAN / Cellular        ┌─────────────────────────┐
  │   Android Phone      │ ──────────────────────────────────> │ Local PC Daemon         │
  │ (Jetpack Compose Web │ <────────────────────────────────── │ (FastAPI, PyTorch,     │
- │  WebView + Camera2)  │        Status, Presets, WS          │  Whisper, Gemini 2.5)   │
+ │  WebView + Camera2)  │        Status, Presets, WS          │  Gemini 3.5 Native)   │
  └──────────────────────┘                                     └─────────────────────────┘
             │                                                              │
             │ Direct Unlisted Upload / Cellular Backup                     │ Staging Proxies (Mode 2)
@@ -215,7 +220,7 @@ Dispatch/
 │   ├── edit_windows.py                  # 720p bounded proxy generation (FFmpeg)
 │   ├── cloud/sync.py                    # Autonomous cloud sync (Supabase & R2)
 │   ├── ai_clips/worker.py               # Gemini highlight extraction worker
-│   ├── transcription/worker.py          # Whisper / YouTube captioning
+│   ├── transcription/worker.py          # Google Gemini Speech-to-Text
 │   ├── publisher/outbox.py              # YouTube Shorts publishing
 │   └── web/app.py                       # FastAPI local LAN backend
 ├── frontend/                            # Vite + React + Tailwind Mobile Studio

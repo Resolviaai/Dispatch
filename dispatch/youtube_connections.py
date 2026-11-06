@@ -292,6 +292,31 @@ def get_account_id_for_video(video_id: str, user_id: Optional[str] = None) -> Op
     return None
 
 
+def get_cloud_connected_youtube_channel() -> Optional[Dict[str, str]]:
+    """Look up bound YouTube account/channel from connected_accounts in Supabase."""
+    try:
+        import httpx
+        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            return None
+        resp = httpx.get(
+            f"{url}/rest/v1/connected_accounts?provider=eq.youtube&select=id,account_id,account_name,user_id&limit=1",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            timeout=5.0
+        )
+        if resp.status_code == 200:
+            rows = resp.json()
+            if rows and isinstance(rows, list) and len(rows) > 0:
+                return {
+                    "account_id": str(rows[0].get("account_id") or ""),
+                    "account_name": str(rows[0].get("account_name") or ""),
+                    "user_id": str(rows[0].get("user_id") or ""),
+                }
+    except Exception as e:
+        logger.debug("Failed to query cloud connected YouTube channel: %s", e)
+    return None
+
+
 def update_job_stage_by_video_id(video_id: str, stage: str) -> None:
     """Report downstream processing stage for a video ID back to any matching cloud jobs."""
     if not video_id:

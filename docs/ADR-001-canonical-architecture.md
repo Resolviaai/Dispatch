@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> **SUPERSEDED NOTICE (November 7, 2026):**  
+> This historical ADR proposed removing PC YouTube login. Under canonical **Dispatch V2** (`docs/architecture/DISPATCH_V2_ARCHITECTURE.md`), Route A requires local PC YouTube OAuth credentials (`youtube_token.json`) matching the creator's channel for `YouTubeInboxPoller` discovery. All AI processing and FFmpeg rendering run strictly on the Windows PC Workstation.
+
 # ADR-001 — Dispatch Canonical Multi-User Architecture (PROPOSED — awaiting owner approval)
 
 Status: **APPROVED by owner (2026-10-24, MCQ):** Decision 2 = Bound per-worker token (owner-issued single-use enrollment code → user-bound worker credential; shared token becomes maintenance-only); Decision 1 = review lives in the **Android app only** for the alpha (no hosted web review app); Decision 4 = **server-side encrypted token vault on the PC backend** (no tokens on devices). Decision 3 boundaries stand as written. Workstream implementation may now start in the gap-map order.
