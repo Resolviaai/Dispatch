@@ -544,13 +544,13 @@ class TestDailyTranscribeQuotaAtomicity(unittest.TestCase):
         results = [check_and_increment_daily_transcribe_quota(max_daily_requests=3) for _ in range(4)]
         self.assertEqual(results, [True, True, True, False])
 
-        self.assertEqual(_get_setting("transcribe_quota_date"), time.strftime("%Y-%m-%d"),
+        self.assertEqual(_get_setting("transcribe_quota_date"), time.strftime("%Y-%m-%d", time.gmtime()),
                          "Day-roll must write today's date, otherwise the counter resets every call")
         self.assertEqual(_get_setting("transcribe_quota_count"), "3")
 
     def test_refund_floors_at_zero(self):
         from dispatch.transcription.gemini_engine import check_and_increment_daily_transcribe_quota, refund_daily_transcribe_quota
-        _set_setting("transcribe_quota_date", time.strftime("%Y-%m-%d"))
+        _set_setting("transcribe_quota_date", time.strftime("%Y-%m-%d", time.gmtime()))
         _set_setting("transcribe_quota_count", "1")
         self.assertTrue(check_and_increment_daily_transcribe_quota(max_daily_requests=5))
         self.assertEqual(_get_setting("transcribe_quota_count"), "2")

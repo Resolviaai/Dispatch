@@ -7,33 +7,53 @@
 
 > You create the raw signal. Dispatch carries it through review and publishing.
 
-Dispatch turns long speaking or work sessions into short, reviewable videos. It has two input routes: recording in the Android app, or submitting an existing YouTube link. Video processing and rendering are designed to run on the Windows PC; Android records, stores, and uploads Route A segments.
+Dispatch turns long speaking or work sessions into short, reviewable videos. It supports three input routes: recording in the Android app (Route A), submitting an existing YouTube link (Route B), or directly uploading an existing video (Route C). All video processing, Gemini AI transcription, and FFmpeg rendering run strictly on the Windows PC Workstation; Cloudflare Workers and Supabase act as the control plane (auth, job queueing, and presigned R2 storage), and Android acts as a capture, review, and control client.
 
 **Current source version:** Android 1.7.32 (version code 100). A version number or successful build is not proof of live-service or physical-phone behavior. Check the current source and verification records before relying on older status claims.
 
 ## How the workflow works
 
-### Route A — Record on Android
+### Route A — Record on Android (Phone Camera → YouTube → PC)
 
-1. Dispatch records through CameraX and rolls a long session into segments of about ten minutes.
-2. Room stores session, segment, and upload state on the phone.
-3. WorkManager resumably uploads each segment to the connected YouTube account as **unlisted**, tagged with Dispatch identifiers.
-4. The PC polls YouTube, waits for processing, downloads the segment, and continues the local processing pipeline.
-5. The phone retains its source file until the PC confirms ingestion with matching identifiers and integrity data.
+1. Dispatch records via CameraX and rolls long recordings into sequential segments of approximately 10 minutes.
+2. Room stores session, segment, and upload state locally on the phone.
+3. WorkManager resumably uploads each segment to the user's connected YouTube account as **unlisted**, tagged with `[DISPATCH]` and session identifiers.
+4. **Queue Disambiguation:** Route A does **NOT** use the Supabase `processing_jobs` queue. Instead, the PC background daemon `YouTubeInboxPoller` discovers new segments via YouTube Data API v3, downloads the source MP4 to `YOUTUBE_INBOX_DIR`, and ingests it into the local processing pipeline.
+5. The PC pipeline executes Gemini transcription (`gemini-3.5-transcribe` / `gemini-3.5-flash-lite`), highlight extraction, dynamic captions, and FFmpeg rendering.
+6. **Safe Phone Retention Release:** The phone retains its local recording until the PC confirms successful ingestion via `GET /api/sync/youtube-ack`. The PC verifies that the physical file exists on disk, confirms its SHA-256 matches actual disk bytes, and signs an HMAC-SHA256 receipt. Only after Android cryptographically verifies the receipt signature is the local phone file deleted.
+7. **Long-Session Storage Law:** At 8 Mbps (1080p/30 fps), a 3-hour recording generates ~10.8 GB (~18 segments @ ~600 MB each). The 512 MB free-space threshold in `RecordingSafetyPolicy.kt` is an emergency safety stop floor, not a capacity guarantee. If the PC is offline or uploads lag, segments queue on the phone; if storage reaches the 512 MB safety floor, recording halts safely to protect existing footage. Once acknowledged by the PC, the phone frees local space while the PC retains the master source under its 3-Tier Retention Policy.
 
 The phone does not transfer recordings to the PC over LAN. A YouTube upload alone is not confirmation that the PC has safely ingested a segment.
 
-### Route B — Submit a YouTube link
+### Route B — Submit a YouTube link (Remote URL → PC)
 
-1. Submit a public or unlisted video through the Dispatch Studio.
-2. The PC downloads and probes the source, then persists its processing state.
-3. Dispatch obtains YouTube captions where available or uses **`gemini-3.5-flash-lite`** for Stage 1 full audio transcription and viral highlight analysis.
-4. Gemini proposes highlight ranges. FFmpeg extracts bounded candidate audio, which is aligned at exact millisecond word levels using **`gemini-3.5-transcribe`** (with **`gemini-3.5-flash-lite`** word-timestamp fallback).
-5. Dynamic caption grouping and layout rendering format the clip into the user's choice of 4 framing options: **Crop 9:16**, **Fit + Blur**, **Fit + Black**, or **Native 16:9**.
-6. Review the candidate in Studio, adjust its range or captions, and approve or reject it.
-7. Approved output enters the publishing outbox for multi-platform distribution.
+1. Submit a public or unlisted video URL through Dispatch Studio or the mobile client.
+2. The submission creates a row in Supabase `processing_jobs` (`source = 'youtube'`).
+3. The PC `RemoteJobPoller` atomically claims the job via `cloud_claim_job`.
+4. The PC downloads the source via `catcher.py` (`yt-dlp`), probes the video, and persists its processing state.
+5. Dispatch obtains YouTube captions where available or uses **`gemini-3.5-flash-lite`** for Stage 1 full audio transcription and viral highlight analysis.
+6. Gemini proposes highlight ranges. FFmpeg extracts bounded candidate audio, which is aligned at exact millisecond word levels using **`gemini-3.5-transcribe`** (with **`gemini-3.5-flash-lite`** word-timestamp fallback).
+7. Dynamic caption grouping and layout rendering format the clip into the user's choice of 4 framing options: **Crop 9:16**, **Fit + Blur**, **Fit + Black**, or **Native 16:9**.
+8. Review the candidate in Studio, adjust its range or captions, and approve or reject it.
+9. Approved output enters the publishing outbox for multi-platform distribution.
 
 Private videos are rejected by the manual URL-ingestion visibility gate.
+
+### Route C — Direct Video Upload (R2 Staging → PC)
+
+1. Android or Web clients stage short pre-recorded videos directly into Cloudflare R2:
+   - Client calls `POST /reserve` with `{ kind: "clip_video", mime_type, expected_bytes, client_token }` to reserve storage.
+   - Client PUTs video bytes directly to the returned presigned R2 upload URL.
+   - Client calls `POST /complete` with `{ reservation_id }`. The Cloudflare Worker verifies the object in R2 via `head()`, copies it to the immutable final key, and commits the active media object in Supabase.
+   - Client calls `POST /jobs/direct` with `{ media_object_id, title }`, which inserts a job into Supabase `processing_jobs` (`source = 'direct'`).
+2. The PC `RemoteJobPoller` claims the direct job via `cloud_claim_job`.
+3. The PC `direct_handler` in `dispatch/direct_ingest.py` calls `POST /media-url` with `{ media_object_id }` and `X-Dispatch-User-Id` to obtain a short-lived presigned GET URL (10-minute TTL).
+4. The PC streams the object from R2 to local disk as `dir_<object_id>.mp4` (using a `.part` temporary file during transfer) and invokes `youtube_inbox.catcher.ingest_direct_video()`.
+5. **Route C Scope & Limits:**
+   - Maximum upload size: **512 MiB** (`DIRECT_DOWNLOAD_CAP_BYTES = 536870912 + 16 * 1024 * 1024`).
+   - Maximum duration: **$\le 180.5 seconds$** (~3 minutes).
+   - Generates **one full-length captioned clip**, NOT AI-selected highlights.
+   - The PC executes Gemini transcription and FFmpeg rendering identically to Route B.
 
 ### Review and publishing
 

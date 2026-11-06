@@ -1,13 +1,13 @@
 # November 5 Context: Dispatch Architecture, Verification & Handoff
-**Date:** November 5–6, 2026  
-**Status:** In-flight / Ready for Next Session Continuation  
-**Current Release:** v1.7.32 (Build 100) — Built, signed, tested on Android Emulator (`emulator-5554`), and pushed to GitHub `origin/main`.  
-**Latest Git Hash:** `80202ea` (with handoff commit to follow)  
+**Date:** November 5–7, 2026  
+**Status:** Architecture Reconciled & Verified / Ready for Production Continuation  
+**Current Release:** v1.7.32 (Build 100) — Built, signed, verified, and pushed to GitHub `origin/main`.  
+**Latest Git Hash:** `a1b81db` (with architecture reconciliation commit to follow)  
 
 ---
 
 > [!IMPORTANT]
-> **Implementation vs. Design Specification Note:** Documented architectural requirements and milestone specifications represent approved technical contracts. They do not constitute proof of implementation completion until the corresponding test suites, release builds, and exit gates are run, passed, and independently verified.
+> **Implementation vs. Design Specification Note:** Documented architectural requirements and milestone specifications represent approved technical contracts. They do not constitute proof of implementation completion until the corresponding test suites, release builds, and exit gates are run, passed, and independently verified. Physical-device long-session recording stress tests require actual hardware execution.
 
 ## 1. Executive Summary & Verified UI/UX Fixes
 
@@ -35,111 +35,60 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 
 ---
 
-## 2. PC-Independent, Mobile-First Processing Architecture
+## 2. Reconciled V2 Hybrid Architecture: PC Workstation as Sole Processing Engine
 
-### The Three Routes
-* **Route A (Camera Recording on Android):**
-  - Android records 9:16 or 16:9 MP4 locally.
-  - Native Android (`MediaExtractor` + `MediaMuxer`) extracts the compressed AAC audio track into an `.m4a` file (< 10 MB for a 15-minute video).
-  - Android uploads small audio directly to Cloudflare R2 using pre-signed upload URLs.
-  - Cloudflare Worker / Workflow coordinates with Google Gemini API for transcription and highlight extraction.
-  - Timeline editing and final rendering occur locally on Android using AndroidX Media3 / Transformer.
-  - **PC Workstation is NEVER needed.**
+### The Three Ingestion Routes
+* **Route A (Android Camera Recording — Restored V2 Workflow):**
+  - Android records 1080p/30 fps MP4 via CameraX, rolling long sessions into ~10-minute segments (~600 MB each at 8 Mbps).
+  - Room stores session and segment state (`SegmentEntity`, `RecordingOutboxEntity`).
+  - WorkManager resumably uploads each segment to YouTube as unlisted, tagged `[DISPATCH]`.
+  - **Queue Disambiguation:** Route A does **NOT** use `processing_jobs`. The PC background daemon `YouTubeInboxPoller` discovers new segments via YouTube Data API v3, downloads the source MP4 to `YOUTUBE_INBOX_DIR`, and processes it locally via Gemini + FFmpeg.
+  - **Safe Phone Retention Release:** Android retains local recordings until the PC verifies ingestion via `GET /api/sync/youtube-ack`. The PC confirms physical disk file existence and SHA-256 match, returning a signed HMAC-SHA256 receipt before the phone deletes local media.
 
-* **Route B (YouTube Ingestion):**
-  - For arbitrary YouTube URLs, maintain the PC workstation pipeline as a fallback server (downloading via yt-dlp on PC). No brittle or violating web-scraping on mobile.
+* **Route B (YouTube Link Ingestion — Unchanged):**
+  - User submits a public or unlisted YouTube URL via Dispatch Studio or mobile client.
+  - Row queued in Supabase `processing_jobs` (`source = 'youtube'`).
+  - PC `RemoteJobPoller` claims the job via `cloud_claim_job`.
+  - PC downloads source via `catcher.py` (`yt-dlp`), processes through Gemini transcription + highlight extraction + FFmpeg rendering.
 
-* **Route C (Direct Video Upload):**
-  - User selects an existing local video or uploads to private R2.
-  - Android extracts audio track locally, uploads audio to R2, and triggers cloud transcription.
-  - The client provides their own Gemini API key (BYOK), eliminating central server quotas.
-
----
-
-## 3. High-Priority Tasks for Next Session
-
-### Task 1: Deploy Cloudflare Worker
-- Run:
-  ```bash
-  npm --prefix cloud-worker run deploy
-  # OR: npx wrangler deploy --config cloud-worker/wrangler.toml
-  ```
-- Verifies the `/youtube/duration` CORS fix in production.
-
-### Task 2: Android Native Audio Track Extractor (`AudioExtractorHelper.kt`)
-- Location: `android/app/src/main/java/com/resolvia/dispatch/media/AudioExtractorHelper.kt`
-- Purpose: Extract AAC audio from MP4 without transcoding via `MediaExtractor` and `MediaMuxer`.
-- Expose via `DispatchNativeBridge.extractAudioTrack(videoUri: String, outputM4aPath: String): String`.
-- Allows Android to extract speech audio in ~100ms without PC involvement.
-
-### Task 3: Cloudflare Workflow Gemini Audio Transcription (Cloud-First Authoritative)
-- Selected Single Architecture: Android uploads small audio (.m4a) to private R2; Cloudflare Workflow authoritatively coordinates Gemini processing using the user's decrypted BYOK key from the Supabase vault.
-- Android does NOT call Gemini directly, preserving phone battery, preventing key exposure in mobile memory, and ensuring jobs complete reliably when the app is backgrounded or closed.
-- Workflow persists word-level timestamps and AI highlights directly into Supabase schema.
-
-### Task 4: Port Waveform & Silence Triage to Kotlin (`AutoCutEngine.kt`)
-- Location: `android/app/src/main/java/com/resolvia/dispatch/media/AutoCutEngine.kt`
-- Compute RMS amplitude windows (50ms chunks) from decoded PCM.
-- Classify segments into the 3-tier system:
-  - `AUTO-REMOVE`: Silence > 1.2s or low RMS pause.
-  - `REVIEW`: Hesitation or pause between 0.6s and 1.2s.
-  - `PRESERVE`: Natural speech pauses < 0.6s.
-
-### Task 5: 3-Mode Audio Retranscription in Editor
-- In `frontend/src/captions/CaptionStudio.tsx`:
-  - Mode 1: Full Mix (camera audio + overlays + background music).
-  - Mode 2: Voiceover / Mic track only.
-  - Mode 3: Main video dialogue only.
+* **Route C (Direct Video Upload — Unchanged & PC-Processed):**
+  - User uploads video directly to Cloudflare R2: `POST /reserve` → presigned PUT to R2 → `POST /complete` → `POST /jobs/direct` (`source = 'direct'`).
+  - PC `RemoteJobPoller` claims the direct job via `cloud_claim_job`.
+  - PC `direct_handler` in `dispatch/direct_ingest.py` calls `POST /media-url` to get a presigned GET URL (10-minute TTL).
+  - PC streams object to disk as `dir_<object_id>.mp4` and invokes `youtube_inbox.catcher.ingest_direct_video()`.
+  - **Route C Scope & Limits:** Maximum upload: **512 MiB** (`DIRECT_DOWNLOAD_CAP_BYTES = 536870912 + 16 * 1024 * 1024`); maximum duration: **$\le 180.5 seconds$** (~3 minutes). Generates **one full-length captioned clip**, NOT AI-selected highlights.
 
 ---
 
-## 4. Verification Checkpoints
+## 3. Route A Mobile Storage-Pressure & 3-Hour Recording Risk
 
-Before releasing new builds:
-1. `npm --prefix frontend test -- --run`
-2. `npm --prefix cloud-worker test`
-3. `python -m unittest tests.test_edl_approval tests.test_subtitle_edl_remapping tests.test_waveform_autocut`
+### Bandwidth & Storage Realities
+* At 8 Mbps (1080p/30 fps), a 3-hour recording produces **~10.8 GB** of video data across ~18 sequential segments (~600 MB each).
+* Finalized segments upload immediately via WorkManager.
+* **Storage Accumulation Risk:** Local phone files are deleted **ONLY** after verified PC ingestion. If the PC is offline, upload lags, or YouTube processing is delayed, files accumulate on the phone.
+* **Safety Floor vs. Capacity:** `RecordingSafetyPolicy.MINIMUM_FREE_BYTES = 512 MB` is an emergency safety stop floor, **NOT** a capacity guarantee. A 3-hour recording without PC connectivity requires at least **11–12 GB of free phone storage**.
+* If free storage reaches the 512 MB safety threshold, `SegmenterEngine` halts recording immediately to protect existing footage from corruption.
+* Once the PC acknowledges ingestion, the phone frees local space while the PC retains the source master under the 3-Tier Retention Law (7 days / 72 hours post-publish / 10 GB FIFO ceiling).
+
+---
+
+## 4. Verification Checkpoints & Results
+
+Automated regression verification:
+1. `npm --prefix cloud-worker test`: **102/102 PASS (100%)**
+2. `python -m unittest tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **PASS (100%)**
+3. `npm --prefix frontend test -- --run`: **PASS (100%)**
 4. Android build & keystore verification:
    `powershell scripts/prepare_release.ps1`
-5. On-device emulator check:
-   `adb install -r android/app/build/outputs/apk/release/app-release.apk`
-
+   - Release APK compiled and signed: `v1.7.32` (Build 100).
+5. **Outstanding Physical Verification:** Physical 3-hour hardware recording stress test with real POCO C65 camera thermal, battery, and background WorkManager behavior remains to be performed on physical hardware.
 
 ---
 
-## 5. Architectural Invariants & Governance (Final Review Corrections)
+## 5. Architectural Invariants & Governance
 
-1. **Job Queue Execution Target (No Dual-Consumer Race):**
-   - Add explicit execution_target ('cloud' | 'pc') to processing_jobs.
-   - PC daemon claims ONLY execution_target = 'pc'.
-   - Cloudflare Workflow / Worker dispatches ONLY execution_target = 'cloud'.
-   - Uses transactional outbox, deterministic workflow IDs, database leases, and fencing tokens to prevent double processing and duplicate Gemini charges.
-
-2. **Route A Source Video Retention:**
-   - Native audio extraction (.m4a) is strictly for cloud transcription/highlights.
-   - Original local MP4 video segments MUST NEVER be deleted upon audio upload or transcription.
-   - Local source segments remain available until clip rendering and verified export upload to R2 succeed, governed by an explicit retention policy.
-
-3. **Multi-Source Segment EDL:**
-   - Route A recordings comprise multiple physical video files (e.g. 10-minute segments).
-   - EDL schema and AndroidClipRenderer must support multi-source video composition with absolute timeline offsets and seam-crossing bounds.
-
-4. **R2 Multipart & Checksum Integrity:**
-   - Client calculates per-part MD5, R2 validates via Content-MD5.
-   - Reconcile uploaded parts via R2 ListParts before completion.
-   - Whole-file SHA-256 stored as client source fingerprint, never falsely claimed as server-verified without actual streaming verification.
-   - Automated cleanup of abandoned multipart sessions.
-
-5. **Durable Android Background Rendering:**
-   - Room as local job journal (QUEUED, CLAIMED, RENDERING, RENDER_COMPLETE, UPLOAD_PENDING, UPLOAD_VERIFIED, COMPLETED).
-   - WorkManager as persistent scheduler + foreground service for active rendering.
-   - Prevent new render requests from interrupting active jobs; renewal of WakeLock.
-
-6. **Streaming Cloud Publishing:**
-   - Eliminate 
-2Object.arrayBuffer() in Cloudflare Worker (prevents 128 MB RAM exhaustion on 512 MB videos).
-   - Use streaming and resumable external platform uploads.
-
-7. **Milestone Governance:**
-   - Scope implementation approval to Milestone 1 (Cloud Foundation & Media Reliability) first.
-   - Subsequent milestones gated on verifiable exit criteria.
+1. **PC as Sole Processing Engine:** PC workstation is the exclusive engine for Gemini AI transcription, highlight reasoning, and FFmpeg rendering.
+2. **Control Plane Boundary:** Cloudflare Workers + Supabase act as control plane and staging storage only. Zero GCP, AWS, VPS, or cloud FFmpeg dependencies.
+3. **Queue Disambiguation:** `processing_jobs` is exclusively used by Route B (`source='youtube'`) and Route C (`source='direct'`). Route A does **NOT** use `processing_jobs`.
+4. **Single-Consumer Authority:** Supabase `cloud_claim_job` is called exclusively by the PC `RemoteJobPoller`. Cloudflare Workers never claim or execute jobs.
+5. **Zero Premature Phone Deletion:** Local video files on Android are never deleted without cryptographic HMAC-SHA256 receipt verification from PC `/api/sync/youtube-ack`.
