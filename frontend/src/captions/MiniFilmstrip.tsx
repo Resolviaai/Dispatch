@@ -15,6 +15,20 @@ function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
 }
 
+export function computeContextWindow(
+  sourceStart: number,
+  sourceEnd: number,
+  totalDuration: number,
+  padding: number = 2.5
+): { winStart: number; winEnd: number; winSpan: number; cutDuration: number } {
+  const cutDuration = Math.max(0.01, sourceEnd - sourceStart);
+  const winStart = Math.max(0, sourceStart - padding);
+  const boundary = totalDuration > 0 ? totalDuration : Math.max(sourceEnd + padding, 60);
+  const winEnd = Math.min(boundary, sourceEnd + padding);
+  const winSpan = Math.max(0.1, winEnd - winStart);
+  return { winStart, winEnd, winSpan, cutDuration };
+}
+
 function formatBoundaryTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '00:00.00';
   const m = Math.floor(seconds / 60);
@@ -35,23 +49,22 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
 
-  // 1. Calculate an honest context window around the proposed cut
-  const cutDuration = Math.max(0.05, sourceEnd - sourceStart);
-  const padSec = Math.max(1.0, Math.min(2.5, cutDuration * 0.75));
-
-  const winStart = Math.max(0, sourceStart - padSec);
-  const totalBoundary = clipDuration > 0 ? clipDuration : Math.max(sourceEnd + padSec, 60);
-  const winEnd = Math.min(totalBoundary, sourceEnd + padSec);
-  const winSpan = Math.max(0.1, winEnd - winStart);
+  // 1. Calculate synchronized context window around the proposed cut
+  const { winStart, winEnd, winSpan, cutDuration } = useMemo(() => {
+    return computeContextWindow(sourceStart, sourceEnd, clipDuration, 2.5);
+  }, [sourceStart, sourceEnd, clipDuration]);
 
   // 2. Proportional cut region percentages within this window
   const cutLeftPct = clamp(((sourceStart - winStart) / winSpan) * 100, 0, 95);
   const rawCutWidthPct = ((sourceEnd - sourceStart) / winSpan) * 100;
   const cutWidthPct = clamp(rawCutWidthPct, 3, 100 - cutLeftPct);
 
-  // 3. Proportional playhead percentage (if currentTime falls within this window)
-  const isPlayheadInWindow = currentTime >= winStart && currentTime <= winEnd;
-  const playheadPct = isPlayheadInWindow ? clamp(((currentTime - winStart) / winSpan) * 100, 0, 100) : null;
+  // 3. Proportional playhead percentage (supports both source time and clip-relative time)
+  const effectivePlayheadTime = (currentTime >= winStart - 0.5 && currentTime <= winEnd + 0.5)
+    ? currentTime
+    : (currentTime + clipStartOffset);
+  const isPlayheadInWindow = effectivePlayheadTime >= winStart && effectivePlayheadTime <= winEnd;
+  const playheadPct = isPlayheadInWindow ? clamp(((effectivePlayheadTime - winStart) / winSpan) * 100, 0, 100) : null;
 
   // 4. Frames within this context window from filmstrip
   const isSingleFallback = useMemo(() => {

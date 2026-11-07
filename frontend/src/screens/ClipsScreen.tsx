@@ -61,6 +61,7 @@ import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
 import { executeClipApproval } from '../lib/approval';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
 import { FilmstripData, normalizeFilmstripPayload, thumbnailFallbackFilmstrip } from '../captions/filmstrip';
+import { computeContextWindow } from '../captions/MiniFilmstrip';
 import {
   SpeechCleanupWorkspace,
   AutoCutProposal,
@@ -1789,7 +1790,19 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   }, []);
   const [playbackFeedback, setPlaybackFeedback] = useState<string | null>(null);
   const previewAnimRef = useRef<{ active: boolean; restoreTime: number; endTime: number } | null>(null);
-  const contextPreviewRef = useRef<{ sourceEnd: number; restoreTime: number } | null>(null);
+  interface ContextPreviewState {
+    sourceStart: number;
+    sourceEnd: number;
+    cutStart?: number;
+    cutEnd?: number;
+    isCut?: boolean;
+    proposalId?: string;
+    restoreTime: number;
+    hasJumped?: boolean;
+  }
+  const contextPreviewRef = useRef<ContextPreviewState | null>(null);
+  const [activePreviewProposalId, setActivePreviewProposalId] = useState<string | null>(null);
+  const stopPreviewRef = useRef<() => void>(() => {});
 
   // Canonical Caption Track with Stale Protection
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -1927,6 +1940,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setSelectedGroupId(null);
     setIsVideoSelected(false);
     setSelectedPieceIndex(null);
+    if (showAutoCutDrawer) {
+      stopPreviewRef.current();
+      setShowAutoCutDrawer(false);
+    }
     setActivePanel((current) => {
       if ([
         'style',
@@ -1945,7 +1962,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
       return current;
     });
-  }, []);
+  }, [showAutoCutDrawer]);
 
   const handleSelectGroup = useCallback((id: string | null) => {
     if (!id) {
@@ -2875,19 +2892,93 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     });
   };
 
-  const handlePreviewContext = (range: { start: number; end: number }) => {
+  const handleStopPreviewContext = useCallback(() => {
+    const video = videoRef.current;
+    const restoreTime = contextPreviewRef.current?.restoreTime ?? currentTime;
+    contextPreviewRef.current = null;
+    setActivePreviewProposalId(null);
+    if (video) {
+      video.pause();
+      if (bgVideoRef.current) bgVideoRef.current.pause();
+    }
+    setIsPlaying(false);
+    handleSeek(restoreTime);
+  }, [currentTime, handleSeek]);
+
+  useEffect(() => {
+    stopPreviewRef.current = handleStopPreviewContext;
+  }, [handleStopPreviewContext]);
+
+  const handlePreviewContext = (range: {
+    start: number;
+    end: number;
+    cutStart?: number;
+    cutEnd?: number;
+    isCut?: boolean;
+    proposalId?: string;
+  }) => {
     const video = videoRef.current;
     if (!video || !isSourceTimebase || range.end <= range.start) return;
-    const restoreTime = clamp(video.currentTime - clipStart, 0, clipDuration);
+
+    // Toggle: if currently playing preview for this proposal, tap stops it
+    if (contextPreviewRef.current && contextPreviewRef.current.proposalId === range.proposalId && isPlaying) {
+      handleStopPreviewContext();
+      return;
+    }
+
+    const restoreTime = contextPreviewRef.current
+      ? contextPreviewRef.current.restoreTime
+      : clamp(video.currentTime - clipStart, 0, clipDuration);
+
     previewAnimRef.current = null;
-    contextPreviewRef.current = { sourceEnd: range.end, restoreTime };
+    contextPreviewRef.current = {
+      sourceStart: range.start,
+      sourceEnd: range.end,
+      cutStart: range.cutStart,
+      cutEnd: range.cutEnd,
+      isCut: Boolean(range.isCut),
+      proposalId: range.proposalId,
+      restoreTime,
+      hasJumped: false,
+    };
+    setActivePreviewProposalId(range.proposalId || null);
+
     video.currentTime = range.start;
     if (bgVideoRef.current) bgVideoRef.current.currentTime = range.start;
+
+    // High-frequency frame checker for instantaneous seamless jump
+    const checkJump = () => {
+      const v = videoRef.current;
+      const ctx = contextPreviewRef.current;
+      if (!v || !ctx || v.paused) return;
+      const now = v.currentTime;
+
+      if (ctx.isCut && ctx.cutStart != null && ctx.cutEnd != null && !ctx.hasJumped) {
+        if (now >= ctx.cutStart - 0.03 && now < ctx.cutEnd) {
+          ctx.hasJumped = true;
+          v.currentTime = ctx.cutEnd;
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = ctx.cutEnd;
+          setCurrentTime(clamp(ctx.cutEnd - clipStart, 0, clipDuration));
+        }
+      }
+
+      if (now >= ctx.sourceEnd - 0.05) {
+        handleStopPreviewContext();
+        return;
+      }
+
+      if (contextPreviewRef.current) {
+        requestAnimationFrame(checkJump);
+      }
+    };
+
     video.play().then(() => {
       setIsPlaying(true);
       if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
+      requestAnimationFrame(checkJump);
     }).catch(() => {
       contextPreviewRef.current = null;
+      setActivePreviewProposalId(null);
       setIsPlaying(false);
       setPlaybackFeedback('Source preview could not start. Tap play manually.');
       setTimeout(() => setPlaybackFeedback(null), 3500);
@@ -2902,12 +2993,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const effectiveSourceForContext = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
     if (effectiveSourceForContext && contextPreviewRef.current) {
       const context = contextPreviewRef.current;
-      if (cur >= context.sourceEnd) {
-        contextPreviewRef.current = null;
-        video.pause();
-        if (bgVideoRef.current) bgVideoRef.current.pause();
-        setIsPlaying(false);
-        handleSeek(context.restoreTime);
+      if (context.isCut && context.cutStart != null && context.cutEnd != null && !context.hasJumped) {
+        if (cur >= context.cutStart - 0.03 && cur < context.cutEnd) {
+          context.hasJumped = true;
+          video.currentTime = context.cutEnd;
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = context.cutEnd;
+          setCurrentTime(clamp(context.cutEnd - clipStart, 0, clipDuration));
+          return;
+        }
+      }
+      if (cur >= context.sourceEnd - 0.05) {
+        handleStopPreviewContext();
         return;
       }
       setCurrentTime(clamp(cur - clipStart, 0, clipDuration));
@@ -3922,6 +4018,22 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         }
       })
     );
+
+    // If currently previewing, re-audition immediately with updated choice (Instant A/B comparison)
+    if (activePreviewProposalId === proposalId) {
+      const prop = autoCutProposals.find((p) => p.id === proposalId);
+      if (prop) {
+        const win = computeContextWindow(prop.source_start, prop.source_end, duration || 60, 2.5);
+        handlePreviewContext({
+          start: win.winStart,
+          end: win.winEnd,
+          cutStart: prop.source_start,
+          cutEnd: prop.source_end,
+          isCut: choice === 'cut',
+          proposalId,
+        });
+      }
+    }
   };
 
   const handleSeekSourceTime = (sourceSec: number) => {
@@ -5941,6 +6053,11 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             isCompact={false}
             isDetail={true}
             onVideoClick={() => {
+              if (showAutoCutDrawer) {
+                stopPreviewRef.current();
+                setShowAutoCutDrawer(false);
+                return;
+              }
               if (selectedGroupId || isVideoSelected) {
                 handleClearSelection();
               } else {
@@ -6071,11 +6188,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 duration={duration || currentClip.duration || 40}
                 clipStart={currentClip.start_time || 0}
                 clipEnd={currentClip.end_time || duration || 40}
+                previewingProposalId={activePreviewProposalId}
                 onPreviewContext={handlePreviewContext}
                 onSeekSourceTime={handleSeekSourceTime}
                 onToggleDecision={handleToggleAutoCutDecision}
                 onApply={handleApplyAutoCut}
-                onClose={() => setShowAutoCutDrawer(false)}
+                onClose={() => {
+                  stopPreviewRef.current();
+                  setShowAutoCutDrawer(false);
+                }}
                 isApplying={autoCutLoading}
               />
             </div>

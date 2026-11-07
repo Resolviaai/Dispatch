@@ -15,7 +15,16 @@ import {
   Zap,
 } from 'lucide-react';
 import { FilmstripData } from './filmstrip';
-import { MiniFilmstrip } from './MiniFilmstrip';
+import { MiniFilmstrip, computeContextWindow } from './MiniFilmstrip';
+
+export interface ContextPreviewRange {
+  start: number;
+  end: number;
+  cutStart?: number;
+  cutEnd?: number;
+  isCut?: boolean;
+  proposalId?: string;
+}
 
 export interface AutoCutProposal {
   id: string;
@@ -52,7 +61,8 @@ export interface SpeechCleanupWorkspaceProps {
   duration: number;
   clipStart?: number;
   clipEnd?: number;
-  onPreviewContext: (range: { start: number; end: number }) => void;
+  previewingProposalId?: string | null;
+  onPreviewContext: (range: ContextPreviewRange) => void;
   onSeekSourceTime?: (sourceTime: number) => void;
   onToggleDecision: (proposalId: string, choice: 'cut' | 'keep') => void;
   onApply: () => void;
@@ -166,6 +176,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   duration,
   clipStart = 0,
   clipEnd = 60,
+  previewingProposalId = null,
   onPreviewContext,
   onSeekSourceTime,
   onToggleDecision,
@@ -202,9 +213,9 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col bg-surface border-t border-border text-text-main select-none overflow-hidden">
-      {/* 1. COMPACT HEADER: Category Filters + Close (Unified single row) */}
-      <header className="shrink-0 h-11 px-3 border-b border-border bg-surface flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0">
+      {/* 1. COMPACT HEADER: Category Filters (Full-width single row, tap empty stage to close) */}
+      <header className="shrink-0 h-11 px-3 border-b border-border bg-surface flex items-center">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar w-full">
           {(
             [
               { id: 'all', label: 'All', count: counts.all },
@@ -233,15 +244,6 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
             );
           })}
         </div>
-
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close Speech Cleanup"
-          className="w-7 h-7 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95] transition-all shrink-0"
-        >
-          <X size={14} />
-        </button>
       </header>
 
       {/* 2. COMPACT DETECTION LIST */}
@@ -339,23 +341,55 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                       onSeek={onSeekSourceTime}
                     />
 
-                    {/* Action Controls Row: Single Toggle Decision + Contextual Preview */}
+                    {/* Action Controls Row: Single Toggle Decision + Contextual Jump-Cut Preview */}
                     <div className="flex items-center justify-between gap-3 pt-0.5">
-                      {/* Contextual Preview Button */}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onPreviewContext({
-                            start: Math.max(0, prop.source_start - 0.5),
-                            end: Math.min(clipEnd || duration || 60, prop.source_end + 0.5),
-                          })
-                        }
-                        className="min-h-[38px] px-3.5 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center gap-1.5 active:scale-[0.98] transition-all"
-                        title="Preview cut in context"
-                      >
-                        <Play size={12} className="fill-current text-primary" />
-                        <span>Preview</span>
-                      </button>
+                      {/* Contextual Jump-Cut Preview Button */}
+                      {(() => {
+                        const isPreviewingThis = previewingProposalId === prop.id;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const win = computeContextWindow(
+                                prop.source_start,
+                                prop.source_end,
+                                clipEnd || duration || 60,
+                                2.5
+                              );
+                              onPreviewContext({
+                                start: win.winStart,
+                                end: win.winEnd,
+                                cutStart: prop.source_start,
+                                cutEnd: prop.source_end,
+                                isCut: effective === 'cut',
+                                proposalId: prop.id,
+                              });
+                            }}
+                            className={`min-h-[38px] px-3.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                              isPreviewingThis
+                                ? 'bg-primary/20 border-primary text-primary font-semibold'
+                                : 'bg-surface-2 hover:bg-surface-3 border-border text-text-main'
+                            }`}
+                            title={
+                              isPreviewingThis
+                                ? 'Stop context preview'
+                                : 'Audition section (2.5s before & after with seamless jump-cut)'
+                            }
+                          >
+                            {isPreviewingThis ? (
+                              <>
+                                <span className="w-2 h-2 rounded-full bg-primary animate-ping mr-0.5" />
+                                <span>Playing…</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play size={12} className="fill-current text-primary" />
+                                <span>Preview</span>
+                              </>
+                            )}
+                          </button>
+                        );
+                      })()}
 
                       {/* Single Decision Toggle: Cut vs Keep */}
                       <button
