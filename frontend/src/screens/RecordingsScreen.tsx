@@ -289,6 +289,57 @@ export const resolveSessionStage = (session: UnifiedSession): SessionStageInfo =
 type ViewMode = 'library' | 'detail';
 type FilterStatus = 'all' | 'ready' | 'processing' | 'queued' | 'failed';
 
+function extractDirectThumbnail(
+  videoId: string,
+  streamUrl: string,
+  onCaptured: (thumb: string) => void
+) {
+  if (typeof window === 'undefined') return;
+  const v = document.createElement('video');
+  v.crossOrigin = 'anonymous';
+  v.preload = 'auto';
+  v.muted = true;
+  v.playsInline = true;
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    v.src = '';
+    v.remove();
+  };
+  const timer = setTimeout(finish, 10000);
+  v.onloadeddata = () => {
+    v.currentTime = Math.min(1.0, Math.max(0.1, (v.duration || 1) / 4));
+  };
+  v.onseeked = () => {
+    if (done) return;
+    clearTimeout(timer);
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.min(v.videoWidth || 360, 640);
+      canvas.height = Math.round(canvas.width * ((v.videoHeight || 640) / (v.videoWidth || 360)));
+      const ctx = canvas.getContext('2d');
+      if (ctx && canvas.width > 0 && canvas.height > 0) {
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        onCaptured(dataUrl);
+        try {
+          localStorage.setItem('thumb_' + videoId, dataUrl);
+          const raw = videoId.replace(/^dir_/, '');
+          localStorage.setItem('thumb_' + raw, dataUrl);
+          localStorage.setItem('thumb_dir_' + raw, dataUrl);
+        } catch {}
+      }
+    } catch {}
+    finish();
+  };
+  v.onerror = () => {
+    clearTimeout(timer);
+    finish();
+  };
+  v.src = streamUrl;
+}
+
 interface RecordingsScreenProps {
   recordings: RecordingItem[];
   isYouTubeConnected: boolean;
@@ -326,6 +377,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>({});
   const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
   const [resolvedBytes, setResolvedBytes] = useState<Record<string, number>>({});
+  const [directThumbnails, setDirectThumbnails] = useState<Record<string, string>>({});
+  const probedDirectIdsRef = useRef<Set<string>>(new Set());
   const lastSchedulerNudgeRef = useRef(0);
 
   useEffect(() => {
@@ -401,13 +454,26 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   useEffect(() => {
     inboxItems.forEach(async (item) => {
       if (item.video_id.startsWith('dir_')) {
-        const needsDuration = !resolvedDurations[item.video_id] && (!item.duration || item.duration <= 0);
-        if (needsDuration && !routeCMediaUrls[item.video_id]) {
+        const cachedThumb = typeof window !== 'undefined'
+          ? (localStorage.getItem('thumb_' + item.video_id) ||
+             localStorage.getItem('thumb_' + item.video_id.replace(/^dir_/, '')) ||
+             localStorage.getItem('thumb_dir_' + item.video_id.replace(/^dir_/, '')))
+          : null;
+        if (cachedThumb && !directThumbnails[item.video_id]) {
+          setDirectThumbnails(prev => ({ ...prev, [item.video_id]: cachedThumb }));
+        }
+
+        const needsStream = !routeCMediaUrls[item.video_id] && !probedDirectIdsRef.current.has(item.video_id);
+        if (needsStream) {
+          probedDirectIdsRef.current.add(item.video_id);
           try {
             const sess = await currentSession().catch(() => null);
             const token = sess?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
             if (!token) return;
-            const rawObjId = item.video_id.replace(/^dir_/, '').replace(/-/g, '').replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, '$1-$2-$3-$4-$5');
+            const cleanId = item.video_id.replace(/^dir_/, '');
+            const rawObjId = cleanId.includes('-')
+              ? cleanId
+              : cleanId.replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, '$1-$2-$3-$4-$5');
             const res = await fetch(WORKER_BASE + '/media-url', {
               method: 'POST',
               headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -425,25 +491,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               if (data.byte_count && data.byte_count > 0) {
                 setResolvedBytes(prev => ({ ...prev, [item.video_id]: data.byte_count }));
               }
-              if ((!data.duration || data.duration <= 0) && !resolvedDurations[item.video_id] && typeof window !== 'undefined') {
-                try {
-                  const probeEl = document.createElement('video');
-                  probeEl.preload = 'metadata';
-                  probeEl.src = streamUrl;
-                  probeEl.onloadedmetadata = () => {
-                    if (probeEl.duration && probeEl.duration > 0) {
-                      setResolvedDurations(prev => ({ ...prev, [item.video_id]: Math.round(probeEl.duration) }));
-                    }
-                    probeEl.src = '';
-                    probeEl.remove();
-                  };
-                  probeEl.onerror = () => {
-                    probeEl.src = '';
-                    probeEl.remove();
-                  };
-                } catch {
-                  /* ignore probe failure */
-                }
+              if (!cachedThumb && !directThumbnails[item.video_id]) {
+                extractDirectThumbnail(item.video_id, streamUrl, (thumb) => {
+                  setDirectThumbnails(prev => ({ ...prev, [item.video_id]: thumb }));
+                });
               }
             }
           } catch {
@@ -969,8 +1020,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         }
       }
 
-      const thumbUrl = itemClips[0]?.thumbnail_url || undefined;
-      const directVideoUrl = item.video_id.startsWith('dir_')
+      const isDirect = item.video_id.startsWith('dir_');
+      const cachedDirectThumb = isDirect ? (
+        directThumbnails[item.video_id] ||
+        (typeof window !== 'undefined' ? (
+          localStorage.getItem('thumb_' + item.video_id) ||
+          localStorage.getItem('thumb_' + item.video_id.replace(/^dir_/, '')) ||
+          localStorage.getItem('thumb_dir_' + item.video_id.replace(/^dir_/, ''))
+        ) : null) || undefined
+      ) : undefined;
+
+      const thumbUrl = itemClips[0]?.thumbnail_url || (isDirect ? cachedDirectThumb : undefined);
+      const directVideoUrl = isDirect
         ? (routeCMediaUrls[item.video_id] || (pcHost && pcStatus.online ? apiUrl('/api/clips/' + item.video_id + '/source', pcHost) : undefined))
         : undefined;
 
@@ -994,7 +1055,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
     list.sort((a, b) => b.createdAt - a.createdAt);
     return list;
-  }, [nativeSessions, inboxItems, clips, resolvedDurations, resolvedTitles, resolvedBytes, routeCMediaUrls, pcHost, pcStatus.online]);
+  }, [nativeSessions, inboxItems, clips, resolvedDurations, resolvedTitles, resolvedBytes, routeCMediaUrls, directThumbnails, pcHost, pcStatus.online]);
 
   // Active Session Detail item
   const currentSessionDetail = useMemo(() => {
@@ -1004,49 +1065,69 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
   useEffect(() => {
     setVideoPlaybackError(null);
-    setRouteCMediaUrl(null);
-    if (!selectedSessionId) return;
+    if (!selectedSessionId) {
+      setRouteCMediaUrl(null);
+      return;
+    }
 
-    const s = unifiedSessions.find(item => item.id === selectedSessionId);
-    if (s && s.origin === 'direct') {
+    if (selectedSessionId.startsWith('dir_')) {
       if (pcHost && pcStatus.online) {
-        setRouteCMediaUrl(apiUrl('/api/clips/' + s.id + '/source', pcHost));
-      } else {
-        // Fetch presigned R2 URL from Cloudflare Worker
-        (async () => {
-          setIsRouteCLoading(true);
-          try {
-            const sess = await currentSession().catch(() => null);
-            const token = sess?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
-            if (!token) return;
+        setRouteCMediaUrl(apiUrl('/api/clips/' + selectedSessionId + '/source', pcHost));
+        return;
+      }
+      // If we already resolved the stream URL for this session ID, use it directly without clearing or re-fetching
+      if (routeCMediaUrls[selectedSessionId]) {
+        setRouteCMediaUrl(routeCMediaUrls[selectedSessionId]);
+        return;
+      }
 
-            // Raw object ID from dir_<object_id> (format with UUID dashes if 32 hex chars)
-            const cleanId = s.id.replace(/^dir_/, '');
-            const rawObjId = cleanId.includes('-')
-              ? cleanId
-              : cleanId.replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, '$1-$2-$3-$4-$5');
-            const res = await fetch(WORKER_BASE + '/media-url', {
-              method: 'POST',
-              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ media_object_id: rawObjId }),
-            });
-            const data = await res.json().catch(() => null);
-            if (res.ok && data?.url) {
-              const streamUrl = data.url.includes('sig=')
-                ? data.url
-                : (data.url.includes('?') ? `${data.url}&token=${encodeURIComponent(token)}` : `${data.url}?token=${encodeURIComponent(token)}`);
-              setRouteCMediaUrl(streamUrl);
-              setRouteCMediaUrls(prev => ({ ...prev, [s.id]: streamUrl }));
+      // Otherwise fetch stream URL from Cloudflare Worker
+      let isCancelled = false;
+      setIsRouteCLoading(true);
+      (async () => {
+        try {
+          const sess = await currentSession().catch(() => null);
+          const token = sess?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+          if (!token) return;
+
+          const cleanId = selectedSessionId.replace(/^dir_/, '');
+          const rawObjId = cleanId.includes('-')
+            ? cleanId
+            : cleanId.replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, '$1-$2-$3-$4-$5');
+          const res = await fetch(WORKER_BASE + '/media-url', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ media_object_id: rawObjId }),
+          });
+          const data = await res.json().catch(() => null);
+          if (res.ok && data?.url && !isCancelled) {
+            const streamUrl = data.url.includes('sig=')
+              ? data.url
+              : (data.url.includes('?') ? `${data.url}&token=${encodeURIComponent(token)}` : `${data.url}?token=${encodeURIComponent(token)}`);
+            setRouteCMediaUrl(streamUrl);
+            setRouteCMediaUrls(prev => ({ ...prev, [selectedSessionId]: streamUrl }));
+            if (!directThumbnails[selectedSessionId]) {
+              extractDirectThumbnail(selectedSessionId, streamUrl, (thumb) => {
+                setDirectThumbnails(prev => ({ ...prev, [selectedSessionId]: thumb }));
+              });
             }
-          } catch (e) {
-            console.warn('Failed to load direct video cloud URL:', e);
-          } finally {
+          }
+        } catch (e) {
+          console.warn('Failed to load direct video cloud URL:', e);
+        } finally {
+          if (!isCancelled) {
             setIsRouteCLoading(false);
           }
-        })();
-      }
+        }
+      })();
+
+      return () => {
+        isCancelled = true;
+      };
+    } else {
+      setRouteCMediaUrl(null);
     }
-  }, [selectedSessionId, pcHost, pcStatus.online, unifiedSessions]);
+  }, [selectedSessionId, pcHost, pcStatus.online, routeCMediaUrls]);
 
   // Tab Filtering (Clean, zero search overhead)
   const filteredSessions = useMemo(() => {
@@ -1189,6 +1270,33 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       handleImportSubmit(`https://youtu.be/${session.youtubeVideoId}`);
       return;
     }
+    if (session.origin === 'direct') {
+      const cleanId = session.id.replace(/^dir_/, '');
+      const rawObjId = cleanId.includes('-')
+        ? cleanId
+        : cleanId.replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, '$1-$2-$3-$4-$5');
+      (async () => {
+        try {
+          const sess = await currentSession().catch(() => null);
+          const token = sess?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+          if (!token) return;
+          const res = await fetch(`${WORKER_BASE}/jobs/direct`, {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ media_object_id: rawObjId, title: session.title }),
+          });
+          if (res.ok) {
+            showToast('Direct video re-queued for processing!');
+            fetchInbox();
+          } else {
+            showToast('Failed to re-queue processing.', 'error');
+          }
+        } catch {
+          showToast('Failed to re-queue processing.', 'error');
+        }
+      })();
+      return;
+    }
     showToast('This session has no uploaded source to re-process.', 'error');
   };
 
@@ -1214,6 +1322,37 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     const isReady = s.status === 'ready' || s.clipCount > 0;
     const isProcessing = s.status === 'processing' && s.clipCount === 0;
     const isFailed = s.status === 'failed' && s.clipCount === 0;
+
+    const effectiveVideoUrl = (() => {
+      const directCandidate = routeCMediaUrl || routeCMediaUrls[s.id] || s.videoUrl;
+      if (directCandidate) {
+        return directCandidate.startsWith('http') ? directCandidate : apiUrl(directCandidate, pcHost);
+      }
+      if (s.origin === 'direct' && pcHost && pcStatus.online) {
+        return apiUrl(`/api/clips/${s.id}/source`, pcHost);
+      }
+      if (s.videoUrl) {
+        return s.videoUrl.startsWith('http') ? s.videoUrl : apiUrl(s.videoUrl, pcHost);
+      }
+      return '';
+    })();
+
+    const effectivePoster = (() => {
+      const candidate = s.thumbnailUrl || directThumbnails[s.id] || (typeof window !== 'undefined' ? (
+        localStorage.getItem('thumb_' + s.id) ||
+        localStorage.getItem('thumb_' + s.id.replace(/^dir_/, '')) ||
+        localStorage.getItem('thumb_dir_' + s.id.replace(/^dir_/, ''))
+      ) : null);
+      if (!candidate) return undefined;
+      if (candidate.startsWith('http://') || candidate.startsWith('https://') || candidate.startsWith('data:') || candidate.startsWith('blob:')) {
+        return candidate;
+      }
+      if (pcHost && pcStatus.online) {
+        const resolved = apiUrl(candidate, pcHost);
+        return resolved || undefined;
+      }
+      return undefined;
+    })();
 
     return (
       <div className="w-full h-full flex flex-col bg-canvas overflow-hidden">
@@ -1259,32 +1398,48 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         <main className="flex-1 min-h-0 flex flex-col px-4 pt-3 pb-4 gap-4 overflow-y-auto">
           {/* VIDEO / MEDIA STAGE */}
           <div className="w-full aspect-video rounded-xl bg-black overflow-hidden border border-border relative flex items-center justify-center shrink-0 shadow-sm">
-            {(s.videoUrl || routeCMediaUrl || (s.origin === 'direct' && pcHost && pcStatus.online)) && !videoPlaybackError ? (
+            {effectiveVideoUrl && !videoPlaybackError ? (
               <video
-                src={
-                  (s.videoUrl || routeCMediaUrl)
-                    ? ((s.videoUrl || routeCMediaUrl)!.startsWith('http') ? (s.videoUrl || routeCMediaUrl)! : apiUrl((s.videoUrl || routeCMediaUrl)!, pcHost))
-                    : apiUrl(`/api/clips/${s.id}/source`, pcHost)
-                }
-                poster={s.thumbnailUrl
-                  ? (s.thumbnailUrl.startsWith('http')
-                    ? s.thumbnailUrl
-                    : apiUrl(s.thumbnailUrl, pcHost))
-                  : undefined}
+                key={`${s.id}-${effectiveVideoUrl}`}
+                src={effectiveVideoUrl}
+                poster={effectivePoster}
                 controls
                 playsInline
+                crossOrigin="anonymous"
                 onLoadedMetadata={(e) => {
                   const d = e.currentTarget.duration;
                   if (d && d > 0 && s.totalDuration <= 0) {
                     setResolvedDurations(prev => ({ ...prev, [s.id]: Math.round(d) }));
                   }
                 }}
+                onLoadedData={(e) => {
+                  const el = e.currentTarget;
+                  if (!effectivePoster && el.videoWidth > 0 && el.videoHeight > 0) {
+                    try {
+                      const canvas = document.createElement('canvas');
+                      canvas.width = Math.min(el.videoWidth, 640);
+                      canvas.height = Math.round(canvas.width * (el.videoHeight / el.videoWidth));
+                      const ctx = canvas.getContext('2d');
+                      if (ctx && canvas.width > 0 && canvas.height > 0) {
+                        ctx.drawImage(el, 0, 0, canvas.width, canvas.height);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                        setDirectThumbnails(prev => ({ ...prev, [s.id]: dataUrl }));
+                        try {
+                          localStorage.setItem('thumb_' + s.id, dataUrl);
+                          const raw = s.id.replace(/^dir_/, '');
+                          localStorage.setItem('thumb_' + raw, dataUrl);
+                          localStorage.setItem('thumb_dir_' + raw, dataUrl);
+                        } catch {}
+                      }
+                    } catch {}
+                  }
+                }}
                 onError={(e) => {
                   const el = e.currentTarget as HTMLVideoElement;
                   const code = el.error?.code ?? 'none';
                   setVideoPlaybackError(
-                    `Media error ${code} · readyState ${el.readyState} · networkState ${el.networkState}. `
-                    + 'The file is still on this device.'
+                    `Playback issue (${code}) · readyState ${el.readyState}. `
+                    + (s.origin === 'direct' ? 'Cloud stream failed to buffer. Check your connection.' : 'The file is still on this device.')
                   );
                 }}
                 className="w-full h-full object-contain"
@@ -1302,19 +1457,30 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 <div className="flex items-center justify-center gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => Bridge.openNativePreview(s.id)}
-                    className="min-h-[38px] px-3.5 rounded-lg bg-primary text-white text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all"
+                    onClick={() => {
+                      setVideoPlaybackError(null);
+                      setRouteCMediaUrl(null);
+                      setRouteCMediaUrls(prev => {
+                        const copy = { ...prev };
+                        delete copy[s.id];
+                        return copy;
+                      });
+                    }}
+                    className="min-h-[38px] px-3.5 rounded-lg bg-primary text-white text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all shadow-hero-glow"
                   >
-                    <Play size={12} className="fill-white" />
-                    <span>Play in Phone Player</span>
+                    <RotateCw size={12} />
+                    <span>Reload Video</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setVideoPlaybackError(null)}
-                    className="min-h-[38px] px-3 rounded-lg bg-surface-2 border border-border text-text-main text-xs font-semibold active:scale-[0.98] transition-all"
-                  >
-                    Try again
-                  </button>
+                  {s.origin === 'phone' && (
+                    <button
+                      type="button"
+                      onClick={() => Bridge.openNativePreview(s.id)}
+                      className="min-h-[38px] px-3.5 rounded-lg bg-surface-2 border border-border text-text-main text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all"
+                    >
+                      <Play size={12} className="fill-white" />
+                      <span>Play in Phone Player</span>
+                    </button>
+                  )}
                 </div>
               </div>
             ) : isYouTubeId(ytId) ? (
@@ -1646,7 +1812,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const text = s.youtubeVideoId ? `https://youtu.be/${s.youtubeVideoId}` : s.id;
+                  const text = s.youtubeVideoId ? `https://youtu.be/${s.youtubeVideoId}` : (routeCMediaUrl || routeCMediaUrls[s.id] || s.id);
                   handleCopy(text, 'Link');
                 }}
                 className="flex-1 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
@@ -2020,7 +2186,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   )}
                   {session.thumbnailUrl ? (
                     <img
-                      src={session.thumbnailUrl.startsWith('http') ? session.thumbnailUrl : apiUrl(session.thumbnailUrl, pcHost)}
+                      src={
+                        (session.thumbnailUrl.startsWith('http') || session.thumbnailUrl.startsWith('data:') || session.thumbnailUrl.startsWith('blob:'))
+                          ? session.thumbnailUrl
+                          : (pcHost && pcStatus.online ? apiUrl(session.thumbnailUrl, pcHost) : '')
+                      }
                       alt=""
                       className="absolute inset-0 w-full h-full object-cover"
                       loading="lazy"

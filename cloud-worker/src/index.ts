@@ -2152,8 +2152,7 @@ export default {
       if (dur && dur > 0) {
         return json(200, { duration: dur, title: title || null }, '*');
       }
-      const dbg = await probeYouTubeDurationDebug(vId);
-      return json(200, { duration: null, title: title || null, debug: dbg }, '*');
+      return json(200, { duration: null, title: title || null }, '*');
     }
 
     // ---- Per-User Gemini API Keys Vault ----
@@ -4874,11 +4873,12 @@ export default {
       return json(404, { error: "not found" });
     } catch (e: unknown) {
       console.error("Worker unhandled exception:", e);
-      const isHtml = request.headers.get("accept")?.includes("text/html") || request.method === "GET";
-      if (isHtml) {
+      const isOauth = typeof url !== "undefined" && url.pathname.startsWith("/oauth");
+      const wantsHtml = request.headers.get("accept")?.includes("text/html");
+      if (isOauth && wantsHtml) {
         return renderOAuthResultHtml("Temporary Service Error", (e instanceof Error ? e.message : String(e)) || "An unexpected error occurred. Please retry from Dispatch.", true);
       }
-      return json(500, { error: `worker error: ${e instanceof Error ? e.message : String(e)}` });
+      return json(500, { error: `worker error: ${e instanceof Error ? e.message : String(e)}` }, "*");
     }
   },
 

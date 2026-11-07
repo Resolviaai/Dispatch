@@ -273,6 +273,7 @@ class MainActivity : ComponentActivity() {
             .build()
 
         // Configure full-bleed WebView with transparent background
+        WebView.setWebContentsDebuggingEnabled(true)
         webView = WebView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             setLayerType(View.LAYER_TYPE_NONE, null)
@@ -292,7 +293,7 @@ class MainActivity : ComponentActivity() {
                 // is http://appassets.androidplatform.net (no https page, so no
                 // mixed content is possible and LAN http media still plays);
                 // externally-served https pages are the protected surface here.
-                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 mediaPlaybackRequiresUserGesture = false
                 loadWithOverviewMode = true
                 useWideViewPort = true

@@ -165,11 +165,29 @@ export const ActivityProvider: React.FC<{
     setActiveDirectUpload(state);
 
     const objectUrl = URL.createObjectURL(file);
+    let capturedThumbnail: string | null = null;
     try {
       const durationSec = await new Promise<number>((resolve, reject) => {
         const probe = document.createElement('video');
         probe.preload = 'metadata';
-        probe.onloadedmetadata = () => resolve(probe.duration || 0);
+        probe.muted = true;
+        probe.playsInline = true;
+        probe.onloadedmetadata = () => {
+          probe.currentTime = Math.min(1.0, Math.max(0.1, (probe.duration || 1) / 4));
+        };
+        probe.onseeked = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.min(probe.videoWidth || 360, 640);
+            canvas.height = Math.round(canvas.width * ((probe.videoHeight || 640) / (probe.videoWidth || 360)));
+            const ctx = canvas.getContext('2d');
+            if (ctx && canvas.width > 0 && canvas.height > 0) {
+              ctx.drawImage(probe, 0, 0, canvas.width, canvas.height);
+              capturedThumbnail = canvas.toDataURL('image/jpeg', 0.85);
+            }
+          } catch {}
+          resolve(probe.duration || 0);
+        };
         probe.onerror = () => reject(new Error('Could not read this video.'));
         probe.src = objectUrl;
       });
@@ -249,6 +267,15 @@ export const ActivityProvider: React.FC<{
       const complete = await completeRes.json().catch(() => null);
       if (!completeRes.ok || !complete?.object_id) {
         throw new Error(complete?.error || `Upload could not be finalized (HTTP ${completeRes.status}).`);
+      }
+
+      if (capturedThumbnail) {
+        const normObjId = complete.object_id.replace(/-/g, '');
+        try {
+          localStorage.setItem(`thumb_dir_${normObjId}`, capturedThumbnail);
+          localStorage.setItem(`thumb_dir_${complete.object_id}`, capturedThumbnail);
+          localStorage.setItem(`thumb_${complete.object_id}`, capturedThumbnail);
+        } catch {}
       }
 
       const rawTitle = file.name.replace(/\.mp4$/i, '').trim();
