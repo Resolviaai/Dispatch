@@ -1,8 +1,8 @@
 # November 5 Context: Dispatch Architecture, Verification & Handoff
 **Date:** November 5–7, 2026  
 **Status:** Architecture Reconciled & Verified / Ready for Production Continuation  
-**Current Release:** v1.7.32 (Build 100) — Built, signed, verified, and pushed to GitHub `origin/main`.  
-**Latest Git Hash:** `29a6228` (Route A fail-closed empty cloud account, OAuth callback regression tests, and full identity enforcement)
+**Current Release:** v1.7.33 (Build 101) — Built, signed, verified, and pushed to GitHub `origin/main`.  
+**Latest Git Hash:** `0411294` (Direct upload video streaming via Cloudflare R2 worker proxy, permanent R2 Instagram avatar caching, crash recovery stages, and tenant isolation)
 
 ---
 
