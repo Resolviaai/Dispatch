@@ -2985,7 +2985,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       const now = v.currentTime;
 
       if (ctx.isCut && ctx.cutStart != null && ctx.cutEnd != null && !ctx.hasJumped) {
-        if (now >= ctx.cutStart - 0.03 && now < ctx.cutEnd) {
+        if (now >= ctx.cutStart - 0.04 && now <= ctx.cutEnd + 0.1) {
           ctx.hasJumped = true;
           v.currentTime = ctx.cutEnd;
           if (bgVideoRef.current) bgVideoRef.current.currentTime = ctx.cutEnd;
@@ -3024,7 +3024,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (contextPreviewRef.current) {
       const context = contextPreviewRef.current;
       if (context.isCut && context.cutStart != null && context.cutEnd != null && !context.hasJumped) {
-        if (cur >= context.cutStart - 0.03 && cur < context.cutEnd) {
+        if (cur >= context.cutStart - 0.04 && cur <= context.cutEnd + 0.1) {
           context.hasJumped = true;
           video.currentTime = context.cutEnd;
           if (bgVideoRef.current) bgVideoRef.current.currentTime = context.cutEnd;
@@ -3978,10 +3978,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       .filter((w) => w && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
       .sort((a, b) => a.start - b.start);
 
-    // 1. Contextual filler words & obvious hesitation sounds
+    // 1. Contextual filler words & obvious hesitation sounds (English + Hindi/Hinglish)
+    const unambiguousFillers = new Set(['um', 'uh', 'umm', 'uhh', 'er', 'ah', 'erm']);
+    const hinglishDiscourseMarkers = new Set([
+      'matlab', 'samjho', 'arre', 'yaar', 'dekho', 'sun', 'basically', 'actually', 'literally', 'you know'
+    ]);
+
     allWords.forEach((w, idx) => {
       const clean = w.text.toLowerCase().replace(/[^\w]/g, '');
-      if (['um', 'uh', 'umm', 'uhh', 'er', 'ah'].includes(clean)) {
+      if (unambiguousFillers.has(clean)) {
         proposals.push({
           id: `local_filler_${idx}`,
           type: 'filler',
@@ -3995,7 +4000,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       } else if (clean === 'like') {
         const prev = idx > 0 ? allWords[idx - 1].text.toLowerCase().replace(/[^\w]/g, '') : '';
         const nxt = idx < allWords.length - 1 ? allWords[idx + 1].text.toLowerCase().replace(/[^\w]/g, '') : '';
-        const isLexical = ['i', 'we', 'they', 'you'].includes(prev) || ['to', 'a', 'this', 'that'].includes(nxt);
+        const isLexical = ['i', 'we', 'they', 'you', 'he', 'she'].includes(prev) || ['to', 'a', 'this', 'that'].includes(nxt);
         proposals.push({
           id: `local_like_${idx}`,
           type: 'filler',
@@ -4006,52 +4011,102 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           confidence: isLexical ? 0.9 : 0.7,
           decision: isLexical ? 'PRESERVE' : 'REVIEW',
         });
+      } else if (hinglishDiscourseMarkers.has(clean)) {
+        proposals.push({
+          id: `local_hinglish_${idx}`,
+          type: 'filler',
+          source_start: roundMs(w.start),
+          source_end: roundMs(w.end),
+          duration: roundMs(w.end - w.start),
+          reason: `Conversational marker '${w.text}'`,
+          confidence: 0.75,
+          decision: 'REVIEW',
+        });
       }
     });
 
-    // 2. Extended pause gaps
+    // 2. Short-form dead air pauses (>= 0.8s)
     for (let i = 0; i < allWords.length - 1; i++) {
       const currEnd = allWords[i].end;
       const nextStart = allWords[i + 1].start;
       const gap = nextStart - currEnd;
-      if (gap >= 2.5) {
-        const cutStart = currEnd + 0.4;
-        const cutEnd = nextStart - 0.4;
-        if (cutEnd > cutStart + 0.2) {
+      if (gap >= 0.8) {
+        // Leave 0.15s release after previous word and 0.15s attack before next word
+        const cutStart = currEnd + 0.15;
+        const cutEnd = nextStart - 0.15;
+        if (cutEnd > cutStart + 0.15) {
+          const isExtended = gap >= 1.5;
           proposals.push({
             id: `local_gap_${i}`,
             type: 'dead_air',
             source_start: roundMs(cutStart),
             source_end: roundMs(cutEnd),
             duration: roundMs(cutEnd - cutStart),
-            reason: `Extended pause (${gap.toFixed(1)}s trimmed down to 0.8s)`,
-            confidence: 0.9,
-            decision: 'REVIEW',
+            reason: isExtended
+              ? `Extended silence (${gap.toFixed(1)}s trimmed to 0.3s)`
+              : `Hesitation pause (${gap.toFixed(1)}s trimmed to 0.3s)`,
+            confidence: isExtended ? 0.95 : 0.85,
+            decision: isExtended ? 'AUTO-REMOVE' : 'REVIEW',
           });
         }
       }
     }
 
-    // 3. Stutter & false start repetition loops (repeated 1-3 words within 2.5s)
-    for (let i = 0; i < allWords.length - 1; i++) {
-      const clean1 = allWords[i].text.toLowerCase().replace(/[^\w]/g, '');
-      const clean2 = allWords[i + 1].text.toLowerCase().replace(/[^\w]/g, '');
-      if (clean1 && clean1 === clean2 && clean1.length > 1) {
-        const gap = allWords[i + 1].start - allWords[i].start;
-        if (gap <= 2.5) {
-          proposals.push({
-            id: `local_stutter_${i}`,
-            type: 'false_start',
-            source_start: roundMs(allWords[i].start),
-            source_end: roundMs(allWords[i + 1].start),
-            duration: roundMs(allWords[i + 1].start - allWords[i].start),
-            reason: `Stutter repetition of '${allWords[i].text}'`,
-            confidence: 0.85,
-            decision: 'REVIEW',
-            word: allWords[i].text,
-          });
+    // 3. Stutter & false start repetition loops (1-word and 2-word n-grams)
+    let wIdx = 0;
+    while (wIdx < allWords.length - 1) {
+      let matched = false;
+      // Try 2-word phrase repetition (e.g. "phir tut... phir tut", "I think... I think")
+      if (wIdx + 3 < allWords.length) {
+        const c0 = allWords[wIdx].text.toLowerCase().replace(/[^\w]/g, '');
+        const c1 = allWords[wIdx + 1].text.toLowerCase().replace(/[^\w]/g, '');
+        const c2 = allWords[wIdx + 2].text.toLowerCase().replace(/[^\w]/g, '');
+        const c3 = allWords[wIdx + 3].text.toLowerCase().replace(/[^\w]/g, '');
+        if (c0 && c1 && c0 === c2 && c1 === c3 && (allWords[wIdx + 2].start - allWords[wIdx].start) <= 3.0) {
+          const cutStart = allWords[wIdx].start;
+          const cutEnd = allWords[wIdx + 2].start;
+          if (cutEnd > cutStart + 0.1) {
+            proposals.push({
+              id: `local_stutter_2w_${wIdx}`,
+              type: 'false_start',
+              source_start: roundMs(cutStart),
+              source_end: roundMs(cutEnd),
+              duration: roundMs(cutEnd - cutStart),
+              reason: `Redundant restart of '${allWords[wIdx].text} ${allWords[wIdx + 1].text}'`,
+              confidence: 0.9,
+              decision: 'REVIEW',
+              word: `${allWords[wIdx].text} ${allWords[wIdx + 1].text}`,
+            });
+            wIdx += 2;
+            matched = true;
+          }
         }
       }
+
+      // Try 1-word stutter (e.g. "phir... phir", "hum... hum")
+      if (!matched && wIdx + 1 < allWords.length) {
+        const clean1 = allWords[wIdx].text.toLowerCase().replace(/[^\w]/g, '');
+        const clean2 = allWords[wIdx + 1].text.toLowerCase().replace(/[^\w]/g, '');
+        if (clean1 && clean1 === clean2 && clean1.length > 1) {
+          const gap = allWords[wIdx + 1].start - allWords[wIdx].start;
+          if (gap <= 2.5) {
+            proposals.push({
+              id: `local_stutter_1w_${wIdx}`,
+              type: 'false_start',
+              source_start: roundMs(allWords[wIdx].start),
+              source_end: roundMs(allWords[wIdx + 1].start),
+              duration: roundMs(allWords[wIdx + 1].start - allWords[wIdx].start),
+              reason: `Stutter repetition of '${allWords[wIdx].text}'`,
+              confidence: 0.88,
+              decision: 'REVIEW',
+              word: allWords[wIdx].text,
+            });
+            wIdx += 1;
+            matched = true;
+          }
+        }
+      }
+      wIdx++;
     }
 
     return proposals;
@@ -4165,7 +4220,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     setAutoCutLoading(true);
     setFeedback(forceRefresh ? 'Re-analyzing speech with Gemini Flash-Lite...' : 'Analyzing speech with Gemini Flash-Lite & audio waveform...');
 
+    const localProposals = generateLocalAutoCutProposals();
+
     // 1. Direct Phone-to-Gemini Flash-Lite Request (Zero PC server dependency)
+    let geminiProposals: AutoCutProposal[] = [];
     try {
       const session = await currentSession().catch(() => null);
       const token = session?.access_token || null;
@@ -4173,68 +4231,48 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
       if (geminiKey && allWords.length > 0) {
         setFeedback('AI analyzing Hindi/Hinglish speech directly on device...');
-        const geminiProposals = await analyzeSpeechWithGeminiFlashLite(
+        geminiProposals = await analyzeSpeechWithGeminiFlashLite(
           allWords,
           geminiKey,
           clipStartSec,
           clipEndSec
         );
-
-        // Also detect audio gap silences (dead air >= 2.5s) to combine with AI fillers
-        const gapProposals: AutoCutProposal[] = [];
-        const inRangeWords = allWords
-          .filter((w) => w.end > clipStartSec && w.start < clipEndSec)
-          .sort((a, b) => a.start - b.start);
-
-        for (let i = 0; i < inRangeWords.length - 1; i++) {
-          const currEnd = inRangeWords[i].end;
-          const nextStart = inRangeWords[i + 1].start;
-          const gap = nextStart - currEnd;
-          if (gap >= 2.5) {
-            const cutStart = currEnd + 0.4;
-            const cutEnd = nextStart - 0.4;
-            if (cutEnd > cutStart + 0.2) {
-              gapProposals.push({
-                id: `gap_${i}`,
-                type: 'dead_air',
-                source_start: roundMs(cutStart),
-                source_end: roundMs(cutEnd),
-                duration: roundMs(cutEnd - cutStart),
-                reason: `Extended pause (${gap.toFixed(1)}s trimmed down to 0.8s)`,
-                confidence: 0.95,
-                decision: 'REVIEW',
-              });
-            }
-          }
-        }
-
-        // Hybrid Ensemble: combine Gemini AI insights with local deterministic detections so nothing is missed
-        const localProposals = generateLocalAutoCutProposals();
-        const nonOverlappingLocal = localProposals.filter((loc) => {
-          return !geminiProposals.some(
-            (gem) =>
-              (loc.source_start < gem.source_end && loc.source_end > gem.source_start) ||
-              Math.abs(loc.source_start - gem.source_start) < 0.35
-          );
-        });
-
-        const combined = [...geminiProposals, ...gapProposals, ...nonOverlappingLocal].sort(
-          (a, b) => a.source_start - b.source_start
-        );
-        if (combined.length > 0) {
-          autoCutCacheRef.current.set(currentClip.id, { signature, proposals: combined });
-          writeAutoCutCache(currentClip.id, signature, combined);
-          setAutoCutProposals(combined);
-          setFeedback(`Found ${combined.length} speech cleanup suggestions (AI + on-device).`);
-          setAutoCutLoading(false);
-          return;
-        }
       }
     } catch (err) {
       console.warn('Direct Gemini Flash-Lite speech cleanup fallback to local:', err);
     }
 
-    // 2. Hardware-accelerated silence & waveform detection via Android native bridge (if present)
+    // 2. PC Backend Waveform Proposals (if connected to PC backend)
+    let pcProposals: AutoCutProposal[] = [];
+    if (!isCloudMode && pcHost) {
+      try {
+        const session = await currentSession().catch(() => null);
+        const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+        const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/autocut/proposals`, pcHost), {
+          headers: authHeaders,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          pcProposals = (data.proposals || []).map((p: any, idx: number) => ({
+            id: p.id || `pc_${idx + 1}`,
+            type: p.type || 'filler',
+            source_start: roundMs(Number(p.source_start ?? p.start ?? 0)),
+            source_end: roundMs(Number(p.source_end ?? p.end ?? 0)),
+            duration: roundMs(Number(p.duration ?? ((p.source_end ?? 0) - (p.source_start ?? 0)))),
+            reason: p.reason || 'PC waveform & transcript detection',
+            confidence: Number(p.confidence ?? 0.88),
+            decision: (p.decision === 'AUTO-REMOVE' || p.decision === 'PRESERVE' ? p.decision : 'REVIEW') as any,
+            word: p.word,
+          }));
+        }
+      } catch (err) {
+        console.warn('PC backend autocut proposals fetch fallback:', err);
+      }
+    }
+
+    // 3. Android Native Bridge Waveform Proposals (if running on Android with local media)
+    let bridgeProposals: AutoCutProposal[] = [];
     const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
     const mediaPath = (currentClip as any)?.local_path || (currentClip as any)?.source_video_path || (currentClip as any)?.filepath;
     if (bridge?.analyzeAudioWaveformAndSilences && mediaPath) {
@@ -4247,15 +4285,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         if (raw && raw !== '[]') {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const textProposals = generateLocalAutoCutProposals();
-            const fillers = textProposals.filter((p) => p.type === 'filler');
-            const combined: AutoCutProposal[] = [...parsed, ...fillers];
-            autoCutCacheRef.current.set(currentClip.id, { signature, proposals: combined });
-            writeAutoCutCache(currentClip.id, signature, combined);
-            setAutoCutProposals(combined);
-            setFeedback(`Found ${combined.length} on-device auto-cut suggestions.`);
-            setAutoCutLoading(false);
-            return;
+            bridgeProposals = parsed;
           }
         }
       } catch (err) {
@@ -4263,13 +4293,31 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }
     }
 
-    // 3. Client-side heuristic fallback (100% offline, zero server required)
-    const localProposals = generateLocalAutoCutProposals();
-    autoCutCacheRef.current.set(currentClip.id, { signature, proposals: localProposals });
-    writeAutoCutCache(currentClip.id, signature, localProposals);
-    setAutoCutProposals(localProposals);
-    setFeedback(`Loaded ${localProposals.length} client-side suggestions (offline mode).`);
+    // 4. Hybrid Ensemble & Overlap Deduplication
+    const mergeWithoutOverlap = (base: AutoCutProposal[], incoming: AutoCutProposal[]): AutoCutProposal[] => {
+      const nonOverlapping = incoming.filter((inc) => {
+        return !base.some(
+          (b) =>
+            (inc.source_start < b.source_end && inc.source_end > b.source_start) ||
+            Math.abs(inc.source_start - b.source_start) < 0.25
+        );
+      });
+      return [...base, ...nonOverlapping];
+    };
+
+    // Priority: Gemini AI > PC/Bridge Waveform Acoustic > Local Deterministic
+    let ensemble = geminiProposals;
+    ensemble = mergeWithoutOverlap(ensemble, pcProposals);
+    ensemble = mergeWithoutOverlap(ensemble, bridgeProposals);
+    ensemble = mergeWithoutOverlap(ensemble, localProposals);
+    ensemble.sort((a, b) => a.source_start - b.source_start);
+
+    autoCutCacheRef.current.set(currentClip.id, { signature, proposals: ensemble });
+    writeAutoCutCache(currentClip.id, signature, ensemble);
+    setAutoCutProposals(ensemble);
+    setFeedback(`Found ${ensemble.length} speech cleanup suggestions (${geminiProposals.length > 0 ? 'AI + ' : ''}on-device).`);
     setAutoCutLoading(false);
+  };
   };
 
   const handleApplyAutoCut = async () => {

@@ -3,10 +3,11 @@ import { Word } from './types';
 import { roundMs } from './timelineEngine';
 
 const GEMINI_FLASH_LITE_MODELS = [
-  'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
   'gemini-2.5-flash-lite',
+  'gemini-flash-latest',
   'gemini-2.0-flash-lite',
+  'gemini-3.5-flash-lite',
 ];
 
 interface RawGeminiCutProposal {

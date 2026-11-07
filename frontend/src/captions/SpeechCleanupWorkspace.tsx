@@ -366,7 +366,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
                     proposalId: proposal.id,
                   });
                 }}
-                className={`min-h-[40px] px-3.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all ${
+                className={`h-11 min-h-[44px] px-3.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all ${
                   isPreviewingThis
                     ? 'bg-primary/20 border-primary text-primary shadow-hero-sm font-semibold'
                     : 'bg-surface-2 hover:bg-surface-3 border-border text-text-main'
@@ -397,7 +397,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
                   e.stopPropagation();
                   onToggleDecision(proposal.id, effective === 'cut' ? 'keep' : 'cut');
                 }}
-                className={`min-h-[40px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all border ${
+                className={`h-11 min-h-[44px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all border ${
                   effective === 'cut'
                     ? 'bg-primary text-white border-primary shadow-hero-glow'
                     : 'bg-surface-2 text-text-secondary hover:text-text-main border-border'
@@ -587,7 +587,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="h-11 min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
+          className="w-full h-11 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
         >
           Cancel
         </button>
@@ -596,7 +596,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
           type="button"
           onClick={onApply}
           disabled={eligibleCutCount === 0 || isApplying}
-          className="h-11 min-h-[44px] px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full h-11 min-h-[44px] px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isApplying ? (
             <RotateCw size={13} className="animate-spin" />

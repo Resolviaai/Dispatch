@@ -82,7 +82,7 @@ Unlike traditional English-only regex rules that mistakenly cut meaningful words
 ### 3.1 Direct Client-to-API Topology
 Requests are executed directly from the phone via `fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent')` using the user's stored Google AI Studio key.
 * **Zero PC dependency**: Works even when the creator's PC is turned off, sleep mode, or offline.
-* **Model Hierarchy**: `gemini-3.5-flash-lite` $\rightarrow$ fallback `gemini-3.1-flash-lite` $\rightarrow$ `gemini-2.5-flash-lite`.
+* **Model Hierarchy**: `gemini-flash-lite-latest` (primary, verified 200 OK) $\rightarrow$ `gemini-2.5-flash-lite` $\rightarrow$ `gemini-flash-latest` $\rightarrow$ `gemini-2.0-flash-lite`.
 
 ### 3.2 Exhaustive Multi-Pass Instruction System
 ```typescript
@@ -114,18 +114,23 @@ CLASSIFICATION & PRESERVATION RULES:
 
 ---
 
-## 4. The Hybrid Ensemble & Deduplication Engine
+## 4. The Multi-Tier Hybrid Ensemble & Deduplication Engine
 
-To solve the dual failures of "AI under-reporting" and "heuristic false-positives", Dispatch implements an **ensemble union**:
+To solve the dual failures of "AI under-reporting" and "heuristic false-positives", Dispatch implements a **four-tier ensemble**:
 
-1. **Deterministic Run**:
-   - `generateLocalAutoCutProposals()` deterministically extracts all repeated words within 2.5 seconds (`clean1 === clean2`), hesitation vocables (`um`, `uh`), and filler tokens (`like`).
-2. **Gemini Run**:
-   - Evaluates full context, sentence grammar, and cultural semantics.
-3. **Union Merge**:
-   - For any time interval where Gemini detected a cut, **Gemini's decision rules authority**.
-   - Any candidate detected by local heuristics that **did not overlap** with a Gemini proposal is **retained under the REVIEW category**.
-   - Result: 100% of stutter candidates and conversational markers are surfaced without omissions.
+1. **Tier 1: Direct Client-Side Gemini Flash-Lite**:
+   - Analyzes full sentences, speech intent, Hindi/Hinglish discourse particles, and abandoned phrases via `gemini-flash-lite-latest`.
+2. **Tier 2: PC Waveform Engine (`/api/clips/{id}/autocut/proposals`)**:
+   - If connected to the PC backend, executes librosa/PCM acoustic energy detection: catches clipping, transient audio clicks, breaths, coughs, and zero-crossing silence snaps.
+3. **Tier 3: Android Native Bridge**:
+   - On Android devices with local media, queries hardware-accelerated audio silence via `DispatchBridge.analyzeAudioWaveformAndSilences`.
+4. **Tier 4: Local Deterministic Short-Form Detector (`generateLocalAutoCutProposals`)**:
+   - Short-form dead-air silence cadence ($\ge 0.8\text{s}$) trimmed down to a tight natural $0.3\text{s}$ pause.
+   - Hindi/Hinglish vocabulary dictionary (`matlab`, `samjho`, `arre`, `yaar`, `dekho`, `sun`, `basically`, `actually`, `literally`).
+   - 1-word and 2-word phrase stutters (e.g., `"phir tut... phir tut"`, `"I think... I think"`).
+5. **Union Merge & Overlap Deduplication**:
+   - Prioritizes Gemini semantic insights, merges PC waveform acoustic defect events, and fills in non-overlapping dead-air pauses and stutters from the local engine.
+   - Result: Exhaustive detection without false removals.
 
 ---
 
