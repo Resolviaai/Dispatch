@@ -14,11 +14,39 @@ export interface TrimPointerState {
   initialRange: SourceRange;
 }
 
-export function clipTimeToSourceTime(clipTime: number, clipStart: number): number {
+import { concatToSource, sourceToConcat } from './timelineEngine';
+
+export function clipTimeToSourceTime(
+  clipTime: number,
+  clipStart: number,
+  ranges?: unknown,
+  sourceDuration?: number
+): number {
+  if (Array.isArray(ranges) && ranges.length > 0 && typeof sourceDuration === 'number' && sourceDuration > 0) {
+    try {
+      return concatToSource(ranges, clipTime, sourceDuration);
+    } catch {
+      // Fallback to simple offset if range mapping fails
+    }
+  }
   return Math.max(0, clipStart + (Number.isFinite(clipTime) ? clipTime : 0));
 }
 
-export function sourceTimeToClipTime(sourceTime: number, clipStart: number, clipDuration: number): number {
+export function sourceTimeToClipTime(
+  sourceTime: number,
+  clipStart: number,
+  clipDuration: number,
+  ranges?: unknown,
+  sourceDuration?: number
+): number {
+  if (Array.isArray(ranges) && ranges.length > 0 && typeof sourceDuration === 'number' && sourceDuration > 0) {
+    try {
+      const concat = sourceToConcat(ranges, sourceTime, sourceDuration);
+      if (concat !== null) return concat;
+    } catch {
+      // Fallback to simple offset if range mapping fails
+    }
+  }
   const local = (Number.isFinite(sourceTime) ? sourceTime : clipStart) - clipStart;
   return Math.min(Math.max(0, clipDuration), Math.max(0, local));
 }

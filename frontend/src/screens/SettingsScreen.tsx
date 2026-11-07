@@ -38,6 +38,7 @@ import { Bridge, StorageInfo, apiUrl, getAuthHeaders } from '../bridge';
 import { getThemePreference, setThemePreference, ThemePreference } from '../theme';
 import {
   ConnectedAccount,
+  WORKER_BASE,
   GeminiKeyStatus,
   listConnectedAccounts,
   deleteConnectedAccount,
@@ -803,7 +804,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                   {instagramAccounts.map((acc) => (
                     <div key={acc.id} className="py-3 flex items-center justify-between gap-3 text-sm">
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <AccountAvatar src={acc.avatar_url} fallback={<InstagramIcon />} />
+                        <AccountAvatar
+                          src={(acc.avatar_url && !acc.avatar_url.includes('cdninstagram.com'))
+                            ? acc.avatar_url
+                            : (acc.account_id ? `${WORKER_BASE}/avatars/instagram_${acc.account_id}.jpg` : acc.avatar_url)}
+                          fallback={<InstagramIcon />}
+                        />
                         <div className="min-w-0">
                           <p className="font-medium text-text-main truncate">{acc.account_name}</p>
                           <p className="text-xs text-text-muted truncate">Instagram Reels</p>

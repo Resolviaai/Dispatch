@@ -1365,22 +1365,85 @@ export default {
     if (url.pathname === "/health") return json(200, { ok: true });
 
     // ---- Public Cached Avatars (Permanent, CORS-enabled) ----
-    if (url.pathname.startsWith("/avatars/") && request.method === "GET") {
+    if (url.pathname.startsWith("/avatars/") && (request.method === "GET" || request.method === "HEAD")) {
       const key = decodeURIComponent(url.pathname.slice("/avatars/".length));
       if (!key || key.includes("..")) return json(400, { error: "invalid avatar key" });
-      const obj = await env.BUCKET.get("avatars/" + key);
+      let obj = await env.BUCKET.get("avatars/" + key);
+
+      // On-demand self-heal: if an Instagram avatar is not cached in R2 yet, fetch and cache it
+      if (!obj && key.startsWith("instagram_") && key.endsWith(".jpg")) {
+        const accountId = key.replace(/^instagram_/, "").replace(/\.jpg$/, "");
+        try {
+          const accRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/connected_accounts?account_id=eq.${encodeURIComponent(accountId)}&provider=eq.instagram&select=id,credentials_encrypted,avatar_url&limit=1`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          if (accRes.ok) {
+            const rows = (await accRes.json()) as Array<{ id: string; credentials_encrypted?: string; avatar_url?: string }>;
+            const accRow = rows[0];
+            if (accRow) {
+              let fetchedBytes: ArrayBuffer | null = null;
+              if (accRow.avatar_url && !accRow.avatar_url.includes(url.origin)) {
+                try {
+                  const directRes = await fetch(accRow.avatar_url);
+                  if (directRes.ok) fetchedBytes = await directRes.arrayBuffer();
+                } catch {}
+              }
+              if (!fetchedBytes && accRow.credentials_encrypted) {
+                try {
+                  const raw = await decryptToken(env.TOKEN_VAULT_KEY, accRow.credentials_encrypted);
+                  if (raw.startsWith("{")) {
+                    const creds = JSON.parse(raw) as { access_token?: string };
+                    if (creds.access_token) {
+                      const meRes = await fetch(
+                        `https://graph.instagram.com/v21.0/me?fields=profile_picture_url&access_token=${creds.access_token}`
+                      );
+                      if (meRes.ok) {
+                        const meData = (await meRes.json()) as { profile_picture_url?: string };
+                        if (meData.profile_picture_url) {
+                          const imgRes = await fetch(meData.profile_picture_url);
+                          if (imgRes.ok) fetchedBytes = await imgRes.arrayBuffer();
+                        }
+                      }
+                    }
+                  }
+                } catch {}
+              }
+              if (fetchedBytes && fetchedBytes.byteLength > 0) {
+                await env.BUCKET.put("avatars/" + key, fetchedBytes, {
+                  httpMetadata: { contentType: "image/jpeg" },
+                });
+                const permanentUrl = `${url.origin}/avatars/${key}`;
+                fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${accRow.id}`, {
+                  method: "PATCH",
+                  headers: {
+                    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+                    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    "content-type": "application/json",
+                  },
+                  body: JSON.stringify({ avatar_url: permanentUrl }),
+                }).catch(() => null);
+                obj = await env.BUCKET.get("avatars/" + key);
+              }
+            }
+          }
+        } catch (e) {
+          console.error("On-demand Instagram avatar fetch failed:", e);
+        }
+      }
+
       if (obj) {
         const headers = new Headers();
         headers.set("Content-Type", obj.httpMetadata?.contentType || "image/jpeg");
         headers.set("Cache-Control", "public, max-age=604800, immutable");
         headers.set("Access-Control-Allow-Origin", "*");
-        return new Response(obj.body, { status: 200, headers });
+        return new Response(request.method === "HEAD" ? null : obj.body, { status: 200, headers });
       }
       return json(404, { error: "avatar not found" });
     }
 
     // ---- Direct Media Streaming (HTTP Range + CORS for HTML5 video playback) ----
-    if (request.method === "OPTIONS" && url.pathname.match(/^\/media\/[0-9a-fA-F-]{36}\/stream$/i)) {
+    if (request.method === "OPTIONS" && url.pathname.match(/^\/media\/[0-9a-fA-F-]{32,36}\/stream$/i)) {
       return new Response(null, {
         status: 204,
         headers: {
@@ -1392,8 +1455,11 @@ export default {
       });
     }
 
-    if ((request.method === "GET" || request.method === "HEAD") && url.pathname.match(/^\/media\/[0-9a-fA-F-]{36}\/stream$/i)) {
-      const mediaObjectId = url.pathname.split("/")[2];
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname.match(/^\/media\/[0-9a-fA-F-]{32,36}\/stream$/i)) {
+      const rawMediaId = url.pathname.split("/")[2];
+      const mediaObjectId = rawMediaId.length === 32 && !rawMediaId.includes("-")
+        ? rawMediaId.replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, "$1-$2-$3-$4-$5")
+        : rawMediaId;
       const reqHeaders = new Headers(request.headers);
       if (url.searchParams.has("token")) {
         reqHeaders.set("Authorization", "Bearer " + url.searchParams.get("token"));
@@ -1408,7 +1474,6 @@ export default {
 
       const r2Object = await env.BUCKET.get(obj.final_key, {
         range: request.headers,
-        onlyIf: request.headers,
       });
       if (!r2Object) return json(404, { error: "media file not found in storage" });
 
@@ -1418,8 +1483,16 @@ export default {
       headers.set("Access-Control-Allow-Origin", "*");
       headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
       headers.set("Access-Control-Allow-Headers", "Range, Content-Type, Authorization");
-      headers.set("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+      headers.set("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, Content-Type");
       headers.set("Accept-Ranges", "bytes");
+
+      const mime = obj.mime_type || headers.get("Content-Type") || "video/mp4";
+      headers.set("Content-Type", mime);
+
+      if (request.method === "HEAD") {
+        headers.set("Content-Length", String(r2Object.size));
+        return new Response(null, { status: 200, headers });
+      }
 
       if (r2Object.range) {
         const range = r2Object.range as { offset: number; length: number };
@@ -1665,7 +1738,26 @@ export default {
       });
       if (!res.ok) return json(502, { error: `list accounts failed: ${res.status}` });
       const accounts = await res.json() as unknown;
-      return json(200, { accounts: Array.isArray(accounts) ? accounts : [] });
+      const rawAccounts = Array.isArray(accounts) ? (accounts as any[]) : [];
+      const enrichedAccounts = await Promise.all(rawAccounts.map(async (acc) => {
+        if (acc.provider === "instagram" && acc.account_id) {
+          const cachedKey = `avatars/instagram_${acc.account_id}.jpg`;
+          const cachedUrl = `${url.origin}/${cachedKey}`;
+          if (acc.avatar_url !== cachedUrl) {
+            const head = await env.BUCKET.head(cachedKey);
+            if (head) {
+              fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${acc.id}`, {
+                method: "PATCH",
+                headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+                body: JSON.stringify({ avatar_url: cachedUrl }),
+              }).catch(() => null);
+              return { ...acc, avatar_url: cachedUrl };
+            }
+          }
+        }
+        return acc;
+      }));
+      return json(200, { accounts: enrichedAccounts });
     }
 
     if (url.pathname === "/accounts/connect" && request.method === "POST") {
@@ -3404,13 +3496,28 @@ export default {
       if (request.method === "POST" && url.pathname === "/media-url") {
         const body = await readJson<{ media_object_id: string }>(request);
         if (!body?.media_object_id) return json(400, { error: "media_object_id required" });
-        const obj = await selectOne<MediaObj>(env, "media_objects", body.media_object_id, "user_id,status,final_key");
+        const obj = await selectOne<MediaObj>(env, "media_objects", body.media_object_id, "user_id,status,final_key,byte_count");
         if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
         if (obj.status !== "active") return json(409, { error: `media not active (${obj.status})` });
+
+        let duration: number | null = null;
+        try {
+          const jobRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${userId}&or=(upload_object_id.eq.${body.media_object_id},video_id.eq.dir_${body.media_object_id})&select=duration&limit=1`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          if (jobRes.ok) {
+            const jobs = await jobRes.json() as Array<{ duration?: number }>;
+            if (jobs[0]?.duration) duration = Number(jobs[0].duration);
+          }
+        } catch {}
+
         return json(200, {
           url: `${url.origin}/media/${body.media_object_id}/stream`,
           presigned_url: await presign(env, "GET", obj.final_key as string),
           expires_in: PRESIGN_EXPIRES,
+          byte_count: obj.byte_count,
+          duration,
         });
       }
 
@@ -4079,7 +4186,7 @@ export default {
                 caption_data: body?.caption_data || null,
                 caption_revision: Number(body?.caption_revision || 0),
                 ...(body?.session_id && UUID_RE.test(body.session_id) ? { session_id: body.session_id } : {}),
-                ...(body?.youtube_video_id ? { youtube_video_id: body.youtube_video_id } : {}),
+                ...(body?.youtube_video_id ? { youtube_video_id: body.youtube_video_id } : (body?.session_id ? { youtube_video_id: body.session_id } : {})),
               }),
             }
           );

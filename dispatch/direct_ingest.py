@@ -153,19 +153,23 @@ def process_direct_job(job: Any) -> Dict[str, Any]:
 
     update_remote_stage(job, "validating")
     from dispatch.youtube_inbox.catcher import YouTubeInboxCatcher
-    return YouTubeInboxCatcher().ingest_direct_video(
+    res = YouTubeInboxCatcher().ingest_direct_video(
         video_id=video_id,
         local_path=target,
         title=title,
         user_id=user_id,
         source_file_size=target.stat().st_size,
     )
+    dur = res.get("duration") or (res.get("metadata") or {}).get("duration")
+    if dur:
+        update_remote_stage(job, "transcribing", video_id=video_id, duration=float(dur))
+    return res
 
 
-def update_remote_stage(job: Any, stage: str) -> None:
+def update_remote_stage(job: Any, stage: str, video_id: str = "", duration: Optional[float] = None) -> None:
     """Best-effort stage reporting so the phone sees 'downloading' → 'transcribing'."""
     try:
         from dispatch.youtube_connections import update_remote_job_stage
-        update_remote_job_stage(getattr(job, "job_id", ""), stage)
+        update_remote_job_stage(getattr(job, "job_id", ""), stage, video_id=video_id, duration=duration)
     except Exception:
         pass

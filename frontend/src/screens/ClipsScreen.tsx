@@ -61,6 +61,13 @@ import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
 import { executeClipApproval } from '../lib/approval';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
 import { FilmstripData, normalizeFilmstripPayload, thumbnailFallbackFilmstrip } from '../captions/filmstrip';
+import {
+  SpeechCleanupWorkspace,
+  AutoCutProposal,
+  AutoCutFilterCategory,
+  getEffectiveDecision,
+} from '../captions/SpeechCleanupWorkspace';
+export type { AutoCutProposal, AutoCutFilterCategory } from '../captions/SpeechCleanupWorkspace';
 import { ConnectedAccount, listConnectedAccounts, WORKER_BASE } from '../accounts/accountsService';
 import { currentSession } from '../auth/supabase';
 import {
@@ -210,18 +217,6 @@ export const DEFAULT_LANDSCAPE_MODES: AvailableLayoutMode[] = [
   { id: 'native_169', label: 'Native 16:9', target_aspect: '16:9', description: '100% full original horizontal 16:9 (no bars, no crop)' },
 ];
 
-
-export interface AutoCutProposal {
-  id: string;
-  type: 'filler' | 'stutter' | 'dead_air' | 'breath' | 'cough' | 'audio_defect' | 'filler_word' | 'repetition';
-  source_start: number;
-  source_end: number;
-  duration: number;
-  reason: string;
-  confidence: number;
-  decision: 'AUTO-REMOVE' | 'REVIEW' | 'PRESERVE';
-  userOverride?: 'accept' | 'reject';
-}
 
 export interface ClipItem {  id: string;
   cloud_id?: string;
@@ -1758,7 +1753,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [autoCutProposals, setAutoCutProposals] = useState<AutoCutProposal[]>([]);
   const [showAutoCutDrawer, setShowAutoCutDrawer] = useState<boolean>(false);
   const [autoCutLoading, setAutoCutLoading] = useState<boolean>(false);
-  const [autoCutFilter, setAutoCutFilter] = useState<'all' | 'AUTO-REMOVE' | 'REVIEW' | 'PRESERVE'>('all');
+  const [autoCutFilter, setAutoCutFilter] = useState<AutoCutFilterCategory>('all');
 
   useEffect(() => {
     import('../auth/supabase').then(({ currentSession }) =>
@@ -3374,14 +3369,44 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     commitToHistory: boolean = true
   ) => {
     if (!captionTrack) return;
+    const sourceGrp = captionTrack.groups.find(g => g.id === groupId);
+    if (!sourceGrp) return;
+
+    let finalPatch = { ...patch };
+
+    // If start or end is modified in presentation coordinates, translate deltas back to source group
+    if ((patch.start !== undefined || patch.end !== undefined) && presentationCaptionTrack) {
+      const presGrp = presentationCaptionTrack.groups?.find(g => g.id === groupId);
+      if (presGrp) {
+        const deltaStart = patch.start !== undefined ? (patch.start - presGrp.start) : 0;
+        const deltaEnd = patch.end !== undefined ? (patch.end - presGrp.end) : 0;
+        finalPatch.start = Math.max(0, Math.round((sourceGrp.start + deltaStart) * 1000) / 1000);
+        finalPatch.end = Math.max(finalPatch.start + 0.05, Math.round((sourceGrp.end + deltaEnd) * 1000) / 1000);
+
+        if (Array.isArray(finalPatch.words)) {
+          finalPatch.words = finalPatch.words.map(w => ({
+            ...w,
+            start: Math.max(0, Math.round((w.start + deltaStart) * 1000) / 1000),
+            end: Math.max(0, Math.round((w.end + deltaStart) * 1000) / 1000),
+          }));
+        } else if (Array.isArray(sourceGrp.words) && deltaStart !== 0) {
+          finalPatch.words = sourceGrp.words.map(w => ({
+            ...w,
+            start: Math.max(0, Math.round((w.start + deltaStart) * 1000) / 1000),
+            end: Math.max(0, Math.round((w.end + deltaStart) * 1000) / 1000),
+          }));
+        }
+      }
+    }
+
     const updatedTrack = {
       ...captionTrack,
       groups: captionTrack.groups.map((grp) => {
         if (grp.id !== groupId) return grp;
-        const next: CaptionGroup = { ...grp, ...patch };
-        if (patch.layout) next.layout = { ...(grp.layout || captionTrack.default_layout), ...patch.layout };
-        if (patch.style) next.style = { ...(grp.style || captionTrack.default_style), ...patch.style };
-        if (patch.animation) next.animation = { ...(grp.animation || captionTrack.default_animation), ...patch.animation };
+        const next: CaptionGroup = { ...grp, ...finalPatch };
+        if (finalPatch.layout) next.layout = { ...(grp.layout || captionTrack.default_layout), ...finalPatch.layout };
+        if (finalPatch.style) next.style = { ...(grp.style || captionTrack.default_style), ...finalPatch.style };
+        if (finalPatch.animation) next.animation = { ...(grp.animation || captionTrack.default_animation), ...finalPatch.animation };
         return next;
       }),
     };
@@ -3389,12 +3414,38 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     setSaveStatus('unsaved');
   };
 
+  const handleToggleTrackVisibility = (trackIdx: number, groupIds: string[], isHidden: boolean) => {
+    if (!captionTrack) return;
+    const targetIds = new Set(groupIds);
+    const updatedTrack = {
+      ...captionTrack,
+      groups: captionTrack.groups.map((grp) => {
+        if (targetIds.has(grp.id) || grp.trackIndex === trackIdx) {
+          return { ...grp, is_hidden: isHidden };
+        }
+        return grp;
+      }),
+    };
+    setCaptionTrack(updatedTrack, true);
+    setSaveStatus('unsaved');
+  };
+
   // Split Caption Group at Split Time
   const handleSplitGroup = (groupId: string, splitTime: number) => {
     if (!captionTrack) return;
-    const grp = captionTrack.groups?.find((g) => g.id === groupId);
-    if (!grp) return;
-    const splitResult = splitCaptionGroupAtTime(grp, splitTime);
+    const sourceGrp = captionTrack.groups?.find((g) => g.id === groupId);
+    if (!sourceGrp) return;
+
+    let sourceSplitTime = splitTime;
+    if (presentationCaptionTrack) {
+      const presGrp = presentationCaptionTrack.groups?.find((g) => g.id === groupId);
+      if (presGrp) {
+        const offset = Math.max(0, splitTime - presGrp.start);
+        sourceSplitTime = sourceGrp.start + offset;
+      }
+    }
+
+    const splitResult = splitCaptionGroupAtTime(sourceGrp, sourceSplitTime);
     if (!splitResult) return;
     const [first, second] = splitResult;
     const updatedTrack = {
@@ -3801,7 +3852,67 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }
     }
 
+    // 3. Stutter & false start repetition loops (repeated 1-3 words within 2.5s)
+    for (let i = 0; i < allWords.length - 1; i++) {
+      const clean1 = allWords[i].text.toLowerCase().replace(/[^\w]/g, '');
+      const clean2 = allWords[i + 1].text.toLowerCase().replace(/[^\w]/g, '');
+      if (clean1 && clean1 === clean2 && clean1.length > 1) {
+        const gap = allWords[i + 1].start - allWords[i].start;
+        if (gap <= 2.5) {
+          proposals.push({
+            id: `local_stutter_${i}`,
+            type: 'false_start',
+            source_start: roundMs(allWords[i].start),
+            source_end: roundMs(allWords[i + 1].start),
+            duration: roundMs(allWords[i + 1].start - allWords[i].start),
+            reason: `Stutter repetition of '${allWords[i].text}'`,
+            confidence: 0.85,
+            decision: 'REVIEW',
+            word: allWords[i].text,
+          });
+        }
+      }
+    }
+
     return proposals;
+  };
+
+  const handleToggleAutoCutDecision = (proposalId: string, choice: 'cut' | 'keep') => {
+    setAutoCutProposals((prev) =>
+      prev.map((p) => {
+        if (p.id !== proposalId) return p;
+        if (choice === 'cut') {
+          if (p.userOverride === 'accept') {
+            return { ...p, userOverride: undefined };
+          }
+          return { ...p, userOverride: 'accept' };
+        } else {
+          if (p.userOverride === 'reject') {
+            return { ...p, userOverride: undefined };
+          }
+          return { ...p, userOverride: 'reject' };
+        }
+      })
+    );
+  };
+
+  const handleSeekSourceTime = (sourceSec: number) => {
+    contextPreviewRef.current = null;
+    const video = videoRef.current;
+    if (!video) return;
+    const safeSource = Math.max(0, Math.min(video.duration || (currentClip as any)?.source_duration || 3600, sourceSec));
+    video.currentTime = safeSource;
+    if (bgVideoRef.current) bgVideoRef.current.currentTime = safeSource;
+    try {
+      const clipTime = sourceToConcat(effectiveRanges, safeSource, totalSourceDur);
+      if (clipTime !== null) {
+        setCurrentTime(clipTime);
+      } else {
+        setCurrentTime(Math.max(0, safeSource - clipStart));
+      }
+    } catch {
+      setCurrentTime(Math.max(0, safeSource - clipStart));
+    }
   };
 
   const fetchAutoCutProposals = async () => {
@@ -3859,6 +3970,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           confidence: Number(p.confidence ?? 0.9),
           decision: (p.decision === 'AUTO-REMOVE' || p.decision === 'PRESERVE') ? p.decision : 'REVIEW',
           userOverride: undefined,
+          word: p.word ? String(p.word) : undefined,
         }));
         setAutoCutProposals(mapped);
         setShowAutoCutDrawer(true);
@@ -3890,6 +4002,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       setFeedback('No cuts selected to apply.');
       return;
     }
+    setAutoCutLoading(true);
+    try {
 
     const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
     const existingDoc = (currentClip as any).project_document;
@@ -3929,6 +4043,11 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       currentRanges = nextRanges;
     }
 
+    if (currentRanges.length === 0) {
+      setFeedback('Applying these cuts would remove the entire clip.');
+      return;
+    }
+
     const canonical = normalizeRanges(currentRanges, sourceDuration);
     if (canonical.length === 0) {
       setFeedback('Applying these cuts would remove the entire clip.');
@@ -3940,7 +4059,12 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       setShowAutoCutDrawer(false);
       setAutoCutProposals([]);
     }
-  };
+  } catch (err: any) {
+    setFeedback(`Failed to apply auto-cut: ${err?.message || 'unknown error'}`);
+  } finally {
+    setAutoCutLoading(false);
+  }
+};
 
   const handleSplitClip = async (splitTime: number) => {
     if (!currentClip) return;
@@ -5908,7 +6032,26 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             </div>
           </div>
 
-          {activePanel === 'none' ? (
+          {showAutoCutDrawer ? (
+            <div className="flex-1 min-h-0 w-full h-full bg-surface z-30 flex flex-col overflow-hidden animate-in fade-in duration-150">
+              <SpeechCleanupWorkspace
+                proposals={autoCutProposals}
+                filter={autoCutFilter}
+                onFilterChange={setAutoCutFilter}
+                filmstrip={filmstripData}
+                currentTime={currentTime}
+                duration={duration || currentClip.duration || 40}
+                clipStart={currentClip.start_time || 0}
+                clipEnd={currentClip.end_time || duration || 40}
+                onPreviewContext={handlePreviewContext}
+                onSeekSourceTime={handleSeekSourceTime}
+                onToggleDecision={handleToggleAutoCutDecision}
+                onApply={handleApplyAutoCut}
+                onClose={() => setShowAutoCutDrawer(false)}
+                isApplying={autoCutLoading}
+              />
+            </div>
+          ) : activePanel === 'none' ? (
             <>
               {/* 4. MULTI-TRACK TIMELINE (Seamless edge-to-edge surface filling available workspace) */}
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-[#13161B]">
@@ -6002,7 +6145,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   </div>
                 )}
                 <CaptionTimeline
-                    track={visibleCaptionTrack}
+                    track={presentationCaptionTrack || visibleCaptionTrack}
                     currentTime={currentTime}
                     duration={duration || currentClip.duration || 40}
                     hideTrimControls={false}
@@ -6038,6 +6181,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                       }
                     }}
                     onUpdateGroup={handleUpdateGroup}
+                    onToggleTrackVisibility={handleToggleTrackVisibility}
                     onSplitGroup={handleSplitGroup}
                   />
               </div>
@@ -6239,183 +6383,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             </div>
           </div>
         )}
-        {/* Auto-Cut Review Drawer */}
-        {/* Auto-Cut Review Drawer: Docked bottom workspace drawer (~48vh max height), video preview remains visible & playable at top */}
-        {showAutoCutDrawer && (
-          <div className="fixed inset-x-0 bottom-0 top-[50%] z-40 bg-surface-100/95 backdrop-blur-md border-t border-border flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
-            {/* Drawer Header */}
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-surface-100 shrink-0">
-              <div className="flex items-center gap-2">
-                <Scissors size={15} className="text-primary" />
-                <h3 className="text-xs font-semibold text-text-main">Auto-Cut Speech Cleanup</h3>
-                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-medium bg-surface-200 text-text-secondary border border-border">
-                  {autoCutProposals.length}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowAutoCutDrawer(false)}
-                className="w-7 h-7 rounded-lg bg-surface-200 hover:bg-surface-300 flex items-center justify-center text-text-secondary hover:text-text-main transition-colors"
-                aria-label="Close"
-              >
-                <X size={14} />
-              </button>
-            </div>
-
-            {/* Filter Tabs */}
-            <div className="flex items-center gap-1.5 px-4 py-1.5 border-b border-border bg-surface-200/40 overflow-x-auto no-scrollbar shrink-0">
-              {(['all', 'AUTO-REMOVE', 'REVIEW', 'PRESERVE'] as const).map((tab) => {
-                const count = tab === 'all'
-                  ? autoCutProposals.length
-                  : autoCutProposals.filter((p) => p.decision === tab).length;
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setAutoCutFilter(tab)}
-                    className={`h-6 px-2 rounded-md text-[10px] font-medium flex items-center gap-1 transition-all shrink-0 ${
-                      autoCutFilter === tab
-                        ? 'bg-primary text-white shadow-hero-sm'
-                        : 'bg-surface-200 text-text-muted hover:text-text-main border border-border'
-                    }`}
-                  >
-                    <span>{tab === 'all' ? 'All' : tab.replace('_', ' ')}</span>
-                    <span className="opacity-75 font-mono text-[9px]">({count})</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Proposals Scrollable List */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2.5 space-y-2">
-              {autoCutProposals
-                .filter((p) => autoCutFilter === 'all' || p.decision === autoCutFilter)
-                .length === 0 ? (
-                <div className="text-center py-6 text-xs text-text-muted">
-                  No proposals match the current filter.
-                </div>
-              ) : (
-                autoCutProposals
-                  .filter((p) => autoCutFilter === 'all' || p.decision === autoCutFilter)
-                  .map((prop) => {
-                    const isAccepted = prop.userOverride === 'accept' || (prop.decision === 'AUTO-REMOVE' && prop.userOverride !== 'reject');
-                    const isRejected = prop.userOverride === 'reject';
-                    return (
-                      <div
-                        key={prop.id}
-                        className={`p-2.5 rounded-xl border transition-all ${
-                          isAccepted
-                            ? 'bg-surface-200 border-primary/30'
-                            : isRejected
-                            ? 'bg-surface-200/30 border-border opacity-50'
-                            : 'bg-surface-200 border-border'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium uppercase tracking-wider ${
-                              prop.type === 'filler' || prop.type === 'filler_word' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/20' :
-                              prop.type === 'dead_air' ? 'bg-blue-500/15 text-blue-300 border border-blue-500/20' :
-                              prop.type === 'audio_defect' ? 'bg-red-500/15 text-red-300 border border-red-500/20' :
-                              prop.type === 'stutter' || prop.type === 'repetition' ? 'bg-orange-500/15 text-orange-300 border border-orange-500/20' :
-                              'bg-purple-500/15 text-purple-300 border border-purple-500/20'
-                            }`}>
-                              {prop.type.replace('_', ' ')}
-                            </span>
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
-                              prop.decision === 'AUTO-REMOVE' ? 'bg-red-500/15 text-red-300 border border-red-500/20' :
-                              prop.decision === 'PRESERVE' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/20' :
-                              'bg-amber-500/15 text-amber-300 border border-amber-500/20'
-                            }`}>
-                              {prop.userOverride ? (prop.userOverride === 'accept' ? 'ACCEPTED' : 'REJECTED') : prop.decision}
-                            </span>
-                          </div>
-                          <span className="font-mono text-[11px] text-text-muted tabular-nums">
-                            {prop.source_start.toFixed(2)}s – {prop.source_end.toFixed(2)}s ({prop.duration.toFixed(2)}s)
-                          </span>
-                        </div>
-
-                        <p className="text-[11px] text-text-secondary line-clamp-2 mb-1.5 leading-relaxed">
-                          {prop.reason}
-                        </p>
-
-                        <div className="flex items-center justify-between pt-1 border-t border-border">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              handlePreviewContext({
-                                start: Math.max(0, prop.source_start - 0.5),
-                                end: Math.min((duration || currentClip.duration || 40), prop.source_end + 0.5),
-                              });
-                            }}
-                            className="h-6 px-2 rounded-md bg-surface-300 hover:bg-surface-400 text-[10px] font-medium text-text-secondary hover:text-text-main flex items-center gap-1 active:scale-95"
-                          >
-                            <Play size={10} />
-                            <span>Preview</span>
-                          </button>
-
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAutoCutProposals((prev) =>
-                                  prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'reject' ? undefined : 'reject' } : p))
-                                );
-                              }}
-                              className={`h-6 px-2 rounded-md text-[10px] font-medium flex items-center gap-1 active:scale-95 border ${
-                                prop.userOverride === 'reject'
-                                  ? 'bg-red-500/25 text-red-200 border-red-500/40'
-                                  : 'bg-surface-300 text-text-muted hover:text-text-main border-transparent'
-                              }`}
-                            >
-                              <X size={10} />
-                              <span>Keep</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAutoCutProposals((prev) =>
-                                  prev.map((p) => (p.id === prop.id ? { ...p, userOverride: p.userOverride === 'accept' ? undefined : 'accept' } : p))
-                                );
-                              }}
-                              className={`h-6 px-2 rounded-md text-[10px] font-semibold flex items-center gap-1 active:scale-95 border ${
-                                isAccepted
-                                  ? 'bg-primary text-white border-primary shadow-hero-sm'
-                                  : 'bg-surface-300 text-text-secondary hover:text-text-main border-transparent'
-                              }`}
-                            >
-                              <Check size={10} />
-                              <span>Cut</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-              )}
-            </div>
-
-            {/* Bottom Sticky Action Bar */}
-            <div className="p-3 border-t border-border bg-surface-100 flex items-center gap-2 shrink-0 pb-[max(12px,env(safe-area-inset-bottom,0px))]">
-              <button
-                type="button"
-                onClick={() => setShowAutoCutDrawer(false)}
-                className="flex-1 h-8 rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-xs font-medium active:scale-98 transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyAutoCut}
-                className="flex-2 h-8 px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-98 transition-all shadow-hero-glow"
-              >
-                <Scissors size={13} />
-                <span>Apply Auto-Cut ({autoCutProposals.filter((p) => p.userOverride === 'accept' || (p.decision === 'AUTO-REMOVE' && p.userOverride !== 'reject')).length})</span>
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Exit Confirmation Modal */}
         {showStudioExitConfirm && (
           <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">

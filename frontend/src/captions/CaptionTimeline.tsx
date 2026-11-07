@@ -120,6 +120,10 @@ interface CaptionTimelineProps {
 
   onUpdateGroup?: (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) => void;
 
+  onUpdateGroups?: (updates: Array<{ groupId: string; patch: Partial<CaptionGroup> }>, commitToHistory?: boolean) => void;
+
+  onToggleTrackVisibility?: (trackIdx: number, groupIds: string[], isHidden: boolean) => void;
+
   onSplitGroup?: (groupId: string, splitTime: number) => void;
 
   hideTrimControls?: boolean;
@@ -229,6 +233,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   onSelectVideo,
 
   onUpdateGroup,
+
+  onUpdateGroups,
+
+  onToggleTrackVisibility,
 
   onSplitGroup,
 
@@ -2081,17 +2089,31 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
   const toggleTrackVisibility = (idx: number) => {
 
-    const isNowHidden = !hiddenTracks[idx];
+    const rowGroups = dynamicTracks[idx] || [];
+
+    const allCurrentlyHidden = rowGroups.length > 0 && rowGroups.every((g) => Boolean(g.is_hidden));
+
+    const isNowHidden = !allCurrentlyHidden;
 
     setHiddenTracks((prev) => ({ ...prev, [idx]: isNowHidden }));
 
-    const rowGroups = dynamicTracks[idx] || [];
+    if (onToggleTrackVisibility) {
 
-    rowGroups.forEach((grp) => {
+      onToggleTrackVisibility(idx, rowGroups.map((grp) => grp.id), isNowHidden);
 
-      onUpdateGroup?.(grp.id, { is_hidden: isNowHidden }, true);
+    } else if (onUpdateGroups) {
 
-    });
+      onUpdateGroups(rowGroups.map((grp) => ({ groupId: grp.id, patch: { is_hidden: isNowHidden } })), true);
+
+    } else {
+
+      rowGroups.forEach((grp) => {
+
+        onUpdateGroup?.(grp.id, { is_hidden: isNowHidden }, true);
+
+      });
+
+    }
 
   };
 
@@ -2477,7 +2499,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             {/* Headers: Uniform Layers (L1, L2, L3...) */}
 
-            {dynamicTracks.map((_, idx) => (
+            {dynamicTracks.map((rowGroups, idx) => (
 
               <div
 
@@ -2505,7 +2527,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                 >
 
-                  {!hiddenTracks[idx] ? <Eye size={10} /> : <EyeOff size={10} className="text-red-400" />}
+                  {!(hiddenTracks[idx] ?? (rowGroups.length > 0 && rowGroups.every((g) => Boolean(g.is_hidden)))) ? <Eye size={10} /> : <EyeOff size={10} className="text-red-400" />}
 
                 </button>
 
@@ -3046,26 +3068,6 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
               {dynamicTracks.map((rowGroups, trackIdx) => {
 
-                if (hiddenTracks[trackIdx]) {
-
-                  return (
-
-                    <div
-
-                      key={`track_${trackIdx}`}
-
-                      className="h-10 shrink-0 border-b border-[#232832] relative bg-black/20"
-
-                      style={{ width: `${totalTimelineWidth}px` }}
-
-                    />
-
-                  );
-
-                }
-
-
-
                 return (
 
                   <div
@@ -3102,7 +3104,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                       const isSpoken = isCaption && captionTimeIsActive(currentTime, grp.start, grp.end);
 
-                      const isGroupHidden = grp.is_hidden || hiddenTracks[trackIdx];
+                      const isGroupHidden = Boolean(grp.is_hidden || hiddenTracks[trackIdx] || (rowGroups.length > 0 && rowGroups.every((g) => Boolean(g.is_hidden))));
 
                       const meta = getLayerMeta(grp, trackIdx);
 

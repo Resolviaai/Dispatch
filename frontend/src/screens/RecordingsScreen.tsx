@@ -325,6 +325,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [isRouteCLoading, setIsRouteCLoading] = useState(false);
   const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>({});
   const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
+  const [resolvedBytes, setResolvedBytes] = useState<Record<string, number>>({});
   const lastSchedulerNudgeRef = useRef(0);
 
   useEffect(() => {
@@ -418,6 +419,25 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                 ? `${data.url}&token=${encodeURIComponent(token)}`
                 : `${data.url}?token=${encodeURIComponent(token)}`;
               setRouteCMediaUrls(prev => ({ ...prev, [item.video_id]: streamUrl }));
+              if (data.duration && data.duration > 0) {
+                setResolvedDurations(prev => ({ ...prev, [item.video_id]: Math.round(data.duration) }));
+              }
+              if (data.byte_count && data.byte_count > 0) {
+                setResolvedBytes(prev => ({ ...prev, [item.video_id]: data.byte_count }));
+              } else if (typeof window !== 'undefined') {
+                try {
+                  const probeEl = document.createElement('video');
+                  probeEl.preload = 'metadata';
+                  probeEl.src = streamUrl;
+                  probeEl.onloadedmetadata = () => {
+                    if (probeEl.duration && probeEl.duration > 0) {
+                      setResolvedDurations(prev => ({ ...prev, [item.video_id]: Math.round(probeEl.duration) }));
+                    }
+                  };
+                } catch {
+                  /* ignore probe failure */
+                }
+              }
             }
           } catch {
             /* ignore background resolution error */
@@ -722,12 +742,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     if (!c || !sessionId) return false;
     const normSess = sessionId.replace(/^(sess_|dir_)/, '');
 
-    // 1. Exact match on primary session ID or source video ID
-    if (c.session_id === sessionId || c.chunk_id === sessionId || (c as any).source_video_id === sessionId) return true;
+    // 1. Exact match on primary session ID, chunk ID, source video ID, or youtube_video_id
+    if (
+      c.session_id === sessionId ||
+      c.chunk_id === sessionId ||
+      (c as any).source_video_id === sessionId ||
+      c.youtube_video_id === sessionId
+    ) return true;
 
     // 2. Normalized prefix-stripped match
     if (c.session_id && c.session_id.replace(/^(sess_|dir_)/, '') === normSess) return true;
     if (c.chunk_id && c.chunk_id.replace(/^(sess_|dir_)/, '') === normSess) return true;
+    if (c.youtube_video_id && c.youtube_video_id.replace(/^(sess_|dir_)/, '') === normSess) return true;
 
     // 3. YouTube video ID match
     if (opts?.ytId && (c.session_id === opts.ytId || c.chunk_id === opts.ytId || c.youtube_video_id === opts.ytId)) {
@@ -917,7 +943,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         origin: (item.video_id && item.video_id.startsWith('dir_')) ? 'direct' : 'youtube',
         createdAt: item.discovered_at ? new Date(item.discovered_at).getTime() : Date.now(),
         totalDuration: computedDuration,
-        totalBytes: 0,
+        totalBytes: resolvedBytes[item.video_id] || 0,
         status,
         stage: item.stage,
         clipCount,
@@ -931,7 +957,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
     list.sort((a, b) => b.createdAt - a.createdAt);
     return list;
-  }, [nativeSessions, inboxItems, clips, resolvedDurations, resolvedTitles, routeCMediaUrls, pcHost, pcStatus.online]);
+  }, [nativeSessions, inboxItems, clips, resolvedDurations, resolvedTitles, resolvedBytes, routeCMediaUrls, pcHost, pcStatus.online]);
 
   // Active Session Detail item
   const currentSessionDetail = useMemo(() => {
@@ -2123,13 +2149,19 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <div className="flex items-center gap-2">
                 {currentSessionDetail.origin === 'phone' ? (
                   <Camera size={14} className="text-text-muted" />
+                ) : currentSessionDetail.origin === 'direct' ? (
+                  <Upload size={14} className="text-primary" />
                 ) : (
                   <Youtube size={14} className="text-danger" />
                 )}
                 <span>Origin</span>
               </div>
               <span className="text-[11px] text-text-muted font-medium">
-                {currentSessionDetail.origin === 'phone' ? 'Phone Camera Recording' : 'YouTube Ingest'}
+                {currentSessionDetail.origin === 'phone'
+                  ? 'Phone Camera Recording'
+                  : currentSessionDetail.origin === 'direct'
+                    ? 'Direct Video Upload'
+                    : 'YouTube Ingest'}
               </span>
             </div>
 

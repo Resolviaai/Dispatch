@@ -452,11 +452,11 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
             except Exception:
                 pass
 
-        yt_video_id = None
-        if clip.get("session_id"):
+        yt_video_id = clip.get("youtube_video_id")
+        if not yt_video_id and clip.get("session_id"):
             try:
-                from dispatch.database import get_db
-                with get_db() as conn:
+                from dispatch.db import get_db_connection
+                with get_db_connection() as conn:
                     cur = conn.cursor()
                     cur.execute("SELECT video_id FROM youtube_inbox WHERE session_id = ? LIMIT 1", (clip.get("session_id"),))
                     row = cur.fetchone()
@@ -464,6 +464,19 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
                         yt_video_id = row[0]
             except Exception:
                 pass
+        if not yt_video_id and clip.get("chunk_id"):
+            try:
+                from dispatch.db import get_db_connection
+                with get_db_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT video_id FROM youtube_inbox WHERE video_id = ? OR session_id = ? LIMIT 1", (clip.get("chunk_id"), clip.get("chunk_id")))
+                    row = cur.fetchone()
+                    if row:
+                        yt_video_id = row[0]
+            except Exception:
+                pass
+        if not yt_video_id and clip.get("session_id") and str(clip.get("session_id")).startswith("dir_"):
+            yt_video_id = str(clip.get("session_id"))
 
         r_clip = requests.post(
             f"{_worker_base()}/sync/pc/clips",
