@@ -1941,10 +1941,6 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     setSelectedGroupId(null);
     setIsVideoSelected(false);
     setSelectedPieceIndex(null);
-    if (showAutoCutDrawer) {
-      stopPreviewRef.current();
-      setShowAutoCutDrawer(false);
-    }
     setActivePanel((current) => {
       if ([
         'style',
@@ -1963,7 +1959,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
       return current;
     });
-  }, [showAutoCutDrawer]);
+  }, []);
 
   const handleSelectGroup = useCallback((id: string | null) => {
     if (!id) {
@@ -4084,7 +4080,13 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
   const fetchAutoCutProposals = async () => {
     if (!currentClip) return;
+    // 0ms instant tactile response: open drawer immediately with loading indicator & clear selections
+    setShowAutoCutDrawer(true);
     setAutoCutLoading(true);
+    setIsVideoSelected(false);
+    setSelectedGroupId(null);
+    setSelectedPieceIndex(null);
+    setActivePanel('none');
     setFeedback('Analyzing speech with Gemini Flash-Lite & audio waveform...');
 
     const allWords = captionTrack?.groups
@@ -4142,7 +4144,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         const combined = [...geminiProposals, ...gapProposals].sort((a, b) => a.source_start - b.source_start);
         if (combined.length > 0) {
           setAutoCutProposals(combined);
-          setShowAutoCutDrawer(true);
           setFeedback(`Found ${combined.length} Gemini Flash-Lite speech cleanup suggestions.`);
           setAutoCutLoading(false);
           return;
@@ -6075,10 +6076,19 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           </div>
         </header>
 
-        {/* 2. VIDEO PREVIEW STAGE (Compact 35% during AutoCut inspection to reveal full detection list, 50% default) */}
+        {/* 2. VIDEO PREVIEW STAGE (Stable height without layout shifts; tap letterbox to dismiss) */}
         <div
-          className={`${showAutoCutDrawer ? 'h-[35%] min-h-[160px] max-h-[35%]' : 'h-[50%] min-h-[200px] max-h-[50%]'} shrink-0 w-full flex items-center justify-center p-1 bg-black relative overflow-hidden transition-all duration-200`}
-          onClick={handleClearSelection}
+          className={`${showAutoCutDrawer ? 'h-[42%] min-h-[180px] max-h-[42%]' : 'h-[50%] min-h-[200px] max-h-[50%]'} shrink-0 w-full flex items-center justify-center p-1 bg-black relative overflow-hidden`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && showAutoCutDrawer) {
+              stopPreviewRef.current();
+              setShowAutoCutDrawer(false);
+              return;
+            }
+            if (!showAutoCutDrawer) {
+              handleClearSelection();
+            }
+          }}
         >
           <FramedVideoStage
             sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
@@ -6111,8 +6121,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             isDetail={true}
             onVideoClick={() => {
               if (showAutoCutDrawer) {
-                stopPreviewRef.current();
-                setShowAutoCutDrawer(false);
+                handleTogglePlay();
                 return;
               }
               if (selectedGroupId || isVideoSelected) {
@@ -6146,6 +6155,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         <div
           className="flex-1 min-h-0 relative flex flex-col bg-[#121418] overflow-hidden"
           onClick={(e) => {
+            if (showAutoCutDrawer) return;
             const target = e.target as HTMLElement;
             if (target.closest('button, input, textarea, select, [data-layer-block="true"], [data-video-track="true"], [data-handle]')) {
               return;
@@ -6235,7 +6245,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           </div>
 
           {showAutoCutDrawer ? (
-            <div className="flex-1 min-h-0 w-full h-full bg-surface z-30 flex flex-col overflow-hidden animate-in fade-in duration-150">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 min-h-0 w-full h-full bg-surface z-30 flex flex-col overflow-hidden animate-in fade-in duration-150"
+            >
               <SpeechCleanupWorkspace
                 proposals={autoCutProposals}
                 filter={autoCutFilter}
@@ -6254,7 +6267,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   stopPreviewRef.current();
                   setShowAutoCutDrawer(false);
                 }}
-                isApplying={autoCutLoading}
+                isLoading={autoCutLoading}
+                isApplying={autoCutLoading && autoCutProposals.length > 0}
               />
             </div>
           ) : activePanel === 'none' ? (

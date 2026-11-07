@@ -68,6 +68,7 @@ export interface SpeechCleanupWorkspaceProps {
   onApply: () => void;
   onClose: () => void;
   isApplying?: boolean;
+  isLoading?: boolean;
 }
 
 export function formatCutTimestamp(seconds: number): string {
@@ -183,6 +184,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   onApply,
   onClose,
   isApplying = false,
+  isLoading = false,
 }) => {
   // Only ONE detection may be expanded at a time
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -212,7 +214,10 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   }, [proposals, filter]);
 
   return (
-    <div className="w-full h-full flex flex-col bg-surface border-t border-border text-text-main select-none overflow-hidden">
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="w-full h-full flex flex-col bg-surface border-t border-border text-text-main select-none overflow-hidden"
+    >
       {/* 1. COMPACT HEADER: Category Filters (Full-width single row, tap empty stage to close) */}
       <header className="shrink-0 h-9 px-2.5 border-b border-border bg-surface flex items-center">
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar w-full">
@@ -248,7 +253,12 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
 
       {/* 2. COMPACT DETECTION LIST */}
       <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-border">
-        {filteredProposals.length === 0 ? (
+        {isLoading && filteredProposals.length === 0 ? (
+          <div className="flex flex-col items-center justify-center p-8 text-center text-text-muted gap-2 text-xs">
+            <RotateCw size={18} className="animate-spin text-primary" />
+            <span className="text-text-secondary font-medium">Analyzing speech with Gemini Flash-Lite…</span>
+          </div>
+        ) : filteredProposals.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-8 text-center text-text-muted text-xs">
             <p>No detections match the selected filter.</p>
           </div>
