@@ -120,25 +120,32 @@ const FacebookIcon = () => (
 /** Profile image with the provider's own icon as a failure/unconnected fallback. */
 const AccountAvatar: React.FC<{
   src?: string | null;
+  fallbackSrc?: string | null;
   fallback: React.ReactNode;
-}> = ({ src, fallback }) => {
-  const [failed, setFailed] = useState(false);
+}> = ({ src, fallbackSrc, fallback }) => {
+  const [activeSrc, setActiveSrc] = useState<string | null>(src || fallbackSrc || null);
 
   useEffect(() => {
-    setFailed(false);
-  }, [src]);
+    setActiveSrc(src || fallbackSrc || null);
+  }, [src, fallbackSrc]);
 
   return (
     <div className="w-8 h-8 rounded-full bg-surface-3 border border-border flex items-center justify-center overflow-hidden shrink-0">
-      {src && !failed ? (
+      {activeSrc ? (
         <img
-          src={src}
+          src={activeSrc}
           alt=""
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover"
-          onError={() => setFailed(true)}
+          onError={() => {
+            if (activeSrc !== fallbackSrc && fallbackSrc) {
+              setActiveSrc(fallbackSrc);
+            } else {
+              setActiveSrc(null);
+            }
+          }}
         />
       ) : fallback}
     </div>
@@ -497,6 +504,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const linkedinAccount = accounts.find(a => a.provider === 'linkedin');
   const twitterAccount = accounts.find(a => a.provider === 'twitter');
   const facebookAccount = facebookAccounts[0] ?? null;
+  const creatorAvatar = youtubeAccounts[0]?.avatar_url || twitterAccount?.avatar_url || linkedinAccount?.avatar_url || null;
 
   // Global Activity & Notification Center
   const {
@@ -801,28 +809,34 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
               {/* Instagram — one row per account (account name first, like YouTube) */}
               {instagramAccounts.length > 0 ? (
                 <>
-                  {instagramAccounts.map((acc) => (
-                    <div key={acc.id} className="py-3 flex items-center justify-between gap-3 text-sm">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <AccountAvatar
-                          src={(acc.avatar_url && !acc.avatar_url.includes('cdninstagram.com'))
-                            ? acc.avatar_url
-                            : (acc.account_id ? `${WORKER_BASE}/avatars/instagram_${acc.account_id}.jpg` : acc.avatar_url)}
-                          fallback={<InstagramIcon />}
-                        />
-                        <div className="min-w-0">
-                          <p className="font-medium text-text-main truncate">{acc.account_name}</p>
-                          <p className="text-xs text-text-muted truncate">Instagram Reels</p>
+                  {instagramAccounts.map((acc) => {
+                    const igIdentifier = acc.account_id || acc.account_name.replace(/^@/, '');
+                    const primarySrc = acc.avatar_url && !acc.avatar_url.includes('cdninstagram.com')
+                      ? acc.avatar_url
+                      : (igIdentifier ? `${WORKER_BASE}/avatars/instagram_${igIdentifier}.jpg` : acc.avatar_url);
+
+                    return (
+                      <div key={acc.id} className="py-3 flex items-center justify-between gap-3 text-sm">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <AccountAvatar
+                            src={primarySrc}
+                            fallbackSrc={creatorAvatar}
+                            fallback={<InstagramIcon />}
+                          />
+                          <div className="min-w-0">
+                            <p className="font-medium text-text-main truncate">{acc.account_name}</p>
+                            <p className="text-xs text-text-muted truncate">Instagram Reels</p>
+                          </div>
                         </div>
+                        <button
+                          onClick={() => handleDisconnectAccount(acc)}
+                          className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
+                        >
+                          Disconnect
+                        </button>
                       </div>
-                      <button
-                        onClick={() => handleDisconnectAccount(acc)}
-                        className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <button
                     onClick={() => handleConnectProvider('instagram')}
                     className="w-full min-h-[44px] mt-1 mb-2 py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
@@ -854,6 +868,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 <div className="flex items-center gap-2.5 min-w-0">
                   <AccountAvatar
                     src={facebookAccount?.avatar_url}
+                    fallbackSrc={creatorAvatar}
                     fallback={<FacebookIcon />}
                   />
                   <div className="min-w-0">
@@ -885,6 +900,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 <div className="flex items-center gap-2.5 min-w-0">
                   <AccountAvatar
                     src={linkedinAccount?.avatar_url}
+                    fallbackSrc={creatorAvatar}
                     fallback={<LinkedInIcon />}
                   />
                   <div className="min-w-0">
@@ -916,6 +932,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 <div className="flex items-center gap-2.5 min-w-0">
                   <AccountAvatar
                     src={twitterAccount?.avatar_url}
+                    fallbackSrc={creatorAvatar}
                     fallback={<XIcon />}
                   />
                   <div className="min-w-0">

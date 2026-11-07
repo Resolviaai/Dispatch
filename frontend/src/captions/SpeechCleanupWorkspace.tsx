@@ -202,62 +202,49 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col bg-surface border-t border-border text-text-main select-none overflow-hidden">
-      {/* 1. HEADER: Speech Cleanup | Total detections | Close */}
-      <header className="shrink-0 h-12 px-4 border-b border-border bg-surface flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-7 h-7 rounded-lg bg-surface-2 flex items-center justify-center shrink-0 text-primary">
-            <Scissors size={15} />
-          </div>
-          <h2 className="text-sm font-semibold text-text-main truncate">
-            Speech Cleanup
-          </h2>
-          <span className="px-2 py-0.5 rounded-md text-xs font-mono tabular-nums text-text-secondary bg-surface-2 border border-border shrink-0">
-            {proposals.length} {proposals.length === 1 ? 'detection' : 'detections'}
-          </span>
+      {/* 1. COMPACT HEADER: Category Filters + Close (Unified single row) */}
+      <header className="shrink-0 h-11 px-3 border-b border-border bg-surface flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0">
+          {(
+            [
+              { id: 'all', label: 'All', count: counts.all },
+              { id: 'AUTO-REMOVE', label: 'Auto-cut', count: counts['AUTO-REMOVE'] },
+              { id: 'REVIEW', label: 'Review', count: counts.REVIEW },
+              { id: 'PRESERVE', label: 'Preserve', count: counts.PRESERVE },
+            ] as const
+          ).map((tab) => {
+            const isActive = filter === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => onFilterChange(tab.id)}
+                className={`h-7 px-2.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-all shrink-0 active:scale-[0.98] border ${
+                  isActive
+                    ? 'bg-primary text-white border-primary shadow-hero-sm font-semibold'
+                    : 'bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 border-border'
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span className="font-mono tabular-nums text-[10px] opacity-80">
+                  ({tab.count})
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         <button
           type="button"
           onClick={onClose}
           aria-label="Close Speech Cleanup"
-          className="w-9 h-9 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95] transition-all shrink-0"
+          className="w-7 h-7 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-[0.95] transition-all shrink-0"
         >
-          <X size={15} />
+          <X size={14} />
         </button>
       </header>
 
-      {/* 2. CATEGORY FILTERS: All | Auto-cut | Review | Preserve */}
-      <div className="shrink-0 px-4 py-2 border-b border-border bg-surface flex items-center gap-2 overflow-x-auto no-scrollbar">
-        {(
-          [
-            { id: 'all', label: 'All', count: counts.all },
-            { id: 'AUTO-REMOVE', label: 'Auto-cut', count: counts['AUTO-REMOVE'] },
-            { id: 'REVIEW', label: 'Review', count: counts.REVIEW },
-            { id: 'PRESERVE', label: 'Preserve', count: counts.PRESERVE },
-          ] as const
-        ).map((tab) => {
-          const isActive = filter === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onFilterChange(tab.id)}
-              className={`h-8 px-3 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all shrink-0 active:scale-[0.98] border ${
-                isActive
-                  ? 'bg-primary text-white border-primary shadow-hero-sm font-semibold'
-                  : 'bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 border-border'
-              }`}
-            >
-              <span>{tab.label}</span>
-              <span className="font-mono tabular-nums text-[11px] opacity-80">
-                ({tab.count})
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 3. COMPACT DETECTION LIST */}
+      {/* 2. COMPACT DETECTION LIST */}
       <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-border">
         {filteredProposals.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-8 text-center text-text-muted text-xs">
@@ -279,7 +266,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                 {/* Collapsed Row Summary / Header Trigger */}
                 <div
                   onClick={() => setExpandedId(isExpanded ? null : prop.id)}
-                  className="min-h-[52px] px-4 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none active:bg-surface-2/60 transition-colors"
+                  className="min-h-[44px] px-3 py-1.5 flex items-center justify-between gap-3 cursor-pointer select-none active:bg-surface-2/60 transition-colors"
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
@@ -338,9 +325,9 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                   </div>
                 </div>
 
-                {/* 4. EXPANDED INSPECTION INTERACTION */}
+                {/* 3. EXPANDED INSPECTION INTERACTION */}
                 {isExpanded && (
-                  <div className="px-4 pb-4 pt-1 space-y-3 bg-surface-2/20 border-t border-border/60 animate-in fade-in duration-150">
+                  <div className="px-3 pb-3 pt-1 space-y-2.5 bg-surface-2/20 border-t border-border/60 animate-in fade-in duration-150">
                     {/* Miniature Filmstrip (Captions Reference) */}
                     <MiniFilmstrip
                       filmstrip={filmstrip}
@@ -352,16 +339,8 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                       onSeek={onSeekSourceTime}
                     />
 
-                    {/* AI Recommendation Context & Reason */}
-                    <div className="flex items-center justify-between text-xs text-text-secondary leading-relaxed px-0.5">
-                      <span className="truncate pr-2">{prop.reason}</span>
-                      <span className="text-[11px] font-mono tabular-nums text-text-muted shrink-0">
-                        AI: {prop.decision === 'AUTO-REMOVE' ? 'Auto-cut' : prop.decision === 'PRESERVE' ? 'Preserve' : 'Review'}
-                      </span>
-                    </div>
-
-                    {/* Action Controls Row */}
-                    <div className="flex items-center justify-between gap-3 pt-1">
+                    {/* Action Controls Row: Single Toggle Decision + Contextual Preview */}
+                    <div className="flex items-center justify-between gap-3 pt-0.5">
                       {/* Contextual Preview Button */}
                       <button
                         type="button"
@@ -371,43 +350,36 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                             end: Math.min(clipEnd || duration || 60, prop.source_end + 0.5),
                           })
                         }
-                        className="min-h-[40px] px-3.5 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center gap-1.5 active:scale-[0.98] transition-all"
+                        className="min-h-[38px] px-3.5 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-main flex items-center gap-1.5 active:scale-[0.98] transition-all"
                         title="Preview cut in context"
                       >
                         <Play size={12} className="fill-current text-primary" />
                         <span>Preview</span>
                       </button>
 
-                      {/* Decision Controls: Cut vs Keep */}
-                      <div className="flex items-center gap-2">
-                        {/* Keep Button */}
-                        <button
-                          type="button"
-                          onClick={() => onToggleDecision(prop.id, 'keep')}
-                          className={`min-h-[40px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all border ${
-                            effective === 'keep'
-                              ? 'bg-surface-3 text-text-main border-border-strong shadow-sm'
-                              : 'bg-surface-2 text-text-muted hover:text-text-main border-border'
-                          }`}
-                        >
-                          {effective === 'keep' && <Check size={13} />}
-                          <span>Keep</span>
-                        </button>
-
-                        {/* Cut Button */}
-                        <button
-                          type="button"
-                          onClick={() => onToggleDecision(prop.id, 'cut')}
-                          className={`min-h-[40px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all border ${
-                            effective === 'cut'
-                              ? 'bg-primary text-white border-primary shadow-hero-glow'
-                              : 'bg-surface-2 text-text-muted hover:text-text-main border-border'
-                          }`}
-                        >
-                          <Scissors size={13} />
-                          <span>Cut</span>
-                        </button>
-                      </div>
+                      {/* Single Decision Toggle: Cut vs Keep */}
+                      <button
+                        type="button"
+                        onClick={() => onToggleDecision(prop.id, effective === 'cut' ? 'keep' : 'cut')}
+                        className={`min-h-[38px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all border ${
+                          effective === 'cut'
+                            ? 'bg-primary text-white border-primary shadow-hero-glow'
+                            : 'bg-surface-2 text-text-secondary hover:text-text-main border-border'
+                        }`}
+                        title={effective === 'cut' ? 'Marked for removal. Click to keep.' : 'Kept. Click to cut.'}
+                      >
+                        {effective === 'cut' ? (
+                          <>
+                            <Scissors size={13} />
+                            <span>Cut</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check size={13} />
+                            <span>Keep</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
                 )}
@@ -417,12 +389,12 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
         )}
       </div>
 
-      {/* 5. STICKY BOTTOM ACTION BAR */}
-      <footer className="p-3 border-t border-border bg-surface flex items-center gap-3 shrink-0 pb-[max(12px,env(safe-area-inset-bottom,0px))]">
+      {/* 4. STICKY BOTTOM ACTION BAR */}
+      <footer className="px-3 py-2 border-t border-border bg-surface flex items-center gap-2.5 shrink-0 pb-[max(8px,env(safe-area-inset-bottom,0px))]">
         <button
           type="button"
           onClick={onClose}
-          className="flex-1 min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-sm font-medium active:scale-[0.98] transition-all"
+          className="flex-1 min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-sm font-medium active:scale-[0.98] transition-all"
         >
           Cancel
         </button>
@@ -431,12 +403,12 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
           type="button"
           onClick={onApply}
           disabled={eligibleCutCount === 0 || isApplying}
-          className="flex-2 min-h-[44px] px-4 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex-2 min-h-[40px] px-4 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isApplying ? (
-            <RotateCw size={15} className="animate-spin" />
+            <RotateCw size={14} className="animate-spin" />
           ) : (
-            <Scissors size={15} />
+            <Scissors size={14} />
           )}
           <span>Apply Auto-Cut ({eligibleCutCount})</span>
         </button>

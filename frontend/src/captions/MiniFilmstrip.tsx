@@ -54,8 +54,17 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
   const playheadPct = isPlayheadInWindow ? clamp(((currentTime - winStart) / winSpan) * 100, 0, 100) : null;
 
   // 4. Frames within this context window from filmstrip
+  const isSingleFallback = useMemo(() => {
+    if (!filmstrip || !filmstrip.frames || filmstrip.frames.length === 0) return false;
+    if (filmstrip.frames.length === 1) return true;
+    const firstSpan = filmstrip.frames[0]?.span || 0;
+    return firstSpan > 5.0;
+  }, [filmstrip]);
+
+  const fallbackUrl = filmstrip?.frames?.[0]?.url || null;
+
   const relevantFrames = useMemo(() => {
-    if (!filmstrip || !filmstrip.frames || filmstrip.frames.length === 0) {
+    if (!filmstrip || !filmstrip.frames || filmstrip.frames.length === 0 || isSingleFallback) {
       return [];
     }
 
@@ -83,7 +92,7 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
           widthPct,
         };
       });
-  }, [filmstrip, winStart, winEnd, winSpan, clipStartOffset]);
+  }, [filmstrip, winStart, winEnd, winSpan, clipStartOffset, isSingleFallback]);
 
   // 5. Stylized acoustic waveform bars (representing speech energy vs silence)
   const waveformBars = useMemo(() => {
@@ -172,15 +181,29 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
         aria-valuemax={winEnd}
         aria-valuenow={currentTime}
       >
-        {/* Layer 1: Frame Thumbnails (if available) */}
-        {relevantFrames.length > 0 ? (
-          <div className="absolute inset-0 flex items-stretch pointer-events-none">
+        {/* Layer 1: Frame Thumbnails (Clean filmstrip reel) */}
+        {isSingleFallback && fallbackUrl ? (
+          <div className="absolute inset-0 flex items-stretch overflow-hidden pointer-events-none divide-x divide-black/60">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div key={`fallback_tile_${idx}`} className="flex-1 h-full overflow-hidden relative bg-black/40">
+                <img
+                  src={fallbackUrl}
+                  alt=""
+                  className="w-full h-full object-cover opacity-80 pointer-events-none"
+                  loading="lazy"
+                  draggable={false}
+                />
+              </div>
+            ))}
+          </div>
+        ) : relevantFrames.length > 0 ? (
+          <div className="absolute inset-0 flex items-stretch pointer-events-none overflow-hidden">
             {relevantFrames.map((frame, idx) => (
               <img
                 key={`mini_frame_${idx}`}
                 src={frame.url}
                 alt=""
-                className="absolute top-0 bottom-0 h-full object-cover opacity-60 pointer-events-none"
+                className="absolute top-0 bottom-0 h-full object-cover opacity-80 pointer-events-none"
                 style={{
                   left: `${frame.leftPct}%`,
                   width: `${frame.widthPct}%`,
@@ -199,13 +222,13 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
           </div>
         )}
 
-        {/* Layer 2: Waveform Acoustic Energy Overlay */}
-        <div className="absolute inset-x-0 bottom-0 h-7 flex items-end justify-between px-1 pointer-events-none z-10">
+        {/* Layer 2: Waveform Acoustic Energy Overlay (Refined, subtle needles along bottom) */}
+        <div className="absolute inset-x-0 bottom-0 h-4 flex items-end justify-between px-1.5 pointer-events-none z-10">
           {waveformBars.map((bar, i) => (
             <div
               key={`bar_${i}`}
-              className={`w-1 rounded-t-sm transition-all duration-100 ${
-                bar.isInsideCut ? 'bg-red-400/40' : 'bg-white/40'
+              className={`w-0.5 rounded-t-sm transition-all duration-100 ${
+                bar.isInsideCut ? 'bg-red-400/30' : 'bg-white/25'
               }`}
               style={{ height: `${bar.heightPct}%` }}
             />

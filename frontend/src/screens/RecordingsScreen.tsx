@@ -415,16 +415,17 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             });
             const data = await res.json().catch(() => null);
             if (res.ok && data?.url) {
-              const streamUrl = data.url.includes('?')
-                ? `${data.url}&token=${encodeURIComponent(token)}`
-                : `${data.url}?token=${encodeURIComponent(token)}`;
+              const streamUrl = data.url.includes('sig=')
+                ? data.url
+                : (data.url.includes('?') ? `${data.url}&token=${encodeURIComponent(token)}` : `${data.url}?token=${encodeURIComponent(token)}`);
               setRouteCMediaUrls(prev => ({ ...prev, [item.video_id]: streamUrl }));
               if (data.duration && data.duration > 0) {
                 setResolvedDurations(prev => ({ ...prev, [item.video_id]: Math.round(data.duration) }));
               }
               if (data.byte_count && data.byte_count > 0) {
                 setResolvedBytes(prev => ({ ...prev, [item.video_id]: data.byte_count }));
-              } else if (typeof window !== 'undefined') {
+              }
+              if ((!data.duration || data.duration <= 0) && !resolvedDurations[item.video_id] && typeof window !== 'undefined') {
                 try {
                   const probeEl = document.createElement('video');
                   probeEl.preload = 'metadata';
@@ -433,6 +434,12 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                     if (probeEl.duration && probeEl.duration > 0) {
                       setResolvedDurations(prev => ({ ...prev, [item.video_id]: Math.round(probeEl.duration) }));
                     }
+                    probeEl.src = '';
+                    probeEl.remove();
+                  };
+                  probeEl.onerror = () => {
+                    probeEl.src = '';
+                    probeEl.remove();
                   };
                 } catch {
                   /* ignore probe failure */
@@ -995,9 +1002,9 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             });
             const data = await res.json().catch(() => null);
             if (res.ok && data?.url) {
-              const streamUrl = data.url.includes('?')
-                ? `${data.url}&token=${encodeURIComponent(token)}`
-                : `${data.url}?token=${encodeURIComponent(token)}`;
+              const streamUrl = data.url.includes('sig=')
+                ? data.url
+                : (data.url.includes('?') ? `${data.url}&token=${encodeURIComponent(token)}` : `${data.url}?token=${encodeURIComponent(token)}`);
               setRouteCMediaUrl(streamUrl);
               setRouteCMediaUrls(prev => ({ ...prev, [s.id]: streamUrl }));
             }
@@ -1251,7 +1258,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   );
                 }}
                 className="w-full h-full object-contain"
-                preload="metadata"
+                preload="auto"
               />
             ) : isRouteCLoading ? (
               <div className="flex flex-col items-center justify-center gap-3 p-6 text-text-muted">

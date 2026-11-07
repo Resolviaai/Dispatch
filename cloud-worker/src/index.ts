@@ -1375,17 +1375,22 @@ export default {
         const accountId = key.replace(/^instagram_/, "").replace(/\.jpg$/, "");
         try {
           const accRes = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/connected_accounts?account_id=eq.${encodeURIComponent(accountId)}&provider=eq.instagram&select=id,credentials_encrypted,avatar_url&limit=1`,
+            `${env.SUPABASE_URL}/rest/v1/connected_accounts?or=(account_id.eq.${encodeURIComponent(accountId)},account_name.eq.${encodeURIComponent(accountId)},account_name.eq.@${encodeURIComponent(accountId)})&provider=eq.instagram&select=id,user_id,credentials_encrypted,avatar_url&limit=1`,
             { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
           );
           if (accRes.ok) {
-            const rows = (await accRes.json()) as Array<{ id: string; credentials_encrypted?: string; avatar_url?: string }>;
+            const rows = (await accRes.json()) as Array<{ id: string; user_id?: string; credentials_encrypted?: string; avatar_url?: string }>;
             const accRow = rows[0];
             if (accRow) {
               let fetchedBytes: ArrayBuffer | null = null;
               if (accRow.avatar_url && !accRow.avatar_url.includes(url.origin)) {
                 try {
-                  const directRes = await fetch(accRow.avatar_url);
+                  const directRes = await fetch(accRow.avatar_url, {
+                    headers: {
+                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                      "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    },
+                  });
                   if (directRes.ok) fetchedBytes = await directRes.arrayBuffer();
                 } catch {}
               }
@@ -1401,8 +1406,35 @@ export default {
                       if (meRes.ok) {
                         const meData = (await meRes.json()) as { profile_picture_url?: string };
                         if (meData.profile_picture_url) {
-                          const imgRes = await fetch(meData.profile_picture_url);
+                          const imgRes = await fetch(meData.profile_picture_url, {
+                            headers: {
+                              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            },
+                          });
                           if (imgRes.ok) fetchedBytes = await imgRes.arrayBuffer();
+                        }
+                      }
+                    }
+                  }
+                } catch {}
+              }
+              // Fallback to user's other social profile avatar (e.g. YouTube / Twitter / LinkedIn)
+              if (!fetchedBytes && accRow.user_id) {
+                try {
+                  const otherRes = await fetch(
+                    `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${accRow.user_id}&avatar_url=not.is.null&select=avatar_url&limit=3`,
+                    { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+                  );
+                  if (otherRes.ok) {
+                    const others = (await otherRes.json()) as Array<{ avatar_url?: string }>;
+                    for (const o of others) {
+                      if (o.avatar_url && !o.avatar_url.includes(url.origin)) {
+                        const fallbackImgRes = await fetch(o.avatar_url, {
+                          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+                        });
+                        if (fallbackImgRes.ok) {
+                          fetchedBytes = await fallbackImgRes.arrayBuffer();
+                          break;
                         }
                       }
                     }
@@ -1460,19 +1492,42 @@ export default {
       const mediaObjectId = rawMediaId.length === 32 && !rawMediaId.includes("-")
         ? rawMediaId.replace(/^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i, "$1-$2-$3-$4-$5")
         : rawMediaId;
-      const reqHeaders = new Headers(request.headers);
-      if (url.searchParams.has("token")) {
-        reqHeaders.set("Authorization", "Bearer " + url.searchParams.get("token"));
+      let finalKey: string | null = null;
+      let mimeType: string = "video/mp4";
+
+      // 1. FAST PATH (<0.1ms): Edge-verified encrypted streaming ticket (zero Supabase WAN calls)
+      const sig = url.searchParams.get("sig");
+      if (sig) {
+        try {
+          const raw = await decryptToken(env.TOKEN_VAULT_KEY, sig);
+          if (raw.startsWith("{")) {
+            const ticket = JSON.parse(raw) as { k?: string; u?: string; m?: string; e?: number };
+            if (ticket.k && ticket.e && Date.now() < ticket.e) {
+              finalKey = ticket.k;
+              if (ticket.m) mimeType = ticket.m;
+            }
+          }
+        } catch {}
       }
-      const fakeReq = new Request(request.url, { headers: reqHeaders });
-      const user = await authenticate(env, fakeReq);
-      if (!user) return json(401, { error: "unauthorized" });
 
-      const obj = await selectOne<MediaObj>(env, "media_objects", mediaObjectId, "user_id,status,final_key,byte_count,mime_type");
-      if (!obj || obj.user_id !== user.userId) return json(403, { error: "forbidden" });
-      if (obj.status !== "active" || !obj.final_key) return json(409, { error: "media not active" });
+      // 2. FALLBACK: Full Supabase Auth + DB lookup if ticket missing/expired
+      if (!finalKey) {
+        const reqHeaders = new Headers(request.headers);
+        if (url.searchParams.has("token")) {
+          reqHeaders.set("Authorization", "Bearer " + url.searchParams.get("token"));
+        }
+        const fakeReq = new Request(request.url, { headers: reqHeaders });
+        const user = await authenticate(env, fakeReq);
+        if (!user) return json(401, { error: "unauthorized" });
 
-      const r2Object = await env.BUCKET.get(obj.final_key, {
+        const obj = await selectOne<MediaObj>(env, "media_objects", mediaObjectId, "user_id,status,final_key,byte_count,mime_type");
+        if (!obj || obj.user_id !== user.userId) return json(403, { error: "forbidden" });
+        if (obj.status !== "active" || !obj.final_key) return json(409, { error: "media not active" });
+        finalKey = obj.final_key;
+        if (obj.mime_type) mimeType = obj.mime_type;
+      }
+
+      const r2Object = await env.BUCKET.get(finalKey, {
         range: request.headers,
       });
       if (!r2Object) return json(404, { error: "media file not found in storage" });
@@ -1483,10 +1538,11 @@ export default {
       headers.set("Access-Control-Allow-Origin", "*");
       headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
       headers.set("Access-Control-Allow-Headers", "Range, Content-Type, Authorization");
-      headers.set("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, Content-Type");
+      headers.set("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, Content-Type, ETag");
       headers.set("Accept-Ranges", "bytes");
+      headers.set("Cache-Control", "public, max-age=604800, s-maxage=604800, immutable");
 
-      const mime = obj.mime_type || headers.get("Content-Type") || "video/mp4";
+      const mime = mimeType || headers.get("Content-Type") || "video/mp4";
       headers.set("Content-Type", mime);
 
       if (request.method === "HEAD") {
@@ -3496,7 +3552,7 @@ export default {
       if (request.method === "POST" && url.pathname === "/media-url") {
         const body = await readJson<{ media_object_id: string }>(request);
         if (!body?.media_object_id) return json(400, { error: "media_object_id required" });
-        const obj = await selectOne<MediaObj>(env, "media_objects", body.media_object_id, "user_id,status,final_key,byte_count");
+        const obj = await selectOne<MediaObj>(env, "media_objects", body.media_object_id, "user_id,status,final_key,byte_count,mime_type");
         if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
         if (obj.status !== "active") return json(409, { error: `media not active (${obj.status})` });
 
@@ -3512,8 +3568,17 @@ export default {
           }
         } catch {}
 
+        // Edge-signed fast-stream ticket: eliminates all database/auth latency on every byte-range chunk
+        const ticketPayload = {
+          k: obj.final_key,
+          u: userId,
+          m: obj.mime_type || "video/mp4",
+          e: Date.now() + (24 * 3600 * 1000),
+        };
+        const streamSig = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(ticketPayload));
+
         return json(200, {
-          url: `${url.origin}/media/${body.media_object_id}/stream`,
+          url: `${url.origin}/media/${body.media_object_id}/stream?sig=${encodeURIComponent(streamSig)}`,
           presigned_url: await presign(env, "GET", obj.final_key as string),
           expires_in: PRESIGN_EXPIRES,
           byte_count: obj.byte_count,
@@ -3637,6 +3702,18 @@ export default {
       if (request.method === "PUT" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline")) {
         const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline".length));
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+
+        // Resolve UUID to local_clip_id if target was passed as cloud UUID
+        let actualLocalClipId = localClipId;
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(localClipId);
+        if (isUuid) {
+          try {
+            const row = await selectOne<{ local_clip_id?: string }>(env, "clips_cloud", localClipId, "local_clip_id");
+            if (row?.local_clip_id) {
+              actualLocalClipId = row.local_clip_id;
+            }
+          } catch {}
+        }
         const body = await readJson<{
           document?: Record<string, unknown>;
           project_document?: Record<string, unknown>;
@@ -3688,7 +3765,7 @@ export default {
         try {
           const result = await rpc<{ revision: number; conflict: boolean; current_document: unknown }>(env, "cloud_put_project_document", {
             p_user_id: userId,
-            p_local_clip_id: localClipId,
+            p_local_clip_id: actualLocalClipId,
             p_document: doc,
             p_base_revision: baseRev,
             p_operation_id: operationId,

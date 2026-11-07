@@ -3761,6 +3761,34 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           if (res.status === 409 && conflictRev !== null) {
             setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: conflictRev } : c)));
             setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: conflictRev } : c)));
+
+            // Transparent single-flight retry using server's current revision
+            const retryRes = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
+              method: 'PUT',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                expected_revision: conflictRev,
+                base_revision: conflictRev,
+                document: updatedProjectDoc,
+                project_document: updatedProjectDoc,
+                operation_id: `op_${actionType}_retry_${Date.now()}`,
+                action_type: actionType,
+              }),
+            });
+
+            if (retryRes.ok) {
+              const retryData = await retryRes.json().catch(() => ({}));
+              const rev = retryData.revision ?? retryData.segments_revision ?? (conflictRev + 1);
+              setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
+              setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
+              setSaveStatus('saved');
+              setLastFailedAction(null);
+              lastFailedTimelineCommitRef.current = null;
+              return true;
+            }
           }
           throw new Error(errData?.detail || errData?.error || `Cloud save failed (${res.status})`);
         }
