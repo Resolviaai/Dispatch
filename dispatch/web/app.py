@@ -258,7 +258,10 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
                     "DISPATCH_USER_ID is set to '%s', but is not in authorized_pc_owner_ids: %s. Failing closed.",
                     explicit_user, owners
                 )
-                return None
+                raise HTTPException(
+                    status_code=403,
+                    detail="DISPATCH_USER_ID is set but is not in authorized PC owners"
+                )
             if len(owners) == 1:
                 return owners[0]
             if len(owners) > 1:
@@ -266,10 +269,13 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
                     "Paired device token presented, but multiple PC owners configured (%d owners: %s) without explicit DISPATCH_USER_ID. Failing closed.",
                     len(owners), owners
                 )
-                return None
+                raise HTTPException(
+                    status_code=403,
+                    detail="Paired device owner is ambiguous: multiple PC owners configured without DISPATCH_USER_ID"
+                )
             return None
         except HTTPException:
-            pass
+            raise
 
     if allow_lan_peer and _is_local_network_peer(client_host):
         return None
@@ -2856,15 +2862,13 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
             "message": f"YouTube video {video_id} is already being ingested. Track its progress in the inbox."
         }
 
-    user_id = None
-    try:
-        user_id = resolve_caller_user_id(request)
-    except Exception:
-        pass
+    user_id = resolve_caller_user_id(request)
     if not user_id:
         try:
             user_info = get_authenticated_user(request)
             user_id = user_info.get("user_id") or user_info.get("id")
+        except HTTPException:
+            raise
         except Exception:
             pass
 

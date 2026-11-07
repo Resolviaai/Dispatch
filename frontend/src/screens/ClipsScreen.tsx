@@ -58,6 +58,7 @@ import { splitAt, roundMs, trimEdge, deletePiece, normalizeRanges, keptDuration,
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
+import { executeClipApproval } from '../lib/approval';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
 import { FilmstripData, normalizeFilmstripPayload, thumbnailFallbackFilmstrip } from '../captions/filmstrip';
 import { ConnectedAccount, listConnectedAccounts, WORKER_BASE } from '../accounts/accountsService';
@@ -270,7 +271,7 @@ export interface ClipItem {  id: string;
   source_aspect_ratio?: '9:16' | '16:9';
   available_layout_modes?: AvailableLayoutMode[];
   target_aspect?: '16:9' | '9:16';
-  origin?: 'phone' | 'youtube';
+  origin?: 'phone' | 'youtube' | 'direct';
   youtube_video_id?: string | null;
   source_title?: string | null;
   caption_data?: any;
@@ -4198,174 +4199,37 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     };
 
     try {
-      // 1. If running natively on Android, trigger on-device Media3 rendering & background upload
-      const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
-      if (bridge?.startRenderAndPublish) {
-        const rawDoc = clipToApprove.project_document;
-        const parsedDoc = typeof rawDoc === 'string' ? JSON.parse(rawDoc) : (rawDoc && Object.keys(rawDoc).length > 0 ? rawDoc : null);
-        const clipStart = Number(clipToApprove.start_time || 0);
-        const clipEnd = Number(clipToApprove.end_time || (clipStart + 30));
-        const sourceDur = Number(clipToApprove.source_duration || clipEnd || 60);
-
-        const effectiveDoc = parsedDoc ? { ...parsedDoc } : {
-          version: 1,
-          timeline: {
-            source_duration: sourceDur,
-            segments: [{
-              id: 'seg_1',
-              source_start: clipStart,
-              source_end: clipEnd,
-            }],
-            kept_duration: roundMs(clipEnd - clipStart),
-          },
-          tracks: [],
-        };
-
-        if (captionTrack && (!effectiveDoc.tracks || effectiveDoc.tracks.length === 0)) {
-          effectiveDoc.tracks = [{
-            ...captionTrack,
-            kind: 'captions',
-            id: captionTrack.id || 'caption_primary',
-          }];
-        }
-
-        const renderJobPayload = {
-          clip_id: clipToApprove.id,
-          project_document: effectiveDoc,
-          source_video_path: (clipToApprove as any).local_path || (clipToApprove as any).video_path || '',
-          layout_mode: optimisticLayout,
-          target_resolution: '1080p',
-          render_fingerprint: (clipToApprove as any).render_fingerprint || '',
-          title: optimisticTitle,
-          description: optimisticDescription,
-          platforms: platformsToPublish,
-          publish_mode: optimisticMode,
-        };
-        bridge.startRenderAndPublish(JSON.stringify(renderJobPayload));
-        markApproved('Started on-device video rendering (Media3 Transformer)…');
-        return;
-      }
-
       const session = await currentSession();
+      const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
       const token = session?.access_token || bridge?.getAuthToken?.();
+      const capBaseRevision = trackSnapshot
+        ? (localCaptionsRevisionRef.current.get(clipToApprove.id) ?? Number(clipToApprove.captions_revision ?? 0))
+        : undefined;
 
-      // If clip was already published, directly submit to cloud publishing queue without re-rendering
-      if (clipToApprove.status === 'published') {
-        if (!token) {
-          restoreToReady('Cannot re-publish: authentication required.');
-          return;
-        }
-        const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            clip_id: clipToApprove.id,
-            title: optimisticTitle,
-            description: optimisticDescription,
-            platforms: platformsToPublish,
-            publish_mode: optimisticMode,
-            rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
-          }),
-        });
-        if (!cloudRes.ok) {
-          let errorDetail = `Publish failed (${cloudRes.status})`;
-          try {
-            const errJson = await cloudRes.json();
-            if (errJson?.error || errJson?.message) errorDetail = errJson.error || errJson.message;
-          } catch {}
-          restoreToReady(errorDetail);
-          return;
-        }
-        markApproved(`Publishing to ${platformsToPublish}…`);
-        return;
+      const result = await executeClipApproval({
+        clip: clipToApprove,
+        optimisticTitle,
+        optimisticDescription,
+        optimisticLayout,
+        optimisticMode,
+        platformsToPublish,
+        accountsMap,
+        captionTrack: trackSnapshot,
+        pcHost,
+        token,
+        bridge,
+        workerBase: WORKER_BASE,
+        isCloudMode,
+        getAuthHeaders,
+        apiUrl,
+        localCaptionsRevision: capBaseRevision,
+      });
+
+      if (result.success) {
+        markApproved(result.message);
+      } else {
+        restoreToReady(result.error || result.message);
       }
-
-      // 2. PC Workstation approval (if connected to PC)
-      let pcSuccess = false;
-      if (pcHost) {
-        if (trackSnapshot) {
-          const capBaseRevision = localCaptionsRevisionRef.current.get(clipToApprove.id)
-            ?? Number(clipToApprove.captions_revision ?? 0);
-          try {
-            await fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
-              method: 'POST',
-              headers: getAuthHeaders(),
-              body: JSON.stringify({ ...trackSnapshot, base_revision: capBaseRevision }),
-            });
-          } catch (capErr) {
-            console.warn('Caption pre-save non-fatal error:', capErr);
-          }
-        }
-
-        const pcRes = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/approve`, pcHost), {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({
-            title: optimisticTitle,
-            hashtags: optimisticDescription,
-            publish_mode: optimisticMode,
-            platforms: platformsToPublish,
-            account_ids: accountsMap,
-            layout_mode: optimisticLayout,
-            range_revision: rev,
-          }),
-        });
-
-        if (!pcRes.ok) {
-          let errorDetail = `PC approval failed (${pcRes.status})`;
-          try {
-            const errJson = await pcRes.json();
-            if (errJson?.detail) errorDetail = errJson.detail;
-          } catch {}
-          restoreToReady(errorDetail);
-          return;
-        }
-        pcSuccess = true;
-      }
-
-      // 3. Cloud queue submission (if in cloud mode or authenticated)
-      let cloudSuccess = false;
-      if (token && (isCloudMode || !pcHost)) {
-        const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            clip_id: clipToApprove.id,
-            title: optimisticTitle,
-            description: optimisticDescription,
-            platforms: platformsToPublish,
-            publish_mode: optimisticMode,
-            rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
-          }),
-        });
-
-        if (!cloudRes.ok) {
-          let errorDetail = `Cloud publish failed (${cloudRes.status})`;
-          try {
-            const errJson = await cloudRes.json();
-            if (errJson?.error || errJson?.message) errorDetail = errJson.error || errJson.message;
-          } catch {}
-          if (!pcSuccess) {
-            restoreToReady(errorDetail);
-            return;
-          }
-        } else {
-          cloudSuccess = true;
-        }
-      }
-
-      if (!pcSuccess && !cloudSuccess) {
-        restoreToReady('Cannot approve: No PC connection or cloud authentication available.');
-        return;
-      }
-
-      markApproved('Queued for rendering & publishing…');
     } catch (err: any) {
       console.error('Approval execution error:', err);
       restoreToReady(`Approval failed: ${err?.message || err}`);
@@ -5002,7 +4866,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                       || clip.created_at;
                     const retention = getRetentionRemaining(isPublished ? effectivePublishedAt : null);
                     const age = formatAge(isUploaded ? effectivePublishedAt : clip.created_at);
-                    const clipOrigin = clip.origin || (clip.youtube_video_id ? 'youtube' : (clip.session_id ? 'phone' : 'youtube'));
+                    const clipOrigin = clip.origin || (clip.id?.startsWith('dir_') || clip.session_id?.startsWith('dir_') ? 'direct' : (clip.youtube_video_id ? 'youtube' : (clip.session_id ? 'phone' : 'youtube')));
 
                     return (
                       <div
@@ -5038,12 +4902,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                           {/* Minimal origin badge matching Sessions screen pattern */}
                           <span
                             className="absolute top-1 left-1 w-4 h-4 rounded bg-black/85 text-white flex items-center justify-center shadow-sm"
-                            title={clipOrigin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                            title={clipOrigin === 'phone' ? 'Camera recording' : clipOrigin === 'direct' ? 'Direct upload' : 'YouTube video'}
                             role="img"
-                            aria-label={clipOrigin === 'phone' ? 'Camera recording' : 'YouTube video'}
+                            aria-label={clipOrigin === 'phone' ? 'Camera recording' : clipOrigin === 'direct' ? 'Direct upload' : 'YouTube video'}
                           >
                             {clipOrigin === 'phone'
                               ? <Camera size={10} />
+                              : clipOrigin === 'direct'
+                              ? <Upload size={10} className="text-primary" />
                               : <Youtube size={10} className="text-danger" />}
                           </span>
 
@@ -6950,17 +6816,20 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
             <div className="w-full min-h-[44px] px-3 rounded-xl bg-surface-100 border border-border flex items-center justify-between text-sm font-medium text-text-main">
               <div className="flex items-center gap-2">
-                {((currentClip.origin || (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube'))) === 'phone') ? (
+                {((currentClip.origin || (currentClip.id?.startsWith('dir_') || currentClip.session_id?.startsWith('dir_') ? 'direct' : (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube')))) === 'phone') ? (
                   <Camera size={14} className="text-text-muted" />
+                ) : ((currentClip.origin || (currentClip.id?.startsWith('dir_') || currentClip.session_id?.startsWith('dir_') ? 'direct' : (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube')))) === 'direct') ? (
+                  <Upload size={14} className="text-primary" />
                 ) : (
                   <Youtube size={14} className="text-danger" />
                 )}
                 <span>Origin</span>
               </div>
               <span className="text-xs text-text-muted font-medium">
-                {((currentClip.origin || (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube'))) === 'phone')
-                  ? 'Phone Camera'
-                  : 'YouTube Ingest'}
+                {(() => {
+                  const o = currentClip.origin || (currentClip.id?.startsWith('dir_') || currentClip.session_id?.startsWith('dir_') ? 'direct' : (currentClip.youtube_video_id ? 'youtube' : (currentClip.session_id ? 'phone' : 'youtube')));
+                  return o === 'phone' ? 'Phone Camera' : o === 'direct' ? 'Direct Upload' : 'YouTube Ingest';
+                })()}
               </span>
             </div>
 

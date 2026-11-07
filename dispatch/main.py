@@ -253,11 +253,30 @@ def start_dispatch(run_web: bool = True):
                 finally:
                     first = False
 
+        def _orchestrator_recovery_janitor() -> None:
+            first = True
+            while True:
+                try:
+                    time.sleep(180 if first else 600)
+                    stats = recover_laptop_orchestrator(is_boot=False, stale_timeout_seconds=900)
+                    if stats.get("reclaimed_jobs") or stats.get("reclaimed_inbox_items"):
+                        logger.info(
+                            "Periodic orchestrator recovery sweep reclaimed %d stale job(s) and %d stuck inbox item(s)",
+                            len(stats.get("reclaimed_jobs", [])),
+                            len(stats.get("reclaimed_inbox_items", [])),
+                        )
+                except Exception as sweep_err:
+                    logger.warning("Periodic orchestrator recovery sweep failed: %s", sweep_err)
+                finally:
+                    first = False
+
         threading.Thread(target=_published_clip_janitor, daemon=True,
                           name="dispatch-published-clip-janitor").start()
         threading.Thread(target=_storage_retention_janitor, daemon=True,
                           name="dispatch-storage-retention-janitor").start()
-        logger.info("Published-clip and 3-Tier Storage retention janitors active")
+        threading.Thread(target=_orchestrator_recovery_janitor, daemon=True,
+                          name="dispatch-orchestrator-recovery-janitor").start()
+        logger.info("Published-clip, 3-Tier Storage retention, and periodic orchestrator recovery janitors active")
     except Exception as e:
         logger.warning("Storage janitors not started: %s", e)
 

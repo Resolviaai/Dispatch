@@ -1976,3 +1976,25 @@ test("/youtube/duration rejects missing video_id with 400", async () => {
   const res = await worker.fetch(new Request("https://dispatch.app/youtube/duration", { method: "GET" }), env());
   assert.equal(res.status, 400);
 });
+
+test("/avatars/:key serves cached avatar from bucket with CORS", async () => {
+  const e = env();
+  e.BUCKET.get = async (k) => ({
+    body: "fake-jpg-bytes",
+    size: 14,
+    httpMetadata: { contentType: "image/jpeg" },
+  });
+  const res = await worker.fetch(new Request("https://dispatch.app/avatars/test.jpg"), e);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("Content-Type"), "image/jpeg");
+  assert.equal(res.headers.get("Access-Control-Allow-Origin"), "*");
+});
+
+test("/media/:id/stream OPTIONS returns 204 with CORS headers", async () => {
+  const res = await worker.fetch(new Request("https://dispatch.app/media/00000000-0000-0000-0000-000000000001/stream", {
+    method: "OPTIONS",
+  }), env());
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.match(res.headers.get("Access-Control-Allow-Methods"), /GET/);
+});

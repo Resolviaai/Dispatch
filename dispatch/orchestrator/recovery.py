@@ -20,9 +20,10 @@ def reconcile_interrupted_inbox_stages(
 ) -> List[Dict[str, Any]]:
     """Reconcile youtube_inbox items that were interrupted during active processing stages.
 
-    Covers TRANSCRIBING (transcription worker) and ANALYZING (highlight worker),
-    plus DOWNLOADING. On boot, all rows in these active processing states are known
-    to be orphaned by the previous shutdown/crash and are immediately reclaimed.
+    Covers TRANSCRIBING (transcription worker), ANALYZING (highlight worker),
+    DOWNLOADING, VALIDATING (catcher ffprobe check), and RENDERING (clip renderer).
+    On boot, all rows in these active processing states are known to be orphaned by
+    the previous shutdown/crash and are immediately reclaimed.
     During runtime sweeps, rows are reclaimed if inactive beyond stale_timeout_seconds.
     Fails closed to 'FAILED' after 5 retries to prevent infinite retry loops.
     """
@@ -32,15 +33,15 @@ def reconcile_interrupted_inbox_stages(
 
         if is_boot:
             cursor.execute("""
-                SELECT video_id, status, retry_count, ai_attempt_count, updated_at
+                SELECT video_id, status, retry_count, ai_attempt_count, local_video_path, updated_at
                 FROM youtube_inbox
-                WHERE status IN ('TRANSCRIBING', 'ANALYZING', 'DOWNLOADING')
+                WHERE status IN ('TRANSCRIBING', 'ANALYZING', 'DOWNLOADING', 'VALIDATING', 'RENDERING')
             """)
         else:
             cursor.execute(f"""
-                SELECT video_id, status, retry_count, ai_attempt_count, updated_at
+                SELECT video_id, status, retry_count, ai_attempt_count, local_video_path, updated_at
                 FROM youtube_inbox
-                WHERE status IN ('TRANSCRIBING', 'ANALYZING', 'DOWNLOADING')
+                WHERE status IN ('TRANSCRIBING', 'ANALYZING', 'DOWNLOADING', 'VALIDATING', 'RENDERING')
                   AND datetime(updated_at) < datetime('now', '-{int(stale_timeout_seconds)} seconds')
             """)
 
@@ -50,6 +51,7 @@ def reconcile_interrupted_inbox_stages(
             old_status = item["status"]
             current_retries = item["retry_count"] or 0
             current_ai_attempts = item["ai_attempt_count"] or 0
+            local_video_path = item["local_video_path"]
 
             if old_status == "TRANSCRIBING":
                 new_retries = current_retries + 1
@@ -92,6 +94,47 @@ def reconcile_interrupted_inbox_stages(
                     SET status = ?, retry_count = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE video_id = ?
                 """, (new_status, new_retries, err, video_id))
+
+            elif old_status == "VALIDATING":
+                new_retries = current_retries + 1
+                if new_retries > 5:
+                    new_status = "FAILED"
+                    err = f"Exceeded retry limit (5) during video validation (failed at {new_retries} attempts)"
+                else:
+                    has_valid_file = False
+                    if local_video_path:
+                        try:
+                            p = Path(local_video_path)
+                            if p.exists() and p.stat().st_size > 1024:
+                                has_valid_file = True
+                        except Exception:
+                            has_valid_file = False
+
+                    if has_valid_file:
+                        new_status = "DOWNLOADING"
+                        err = "Validation interrupted by crash/restart; resetting to DOWNLOADING for re-validation"
+                    else:
+                        new_status = "DISCOVERED"
+                        err = "Validation interrupted with missing or incomplete file; resetting to DISCOVERED for re-download"
+                cursor.execute("""
+                    UPDATE youtube_inbox
+                    SET status = ?, retry_count = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE video_id = ?
+                """, (new_status, new_retries, err, video_id))
+
+            elif old_status == "RENDERING":
+                new_retries = max(current_retries, current_ai_attempts) + 1
+                if new_retries > 5:
+                    new_status = "FAILED"
+                    err = f"Exceeded retry limit (5) during clip rendering (failed at {new_retries} attempts)"
+                else:
+                    new_status = "CLIPS_DEFINED"
+                    err = "Clip rendering interrupted by crash/restart; resetting to CLIPS_DEFINED for retry"
+                cursor.execute("""
+                    UPDATE youtube_inbox
+                    SET status = ?, retry_count = ?, ai_attempt_count = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE video_id = ?
+                """, (new_status, new_retries, new_retries, err, video_id))
             else:
                 continue
 

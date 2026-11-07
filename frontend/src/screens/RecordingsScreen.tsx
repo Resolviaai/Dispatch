@@ -414,7 +414,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             });
             const data = await res.json().catch(() => null);
             if (res.ok && data?.url) {
-              setRouteCMediaUrls(prev => ({ ...prev, [item.video_id]: data.url }));
+              const streamUrl = data.url.includes('?')
+                ? `${data.url}&token=${encodeURIComponent(token)}`
+                : `${data.url}?token=${encodeURIComponent(token)}`;
+              setRouteCMediaUrls(prev => ({ ...prev, [item.video_id]: streamUrl }));
             }
           } catch {
             /* ignore background resolution error */
@@ -966,8 +969,11 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             });
             const data = await res.json().catch(() => null);
             if (res.ok && data?.url) {
-              setRouteCMediaUrl(data.url);
-              setRouteCMediaUrls(prev => ({ ...prev, [s.id]: data.url }));
+              const streamUrl = data.url.includes('?')
+                ? `${data.url}&token=${encodeURIComponent(token)}`
+                : `${data.url}?token=${encodeURIComponent(token)}`;
+              setRouteCMediaUrl(streamUrl);
+              setRouteCMediaUrls(prev => ({ ...prev, [s.id]: streamUrl }));
             }
           } catch (e) {
             console.warn('Failed to load direct video cloud URL:', e);

@@ -75,9 +75,80 @@ class TestCrashRecoveryStages(unittest.TestCase):
         self.assertEqual(row["ai_attempt_count"], 2)
         self.assertIn("Highlight analysis interrupted", row["last_error"])
 
+    def test_boot_recovery_reconciles_validating_with_valid_file(self):
+        import tempfile
+        from pathlib import Path
+        video_id = "test-crash-val-file"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tf:
+            tf.write(b"x" * 2048)
+            temp_path = tf.name
+
+        try:
+            with db.get_db_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO youtube_inbox (video_id, title, status, retry_count, local_video_path)
+                    VALUES (?, ?, 'VALIDATING', 0, ?)
+                    """,
+                    (video_id, "Validating with file", temp_path),
+                )
+                conn.commit()
+
+            reconciled = reconcile_interrupted_inbox_stages(is_boot=True)
+            self.assertIn(video_id, [r["video_id"] for r in reconciled])
+
+            row = db.get_youtube_video(video_id)
+            self.assertEqual(row["status"], "DOWNLOADING")
+            self.assertEqual(row["retry_count"], 1)
+            self.assertIn("Validation interrupted", row["last_error"])
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
+    def test_boot_recovery_reconciles_validating_without_file_to_discovered(self):
+        video_id = "test-crash-val-nofile"
+        with db.get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO youtube_inbox (video_id, title, status, retry_count, local_video_path)
+                VALUES (?, ?, 'VALIDATING', 0, 'nonexistent_file_path.mp4')
+                """,
+                (video_id, "Validating missing file"),
+            )
+            conn.commit()
+
+        reconciled = reconcile_interrupted_inbox_stages(is_boot=True)
+        self.assertIn(video_id, [r["video_id"] for r in reconciled])
+
+        row = db.get_youtube_video(video_id)
+        self.assertEqual(row["status"], "DISCOVERED")
+        self.assertEqual(row["retry_count"], 1)
+        self.assertIn("missing or incomplete file", row["last_error"])
+
+    def test_boot_recovery_reconciles_rendering_to_clips_defined(self):
+        video_id = "test-crash-render-1"
+        with db.get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO youtube_inbox (video_id, title, status, retry_count, ai_attempt_count)
+                VALUES (?, ?, 'RENDERING', 1, 1)
+                """,
+                (video_id, "Stuck Rendering"),
+            )
+            conn.commit()
+
+        reconciled = reconcile_interrupted_inbox_stages(is_boot=True)
+        self.assertIn(video_id, [r["video_id"] for r in reconciled])
+
+        row = db.get_youtube_video(video_id)
+        self.assertEqual(row["status"], "CLIPS_DEFINED")
+        self.assertEqual(row["retry_count"], 2)
+        self.assertIn("Clip rendering interrupted", row["last_error"])
+
     def test_exceeded_retries_transition_to_failed(self):
         vid_transcribe = "test-crash-transcribe-fail"
         vid_analyze = "test-crash-analyze-fail"
+        vid_validate = "test-crash-validate-fail"
+        vid_render = "test-crash-render-fail"
         with db.get_db_connection() as conn:
             conn.execute(
                 """
@@ -93,6 +164,20 @@ class TestCrashRecoveryStages(unittest.TestCase):
                 """,
                 (vid_analyze, "Failing Highlight"),
             )
+            conn.execute(
+                """
+                INSERT INTO youtube_inbox (video_id, title, status, retry_count)
+                VALUES (?, ?, 'VALIDATING', 5)
+                """,
+                (vid_validate, "Failing Validation"),
+            )
+            conn.execute(
+                """
+                INSERT INTO youtube_inbox (video_id, title, status, retry_count, ai_attempt_count)
+                VALUES (?, ?, 'RENDERING', 5, 5)
+                """,
+                (vid_render, "Failing Rendering"),
+            )
             conn.commit()
 
         reconcile_interrupted_inbox_stages(is_boot=True)
@@ -104,6 +189,14 @@ class TestCrashRecoveryStages(unittest.TestCase):
         row_a = db.get_youtube_video(vid_analyze)
         self.assertEqual(row_a["status"], "FAILED")
         self.assertIn("Exceeded retry limit (5)", row_a["last_error"])
+
+        row_v = db.get_youtube_video(vid_validate)
+        self.assertEqual(row_v["status"], "FAILED")
+        self.assertIn("Exceeded retry limit (5)", row_v["last_error"])
+
+        row_r = db.get_youtube_video(vid_render)
+        self.assertEqual(row_r["status"], "FAILED")
+        self.assertIn("Exceeded retry limit (5)", row_r["last_error"])
 
     def test_runtime_sweep_respects_stale_timeout(self):
         vid_recent = "test-crash-recent"

@@ -1363,6 +1363,74 @@ export default {
       });
     }
     if (url.pathname === "/health") return json(200, { ok: true });
+
+    // ---- Public Cached Avatars (Permanent, CORS-enabled) ----
+    if (url.pathname.startsWith("/avatars/") && request.method === "GET") {
+      const key = decodeURIComponent(url.pathname.slice("/avatars/".length));
+      if (!key || key.includes("..")) return json(400, { error: "invalid avatar key" });
+      const obj = await env.BUCKET.get("avatars/" + key);
+      if (obj) {
+        const headers = new Headers();
+        headers.set("Content-Type", obj.httpMetadata?.contentType || "image/jpeg");
+        headers.set("Cache-Control", "public, max-age=604800, immutable");
+        headers.set("Access-Control-Allow-Origin", "*");
+        return new Response(obj.body, { status: 200, headers });
+      }
+      return json(404, { error: "avatar not found" });
+    }
+
+    // ---- Direct Media Streaming (HTTP Range + CORS for HTML5 video playback) ----
+    if (request.method === "OPTIONS" && url.pathname.match(/^\/media\/[0-9a-fA-F-]{36}\/stream$/i)) {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+          "Access-Control-Allow-Headers": "Range, Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400",
+        },
+      });
+    }
+
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname.match(/^\/media\/[0-9a-fA-F-]{36}\/stream$/i)) {
+      const mediaObjectId = url.pathname.split("/")[2];
+      const reqHeaders = new Headers(request.headers);
+      if (url.searchParams.has("token")) {
+        reqHeaders.set("Authorization", "Bearer " + url.searchParams.get("token"));
+      }
+      const fakeReq = new Request(request.url, { headers: reqHeaders });
+      const user = await authenticate(env, fakeReq);
+      if (!user) return json(401, { error: "unauthorized" });
+
+      const obj = await selectOne<MediaObj>(env, "media_objects", mediaObjectId, "user_id,status,final_key,byte_count,mime_type");
+      if (!obj || obj.user_id !== user.userId) return json(403, { error: "forbidden" });
+      if (obj.status !== "active" || !obj.final_key) return json(409, { error: "media not active" });
+
+      const r2Object = await env.BUCKET.get(obj.final_key, {
+        range: request.headers,
+        onlyIf: request.headers,
+      });
+      if (!r2Object) return json(404, { error: "media file not found in storage" });
+
+      const headers = new Headers();
+      r2Object.writeHttpMetadata(headers);
+      headers.set("etag", r2Object.httpEtag);
+      headers.set("Access-Control-Allow-Origin", "*");
+      headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      headers.set("Access-Control-Allow-Headers", "Range, Content-Type, Authorization");
+      headers.set("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+      headers.set("Accept-Ranges", "bytes");
+
+      if (r2Object.range) {
+        const range = r2Object.range as { offset: number; length: number };
+        headers.set("Content-Range", `bytes ${range.offset}-${range.offset + range.length - 1}/${r2Object.size}`);
+        headers.set("Content-Length", String(range.length));
+        return new Response(r2Object.body, { status: 206, headers });
+      }
+
+      headers.set("Content-Length", String(r2Object.size));
+      return new Response(r2Object.body, { status: 200, headers });
+    }
       if (request.method === "POST" && url.pathname === "/cleanup") {
         // Trusted-PC maintenance only: the raw worker token, no user impersonation.
         const token = (request.headers.get("Authorization") ?? "").slice(7);
@@ -2302,12 +2370,29 @@ export default {
       };
       const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
 
+      let avatarUrl = me.profile_picture_url || null;
+      if (avatarUrl) {
+        try {
+          const imgRes = await fetch(avatarUrl);
+          if (imgRes.ok) {
+            const imgBytes = await imgRes.arrayBuffer();
+            const avatarKey = `avatars/instagram_${igUserId}.jpg`;
+            await env.BUCKET.put(avatarKey, imgBytes, {
+              httpMetadata: { contentType: "image/jpeg" },
+            });
+            avatarUrl = `${url.origin}/avatars/instagram_${igUserId}.jpg`;
+          }
+        } catch (e) {
+          console.warn("Failed to cache Instagram avatar to R2:", e);
+        }
+      }
+
       const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
         body: JSON.stringify({
           p_user_id: uid, p_provider: "instagram", p_account_id: igUserId, p_account_name: "@" + me.username,
-          p_account_email: null, p_avatar_url: me.profile_picture_url || null, p_credentials_encrypted: enc,
+          p_account_email: null, p_avatar_url: avatarUrl, p_credentials_encrypted: enc,
           p_metadata: { ig_user_id: igUserId, username: "@" + me.username, auth_mode: "instagram_login", account_type: me.account_type || "" },
         }),
       });
@@ -3322,7 +3407,11 @@ export default {
         const obj = await selectOne<MediaObj>(env, "media_objects", body.media_object_id, "user_id,status,final_key");
         if (!obj || obj.user_id !== userId) return json(403, { error: "forbidden" });
         if (obj.status !== "active") return json(409, { error: `media not active (${obj.status})` });
-        return json(200, { url: await presign(env, "GET", obj.final_key as string), expires_in: PRESIGN_EXPIRES });
+        return json(200, {
+          url: `${url.origin}/media/${body.media_object_id}/stream`,
+          presigned_url: await presign(env, "GET", obj.final_key as string),
+          expires_in: PRESIGN_EXPIRES,
+        });
       }
 
       // Cloud storage manager: the user's active video objects, with the title

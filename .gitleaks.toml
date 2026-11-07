@@ -2,15 +2,21 @@
 title = "Dispatch Gitleaks Config"
 
 [allowlist]
-description = "Ignore synthetic mock tokens in unit test fixtures and pre-commit checks"
+description = "Allowlist exact synthetic mock fixture tokens and hook definitions"
 paths = [
-    '''tests/.*''',
-    '''cloud-worker/test/.*''',
     '''\.pre-commit-config\.yaml''',
-    '''android/app/src/main/assets/web/.*''',
+]
+stopwords = [
+    "AIzaSyOriginalKey00000000000000000000",
+    "AIzaSyTestKeyWithValidFormat0000000000000",
+    "AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "1//0gMockRefreshToken1234567890abcdef",
+    "host_pc_secret_key_12345",
 ]
 regexes = [
-    '''1//0gMockRefreshToken[0-9a-zA-Z]+''',
-    '''AIzaSy[A-Za-z0-9_-]{30,}''',
+    '''AIzaSyOriginalKey00000000000000000000''',
+    '''AIzaSyTestKeyWithValidFormat0000000000000''',
+    '''AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA''',
+    '''1//0gMockRefreshToken1234567890abcdef''',
     '''host_pc_secret_key_[0-9]+''',
 ]

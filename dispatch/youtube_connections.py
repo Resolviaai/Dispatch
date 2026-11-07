@@ -218,7 +218,7 @@ def claim_remote_job(worker_id: str) -> Optional[RemoteJob]:
     )
 
 
-def update_remote_job_stage(job_id: str, stage: str, video_id: str = "") -> None:
+def update_remote_job_stage(job_id: str, stage: str, video_id: str = "", duration: Optional[float] = None) -> None:
     """Report granular processing stage (downloading, transcribing, analyzing, rendering, ready) to Supabase."""
     if not job_id:
         return
@@ -229,6 +229,8 @@ def update_remote_job_stage(job_id: str, stage: str, video_id: str = "") -> None
             payload: Dict[str, Any] = {"stage": stage, "last_error": f"stage:{stage}" if stage != "done" else ""}
             if video_id:
                 payload["video_id"] = video_id
+            if duration is not None and duration > 0:
+                payload["duration"] = round(float(duration), 2)
             httpx.patch(
                 f"{url}/rest/v1/processing_jobs?id=eq.{job_id}",
                 json=payload,
@@ -598,8 +600,9 @@ class RemoteJobPoller:
                 result = self.ingest_video(job.youtube_url, user_id=job.user_id)
             status = result.get("status", "FAILED")
             vid = result.get("video_id", "")
+            dur = (result.get("metadata") or {}).get("duration") or result.get("duration")
             if status in ("DOWNLOADED", "WAITING_FOR_YOUTUBE_PROCESSING", "WAITING_FOR_VISIBILITY_CHECK"):
-                update_remote_job_stage(job.job_id, "transcribing", video_id=vid)
+                update_remote_job_stage(job.job_id, "transcribing", video_id=vid, duration=dur)
                 finish_remote_job(job.job_id, "done", vid, str(result.get("error", "")))
                 logger.info("Remote job %s accepted: %s", job.job_id, status)
             else:

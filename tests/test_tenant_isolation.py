@@ -176,6 +176,7 @@ class TestTenantIsolation(unittest.TestCase):
     @patch("dispatch.sync.receiver.verify_token")
     @patch("dispatch.web.app.authorized_pc_owner_ids")
     def test_paired_device_fails_closed_on_multi_owner_ambiguity(self, mock_owners, mock_verify):
+        from fastapi import HTTPException
         mock_verify.return_value = True
         mock_owners.return_value = ["owner_1", "owner_2"]
 
@@ -183,25 +184,48 @@ class TestTenantIsolation(unittest.TestCase):
         mock_request.client.host = "192.168.1.45"
         mock_request.headers = {"x-auth-token": "valid_device_token"}
 
-        # Without DISPATCH_USER_ID: must return None (fail-closed, not pick owner_1)
-        resolved = resolve_caller_user_id(mock_request)
-        self.assertIsNone(resolved)
+        # Without DISPATCH_USER_ID: must raise 403 (fail-closed, not pick owner_1 or fall through)
+        with self.assertRaises(HTTPException) as ctx:
+            resolve_caller_user_id(mock_request)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("ambiguous", ctx.exception.detail)
 
         # With explicit DISPATCH_USER_ID set to owner_2: resolves to owner_2
         os.environ["DISPATCH_USER_ID"] = "owner_2"
         resolved = resolve_caller_user_id(mock_request)
         self.assertEqual(resolved, "owner_2")
 
-        # With explicit DISPATCH_USER_ID set to unauthorized user: fails closed
+        # With explicit DISPATCH_USER_ID set to unauthorized user: raises 403
         os.environ["DISPATCH_USER_ID"] = "stranger"
-        resolved = resolve_caller_user_id(mock_request)
-        self.assertIsNone(resolved)
+        with self.assertRaises(HTTPException) as ctx:
+            resolve_caller_user_id(mock_request)
+        self.assertEqual(ctx.exception.status_code, 403)
 
         # With single owner: resolves cleanly
         del os.environ["DISPATCH_USER_ID"]
         mock_owners.return_value = ["sole_owner"]
         resolved = resolve_caller_user_id(mock_request)
         self.assertEqual(resolved, "sole_owner")
+
+    @patch("dispatch.sync.receiver.verify_token")
+    @patch("dispatch.web.app.authorized_pc_owner_ids")
+    def test_youtube_ingest_fails_closed_on_paired_device_ambiguity(self, mock_owners, mock_verify):
+        mock_verify.return_value = True
+        mock_owners.return_value = ["owner_1", "owner_2"]
+
+        headers = {
+            "x-auth-token": "valid_device_token",
+            "host": "192.168.1.100:8000"
+        }
+        with patch("dispatch.web.app.Request.client", new_callable=MagicMock) as mock_client:
+            mock_client.host = "192.168.1.45"
+            resp = client.post(
+                "/api/youtube/ingest",
+                json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+                headers=headers
+            )
+            self.assertEqual(resp.status_code, 403)
+            self.assertIn("ambiguous", resp.text)
 
 
 if __name__ == "__main__":

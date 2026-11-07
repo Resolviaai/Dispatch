@@ -1,8 +1,11 @@
-// Test: Approval Flow, Error Handling, and Rollback State Verification
+// Test: Production Approval Execution & Rollback State Verification
+// Tests executeClipApproval directly against Android native bridge, PC workstation, and cloud backends.
 
-console.log('🧪 Starting Dispatch Approval Rollback & State Flow Test Suite...');
+import { executeClipApproval } from './src/lib/approval';
 
-function createMockClip(id: string, title: string) {
+console.log('🧪 Starting Dispatch Production Approval & Bridge Rollback Test Suite...');
+
+function createMockClip(id: string, title: string = 'Test Clip') {
   return {
     id,
     title,
@@ -15,148 +18,254 @@ function createMockClip(id: string, title: string) {
   };
 }
 
-// Test 1: Rollback on HTTP 409 Conflict
-(() => {
-  console.log('\nTest 1: Verification that HTTP 409 conflict aborts approval and restores Ready state...');
-  let readyClips = [createMockClip('c1', 'Clip One')];
-  let approvedClips: any[] = [];
-  let viewMode = 'inspect';
-  let selectedClipId: string | null = 'c1';
-  let isSubmitting = false;
-  let feedback: string | null = null;
+// -----------------------------------------------------------------------------
+// Test 1: Native Android Bridge failure with JSON string response
+// -----------------------------------------------------------------------------
+(async () => {
+  console.log('\nTest 1: Native Android Bridge returns JSON {"success": false, "error": "Disk full"}...');
+  const mockBridge = {
+    startRenderAndPublish: (_payload: string) => {
+      return JSON.stringify({
+        success: false,
+        error: 'Insufficient internal storage for Media3 rendering (512 MB required)',
+      });
+    },
+  };
 
-  const previousViewMode = viewMode;
-  const previousSelectedClipId = selectedClipId;
-  const clipToApprove = readyClips[0];
+  const clip = createMockClip('c_bridge_err_1');
+  const result = await executeClipApproval({
+    clip,
+    optimisticTitle: 'Title 1',
+    optimisticDescription: 'Desc 1',
+    optimisticLayout: 'portrait_9_16',
+    optimisticMode: 'private',
+    platformsToPublish: 'youtube',
+    accountsMap: {},
+    bridge: mockBridge,
+  });
 
-  isSubmitting = true;
-  feedback = 'Approving clip…';
+  if (result.success !== false) {
+    throw new Error(`Expected result.success === false on native bridge error, got ${result.success}`);
+  }
+  if (!result.error || !result.error.includes('Insufficient internal storage')) {
+    throw new Error(`Expected error message to mention 'Insufficient internal storage', got '${result.error}'`);
+  }
+  if (result.actionTaken !== 'native_bridge') {
+    throw new Error(`Expected actionTaken 'native_bridge', got '${result.actionTaken}'`);
+  }
+  console.log('  ✓ Native bridge failure correctly captured and returned as failure result');
+})();
 
-  const restoreToReady = (message: string) => {
-    approvedClips = approvedClips.filter((c) => c.id !== clipToApprove.id);
-    if (!readyClips.some((c) => c.id === clipToApprove.id)) {
-      readyClips = [clipToApprove, ...readyClips];
+// -----------------------------------------------------------------------------
+// Test 2: Native Android Bridge failure with Object response
+// -----------------------------------------------------------------------------
+(async () => {
+  console.log('\nTest 2: Native Android Bridge returns Object {success: false, error: "MediaCodec crashed"}...');
+  const mockBridge = {
+    startRenderAndPublish: (_payload: string) => {
+      return {
+        success: false,
+        error: 'MediaCodec hardware decoder crashed during initialization',
+      };
+    },
+  };
+
+  const clip = createMockClip('c_bridge_err_2');
+  const result = await executeClipApproval({
+    clip,
+    optimisticTitle: 'Title 2',
+    optimisticDescription: 'Desc 2',
+    optimisticLayout: 'portrait_9_16',
+    optimisticMode: 'private',
+    platformsToPublish: 'youtube',
+    accountsMap: {},
+    bridge: mockBridge,
+  });
+
+  if (result.success !== false) {
+    throw new Error(`Expected result.success === false on native bridge object error, got ${result.success}`);
+  }
+  if (!result.error || !result.error.includes('MediaCodec hardware decoder crashed')) {
+    throw new Error(`Expected error message to mention 'MediaCodec hardware decoder crashed', got '${result.error}'`);
+  }
+  console.log('  ✓ Native bridge object error correctly captured and returned as failure result');
+})();
+
+// -----------------------------------------------------------------------------
+// Test 3: Native Android Bridge success with JSON string response
+// -----------------------------------------------------------------------------
+(async () => {
+  console.log('\nTest 3: Native Android Bridge returns JSON {"success": true, "job_id": "render_abc", "status": "QUEUED"}...');
+  const mockBridge = {
+    startRenderAndPublish: (_payload: string) => {
+      return JSON.stringify({
+        success: true,
+        job_id: 'render_1730000000_12345678',
+        status: 'QUEUED',
+      });
+    },
+  };
+
+  const clip = createMockClip('c_bridge_ok');
+  const result = await executeClipApproval({
+    clip,
+    optimisticTitle: 'Title 3',
+    optimisticDescription: 'Desc 3',
+    optimisticLayout: 'portrait_9_16',
+    optimisticMode: 'private',
+    platformsToPublish: 'youtube',
+    accountsMap: {},
+    bridge: mockBridge,
+  });
+
+  if (result.success !== true) {
+    throw new Error(`Expected result.success === true on native bridge success, got ${result.success}`);
+  }
+  if (!result.message.includes('Started on-device video rendering')) {
+    throw new Error(`Expected success message, got '${result.message}'`);
+  }
+  console.log('  ✓ Native bridge success confirmed with 2xx queue state');
+})();
+
+// -----------------------------------------------------------------------------
+// Test 4: PC Workstation approval returns HTTP 409 Conflict
+// -----------------------------------------------------------------------------
+(async () => {
+  console.log('\nTest 4: PC Workstation returns HTTP 409 Conflict (e.g. range changed concurrently)...');
+  const mockFetch = async (url: any) => {
+    const urlStr = String(url);
+    if (urlStr.includes('/captions')) {
+      return { ok: true, json: async () => ({ status: 'ok' }) } as any;
     }
-    viewMode = previousViewMode;
-    selectedClipId = previousSelectedClipId;
-    feedback = message;
-    isSubmitting = false;
+    return {
+      ok: false,
+      status: 409,
+      json: async () => ({ detail: 'The clip range changed while rendering. Review and approve again.' }),
+    } as any;
   };
 
-  // Simulate failed PC response (409)
-  const mockResponse = { ok: false, status: 409, detail: 'The clip range changed while rendering.' };
-  if (!mockResponse.ok) {
-    restoreToReady(mockResponse.detail);
-  }
+  const clip = createMockClip('c_pc_409');
+  const result = await executeClipApproval({
+    clip,
+    optimisticTitle: 'Title 4',
+    optimisticDescription: 'Desc 4',
+    optimisticLayout: 'fit_blur',
+    optimisticMode: 'private',
+    platformsToPublish: 'youtube',
+    accountsMap: {},
+    pcHost: 'http://127.0.0.1:8000',
+  }, mockFetch);
 
-  if (readyClips.length !== 1 || readyClips[0].id !== 'c1') {
-    throw new Error('Expected clip to remain in readyClips upon 409 failure');
+  if (result.success !== false) {
+    throw new Error('Expected result.success === false on PC 409 Conflict');
   }
-  if (approvedClips.length !== 0) {
-    throw new Error('Approved clips must be empty after 409 failure');
+  if (!result.error || !result.error.includes('The clip range changed while rendering')) {
+    throw new Error(`Expected server 409 error detail, got '${result.error}'`);
   }
-  if (viewMode !== 'inspect') {
-    throw new Error(`Expected viewMode to remain 'inspect', got '${viewMode}'`);
-  }
-  if (selectedClipId !== 'c1') {
-    throw new Error(`Expected selectedClipId to remain 'c1', got '${selectedClipId}'`);
-  }
-  if (isSubmitting !== false) {
-    throw new Error('isSubmitting must be reset to false');
-  }
-  if (feedback !== 'The clip range changed while rendering.') {
-    throw new Error(`Unexpected feedback: ${feedback}`);
-  }
-  console.log('  ✓ 409 conflict safely rolled back without data loss or phantom library navigation');
+  console.log('  ✓ PC HTTP 409 Conflict captured with server error detail');
 })();
 
-// Test 2: Rollback on Network Exception
-(() => {
-  console.log('\nTest 2: Verification that network error / offline failure triggers rollback...');
-  let readyClips = [createMockClip('c2', 'Clip Two')];
-  let approvedClips: any[] = [];
-  let viewMode = 'inspect';
-  let selectedClipId: string | null = 'c2';
-  let isSubmitting = true;
-  let feedback: string | null = 'Approving clip…';
+// -----------------------------------------------------------------------------
+// Test 5: Network Exception during approval call
+// -----------------------------------------------------------------------------
+(async () => {
+  console.log('\nTest 5: Network exception / timeout during PC approval call...');
+  const mockFetch = async () => {
+    throw new Error('Failed to fetch: Connection refused');
+  };
 
-  const clipToApprove = readyClips[0];
-  const restoreToReady = (message: string) => {
-    approvedClips = approvedClips.filter((c) => c.id !== clipToApprove.id);
-    if (!readyClips.some((c) => c.id === clipToApprove.id)) {
-      readyClips = [clipToApprove, ...readyClips];
+  const clip = createMockClip('c_pc_net_err');
+  const result = await executeClipApproval({
+    clip,
+    optimisticTitle: 'Title 5',
+    optimisticDescription: 'Desc 5',
+    optimisticLayout: 'fit_blur',
+    optimisticMode: 'private',
+    platformsToPublish: 'youtube',
+    accountsMap: {},
+    pcHost: 'http://127.0.0.1:8000',
+  }, mockFetch);
+
+  if (result.success !== false) {
+    throw new Error('Expected result.success === false on network exception');
+  }
+  if (!result.error || !result.error.includes('Connection refused')) {
+    throw new Error(`Expected error to mention Connection refused, got '${result.error}'`);
+  }
+  console.log('  ✓ Network exception safely caught and converted to failure result');
+})();
+
+// -----------------------------------------------------------------------------
+// Test 6: PC Workstation approval succeeds (HTTP 200)
+// -----------------------------------------------------------------------------
+(async () => {
+  console.log('\nTest 6: PC Workstation returns HTTP 200 OK...');
+  const mockFetch = async (url: any) => {
+    const urlStr = String(url);
+    if (urlStr.includes('/captions')) {
+      return { ok: true, json: async () => ({ status: 'ok' }) } as any;
     }
-    viewMode = 'inspect';
-    selectedClipId = 'c2';
-    feedback = message;
-    isSubmitting = false;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ status: 'success', message: 'Clip approved' }),
+    } as any;
   };
 
-  try {
-    throw new Error('Network timeout connecting to PC');
-  } catch (err: any) {
-    restoreToReady(`Approval failed: ${err.message}`);
-  }
+  const clip = createMockClip('c_pc_ok');
+  const result = await executeClipApproval({
+    clip,
+    optimisticTitle: 'Title 6',
+    optimisticDescription: 'Desc 6',
+    optimisticLayout: 'fit_blur',
+    optimisticMode: 'private',
+    platformsToPublish: 'youtube',
+    accountsMap: {},
+    pcHost: 'http://127.0.0.1:8000',
+  }, mockFetch);
 
-  if (readyClips.length !== 1) {
-    throw new Error('Clip must remain in readyClips');
+  if (result.success !== true) {
+    throw new Error(`Expected result.success === true on PC 200 OK, got ${result.success}`);
   }
-  if (feedback !== 'Approval failed: Network timeout connecting to PC') {
-    throw new Error(`Unexpected feedback: ${feedback}`);
+  if (result.actionTaken !== 'pc_workstation') {
+    throw new Error(`Expected actionTaken 'pc_workstation', got '${result.actionTaken}'`);
   }
-  if (isSubmitting) {
-    throw new Error('isSubmitting should be false');
-  }
-  console.log('  ✓ Network exception triggers clean rollback with descriptive error feedback');
+  console.log('  ✓ PC HTTP 200 verified with queued success state');
 })();
 
-// Test 3: Verified Success moves clip to approved and transitions view
-(() => {
-  console.log('\nTest 3: Verification that HTTP 200 moves clip to approved and transitions view...');
-  let readyClips = [createMockClip('c3', 'Clip Three')];
-  let approvedClips: any[] = [];
-  let viewMode = 'inspect';
-  let selectedClipId: string | null = 'c3';
-  let isSubmitting = true;
-  let feedback: string | null = 'Approving clip…';
-
-  const clipToApprove = readyClips[0];
-  const markApproved = (message: string) => {
-    const approvedItem = {
-      ...clipToApprove,
-      status: 'approved',
-      approved_at: new Date().toISOString(),
-    };
-    readyClips = readyClips.filter((c) => c.id !== clipToApprove.id);
-    approvedClips = [approvedItem, ...approvedClips];
-    viewMode = 'library';
-    selectedClipId = null;
-    feedback = message;
-    isSubmitting = false;
+// -----------------------------------------------------------------------------
+// Test 7: Cloud Queue approval succeeds
+// -----------------------------------------------------------------------------
+(async () => {
+  console.log('\nTest 7: Cloud Queue submission succeeds (token present, no pcHost)...');
+  const mockFetch = async () => {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    } as any;
   };
 
-  // Simulate verified HTTP 200 response
-  const mockResponse = { ok: true, status: 200 };
-  if (mockResponse.ok) {
-    markApproved('Queued for rendering & publishing…');
-  }
+  const clip = createMockClip('c_cloud_ok');
+  const result = await executeClipApproval({
+    clip,
+    optimisticTitle: 'Title 7',
+    optimisticDescription: 'Desc 7',
+    optimisticLayout: 'fit_blur',
+    optimisticMode: 'private',
+    platformsToPublish: 'youtube',
+    accountsMap: {},
+    token: 'jwt_mock_token_123',
+    isCloudMode: true,
+  }, mockFetch);
 
-  if (readyClips.length !== 0) {
-    throw new Error('Clip must be removed from readyClips upon success');
+  if (result.success !== true) {
+    throw new Error(`Expected result.success === true on Cloud 200 OK, got ${result.success}`);
   }
-  if (approvedClips.length !== 1 || approvedClips[0].id !== 'c3') {
-    throw new Error('Clip must be added to approvedClips upon success');
+  if (result.actionTaken !== 'cloud_queue') {
+    throw new Error(`Expected actionTaken 'cloud_queue', got '${result.actionTaken}'`);
   }
-  if (viewMode !== 'library') {
-    throw new Error(`Expected viewMode 'library', got '${viewMode}'`);
-  }
-  if (selectedClipId !== null) {
-    throw new Error('selectedClipId should be cleared upon transition to library');
-  }
-  if (isSubmitting) {
-    throw new Error('isSubmitting should be false');
-  }
-  console.log('  ✓ Verified HTTP 200 atomically commits approved state and navigates to library');
+  console.log('  ✓ Cloud queue submission verified');
 })();
 
-console.log('\n🎉 ALL APPROVAL ROLLBACK TESTS PASSED 100%!\n');
+console.log('\n🎉 ALL PRODUCTION APPROVAL & BRIDGE ROLLBACK TESTS PASSED 100%!\n');
