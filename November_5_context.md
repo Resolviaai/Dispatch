@@ -2,7 +2,7 @@
 **Date:** November 5–7, 2026  
 **Status:** Architecture Reconciled & Verified / Ready for Production Continuation  
 **Current Release:** v1.7.32 (Build 100) — Built, signed, verified, and pushed to GitHub `origin/main`.  
-**Latest Git Hash:** `143d1a2` (Route A fail-closed empty cloud account, OAuth callback regression tests, and full identity enforcement)
+**Latest Git Hash:** `29a6228` (Route A fail-closed empty cloud account, OAuth callback regression tests, and full identity enforcement)
 
 ---
 
