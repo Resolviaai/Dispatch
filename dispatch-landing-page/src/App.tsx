@@ -504,8 +504,8 @@ export default function App() {
               </div>
 
               <div className="access-unlocked" style={{ marginTop: '1.5rem', marginBottom: '2rem' }}>
-                <div className="unlocked-pill">Latest Build &bull; v1.7.31-alpha (Build 99)</div>
-                <h3>Dispatch Build 1.7.31-alpha</h3>
+                <div className="unlocked-pill">Latest Build &bull; v1.7.34-alpha (Build 102)</div>
+                <h3>Dispatch Build 1.7.34-alpha</h3>
                 <p>Long sessions in. Short captioned clips out. Download the free Android app.</p>
                 <div className="unlocked-buttons" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                   <a className="btn-hero-primary" href={DIRECT_APK} download="Dispatch.apk">
@@ -514,7 +514,7 @@ export default function App() {
                       <polyline points="7 10 12 15 17 10"/>
                       <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
-                    <span>Download Android APK (25.4 MB)</span>
+                    <span>Download Android APK (26.6 MB)</span>
                   </a>
                   <a className="btn-hero-secondary" href={RELEASE} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem 1.25rem', borderRadius: '9999px', border: '1px solid #2e2e2e', background: '#1c1c1c', color: '#fff', textDecoration: 'none', fontSize: '0.875rem' }}>
                     <span>GitHub Release Notes</span>
