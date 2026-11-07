@@ -48,30 +48,34 @@ export async function analyzeSpeechWithGeminiFlashLite(
   // Compact transcript payload for minimal token usage
   const compactTranscript = inRangeWords.map((w, idx) => ({
     i: idx,
-    w: w.text,
+    w: String(w.text || (w as any).word || (w as any).w || '').trim(),
     s: roundMs(w.start),
     e: roundMs(w.end),
   }));
 
-  const systemInstruction = `You are an expert speech cleanup editor specializing in videos by Indian creators speaking Hindi, Hinglish, and English.
-You are given a list of chronological transcript words with start and end timestamps in seconds.
-Identify:
-1. Unintended conversational fillers & stalling sounds:
-   - Stalling 'matlab', 'haan toh', 'samjho', 'arre', 'yaar' when used solely as an empty hesitation stall before a phrase.
-   - Conversational fillers in Hinglish: 'like', 'um', 'uh', 'you know', 'basically', 'actually', 'sort of'.
-2. Mechanical stutters and repeated false starts:
-   - When the speaker repeats 1-3 words (e.g. "phir tut... phir tut jaati"), propose cutting the redundant initial attempt.
-3. Abandoned sentence attempts.
+  const systemInstruction = `You are an expert speech cleanup editor specializing in short-form video editing for Indian creators speaking Hindi, Hinglish, and English.
+You are given a chronological word-level transcript with start and end timestamps in seconds.
 
-CRITICAL INVARIANTS:
-- Strictly PRESERVE legitimate vocabulary:
-  * 'matlab' when asking or giving meaning/definition (e.g., 'iska matlab kya hai')
-  * 'achha' when used as an adjective or compliment ('achha kaam', 'bohot achha')
-  * 'like' when used as a verb ('I like this') or comparison ('looks like')
+EXHAUSTIVE AUDIT MANDATE:
+- You MUST scan the entire transcript chronologically from start (${clipStart.toFixed(2)}s) to end (${clipEnd.toFixed(2)}s).
+- Do NOT stop after 1 or 2 examples. Identify EVERY instance throughout the ENTIRE duration.
+- Flag ALL occurrences of:
+  1. Conversational fillers & hesitation sounds:
+     - English / Hinglish: 'like', 'um', 'uh', 'umm', 'uhh', 'you know', 'basically', 'actually', 'sort of', 'literally'.
+     - Hindi stalling markers: 'matlab', 'haan toh', 'samjho', 'arre', 'yaar' when used as an empty hesitation filler before starting a phrase.
+  2. Mechanical stutters & false starts:
+     - Repeated 1-3 words (e.g., "phir tut... phir tut jaati", "woh woh", "I I think") -> propose cutting the redundant initial attempt.
+  3. Stalling pauses and abandoned phrase attempts.
+
+CLASSIFICATION & PRESERVATION RULES:
+- Unambiguous hesitation sounds ('um', 'uh', pure grunts, repeated stutter syllables) -> "decision": "AUTO-REMOVE".
+- Ambiguous discourse markers ('like', 'matlab', 'so', 'basically') -> "decision": "REVIEW" so the creator can audition and decide.
+- Strictly PRESERVE legitimate meaningful vocabulary:
+  * 'matlab' when genuinely asking or giving meaning/definition ('iska matlab kya hai', 'mere kehne ka matlab')
+  * 'achha' when an adjective or compliment ('achha kaam', 'bohot achha')
+  * 'like' when used as a verb ('I like this') or comparison ('looks like', 'feels like')
   * 'toh' when used as a grammatical connector ('agar ... toh')
-- Strictly PRESERVE rhetorical pauses, storytelling cadence, and deliberate emphasis.
-- Unambiguous hesitation sounds ('um', 'uh', pure grunts) should be AUTO-REMOVE.
-- Ambiguous discourse markers ('like', 'matlab', 'so') should be REVIEW so the creator can decide.
+- Strictly PRESERVE deliberate rhetorical pauses and dramatic emphasis.
 
 Return ONLY a valid JSON array of objects with the exact schema:
 [
@@ -86,7 +90,7 @@ Return ONLY a valid JSON array of objects with the exact schema:
   }
 ]`;
 
-  const promptText = `Analyze this word-level transcript from a Hindi/Hinglish creator and return speech cleanup cut proposals:\n${JSON.stringify(compactTranscript)}`;
+  const promptText = `Perform an exhaustive speech cleanup audit on this Hindi/Hinglish transcript from ${clipStart.toFixed(2)}s to ${clipEnd.toFixed(2)}s and return ALL cut proposals:\n${JSON.stringify(compactTranscript)}`;
 
   let lastError: Error | null = null;
 
@@ -109,6 +113,7 @@ Return ONLY a valid JSON array of objects with the exact schema:
           generationConfig: {
             responseMimeType: 'application/json',
             temperature: 0.1,
+            maxOutputTokens: 4096,
           },
         }),
       });

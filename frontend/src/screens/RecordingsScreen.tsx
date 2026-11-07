@@ -571,9 +571,39 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   };
 
   useEffect(() => {
-    fetchClips();
-    const interval = setInterval(fetchClips, 6000);
-    return () => clearInterval(interval);
+    let timerId: any = null;
+    let isCancelled = false;
+
+    const poll = async () => {
+      if (document.hidden) {
+        schedule(30000);
+        return;
+      }
+      await fetchClips();
+      if (!isCancelled) {
+        schedule(pcStatus.online ? 8000 : 25000);
+      }
+    };
+
+    const schedule = (ms: number) => {
+      clearTimeout(timerId);
+      timerId = setTimeout(poll, ms);
+    };
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        poll();
+      }
+    };
+
+    poll();
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timerId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [pcHost, pcStatus.online]);
 
   // Fetch YouTube inbox items

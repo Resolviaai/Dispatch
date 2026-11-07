@@ -150,9 +150,16 @@ export const App: React.FC = () => {
     }
   }, [currentTab]);
 
-  // Check real YouTube OAuth status
+  // Check real YouTube OAuth status (adaptive polling, paused when app is in background)
   useEffect(() => {
+    let timerId: any = null;
+    let isCancelled = false;
+
     const checkYouTube = async () => {
+      if (document.hidden) {
+        schedule(30000);
+        return;
+      }
       try {
         const res = await fetch(apiUrl('/api/integrations/status', pcHost), { headers: getAuthHeaders() });
         if (res.ok) {
@@ -165,11 +172,31 @@ export const App: React.FC = () => {
           setIsYouTubeConnected(status.connected);
         }
       }
+      if (!isCancelled) {
+        schedule(isYouTubeConnected ? 60000 : 25000);
+      }
     };
+
+    const schedule = (ms: number) => {
+      clearTimeout(timerId);
+      timerId = setTimeout(checkYouTube, ms);
+    };
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        checkYouTube();
+      }
+    };
+
     checkYouTube();
-    const interval = setInterval(checkYouTube, 6000);
-    return () => clearInterval(interval);
-  }, [pcHost]);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timerId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [pcHost, isYouTubeConnected]);
 
   // Poll recordings: from Android bridge if running on device, or from backend /api/recordings on web
   useEffect(() => {

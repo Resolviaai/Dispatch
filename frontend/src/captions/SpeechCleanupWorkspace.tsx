@@ -224,6 +224,224 @@ export function getProposalPresentation(proposal: AutoCutProposal): {
   };
 }
 
+interface DetectionCardProps {
+  proposal: AutoCutProposal;
+  isExpanded: boolean;
+  onToggleExpand: (id: string) => void;
+  filmstrip: FilmstripData | null;
+  clipDuration: number;
+  clipStart: number;
+  clipEnd: number;
+  currentTime: number;
+  previewingProposalId: string | null;
+  onPreviewContext: (range: ContextPreviewRange) => void;
+  onSeekSourceTime?: (sourceTime: number) => void;
+  onToggleDecision: (proposalId: string, choice: 'cut' | 'keep') => void;
+}
+
+const DetectionCard: React.FC<DetectionCardProps> = React.memo(
+  ({
+    proposal,
+    isExpanded,
+    onToggleExpand,
+    filmstrip,
+    clipDuration,
+    clipStart,
+    clipEnd,
+    currentTime,
+    previewingProposalId,
+    onPreviewContext,
+    onSeekSourceTime,
+    onToggleDecision,
+  }) => {
+    const effective = getEffectiveDecision(proposal);
+    const { title, icon } = getProposalPresentation(proposal);
+    const isPreviewingThis = previewingProposalId === proposal.id;
+
+    return (
+      <div
+        className={`transition-colors border-l-2 ${
+          effective === 'cut'
+            ? 'border-l-primary'
+            : effective === 'keep'
+            ? 'border-l-transparent'
+            : 'border-l-amber-500/70'
+        } ${isExpanded ? 'bg-surface-2/40' : 'hover:bg-surface-2/20'}`}
+      >
+        {/* Collapsed Row Summary / Header Trigger - min-h-[44px] touch target */}
+        <div
+          onClick={() => onToggleExpand(proposal.id)}
+          className="min-h-[44px] px-3 py-1.5 flex items-center justify-between gap-2.5 cursor-pointer select-none active:bg-surface-2/70 active:scale-[0.99] transition-all"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onToggleExpand(proposal.id);
+            }
+          }}
+          aria-expanded={isExpanded}
+        >
+          {/* Left Column: Type Title + Timestamp Range */}
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <div className="flex items-center gap-1.5">
+              {icon}
+              <span className="text-xs font-medium text-text-main truncate">
+                {title}
+              </span>
+            </div>
+            <span className="text-[11px] font-mono tabular-nums text-text-muted">
+              {formatCutTimestamp(proposal.source_start)} &ndash;{' '}
+              {formatCutTimestamp(proposal.source_end)}
+            </span>
+          </div>
+
+          {/* Right Column: Duration + Decision Pill + Chevron */}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="font-mono tabular-nums text-xs font-semibold text-text-main">
+              {formatCutDuration(proposal.duration)}
+            </span>
+
+            {/* Compact Decision Status Pill */}
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded font-medium border ${
+                effective === 'cut'
+                  ? 'bg-primary/15 text-primary border-primary/25'
+                  : effective === 'keep'
+                  ? 'bg-surface-3 text-text-muted border-border'
+                  : 'bg-amber-500/15 text-amber-300 border-amber-500/25'
+              }`}
+            >
+              {effective === 'cut'
+                ? 'Cut'
+                : effective === 'keep'
+                ? 'Keep'
+                : 'Review'}
+            </span>
+
+            {/* Expand/Collapse Chevron */}
+            <div className="text-text-muted">
+              {isExpanded ? (
+                <ChevronUp size={14} />
+              ) : (
+                <ChevronDown size={14} />
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 3. EXPANDED INSPECTION INTERACTION */}
+        {isExpanded && (
+          <div className="px-3 pb-3 pt-1 space-y-2.5 bg-surface-2/20 border-t border-border/60 animate-in fade-in duration-150">
+            {/* Miniature Filmstrip (Captions Reference) */}
+            <MiniFilmstrip
+              filmstrip={filmstrip}
+              clipDuration={clipDuration}
+              sourceStart={proposal.source_start}
+              sourceEnd={proposal.source_end}
+              currentTime={currentTime}
+              clipStartOffset={clipStart}
+              onSeek={onSeekSourceTime}
+            />
+
+            {/* Action Controls Row: Single Toggle Decision + Contextual Jump-Cut Preview */}
+            <div className="flex items-center justify-between gap-2.5 pt-0.5">
+              {/* Contextual Jump-Cut Preview Button */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const win = computeContextWindow(
+                    proposal.source_start,
+                    proposal.source_end,
+                    clipEnd || clipDuration || 60,
+                    2.5
+                  );
+                  onPreviewContext({
+                    start: win.winStart,
+                    end: win.winEnd,
+                    cutStart: proposal.source_start,
+                    cutEnd: proposal.source_end,
+                    isCut: effective === 'cut',
+                    proposalId: proposal.id,
+                  });
+                }}
+                className={`min-h-[40px] px-3.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all ${
+                  isPreviewingThis
+                    ? 'bg-primary/20 border-primary text-primary shadow-hero-sm font-semibold'
+                    : 'bg-surface-2 hover:bg-surface-3 border-border text-text-main'
+                }`}
+                title={
+                  isPreviewingThis
+                    ? 'Stop context preview'
+                    : 'Audition section (2.5s before & after with seamless jump-cut)'
+                }
+              >
+                {isPreviewingThis ? (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-primary animate-ping mr-0.5" />
+                    <span>Playing…</span>
+                  </>
+                ) : (
+                  <>
+                    <Play size={11} className="fill-current text-primary" />
+                    <span>Preview</span>
+                  </>
+                )}
+              </button>
+
+              {/* Single Decision Toggle: Cut vs Keep */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleDecision(proposal.id, effective === 'cut' ? 'keep' : 'cut');
+                }}
+                className={`min-h-[40px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all border ${
+                  effective === 'cut'
+                    ? 'bg-primary text-white border-primary shadow-hero-glow'
+                    : 'bg-surface-2 text-text-secondary hover:text-text-main border-border'
+                }`}
+                title={effective === 'cut' ? 'Marked for removal. Click to keep.' : 'Kept. Click to cut.'}
+              >
+                {effective === 'cut' ? (
+                  <>
+                    <Scissors size={12} />
+                    <span>Cut</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={12} />
+                    <span>Keep</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  },
+  (prev, next) => {
+    // Strict memoization for 60fps playback smoothness:
+    // If neither was or is expanded, suppress 30fps time updates completely!
+    if (!prev.isExpanded && !next.isExpanded) {
+      return (
+        prev.proposal === next.proposal &&
+        prev.previewingProposalId === next.previewingProposalId
+      );
+    }
+    return (
+      prev.proposal === next.proposal &&
+      prev.isExpanded === next.isExpanded &&
+      prev.currentTime === next.currentTime &&
+      prev.previewingProposalId === next.previewingProposalId &&
+      prev.filmstrip === next.filmstrip &&
+      prev.clipDuration === next.clipDuration
+    );
+  }
+);
+
 export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   proposals,
   filter,
@@ -344,182 +562,32 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
             )}
           </div>
         ) : (
-          filteredProposals.map((prop) => {
-            const isExpanded = expandedId === prop.id;
-            const effective = getEffectiveDecision(prop);
-            const { title, icon } = getProposalPresentation(prop);
-
-            return (
-              <div
-                key={prop.id}
-                className={`transition-colors ${
-                  isExpanded ? 'bg-surface-2/40' : 'hover:bg-surface-2/20'
-                }`}
-              >
-                {/* Collapsed Row Summary / Header Trigger */}
-                <div
-                  onClick={() => setExpandedId(isExpanded ? null : prop.id)}
-                  className="min-h-[38px] px-2.5 py-1 flex items-center justify-between gap-2.5 cursor-pointer select-none active:bg-surface-2/60 transition-colors"
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setExpandedId(isExpanded ? null : prop.id);
-                    }
-                  }}
-                  aria-expanded={isExpanded}
-                >
-                  {/* Left Column: Type Title + Timestamp Range */}
-                  <div className="flex flex-col gap-0.5 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      {icon}
-                      <span className="text-xs font-medium text-text-main truncate">
-                        {title}
-                      </span>
-                    </div>
-                    <span className="text-[11px] font-mono tabular-nums text-text-muted">
-                      {formatCutTimestamp(prop.source_start)} &ndash;{' '}
-                      {formatCutTimestamp(prop.source_end)}
-                    </span>
-                  </div>
-
-                  {/* Right Column: Duration + Decision Pill + Chevron */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="font-mono tabular-nums text-xs font-semibold text-text-main">
-                      {formatCutDuration(prop.duration)}
-                    </span>
-
-                    {/* Compact Decision Status Pill */}
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
-                        effective === 'cut'
-                          ? 'bg-primary/15 text-primary border-primary/25'
-                          : effective === 'keep'
-                          ? 'bg-surface-3 text-text-muted border-border'
-                          : 'bg-amber-500/15 text-amber-300 border-amber-500/25'
-                      }`}
-                    >
-                      {effective === 'cut'
-                        ? 'Cut'
-                        : effective === 'keep'
-                        ? 'Keep'
-                        : 'Review'}
-                    </span>
-
-                    {/* Expand/Collapse Chevron */}
-                    <div className="text-text-muted">
-                      {isExpanded ? (
-                        <ChevronUp size={14} />
-                      ) : (
-                        <ChevronDown size={14} />
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. EXPANDED INSPECTION INTERACTION */}
-                {isExpanded && (
-                  <div className="px-2.5 pb-2.5 pt-1 space-y-2 bg-surface-2/20 border-t border-border/60 animate-in fade-in duration-150">
-                    {/* Miniature Filmstrip (Captions Reference) */}
-                    <MiniFilmstrip
-                      filmstrip={filmstrip}
-                      clipDuration={duration}
-                      sourceStart={prop.source_start}
-                      sourceEnd={prop.source_end}
-                      currentTime={currentTime}
-                      clipStartOffset={clipStart}
-                      onSeek={onSeekSourceTime}
-                    />
-
-                    {/* Action Controls Row: Single Toggle Decision + Contextual Jump-Cut Preview */}
-                    <div className="flex items-center justify-between gap-2.5 pt-0.5">
-                      {/* Contextual Jump-Cut Preview Button */}
-                      {(() => {
-                        const isPreviewingThis = previewingProposalId === prop.id;
-                        return (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const win = computeContextWindow(
-                                prop.source_start,
-                                prop.source_end,
-                                clipEnd || duration || 60,
-                                2.5
-                              );
-                              onPreviewContext({
-                                start: win.winStart,
-                                end: win.winEnd,
-                                cutStart: prop.source_start,
-                                cutEnd: prop.source_end,
-                                isCut: effective === 'cut',
-                                proposalId: prop.id,
-                              });
-                            }}
-                            className={`min-h-[34px] px-3 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
-                              isPreviewingThis
-                                ? 'bg-primary/20 border-primary text-primary font-semibold'
-                                : 'bg-surface-2 hover:bg-surface-3 border-border text-text-main'
-                            }`}
-                            title={
-                              isPreviewingThis
-                                ? 'Stop context preview'
-                                : 'Audition section (2.5s before & after with seamless jump-cut)'
-                            }
-                          >
-                            {isPreviewingThis ? (
-                              <>
-                                <span className="w-2 h-2 rounded-full bg-primary animate-ping mr-0.5" />
-                                <span>Playing…</span>
-                              </>
-                            ) : (
-                              <>
-                                <Play size={11} className="fill-current text-primary" />
-                                <span>Preview</span>
-                              </>
-                            )}
-                          </button>
-                        );
-                      })()}
-
-                      {/* Single Decision Toggle: Cut vs Keep */}
-                      <button
-                        type="button"
-                        onClick={() => onToggleDecision(prop.id, effective === 'cut' ? 'keep' : 'cut')}
-                        className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all border ${
-                          effective === 'cut'
-                            ? 'bg-primary text-white border-primary shadow-hero-glow'
-                            : 'bg-surface-2 text-text-secondary hover:text-text-main border-border'
-                        }`}
-                        title={effective === 'cut' ? 'Marked for removal. Click to keep.' : 'Kept. Click to cut.'}
-                      >
-                        {effective === 'cut' ? (
-                          <>
-                            <Scissors size={12} />
-                            <span>Cut</span>
-                          </>
-                        ) : (
-                          <>
-                            <Check size={12} />
-                            <span>Keep</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })
+          filteredProposals.map((prop) => (
+            <DetectionCard
+              key={prop.id}
+              proposal={prop}
+              isExpanded={expandedId === prop.id}
+              onToggleExpand={(id) => setExpandedId(expandedId === id ? null : id)}
+              filmstrip={filmstrip}
+              clipDuration={duration}
+              clipStart={clipStart}
+              clipEnd={clipEnd}
+              currentTime={currentTime}
+              previewingProposalId={previewingProposalId}
+              onPreviewContext={onPreviewContext}
+              onSeekSourceTime={onSeekSourceTime}
+              onToggleDecision={onToggleDecision}
+            />
+          ))
         )}
       </div>
 
-      {/* 4. STICKY BOTTOM ACTION BAR */}
-      <footer className="px-2.5 py-1.5 border-t border-border bg-surface flex items-center gap-2 shrink-0 pb-[max(6px,env(safe-area-inset-bottom,0px))]">
+      {/* 4. STICKY BOTTOM ACTION BAR (Equal 50/50 CSS Grid - zero unevenness, 44px biomechanical hitboxes) */}
+      <footer className="px-3 py-2 border-t border-border bg-surface grid grid-cols-2 gap-2.5 shrink-0 pb-[max(8px,env(safe-area-inset-bottom,0px))]">
         <button
           type="button"
           onClick={onClose}
-          className="flex-1 min-h-[36px] rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-medium active:scale-[0.98] transition-all"
+          className="h-11 min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
         >
           Cancel
         </button>
@@ -528,7 +596,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
           type="button"
           onClick={onApply}
           disabled={eligibleCutCount === 0 || isApplying}
-          className="flex-2 min-h-[36px] px-3.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
+          className="h-11 min-h-[44px] px-3 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isApplying ? (
             <RotateCw size={13} className="animate-spin" />

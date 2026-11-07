@@ -349,13 +349,6 @@ export const ActivityProvider: React.FC<{
     }
   }, [pcHost]);
 
-  // Periodic polling for cloud jobs & backlog
-  useEffect(() => {
-    refreshActivity();
-    const interval = setInterval(refreshActivity, 10000);
-    return () => clearInterval(interval);
-  }, [refreshActivity]);
-
   const activeJobsCount =
     cloudJobs.filter((j) => j.status === 'queued' || j.status === 'claimed' || j.status === 'processing').length +
     (activeDirectUpload && (activeDirectUpload.phase === 'uploading' || activeDirectUpload.phase === 'checking' || activeDirectUpload.phase === 'submitting') ? 1 : 0);
@@ -363,6 +356,49 @@ export const ActivityProvider: React.FC<{
   const hasUnread = notifications.some((n) => !n.read);
   const hasBacklog = (queueStats?.queued_count ?? 0) > 0;
   const hasActiveActivity = activeJobsCount > 0 || hasBacklog || hasUnread;
+
+  const hasActiveWorkRef = useRef(false);
+  hasActiveWorkRef.current = activeJobsCount > 0 || hasBacklog;
+
+  // Adaptive periodic polling for cloud jobs & backlog:
+  // - Pauses when app is hidden / minimized (0 requests/sec, saves mobile battery)
+  // - Polls every 8s when jobs or uploads are actively processing
+  // - Backs off to 35s when completely idle
+  useEffect(() => {
+    let timerId: any = null;
+    let isCancelled = false;
+
+    const tick = async () => {
+      if (document.hidden) {
+        schedule(30000);
+        return;
+      }
+      await refreshActivity();
+      if (!isCancelled) {
+        schedule(hasActiveWorkRef.current ? 8000 : 35000);
+      }
+    };
+
+    const schedule = (ms: number) => {
+      clearTimeout(timerId);
+      timerId = setTimeout(tick, ms);
+    };
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        tick();
+      }
+    };
+
+    tick();
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timerId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [refreshActivity]);
 
   const openNotificationCenter = useCallback(() => {
     setIsOpen(true);

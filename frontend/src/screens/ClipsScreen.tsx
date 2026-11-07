@@ -1175,6 +1175,7 @@ interface FramedVideoStageProps {
   muted?: boolean;
   /** Worker-reported: no media (rendered clip, window proxy, thumbnail) resolved. */
   mediaMissing?: boolean;
+  onStageBackgroundClick?: () => void;
 }
 
 export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
@@ -1203,8 +1204,8 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
   renderedLayoutMode,
   onVideoClick,
   muted = false,
-  /** Worker-reported: no media (rendered clip, window proxy, thumbnail) resolved. */
   mediaMissing = false,
+  onStageBackgroundClick,
 }) => {
   const [sourceFailed, setSourceFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
@@ -1393,7 +1394,12 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
   return (
     <div
       ref={isDetail ? stageContainerRef : undefined}
-      className="w-full h-full flex items-center justify-center overflow-hidden"
+      className="w-full h-full flex items-center justify-center overflow-hidden cursor-pointer"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onStageBackgroundClick?.();
+        }
+      }}
     >
       <section
         style={
@@ -1761,6 +1767,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [autoCutLoading, setAutoCutLoading] = useState<boolean>(false);
   const [autoCutFilter, setAutoCutFilter] = useState<AutoCutFilterCategory>('all');
   const autoCutCacheRef = useRef<Map<string, { signature: string; proposals: AutoCutProposal[] }>>(new Map());
+  const probedYouTubeIdsRef = useRef<Set<string>>(new Set());
+  const filmstripCacheRef = useRef<Map<string, FilmstripData>>(new Map());
 
   useEffect(() => {
     import('../auth/supabase').then(({ currentSession }) =>
@@ -1805,6 +1813,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     proposalId?: string;
     restoreTime: number;
     hasJumped?: boolean;
+    isSourceTimeline?: boolean;
   }
   const contextPreviewRef = useRef<ContextPreviewState | null>(null);
   const [activePreviewProposalId, setActivePreviewProposalId] = useState<string | null>(null);
@@ -2200,15 +2209,21 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     }
   };
 
-  // Probe YouTube titles for clips with youtube_video_id missing source_title
+  // Probe YouTube titles for clips with youtube_video_id missing source_title (with negative cache)
   useEffect(() => {
     const ytIds = new Set<string>();
     allClips.forEach(c => {
-      if (c.youtube_video_id && !c.source_title && !resolvedTitles[c.youtube_video_id]) {
+      if (
+        c.youtube_video_id &&
+        !c.source_title &&
+        !resolvedTitles[c.youtube_video_id] &&
+        !probedYouTubeIdsRef.current.has(c.youtube_video_id)
+      ) {
         ytIds.add(c.youtube_video_id);
       }
     });
     ytIds.forEach(async (vId) => {
+      probedYouTubeIdsRef.current.add(vId);
       try {
         const res = await fetch(`${WORKER_BASE}/youtube/duration?video_id=${vId}`);
         if (res.ok) {
@@ -2230,7 +2245,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         })
         .catch(() => null);
     });
-  }, [allClips]);
+  }, [allClips, resolvedTitles]);
 
   // 1. Fetch Real Clips from PC Backend or Cloud Worker
   const fetchClips = async () => {
@@ -2658,16 +2673,18 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
     // Defer heavy filmstrip frame extraction so active video stream and captions have top network priority
     const reqId = ++filmstripReqIdRef.current;
-    // Immediate honest fallback: one thumbnail spanning the clip while the
-    // time-anchored strip is deferred/regenerating server-side.
-    if (currentClip.thumbnail_url) {
+    // In-memory cache check: if filmstrip was already loaded for this clip, restore instantly (0ms)
+    const cachedFs = filmstripCacheRef.current.get(currentClip.id);
+    if (cachedFs) {
+      setFilmstripData(cachedFs);
+    } else if (currentClip.thumbnail_url) {
       const tUrl = currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost);
       const fallbackDuration = currentClip.duration || Math.max(0, (currentClip.end_time || 0) - (currentClip.start_time || 0));
       setFilmstripData(thumbnailFallbackFilmstrip(tUrl, fallbackDuration));
     } else {
       setFilmstripData(null);
     }
-    if (offlineReadOnly) {
+    if (offlineReadOnly || cachedFs) {
       return () => {
         isCurrentClip = false;
         captionRequestControllerRef.current?.abort();
@@ -2689,13 +2706,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
               expectedClipStart: currentClip.start_time,
             });
             if (!parsed) return;
-            setFilmstripData({
+            const finalStrip: FilmstripData = {
               ...parsed,
               frames: parsed.frames.map((frame) => ({
                 ...frame,
                 url: frame.url.startsWith('http') ? frame.url : apiUrl(frame.url, pcHost),
               })),
-            });
+            };
+            filmstripCacheRef.current.set(currentClip.id, finalStrip);
+            setFilmstripData(finalStrip);
           })
           .catch(() => { });
       }, 700);
@@ -2920,7 +2939,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     proposalId?: string;
   }) => {
     const video = videoRef.current;
-    if (!video || !isSourceTimebase || range.end <= range.start) return;
+    if (!video || range.end <= range.start) return;
 
     // Toggle: if currently playing preview for this proposal, tap stops it
     if (contextPreviewRef.current && contextPreviewRef.current.proposalId === range.proposalId && isPlaying) {
@@ -2928,25 +2947,35 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       return;
     }
 
+    const isSourceTimeline = Boolean(isSourceTimebase && video.duration >= (clipEnd - 1.0));
+    const timeOffset = isSourceTimeline ? 0 : clipStart;
+    const mediaStart = Math.max(0, range.start - timeOffset);
+    const mediaEnd = Math.min(video.duration || (clipEnd - clipStart), range.end - timeOffset);
+    const mediaCutStart = range.cutStart != null ? Math.max(0, range.cutStart - timeOffset) : undefined;
+    const mediaCutEnd = range.cutEnd != null ? Math.min(video.duration || (clipEnd - clipStart), range.cutEnd - timeOffset) : undefined;
+
+    if (mediaEnd <= mediaStart) return;
+
     const restoreTime = contextPreviewRef.current
       ? contextPreviewRef.current.restoreTime
-      : clamp(video.currentTime - clipStart, 0, clipDuration);
+      : currentTime;
 
     previewAnimRef.current = null;
     contextPreviewRef.current = {
-      sourceStart: range.start,
-      sourceEnd: range.end,
-      cutStart: range.cutStart,
-      cutEnd: range.cutEnd,
+      sourceStart: mediaStart,
+      sourceEnd: mediaEnd,
+      cutStart: mediaCutStart,
+      cutEnd: mediaCutEnd,
       isCut: Boolean(range.isCut),
       proposalId: range.proposalId,
       restoreTime,
       hasJumped: false,
+      isSourceTimeline,
     };
     setActivePreviewProposalId(range.proposalId || null);
 
-    video.currentTime = range.start;
-    if (bgVideoRef.current) bgVideoRef.current.currentTime = range.start;
+    video.currentTime = mediaStart;
+    if (bgVideoRef.current) bgVideoRef.current.currentTime = mediaStart;
 
     // High-frequency frame checker for instantaneous seamless jump
     const checkJump = () => {
@@ -2960,7 +2989,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           ctx.hasJumped = true;
           v.currentTime = ctx.cutEnd;
           if (bgVideoRef.current) bgVideoRef.current.currentTime = ctx.cutEnd;
-          setCurrentTime(clamp(ctx.cutEnd - clipStart, 0, clipDuration));
+          setCurrentTime(clamp(ctx.cutEnd + (ctx.isSourceTimeline ? -clipStart : 0), 0, clipDuration));
         }
       }
 
@@ -2992,15 +3021,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (!video) return;
     const cur = video.currentTime;
 
-    const effectiveSourceForContext = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
-    if (effectiveSourceForContext && contextPreviewRef.current) {
+    if (contextPreviewRef.current) {
       const context = contextPreviewRef.current;
       if (context.isCut && context.cutStart != null && context.cutEnd != null && !context.hasJumped) {
         if (cur >= context.cutStart - 0.03 && cur < context.cutEnd) {
           context.hasJumped = true;
           video.currentTime = context.cutEnd;
           if (bgVideoRef.current) bgVideoRef.current.currentTime = context.cutEnd;
-          setCurrentTime(clamp(context.cutEnd - clipStart, 0, clipDuration));
+          setCurrentTime(clamp(context.cutEnd + (context.isSourceTimeline ? -clipStart : 0), 0, clipDuration));
           return;
         }
       }
@@ -3008,7 +3036,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         handleStopPreviewContext();
         return;
       }
-      setCurrentTime(clamp(cur - clipStart, 0, clipDuration));
+      setCurrentTime(clamp(cur + (context.isSourceTimeline ? -clipStart : 0), 0, clipDuration));
       return;
     }
 
@@ -4076,18 +4104,22 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     contextPreviewRef.current = null;
     const video = videoRef.current;
     if (!video) return;
-    const safeSource = Math.max(0, Math.min(video.duration || (currentClip as any)?.source_duration || 3600, sourceSec));
-    video.currentTime = safeSource;
-    if (bgVideoRef.current) bgVideoRef.current.currentTime = safeSource;
+    const isSourceTimeline = Boolean(isSourceTimebase && video.duration >= (clipEnd - 1.0));
+    const targetMediaTime = isSourceTimeline
+      ? Math.max(0, Math.min(video.duration || (currentClip as any)?.source_duration || 3600, sourceSec))
+      : Math.max(0, Math.min(video.duration || clipDuration, sourceSec - clipStart));
+
+    video.currentTime = targetMediaTime;
+    if (bgVideoRef.current) bgVideoRef.current.currentTime = targetMediaTime;
     try {
-      const clipTime = sourceToConcat(effectiveRanges, safeSource, totalSourceDur);
+      const clipTime = sourceToConcat(effectiveRanges, sourceSec, totalSourceDur);
       if (clipTime !== null) {
         setCurrentTime(clipTime);
       } else {
-        setCurrentTime(Math.max(0, safeSource - clipStart));
+        setCurrentTime(Math.max(0, sourceSec - clipStart));
       }
     } catch {
-      setCurrentTime(Math.max(0, safeSource - clipStart));
+      setCurrentTime(Math.max(0, sourceSec - clipStart));
     }
   };
 
@@ -4176,12 +4208,24 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           }
         }
 
-        const combined = [...geminiProposals, ...gapProposals].sort((a, b) => a.source_start - b.source_start);
+        // Hybrid Ensemble: combine Gemini AI insights with local deterministic detections so nothing is missed
+        const localProposals = generateLocalAutoCutProposals();
+        const nonOverlappingLocal = localProposals.filter((loc) => {
+          return !geminiProposals.some(
+            (gem) =>
+              (loc.source_start < gem.source_end && loc.source_end > gem.source_start) ||
+              Math.abs(loc.source_start - gem.source_start) < 0.35
+          );
+        });
+
+        const combined = [...geminiProposals, ...gapProposals, ...nonOverlappingLocal].sort(
+          (a, b) => a.source_start - b.source_start
+        );
         if (combined.length > 0) {
           autoCutCacheRef.current.set(currentClip.id, { signature, proposals: combined });
           writeAutoCutCache(currentClip.id, signature, combined);
           setAutoCutProposals(combined);
-          setFeedback(`Found ${combined.length} Gemini Flash-Lite speech cleanup suggestions.`);
+          setFeedback(`Found ${combined.length} speech cleanup suggestions (AI + on-device).`);
           setAutoCutLoading(false);
           return;
         }
@@ -6162,6 +6206,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             showPlayPauseOverlay={false}
             isCompact={false}
             isDetail={true}
+            onStageBackgroundClick={() => {
+              if (showAutoCutDrawer) {
+                stopPreviewRef.current();
+                setShowAutoCutDrawer(false);
+              } else {
+                handleClearSelection();
+              }
+            }}
             onVideoClick={() => {
               if (showAutoCutDrawer) {
                 handleTogglePlay();
