@@ -69,6 +69,7 @@ export interface SpeechCleanupWorkspaceProps {
   onClose: () => void;
   isApplying?: boolean;
   isLoading?: boolean;
+  onReanalyze?: () => void;
 }
 
 export function formatCutTimestamp(seconds: number): string {
@@ -82,6 +83,61 @@ export function formatCutTimestamp(seconds: number): string {
 export function formatCutDuration(durationSeconds: number): string {
   const d = Math.abs(durationSeconds);
   return `\u2212${d.toFixed(1)}s`;
+}
+
+export function computeTranscriptSignature(
+  clipId: string,
+  clipStart: number,
+  clipEnd: number,
+  words: Array<{ start: number; end: number; text?: string }>
+): string {
+  const len = words.length;
+  const first = len > 0 ? Number(words[0]?.start ?? 0).toFixed(2) : '0';
+  const last = len > 0 ? Number(words[len - 1]?.end ?? 0).toFixed(2) : '0';
+  return `${clipId}:${clipStart.toFixed(2)}-${clipEnd.toFixed(2)}:${len}:${first}-${last}`;
+}
+
+export function readAutoCutCache(
+  clipId: string,
+  signature: string
+): AutoCutProposal[] | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(`dispatch_autocut_${clipId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.signature === signature && Array.isArray(parsed.proposals)) {
+      return parsed.proposals;
+    }
+  } catch (err) {
+    console.warn('Failed to read AutoCut cache:', err);
+  }
+  return null;
+}
+
+export function writeAutoCutCache(
+  clipId: string,
+  signature: string,
+  proposals: AutoCutProposal[]
+): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(
+      `dispatch_autocut_${clipId}`,
+      JSON.stringify({ signature, proposals, timestamp: Date.now() })
+    );
+  } catch (err) {
+    console.warn('Failed to write AutoCut cache:', err);
+  }
+}
+
+export function clearAutoCutCache(clipId: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(`dispatch_autocut_${clipId}`);
+  } catch (err) {
+    console.warn('Failed to clear AutoCut cache:', err);
+  }
 }
 
 export function getEffectiveDecision(proposal: AutoCutProposal): EffectiveDecision {
@@ -185,6 +241,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   onClose,
   isApplying = false,
   isLoading = false,
+  onReanalyze,
 }) => {
   // Only ONE detection may be expanded at a time
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -218,9 +275,9 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
       onClick={(e) => e.stopPropagation()}
       className="w-full h-full flex flex-col bg-surface border-t border-border text-text-main select-none overflow-hidden"
     >
-      {/* 1. COMPACT HEADER: Category Filters (Full-width single row, tap empty stage to close) */}
-      <header className="shrink-0 h-9 px-2.5 border-b border-border bg-surface flex items-center">
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar w-full">
+      {/* 1. COMPACT HEADER: Category Filters & Re-analyze Action */}
+      <header className="shrink-0 h-9 px-2.5 border-b border-border bg-surface flex items-center justify-between gap-1.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 min-w-0">
           {(
             [
               { id: 'all', label: 'All', count: counts.all },
@@ -249,6 +306,20 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
             );
           })}
         </div>
+
+        {onReanalyze && (
+          <button
+            type="button"
+            onClick={onReanalyze}
+            disabled={isLoading || isApplying}
+            className="h-6 px-2 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-all shrink-0 active:scale-[0.98] border border-border bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 disabled:opacity-40"
+            title="Re-analyze speech with Gemini Flash-Lite (bypass cache)"
+            aria-label="Re-analyze speech"
+          >
+            <RotateCw size={11} className={isLoading ? 'animate-spin text-primary' : ''} />
+            <span className="hidden xs:inline">Re-analyze</span>
+          </button>
+        )}
       </header>
 
       {/* 2. COMPACT DETECTION LIST */}
@@ -259,8 +330,18 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
             <span className="text-text-secondary font-medium">Analyzing speech with Gemini Flash-Lite…</span>
           </div>
         ) : filteredProposals.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-8 text-center text-text-muted text-xs">
+          <div className="flex flex-col items-center justify-center p-8 text-center text-text-muted text-xs gap-2">
             <p>No detections match the selected filter.</p>
+            {onReanalyze && filter === 'all' && (
+              <button
+                type="button"
+                onClick={onReanalyze}
+                className="mt-1 h-7 px-3 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 text-text-main text-xs font-medium flex items-center gap-1.5 active:scale-95 transition-all"
+              >
+                <RotateCw size={12} className={isLoading ? 'animate-spin' : ''} />
+                <span>Run fresh analysis</span>
+              </button>
+            )}
           </div>
         ) : (
           filteredProposals.map((prop) => {

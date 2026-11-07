@@ -67,6 +67,10 @@ import {
   AutoCutProposal,
   AutoCutFilterCategory,
   getEffectiveDecision,
+  computeTranscriptSignature,
+  readAutoCutCache,
+  writeAutoCutCache,
+  clearAutoCutCache,
 } from '../captions/SpeechCleanupWorkspace';
 export type { AutoCutProposal, AutoCutFilterCategory } from '../captions/SpeechCleanupWorkspace';
 import { ConnectedAccount, listConnectedAccounts, WORKER_BASE, getGeminiApiKey } from '../accounts/accountsService';
@@ -1756,6 +1760,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [showAutoCutDrawer, setShowAutoCutDrawer] = useState<boolean>(false);
   const [autoCutLoading, setAutoCutLoading] = useState<boolean>(false);
   const [autoCutFilter, setAutoCutFilter] = useState<AutoCutFilterCategory>('all');
+  const autoCutCacheRef = useRef<Map<string, { signature: string; proposals: AutoCutProposal[] }>>(new Map());
 
   useEffect(() => {
     import('../auth/supabase').then(({ currentSession }) =>
@@ -4025,22 +4030,30 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   };
 
   const handleToggleAutoCutDecision = (proposalId: string, choice: 'cut' | 'keep') => {
-    setAutoCutProposals((prev) =>
-      prev.map((p) => {
+    setAutoCutProposals((prev) => {
+      const updated: AutoCutProposal[] = prev.map((p) => {
         if (p.id !== proposalId) return p;
         if (choice === 'cut') {
           if (p.userOverride === 'accept') {
             return { ...p, userOverride: undefined };
           }
-          return { ...p, userOverride: 'accept' };
+          return { ...p, userOverride: 'accept' as const };
         } else {
           if (p.userOverride === 'reject') {
             return { ...p, userOverride: undefined };
           }
-          return { ...p, userOverride: 'reject' };
+          return { ...p, userOverride: 'reject' as const };
         }
-      })
-    );
+      });
+      if (currentClip?.id) {
+        const sig = autoCutCacheRef.current.get(currentClip.id)?.signature;
+        if (sig) {
+          autoCutCacheRef.current.set(currentClip.id, { signature: sig, proposals: updated });
+          writeAutoCutCache(currentClip.id, sig, updated);
+        }
+      }
+      return updated;
+    });
 
     // If currently previewing, re-audition immediately with updated choice (Instant A/B comparison)
     if (activePreviewProposalId === proposalId) {
@@ -4078,16 +4091,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
   };
 
-  const fetchAutoCutProposals = async () => {
+  const fetchAutoCutProposals = async (forceRefresh: boolean = false) => {
     if (!currentClip) return;
     // 0ms instant tactile response: open drawer immediately with loading indicator & clear selections
     setShowAutoCutDrawer(true);
-    setAutoCutLoading(true);
     setIsVideoSelected(false);
     setSelectedGroupId(null);
     setSelectedPieceIndex(null);
     setActivePanel('none');
-    setFeedback('Analyzing speech with Gemini Flash-Lite & audio waveform...');
 
     const allWords = captionTrack?.groups
       ? captionTrack.groups
@@ -4097,6 +4108,30 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
     const clipStartSec = Number(currentClip.start_time ?? 0);
     const clipEndSec = Number(currentClip.end_time ?? duration ?? 60);
+    const signature = computeTranscriptSignature(currentClip.id, clipStartSec, clipEndSec, allWords);
+
+    // L1 In-Memory and L2 LocalStorage cache hit (0ms instant restore with prior Cut/Keep overrides)
+    if (!forceRefresh) {
+      const memCached = autoCutCacheRef.current.get(currentClip.id);
+      if (memCached && memCached.signature === signature && memCached.proposals.length > 0) {
+        setAutoCutProposals(memCached.proposals);
+        setAutoCutLoading(false);
+        setFeedback(`Loaded ${memCached.proposals.length} cached speech cleanup suggestions.`);
+        return;
+      }
+
+      const persistentCached = readAutoCutCache(currentClip.id, signature);
+      if (persistentCached && persistentCached.length > 0) {
+        autoCutCacheRef.current.set(currentClip.id, { signature, proposals: persistentCached });
+        setAutoCutProposals(persistentCached);
+        setAutoCutLoading(false);
+        setFeedback(`Loaded ${persistentCached.length} cached speech cleanup suggestions (on-device).`);
+        return;
+      }
+    }
+
+    setAutoCutLoading(true);
+    setFeedback(forceRefresh ? 'Re-analyzing speech with Gemini Flash-Lite...' : 'Analyzing speech with Gemini Flash-Lite & audio waveform...');
 
     // 1. Direct Phone-to-Gemini Flash-Lite Request (Zero PC server dependency)
     try {
@@ -4143,6 +4178,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
         const combined = [...geminiProposals, ...gapProposals].sort((a, b) => a.source_start - b.source_start);
         if (combined.length > 0) {
+          autoCutCacheRef.current.set(currentClip.id, { signature, proposals: combined });
+          writeAutoCutCache(currentClip.id, signature, combined);
           setAutoCutProposals(combined);
           setFeedback(`Found ${combined.length} Gemini Flash-Lite speech cleanup suggestions.`);
           setAutoCutLoading(false);
@@ -4169,8 +4206,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             const textProposals = generateLocalAutoCutProposals();
             const fillers = textProposals.filter((p) => p.type === 'filler');
             const combined: AutoCutProposal[] = [...parsed, ...fillers];
+            autoCutCacheRef.current.set(currentClip.id, { signature, proposals: combined });
+            writeAutoCutCache(currentClip.id, signature, combined);
             setAutoCutProposals(combined);
-            setShowAutoCutDrawer(true);
             setFeedback(`Found ${combined.length} on-device auto-cut suggestions.`);
             setAutoCutLoading(false);
             return;
@@ -4183,8 +4221,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
     // 3. Client-side heuristic fallback (100% offline, zero server required)
     const localProposals = generateLocalAutoCutProposals();
+    autoCutCacheRef.current.set(currentClip.id, { signature, proposals: localProposals });
+    writeAutoCutCache(currentClip.id, signature, localProposals);
     setAutoCutProposals(localProposals);
-    setShowAutoCutDrawer(true);
     setFeedback(`Loaded ${localProposals.length} client-side suggestions (offline mode).`);
     setAutoCutLoading(false);
   };
@@ -4256,6 +4295,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     if (success) {
       setShowAutoCutDrawer(false);
       setAutoCutProposals([]);
+      if (currentClip?.id) {
+        autoCutCacheRef.current.delete(currentClip.id);
+        clearAutoCutCache(currentClip.id);
+      }
     }
   } catch (err: any) {
     setFeedback(`Failed to apply auto-cut: ${err?.message || 'unknown error'}`);
@@ -6269,6 +6312,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 }}
                 isLoading={autoCutLoading}
                 isApplying={autoCutLoading && autoCutProposals.length > 0}
+                onReanalyze={() => fetchAutoCutProposals(true)}
               />
             </div>
           ) : activePanel === 'none' ? (

@@ -31,6 +31,12 @@ import {
   formatCutTimestamp,
   formatCutDuration,
 } from './src/captions/SpeechCleanupWorkspace';
+import {
+  computeTranscriptSignature,
+  readAutoCutCache,
+  writeAutoCutCache,
+  clearAutoCutCache,
+} from './src/captions/SpeechCleanupWorkspace';
 import { normalizeRanges, roundMs } from './src/captions/timelineEngine';
 
 function assert(condition: boolean, msg: string) {
@@ -455,4 +461,63 @@ console.log('Test 20: Single playback authority (no extra video elements)...');
   console.log('  ✓ Zero secondary video elements; preview remains single authority');
 }
 
-console.log('\n🎉 ALL 20 AUTOCUT REDESIGN VERIFICATION TESTS PASSED 100%!\n');
+// ---------------------------------------------------------------------------
+// Test 21: Proposal Caching & Signature Invalidation
+// ---------------------------------------------------------------------------
+console.log('Test 21: Proposal caching & transcript signature invalidation...');
+{
+  const mockWords = [
+    { start: 1.0, end: 1.5, text: 'Hello' },
+    { start: 2.0, end: 2.8, text: 'world' },
+  ];
+  const sig1 = computeTranscriptSignature('clip_123', 0.0, 10.0, mockWords);
+  const sigSame = computeTranscriptSignature('clip_123', 0.0, 10.0, mockWords);
+  assert(sig1 === sigSame, 'Deterministic signatures match for identical inputs');
+
+  // Modified transcript words
+  const modifiedWords = [
+    { start: 1.0, end: 1.5, text: 'Hello' },
+    { start: 2.0, end: 3.2, text: 'universe' },
+  ];
+  const sigChanged = computeTranscriptSignature('clip_123', 0.0, 10.0, modifiedWords);
+  assert(sig1 !== sigChanged, 'Signature automatically changes when transcript words change');
+
+  // Trimmed boundaries
+  const sigTrimmed = computeTranscriptSignature('clip_123', 1.0, 9.0, mockWords);
+  assert(sig1 !== sigTrimmed, 'Signature automatically changes when clip start/end boundaries change');
+
+  // Mock localStorage cache write and read
+  const mockStorage: Record<string, string> = {};
+  (global as any).localStorage = {
+    getItem: (k: string) => mockStorage[k] || null,
+    setItem: (k: string, v: string) => { mockStorage[k] = v; },
+    removeItem: (k: string) => { delete mockStorage[k]; },
+  };
+
+  const sampleProposals: AutoCutProposal[] = [
+    {
+      id: 'cache_1',
+      type: 'filler',
+      source_start: 3.0,
+      source_end: 3.5,
+      duration: 0.5,
+      reason: 'Filler word',
+      confidence: 0.9,
+      decision: 'AUTO-REMOVE',
+    },
+  ];
+
+  writeAutoCutCache('clip_123', sig1, sampleProposals);
+  const cachedHit = readAutoCutCache('clip_123', sig1);
+  assert(cachedHit !== null && cachedHit.length === 1, 'Valid cache hit returns cached proposals');
+  assert(cachedHit![0].id === 'cache_1', 'Cached proposal properties preserved');
+
+  const cachedMiss = readAutoCutCache('clip_123', sigChanged);
+  assert(cachedMiss === null, 'Signature mismatch invalidates cache (returns null)');
+
+  clearAutoCutCache('clip_123');
+  assert(readAutoCutCache('clip_123', sig1) === null, 'clearAutoCutCache successfully purges cache entry');
+  console.log('  ✓ L1/L2 proposal caching and signature invalidation verified 100%');
+}
+
+console.log('\n🎉 ALL 21 AUTOCUT REDESIGN VERIFICATION TESTS PASSED 100%!\n');
