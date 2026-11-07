@@ -194,7 +194,7 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
         aria-valuemax={winEnd}
         aria-valuenow={currentTime}
       >
-        {/* Layer 1: Frame Thumbnails (Clean filmstrip reel) */}
+        {/* Layer 1: Frame Thumbnails (Clean filmstrip reel with portrait-face anchoring) */}
         {isSingleFallback && fallbackUrl ? (
           <div className="absolute inset-0 flex items-stretch overflow-hidden pointer-events-none divide-x divide-black/60">
             {Array.from({ length: 6 }).map((_, idx) => (
@@ -202,7 +202,8 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
                 <img
                   src={fallbackUrl}
                   alt=""
-                  className="w-full h-full object-cover opacity-80 pointer-events-none"
+                  className="w-full h-full object-cover opacity-85 pointer-events-none"
+                  style={{ objectPosition: 'center 22%' }}
                   loading="lazy"
                   draggable={false}
                 />
@@ -216,10 +217,11 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
                 key={`mini_frame_${idx}`}
                 src={frame.url}
                 alt=""
-                className="absolute top-0 bottom-0 h-full object-cover opacity-80 pointer-events-none"
+                className="absolute top-0 bottom-0 h-full object-cover opacity-85 pointer-events-none"
                 style={{
                   left: `${frame.leftPct}%`,
                   width: `${frame.widthPct}%`,
+                  objectPosition: 'center 22%',
                 }}
                 loading="lazy"
                 draggable={false}

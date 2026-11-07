@@ -214,7 +214,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   return (
     <div className="w-full h-full flex flex-col bg-surface border-t border-border text-text-main select-none overflow-hidden">
       {/* 1. COMPACT HEADER: Category Filters (Full-width single row, tap empty stage to close) */}
-      <header className="shrink-0 h-11 px-3 border-b border-border bg-surface flex items-center">
+      <header className="shrink-0 h-9 px-2.5 border-b border-border bg-surface flex items-center">
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar w-full">
           {(
             [
@@ -230,7 +230,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => onFilterChange(tab.id)}
-                className={`h-7 px-2.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-all shrink-0 active:scale-[0.98] border ${
+                className={`h-6 px-2 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-all shrink-0 active:scale-[0.98] border ${
                   isActive
                     ? 'bg-primary text-white border-primary shadow-hero-sm font-semibold'
                     : 'bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 border-border'
@@ -268,7 +268,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                 {/* Collapsed Row Summary / Header Trigger */}
                 <div
                   onClick={() => setExpandedId(isExpanded ? null : prop.id)}
-                  className="min-h-[44px] px-3 py-1.5 flex items-center justify-between gap-3 cursor-pointer select-none active:bg-surface-2/60 transition-colors"
+                  className="min-h-[38px] px-2.5 py-1 flex items-center justify-between gap-2.5 cursor-pointer select-none active:bg-surface-2/60 transition-colors"
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
@@ -283,25 +283,25 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                   <div className="flex flex-col gap-0.5 min-w-0">
                     <div className="flex items-center gap-1.5">
                       {icon}
-                      <span className="text-sm font-medium text-text-main truncate">
+                      <span className="text-xs font-medium text-text-main truncate">
                         {title}
                       </span>
                     </div>
-                    <span className="text-xs font-mono tabular-nums text-text-muted">
+                    <span className="text-[11px] font-mono tabular-nums text-text-muted">
                       {formatCutTimestamp(prop.source_start)} &ndash;{' '}
                       {formatCutTimestamp(prop.source_end)}
                     </span>
                   </div>
 
                   {/* Right Column: Duration + Decision Pill + Chevron */}
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    <span className="font-mono tabular-nums text-sm font-semibold text-text-main">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-mono tabular-nums text-xs font-semibold text-text-main">
                       {formatCutDuration(prop.duration)}
                     </span>
 
                     {/* Compact Decision Status Pill */}
                     <span
-                      className={`text-xs px-2 py-0.5 rounded font-medium border ${
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
                         effective === 'cut'
                           ? 'bg-primary/15 text-primary border-primary/25'
                           : effective === 'keep'
@@ -319,9 +319,9 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                     {/* Expand/Collapse Chevron */}
                     <div className="text-text-muted">
                       {isExpanded ? (
-                        <ChevronUp size={16} />
+                        <ChevronUp size={14} />
                       ) : (
-                        <ChevronDown size={16} />
+                        <ChevronDown size={14} />
                       )}
                     </div>
                   </div>
@@ -329,7 +329,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
 
                 {/* 3. EXPANDED INSPECTION INTERACTION */}
                 {isExpanded && (
-                  <div className="px-3 pb-3 pt-1 space-y-2.5 bg-surface-2/20 border-t border-border/60 animate-in fade-in duration-150">
+                  <div className="px-2.5 pb-2.5 pt-1 space-y-2 bg-surface-2/20 border-t border-border/60 animate-in fade-in duration-150">
                     {/* Miniature Filmstrip (Captions Reference) */}
                     <MiniFilmstrip
                       filmstrip={filmstrip}
@@ -342,7 +342,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                     />
 
                     {/* Action Controls Row: Single Toggle Decision + Contextual Jump-Cut Preview */}
-                    <div className="flex items-center justify-between gap-3 pt-0.5">
+                    <div className="flex items-center justify-between gap-2.5 pt-0.5">
                       {/* Contextual Jump-Cut Preview Button */}
                       {(() => {
                         const isPreviewingThis = previewingProposalId === prop.id;
@@ -365,7 +365,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                                 proposalId: prop.id,
                               });
                             }}
-                            className={`min-h-[38px] px-3.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
+                            className={`min-h-[34px] px-3 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-[0.98] transition-all ${
                               isPreviewingThis
                                 ? 'bg-primary/20 border-primary text-primary font-semibold'
                                 : 'bg-surface-2 hover:bg-surface-3 border-border text-text-main'
@@ -383,7 +383,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                               </>
                             ) : (
                               <>
-                                <Play size={12} className="fill-current text-primary" />
+                                <Play size={11} className="fill-current text-primary" />
                                 <span>Preview</span>
                               </>
                             )}
@@ -395,7 +395,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                       <button
                         type="button"
                         onClick={() => onToggleDecision(prop.id, effective === 'cut' ? 'keep' : 'cut')}
-                        className={`min-h-[38px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all border ${
+                        className={`min-h-[34px] px-3.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 active:scale-[0.98] transition-all border ${
                           effective === 'cut'
                             ? 'bg-primary text-white border-primary shadow-hero-glow'
                             : 'bg-surface-2 text-text-secondary hover:text-text-main border-border'
@@ -404,12 +404,12 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                       >
                         {effective === 'cut' ? (
                           <>
-                            <Scissors size={13} />
+                            <Scissors size={12} />
                             <span>Cut</span>
                           </>
                         ) : (
                           <>
-                            <Check size={13} />
+                            <Check size={12} />
                             <span>Keep</span>
                           </>
                         )}
@@ -424,11 +424,11 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
       </div>
 
       {/* 4. STICKY BOTTOM ACTION BAR */}
-      <footer className="px-3 py-2 border-t border-border bg-surface flex items-center gap-2.5 shrink-0 pb-[max(8px,env(safe-area-inset-bottom,0px))]">
+      <footer className="px-2.5 py-1.5 border-t border-border bg-surface flex items-center gap-2 shrink-0 pb-[max(6px,env(safe-area-inset-bottom,0px))]">
         <button
           type="button"
           onClick={onClose}
-          className="flex-1 min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-sm font-medium active:scale-[0.98] transition-all"
+          className="flex-1 min-h-[36px] rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-medium active:scale-[0.98] transition-all"
         >
           Cancel
         </button>
@@ -437,12 +437,12 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
           type="button"
           onClick={onApply}
           disabled={eligibleCutCount === 0 || isApplying}
-          className="flex-2 min-h-[40px] px-4 rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex-2 min-h-[36px] px-3.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all shadow-hero-glow disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isApplying ? (
-            <RotateCw size={14} className="animate-spin" />
+            <RotateCw size={13} className="animate-spin" />
           ) : (
-            <Scissors size={14} />
+            <Scissors size={13} />
           )}
           <span>Apply Auto-Cut ({eligibleCutCount})</span>
         </button>

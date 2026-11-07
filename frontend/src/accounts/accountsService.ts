@@ -73,6 +73,42 @@ export async function getGeminiKeyStatus(jwtToken: string): Promise<GeminiKeySta
   }
 }
 
+export async function getGeminiApiKey(jwtToken?: string | null): Promise<string | null> {
+  // 1. Try local storage on the phone first (0ms instant)
+  if (typeof localStorage !== 'undefined') {
+    const cached = localStorage.getItem('dispatch_gemini_api_key');
+    if (cached && (cached.startsWith('AIza') || cached.startsWith('AQ.'))) {
+      return cached;
+    }
+  }
+
+  // 2. Fetch decrypted key from Cloudflare Worker vault if signed in
+  if (jwtToken) {
+    try {
+      const res = await fetch(`${WORKER_BASE}/keys/gemini?include_key=true`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (res.ok) {
+        const data = await res.json() as { configured?: boolean; api_key?: string };
+        if (data.api_key && typeof data.api_key === 'string') {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('dispatch_gemini_api_key', data.api_key);
+          }
+          return data.api_key;
+        }
+      }
+    } catch {
+      // Offline or network error
+    }
+  }
+
+  return null;
+}
+
 export async function saveGeminiKey(jwtToken: string, apiKey: string): Promise<{ saved: boolean; key_prefix?: string; error?: string }> {
   try {
     const res = await fetch(`${WORKER_BASE}/keys/gemini`, {

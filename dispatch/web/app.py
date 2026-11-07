@@ -1550,6 +1550,54 @@ async def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Re
         detail="POST /api/clips/{id}/split is retired. Use mobile timeline editing (POST /clips/{id}/timeline)."
     )
 
+@app.api_route("/api/clips/{clip_id}/timeline", methods=["POST", "PUT"])
+@_serialize_clip_mutation
+async def handle_update_clip_timeline(clip_id: str, request: Request):
+    """Persist mobile timeline edits & project document directly to local database for PC mode."""
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    doc = body.get("project_document") or body.get("document")
+    if not doc:
+        raise HTTPException(status_code=400, detail="project_document required")
+
+    curr_rev = int(clip.get("segments_revision") or 0)
+    req_rev = body.get("expected_revision") if body.get("expected_revision") is not None else body.get("base_revision")
+    next_rev = (int(req_rev) if req_rev is not None else curr_rev) + 1
+
+    timeline_data = {
+        "project_document": doc,
+        "segments_revision": next_rev,
+        "active_state_revision": next_rev,
+        "operation_id": str(body.get("operation_id") or f"local-timeline-{int(time.time())}"),
+        "action_type": str(body.get("action_type") or "timeline_edit"),
+        "author": "mobile",
+    }
+    outcome = db.import_cloud_timeline_data(clip_id, timeline_data, expected_user_id=caller_user_id)
+    if outcome in ("applied", "stale"):
+        updated = db.get_clip_by_id(clip_id)
+        return {
+            "status": "success",
+            "ok": True,
+            "revision": updated.get("segments_revision") or next_rev,
+            "segments_revision": updated.get("segments_revision") or next_rev,
+            "project_document": doc,
+        }
+    raise HTTPException(status_code=400, detail=f"Failed to apply timeline: {outcome}")
+
+
+
+
 
 @app.post("/api/clips/{clip_id}/approve")
 @_serialize_clip_mutation

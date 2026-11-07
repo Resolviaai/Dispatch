@@ -9,7 +9,7 @@
 
 Dispatch turns long speaking or work sessions into short, reviewable videos. It supports three input routes: recording in the Android app (Route A), submitting an existing YouTube link (Route B), or directly uploading an existing video (Route C). All video processing, Gemini AI transcription, and FFmpeg rendering run strictly on the Windows PC Workstation; Cloudflare Workers and Supabase act as the control plane (auth, job queueing, and presigned R2 storage), and Android acts as a capture, review, and control client.
 
-**Current source version:** Android 1.7.36 (version code 104). A version number or successful build is not proof of live-service or physical-phone behavior. Check the current source and verification records before relying on older status claims.
+**Current source version:** Android 1.7.37 (version code 105). A version number or successful build is not proof of live-service or physical-phone behavior. Check the current source and verification records before relying on older status claims.
 
 ## How the workflow works
 

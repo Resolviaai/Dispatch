@@ -69,7 +69,8 @@ import {
   getEffectiveDecision,
 } from '../captions/SpeechCleanupWorkspace';
 export type { AutoCutProposal, AutoCutFilterCategory } from '../captions/SpeechCleanupWorkspace';
-import { ConnectedAccount, listConnectedAccounts, WORKER_BASE } from '../accounts/accountsService';
+import { ConnectedAccount, listConnectedAccounts, WORKER_BASE, getGeminiApiKey } from '../accounts/accountsService';
+import { analyzeSpeechWithGeminiFlashLite } from '../captions/geminiSpeechCleanup';
 import { currentSession } from '../auth/supabase';
 import {
   cacheClipThumbnails,
@@ -3825,16 +3826,45 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         can_redo: false,
       };
 
-      // Optimistic update
+      // Optimistic update: instantly apply new duration and segments in UI
       setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
       setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
       setDuration(newKeptDuration);
       if (feedbackMsg) setFeedback(feedbackMsg);
 
-      // Async persistence to Cloudflare Worker
+      // 1. Local PC Mode persistence (when running against local workstation daemon)
+      if (!isCloudMode && pcHost) {
+        try {
+          const pcRes = await fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/timeline`, pcHost), {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              expected_revision: baseRevision,
+              base_revision: baseRevision,
+              project_document: updatedProjectDoc,
+              operation_id: operationId,
+              action_type: actionType,
+            }),
+          });
+          if (pcRes.ok) {
+            const pcData = await pcRes.json().catch(() => ({}));
+            const rev = pcData?.revision ?? pcData?.segments_revision ?? (baseRevision + 1);
+            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
+            setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
+            setSaveStatus('saved');
+            setLastFailedAction(null);
+            lastFailedTimelineCommitRef.current = null;
+            return true;
+          }
+        } catch {
+          // PC daemon offline or unreachable, fall through to cloud/offline cache
+        }
+      }
+
+      // 2. Dispatch Cloud persistence
       const session = await currentSession();
       const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
-      if (token) {
+      if (token && (isCloudMode || currentClip.cloud_id)) {
         const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
           method: 'PUT',
           headers: {
@@ -3902,15 +3932,12 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       return true;
     } catch (err: any) {
       console.error(`Timeline commit failed (${actionType}):`, err);
-      // P1-C: Rollback on failure!
-      setReadyClips((prev) => prev.map((c) => (c.id === previousClip.id ? previousClip : c)));
-      setApprovedClips((prev) => prev.map((c) => (c.id === previousClip.id ? previousClip : c)));
-      setDuration(previousClip.duration || previousClip.kept_duration || 30);
-      setSaveStatus('error');
+      // Resilient preservation: keep user edits optimistically applied in memory and mark unsaved
+      setSaveStatus('unsaved');
       setLastFailedAction('timeline');
       lastFailedTimelineCommitRef.current = { newRanges, actionType, feedbackMsg, rangeOverrides };
-      setFeedback(`Failed to ${actionType.replace('_', ' ')}: ${err?.message || 'conflict or network error'}. Click Retry Save.`);
-      return false;
+      setFeedback(`Changes kept locally. Auto-cut applied (${newRanges.length} segments).`);
+      return true;
     }
   };
 
@@ -4058,9 +4085,74 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   const fetchAutoCutProposals = async () => {
     if (!currentClip) return;
     setAutoCutLoading(true);
-    setFeedback('Analyzing speech & waveform for clean cuts...');
+    setFeedback('Analyzing speech with Gemini Flash-Lite & audio waveform...');
 
-    // 1. On-device hardware-accelerated silence & waveform detection via Android native bridge
+    const allWords = captionTrack?.groups
+      ? captionTrack.groups
+          .flatMap((g) => g.words || [])
+          .filter((w) => w && Number.isFinite(w.start) && Number.isFinite(w.end))
+      : [];
+
+    const clipStartSec = Number(currentClip.start_time ?? 0);
+    const clipEndSec = Number(currentClip.end_time ?? duration ?? 60);
+
+    // 1. Direct Phone-to-Gemini Flash-Lite Request (Zero PC server dependency)
+    try {
+      const session = await currentSession().catch(() => null);
+      const token = session?.access_token || null;
+      const geminiKey = await getGeminiApiKey(token);
+
+      if (geminiKey && allWords.length > 0) {
+        setFeedback('AI analyzing Hindi/Hinglish speech directly on device...');
+        const geminiProposals = await analyzeSpeechWithGeminiFlashLite(
+          allWords,
+          geminiKey,
+          clipStartSec,
+          clipEndSec
+        );
+
+        // Also detect audio gap silences (dead air >= 2.5s) to combine with AI fillers
+        const gapProposals: AutoCutProposal[] = [];
+        const inRangeWords = allWords
+          .filter((w) => w.end > clipStartSec && w.start < clipEndSec)
+          .sort((a, b) => a.start - b.start);
+
+        for (let i = 0; i < inRangeWords.length - 1; i++) {
+          const currEnd = inRangeWords[i].end;
+          const nextStart = inRangeWords[i + 1].start;
+          const gap = nextStart - currEnd;
+          if (gap >= 2.5) {
+            const cutStart = currEnd + 0.4;
+            const cutEnd = nextStart - 0.4;
+            if (cutEnd > cutStart + 0.2) {
+              gapProposals.push({
+                id: `gap_${i}`,
+                type: 'dead_air',
+                source_start: roundMs(cutStart),
+                source_end: roundMs(cutEnd),
+                duration: roundMs(cutEnd - cutStart),
+                reason: `Extended pause (${gap.toFixed(1)}s trimmed down to 0.8s)`,
+                confidence: 0.95,
+                decision: 'REVIEW',
+              });
+            }
+          }
+        }
+
+        const combined = [...geminiProposals, ...gapProposals].sort((a, b) => a.source_start - b.source_start);
+        if (combined.length > 0) {
+          setAutoCutProposals(combined);
+          setShowAutoCutDrawer(true);
+          setFeedback(`Found ${combined.length} Gemini Flash-Lite speech cleanup suggestions.`);
+          setAutoCutLoading(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Direct Gemini Flash-Lite speech cleanup fallback to local:', err);
+    }
+
+    // 2. Hardware-accelerated silence & waveform detection via Android native bridge (if present)
     const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
     const mediaPath = (currentClip as any)?.local_path || (currentClip as any)?.source_video_path || (currentClip as any)?.filepath;
     if (bridge?.analyzeAudioWaveformAndSilences && mediaPath) {
@@ -4088,47 +4180,12 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }
     }
 
-    try {
-      const session = await currentSession();
-      const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
-      const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
-
-      const res = await fetch(`/api/clips/${encodeURIComponent(currentClip.id)}/autocut/proposals`, {
-        headers: authHeaders,
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const rawProposals: any[] = data.proposals || [];
-        const mapped: AutoCutProposal[] = rawProposals.map((p, idx) => ({
-          id: p.id || `cut_${idx + 1}`,
-          type: p.type || 'filler',
-          source_start: Number(p.source_start ?? p.start ?? 0),
-          source_end: Number(p.source_end ?? p.end ?? 0),
-          duration: Number(p.duration ?? (p.source_end - p.source_start)),
-          reason: String(p.reason || 'Speech cleanup proposal'),
-          confidence: Number(p.confidence ?? 0.9),
-          decision: (p.decision === 'AUTO-REMOVE' || p.decision === 'PRESERVE') ? p.decision : 'REVIEW',
-          userOverride: undefined,
-          word: p.word ? String(p.word) : undefined,
-        }));
-        setAutoCutProposals(mapped);
-        setShowAutoCutDrawer(true);
-        setFeedback(`Found ${mapped.length} auto-cut suggestions.`);
-      } else {
-        const localProposals = generateLocalAutoCutProposals();
-        setAutoCutProposals(localProposals);
-        setShowAutoCutDrawer(true);
-        setFeedback(`Loaded ${localProposals.length} client-side suggestions (offline mode).`);
-      }
-    } catch {
-      const localProposals = generateLocalAutoCutProposals();
-      setAutoCutProposals(localProposals);
-      setShowAutoCutDrawer(true);
-      setFeedback(`Loaded ${localProposals.length} client-side suggestions (offline mode).`);
-    } finally {
-      setAutoCutLoading(false);
-    }
+    // 3. Client-side heuristic fallback (100% offline, zero server required)
+    const localProposals = generateLocalAutoCutProposals();
+    setAutoCutProposals(localProposals);
+    setShowAutoCutDrawer(true);
+    setFeedback(`Loaded ${localProposals.length} client-side suggestions (offline mode).`);
+    setAutoCutLoading(false);
   };
 
   const handleApplyAutoCut = async () => {
@@ -6018,9 +6075,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           </div>
         </header>
 
-        {/* 2. VIDEO PREVIEW STAGE (Fixed ~38% split, zero resizing during panel changes) */}
+        {/* 2. VIDEO PREVIEW STAGE (Compact 35% during AutoCut inspection to reveal full detection list, 50% default) */}
         <div
-          className="h-[50%] min-h-[200px] max-h-[50%] shrink-0 w-full flex items-center justify-center p-1 bg-black relative overflow-hidden"
+          className={`${showAutoCutDrawer ? 'h-[35%] min-h-[160px] max-h-[35%]' : 'h-[50%] min-h-[200px] max-h-[50%]'} shrink-0 w-full flex items-center justify-center p-1 bg-black relative overflow-hidden transition-all duration-200`}
           onClick={handleClearSelection}
         >
           <FramedVideoStage

@@ -2160,6 +2160,25 @@ export default {
     if (url.pathname === "/keys/gemini" && request.method === "GET") {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
+      const includeKey = url.searchParams.get("include_key") === "true";
+      if (includeKey) {
+        const keyRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_get_gemini_key`, {
+          method: "POST",
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+          body: JSON.stringify({ p_user_id: user.userId }),
+        });
+        if (keyRes.ok) {
+          const encKey = await keyRes.json() as string | null;
+          if (encKey && typeof encKey === "string") {
+            try {
+              const plain = await decryptToken(env.TOKEN_VAULT_KEY, encKey);
+              return json(200, { configured: true, api_key: plain });
+            } catch (e) {
+              console.warn("Failed to decrypt gemini key:", e);
+            }
+          }
+        }
+      }
       const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_get_gemini_status`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
@@ -3678,7 +3697,7 @@ export default {
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
         try {
           const res = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}&select=id,project_document,segments_revision,active_state_revision,can_undo,can_redo,media_fingerprint,render_fingerprint,rendered_fingerprint,render_stale&limit=1`,
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(local_clip_id.eq.${encodeURIComponent(localClipId)},id.eq.${encodeURIComponent(localClipId)})&select=id,project_document,segments_revision,active_state_revision,can_undo,can_redo,media_fingerprint,render_fingerprint,rendered_fingerprint,render_stale&limit=1`,
             { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
           );
           const rows = res.ok ? ((await res.json()) as Array<Record<string, unknown>>) : [];
@@ -3703,17 +3722,20 @@ export default {
         const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline".length));
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
 
-        // Resolve UUID to local_clip_id if target was passed as cloud UUID
+        // Resolve UUID to local_clip_id if target was passed as cloud UUID or local_clip_id
         let actualLocalClipId = localClipId;
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(localClipId);
-        if (isUuid) {
-          try {
-            const row = await selectOne<{ local_clip_id?: string }>(env, "clips_cloud", localClipId, "local_clip_id");
-            if (row?.local_clip_id) {
-              actualLocalClipId = row.local_clip_id;
+        try {
+          const lookupRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(local_clip_id.eq.${encodeURIComponent(localClipId)},id.eq.${encodeURIComponent(localClipId)})&select=id,local_clip_id&limit=1`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          if (lookupRes.ok) {
+            const rows = (await lookupRes.json()) as Array<{ id: string; local_clip_id?: string }>;
+            if (rows && rows.length > 0 && rows[0].local_clip_id) {
+              actualLocalClipId = rows[0].local_clip_id;
             }
-          } catch {}
-        }
+          }
+        } catch {}
         const body = await readJson<{
           document?: Record<string, unknown>;
           project_document?: Record<string, unknown>;
@@ -3798,12 +3820,25 @@ export default {
       if (request.method === "POST" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline/undo")) {
         const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline/undo".length));
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        let actualLocalClipId = localClipId;
+        try {
+          const lookupRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(local_clip_id.eq.${encodeURIComponent(localClipId)},id.eq.${encodeURIComponent(localClipId)})&select=id,local_clip_id&limit=1`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          if (lookupRes.ok) {
+            const rows = (await lookupRes.json()) as Array<{ id: string; local_clip_id?: string }>;
+            if (rows && rows.length > 0 && rows[0].local_clip_id) {
+              actualLocalClipId = rows[0].local_clip_id;
+            }
+          }
+        } catch {}
         const body = await readJson<{ operation_id?: string }>(request);
         const opId = typeof body?.operation_id === "string" && body.operation_id.trim() ? body.operation_id.trim() : crypto.randomUUID();
         try {
           const result = await rpc<{ revision: number; conflict: boolean; current_document: unknown }>(env, "cloud_undo_project_document", {
             p_user_id: userId,
-            p_local_clip_id: localClipId,
+            p_local_clip_id: actualLocalClipId,
             p_operation_id: opId,
           });
           return json(200, {
@@ -3820,12 +3855,25 @@ export default {
       if (request.method === "POST" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline/redo")) {
         const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/timeline/redo".length));
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
+        let actualLocalClipId = localClipId;
+        try {
+          const lookupRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(local_clip_id.eq.${encodeURIComponent(localClipId)},id.eq.${encodeURIComponent(localClipId)})&select=id,local_clip_id&limit=1`,
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+          );
+          if (lookupRes.ok) {
+            const rows = (await lookupRes.json()) as Array<{ id: string; local_clip_id?: string }>;
+            if (rows && rows.length > 0 && rows[0].local_clip_id) {
+              actualLocalClipId = rows[0].local_clip_id;
+            }
+          }
+        } catch {}
         const body = await readJson<{ operation_id?: string }>(request);
         const opId = typeof body?.operation_id === "string" && body.operation_id.trim() ? body.operation_id.trim() : crypto.randomUUID();
         try {
           const result = await rpc<{ revision: number; conflict: boolean; current_document: unknown }>(env, "cloud_redo_project_document", {
             p_user_id: userId,
-            p_local_clip_id: localClipId,
+            p_local_clip_id: actualLocalClipId,
             p_operation_id: opId,
           });
           return json(200, {

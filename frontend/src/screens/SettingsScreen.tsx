@@ -444,6 +444,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
       }
 
       if (cloudSuccess || pcSuccess) {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('dispatch_gemini_api_key', cleanKey);
+        }
         setGeminiStatus({ configured: true, key_prefix: displayPrefix });
         setGeminiKeyInput('');
         setShowGeminiInput(false);
@@ -465,6 +468,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   };
 
   const handleDeleteGeminiKey = async () => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('dispatch_gemini_api_key');
+    }
     if (!jwtToken) return;
     const ok = await deleteGeminiKey(jwtToken);
     if (ok) {
