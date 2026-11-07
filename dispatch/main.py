@@ -135,8 +135,9 @@ def start_dispatch(run_web: bool = True):
     # 2. Crash & reboot recovery: reclaim stale leases and clean temporary files
     try:
         recovery_stats = recover_laptop_orchestrator()
-        logger.info("Boot recovery: %d stale job leases reclaimed, %d temp files cleaned",
+        logger.info("Boot recovery: %d stale job leases reclaimed, %d inbox items reconciled, %d temp files cleaned",
                     len(recovery_stats.get("reclaimed_jobs", [])),
+                    len(recovery_stats.get("reclaimed_inbox_items", [])),
                     recovery_stats.get("cleaned_temp_files", 0))
     except Exception as e:
         logger.error("Boot crash recovery encountered error: %s", e)
@@ -150,7 +151,16 @@ def start_dispatch(run_web: bool = True):
         sys.exit(1)
     logger.info("FFmpeg verified in system PATH")
 
-    # 5. Video ingestion is driven autonomously via RemoteJobPoller from the cloud queue.
+    # 5. Video ingestion: Route A YouTube Cloud Inbox Poller
+    yt_inbox_poller = None
+    if os.getenv("DISPATCH_ROUTE_A_POLLER", "1") == "1":
+        try:
+            from dispatch.youtube_inbox.poller import YouTubeInboxPoller
+            yt_inbox_poller = YouTubeInboxPoller()
+            yt_inbox_poller.start()
+            logger.info("Autonomous YouTube Cloud Inbox poller active (Route A: Phone -> YouTube unlisted -> PC)")
+        except Exception as e:
+            logger.warning("YouTube inbox poller not started: %s", e)
 
     # 6. Pillar 2: Autonomous Transcription Worker (Gemini 3.5 Transcribe with Flash-Lite fallback)
     from dispatch.transcription.worker import TranscriptionWorker
@@ -265,6 +275,8 @@ def start_dispatch(run_web: bool = True):
                         ssl_keyfile=tls_files[1] if tls_files else None)
         finally:
             logger.info("Stopping Dispatch background workers...")
+            if yt_inbox_poller:
+                yt_inbox_poller.stop()
             outbox_worker.stop()
             highlight_worker.stop()
             transcription_worker.stop()
@@ -276,6 +288,9 @@ def start_dispatch(run_web: bool = True):
                 time.sleep(1)
         except KeyboardInterrupt:
             logger.info("Dispatch daemon stopping workers...")
+        finally:
+            if yt_inbox_poller:
+                yt_inbox_poller.stop()
             outbox_worker.stop()
             highlight_worker.stop()
             transcription_worker.stop()

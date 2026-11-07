@@ -1,22 +1,23 @@
 # Dispatch Future Tasks (Deferred Work)
 
-Tasks recorded here are explicitly OUT of scope for the current milestone (Route B manual-link ingestion). Do not implement them during Route B work. Each entry lists the reason for deferral and dependencies.
+> **Document Status:** Active Future Roadmap Tracker<br/>
+> **Date:** November 7, 2026<br/>
+> **Current Baseline:** Dispatch V2 Hybrid Architecture (`v1.7.32`, Build 100)<br/>
+> **Authoritative Specification:** `docs/architecture/DISPATCH_V2_ARCHITECTURE.md`
+
+Tasks recorded here are explicitly out of scope for the current stabilization milestone. Each entry lists the reason for deferral and dependencies.
 
 ## Route A — Android camera module repairs
-- **Mp4FastStart.kt fast-start moov placement** — deferred: Route B must ship independently of the camera module; no recording behavior changes in this milestone. Dependency: none (isolated Android media work).
-- **Camera bitrate changes** — deferred: same reasoning as Mp4FastStart; touches recording hardware paths that need device testing on the POCO C65. Dependency: Route A test session.
+- **Mp4FastStart.kt fast-start moov placement** — deferred: Touches recording hardware paths that need device testing on the POCO C65. Dependency: Route A physical device test session.
+- **Camera bitrate changes** — deferred: Same reasoning as Mp4FastStart; touches recording hardware paths that need device testing on the POCO C65. Dependency: Route A physical test session.
 - **Other Route A repairs** (viewfinder/lifecycle polish) — deferred until the camera module is the active workstream.
 
 ## Cloud & infrastructure
-- **Supabase migration** — deferred: current SQLite + single-PC daemon satisfies the single-user POC; migration is SaaS-scope work. Dependency: SaaS decision.
-- **SaaS / multi-user infrastructure** — deferred: Dispatch is currently a single-creator local pipeline. Dependency: product decision on multi-tenancy.
-- **R2 (or other object storage) integration** — deferred: local disk storage is sufficient for current clip volumes. Dependency: SaaS workstream.
-- **New cloud services / queues / worker frameworks** — deferred: the existing daemon-thread workers + SQLite state machine cover current throughput; adding infrastructure now would be speculative (YAGNI).
+- **Multi-region cloud redundancy** — deferred: Single-region Cloudflare Worker + Supabase satisfies current scale.
+- **Advanced automated billing / tier management** — deferred: Currently personal / trusted friends workflow.
 
 ## Publishing
-- **Multi-platform publishing** (Instagram Reels, LinkedIn, X adapters beyond current stubs) — deferred: YouTube Shorts is the only live publishing target in this milestone. Dependency: publisher outbox hardening, per-platform API credentials.
-- **YouTube publishing defaults / automatic publication changes** — deferred: approval-before-publishing behavior is intentionally preserved; any default change is a product decision.
+- **Multi-platform publishing expansion** (native TikTok, Instagram Reels, LinkedIn, X adapters beyond current YouTube Shorts pipeline) — deferred: YouTube Shorts is the primary production publishing target; additional platform APIs require developer app verification from respective platforms.
 
-## Known limits accepted for now
-- **In-memory single-flight ingestion guard is process-local** (`dispatch/youtube_inbox/catcher.py`). Correct for the single-process daemon. If Dispatch ever runs as multiple processes/servers, replace with a database-level claim (e.g. atomic status transition) — dependency: SaaS/multi-process decision.
-- **PC dashboard template** (`dispatch/web/templates/index.html`) has no link-entry form; the Route B entry point is the Sessions tab in the React app per user decision. Add a form there only if the legacy dashboard becomes the primary PC experience again.
+## Physical Hardware Verification (Outstanding)
+- **POCO C65 3-Hour Continuous Recording Stress Test:** While all unit and integration tests for Route A channel alignment, crash recovery, and inbox polling pass in CI/local suites, the 3-hour continuous recording thermal, battery, and background WorkManager upload test on physical POCO C65 hardware remains outstanding.

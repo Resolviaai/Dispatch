@@ -14,7 +14,102 @@ from dispatch.orchestrator.job_queue import init_job_queue_schema
 logger = logging.getLogger("dispatch.orchestrator.recovery")
 
 
-def recover_laptop_orchestrator() -> Dict[str, Any]:
+def reconcile_interrupted_inbox_stages(
+    is_boot: bool = False,
+    stale_timeout_seconds: int = 900
+) -> List[Dict[str, Any]]:
+    """Reconcile youtube_inbox items that were interrupted during active processing stages.
+
+    Covers TRANSCRIBING (transcription worker) and ANALYZING (highlight worker),
+    plus DOWNLOADING. On boot, all rows in these active processing states are known
+    to be orphaned by the previous shutdown/crash and are immediately reclaimed.
+    During runtime sweeps, rows are reclaimed if inactive beyond stale_timeout_seconds.
+    Fails closed to 'FAILED' after 5 retries to prevent infinite retry loops.
+    """
+    reconciled = []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        if is_boot:
+            cursor.execute("""
+                SELECT video_id, status, retry_count, ai_attempt_count, updated_at
+                FROM youtube_inbox
+                WHERE status IN ('TRANSCRIBING', 'ANALYZING', 'DOWNLOADING')
+            """)
+        else:
+            cursor.execute(f"""
+                SELECT video_id, status, retry_count, ai_attempt_count, updated_at
+                FROM youtube_inbox
+                WHERE status IN ('TRANSCRIBING', 'ANALYZING', 'DOWNLOADING')
+                  AND datetime(updated_at) < datetime('now', '-{int(stale_timeout_seconds)} seconds')
+            """)
+
+        stuck_items = cursor.fetchall()
+        for item in stuck_items:
+            video_id = item["video_id"]
+            old_status = item["status"]
+            current_retries = item["retry_count"] or 0
+            current_ai_attempts = item["ai_attempt_count"] or 0
+
+            if old_status == "TRANSCRIBING":
+                new_retries = current_retries + 1
+                if new_retries > 5:
+                    new_status = "FAILED"
+                    err = f"Exceeded retry limit (5) during transcription (failed at {new_retries} attempts)"
+                else:
+                    new_status = "DOWNLOADED"
+                    err = "Transcription interrupted by crash/restart; resetting to DOWNLOADED for retry"
+                cursor.execute("""
+                    UPDATE youtube_inbox
+                    SET status = ?, retry_count = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE video_id = ?
+                """, (new_status, new_retries, err, video_id))
+
+            elif old_status == "ANALYZING":
+                new_retries = max(current_retries, current_ai_attempts) + 1
+                if new_retries > 5:
+                    new_status = "FAILED"
+                    err = f"Exceeded retry limit (5) during highlight analysis (failed at {new_retries} attempts)"
+                else:
+                    new_status = "TRANSCRIBED"
+                    err = "Highlight analysis interrupted by crash/restart; resetting to TRANSCRIBED for retry"
+                cursor.execute("""
+                    UPDATE youtube_inbox
+                    SET status = ?, retry_count = ?, ai_attempt_count = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE video_id = ?
+                """, (new_status, new_retries, new_retries, err, video_id))
+
+            elif old_status == "DOWNLOADING":
+                new_retries = current_retries + 1
+                if new_retries > 5:
+                    new_status = "FAILED"
+                    err = f"Exceeded retry limit (5) during video download (failed at {new_retries} attempts)"
+                else:
+                    new_status = "DISCOVERED"
+                    err = "Download interrupted by crash/restart; resetting to DISCOVERED for retry"
+                cursor.execute("""
+                    UPDATE youtube_inbox
+                    SET status = ?, retry_count = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE video_id = ?
+                """, (new_status, new_retries, err, video_id))
+            else:
+                continue
+
+            reconciled.append({
+                "video_id": video_id,
+                "old_status": old_status,
+                "new_status": new_status,
+                "retry_count": new_retries,
+            })
+            logger.info("Reconciled interrupted inbox item %s: %s -> %s (attempt %d)",
+                        video_id, old_status, new_status, new_retries)
+
+        conn.commit()
+
+    return reconciled
+
+
+def recover_laptop_orchestrator(is_boot: bool = True, stale_timeout_seconds: int = 900) -> Dict[str, Any]:
     """Scan and recover orphaned jobs and clean temporary artifacts on boot or heartbeat tick."""
     init_job_queue_schema()
     now_str = datetime.now().isoformat()
@@ -50,7 +145,13 @@ def recover_laptop_orchestrator() -> Dict[str, Any]:
             reclaimed_jobs.append(job_id)
             logger.info("Reclaimed stale job %s from failed worker (Resuming at stage %s)", job_id, stage)
 
-    # 2. Clean temporary files in processing folder without touching source chunks
+    # 2. Reconcile interrupted active processing stages in youtube_inbox
+    reclaimed_inbox = reconcile_interrupted_inbox_stages(
+        is_boot=is_boot,
+        stale_timeout_seconds=stale_timeout_seconds
+    )
+
+    # 3. Clean temporary files in processing folder without touching source chunks
     cleaned_temp_files = 0
     if PROCESSING_DIR.exists():
         for f in PROCESSING_DIR.iterdir():
@@ -61,11 +162,12 @@ def recover_laptop_orchestrator() -> Dict[str, Any]:
                 except Exception as e:
                     logger.debug("Could not clean temp file %s: %s", f.name, e)
 
-    if reclaimed_jobs:
-        logger.info("Laptop orchestrator recovery complete: %d jobs reclaimed, %d temp files cleaned",
-                    len(reclaimed_jobs), cleaned_temp_files)
+    if reclaimed_jobs or reclaimed_inbox:
+        logger.info("Laptop orchestrator recovery complete: %d jobs reclaimed, %d inbox items reconciled, %d temp files cleaned",
+                    len(reclaimed_jobs), len(reclaimed_inbox), cleaned_temp_files)
 
     return {
         "reclaimed_jobs": reclaimed_jobs,
+        "reclaimed_inbox_items": reclaimed_inbox,
         "cleaned_temp_files": cleaned_temp_files
     }

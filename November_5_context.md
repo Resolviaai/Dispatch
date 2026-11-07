@@ -81,13 +81,15 @@ All 5 core UI/UX issues plus 1 network CORS blocker (6 total verified items) rep
 
 Automated regression verification:
 1. `npm --prefix cloud-worker test`: **104/104 PASS (100%)** (includes Google OAuth channel verification regression tests)
-2. `python -m unittest tests.test_youtube_channel_identity tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **66/66 PASS (100%)** (169 tests pass across full CI Python suite)
-3. `npm --prefix frontend test -- --run`: **ALL PASS (100%)**
-4. CI Workflow Integration: Added `tests.test_youtube_channel_identity` to `.github/workflows/ci.yml`.
-4. Android build & keystore verification:
+2. `python -m unittest tests.test_youtube_channel_identity tests.test_tenant_isolation tests.test_crash_recovery_stages tests.test_gemini_key_isolation tests.test_sync_engine tests.test_cluster_c_remediation tests.test_edl_approval tests.test_waveform_autocut`: **83/83 PASS (100%)** (186+ tests pass across full CI Python suite)
+3. `npm --prefix frontend test`: **ALL PASS (100%)** (includes approval flow and error rollback regression test)
+4. CI Workflow Integration: Added `tests.test_tenant_isolation`, `tests.test_crash_recovery_stages`, `tests.test_gemini_key_isolation`, and Gitleaks secret scan to `.github/workflows/ci.yml`.
+5. Cloud Scheduled Handler: Added cron trigger `crons = ["*/15 * * * *"]` to `cloud-worker/wrangler.toml.example`.
+6. Dependency Hygiene: Purged unused `youtube-transcript-api` from `requirements.txt` and `pyproject.toml`.
+7. Android build & keystore verification:
    `powershell scripts/prepare_release.ps1`
    - Release APK compiled and signed: `v1.7.32` (Build 100).
-5. **Outstanding Physical Verification:** Physical 3-hour hardware recording stress test with real POCO C65 camera thermal, battery, and background WorkManager behavior remains to be performed on physical hardware.
+8. **Outstanding Physical Verification:** Physical 3-hour hardware recording stress test with real POCO C65 camera thermal, battery, and background WorkManager behavior remains to be performed on physical hardware.
 
 ---
 

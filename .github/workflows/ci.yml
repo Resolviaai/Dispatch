@@ -73,7 +73,10 @@ jobs:
             tests.test_phase3_highlights \
             tests.test_publication_stats \
             tests.test_sync_engine \
-            tests.test_youtube_channel_identity
+            tests.test_youtube_channel_identity \
+            tests.test_tenant_isolation \
+            tests.test_crash_recovery_stages \
+            tests.test_gemini_key_isolation
 
   cloud-worker:
     name: Cloud worker (npm test)
@@ -125,3 +128,15 @@ jobs:
 
       - name: Run tests
         run: npm test
+  gitleaks:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

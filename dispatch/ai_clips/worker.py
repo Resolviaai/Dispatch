@@ -851,11 +851,11 @@ class HighlightWorker:
             except Exception as ke:
                 logger.debug("User Gemini key lookup note for %s: %s", user_id, ke)
 
-            active_gemini_key = user_gemini_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
-            if not active_gemini_key:
-                err_msg = f"User {user_id} has not configured a Gemini API key in Settings, and server GEMINI_API_KEY is not configured."
+            if not user_gemini_key:
+                err_msg = f"User {user_id} has not configured a Gemini API key in cloud vault. Refusing fallback to PC host GEMINI_API_KEY."
                 db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
                 raise RuntimeError(err_msg)
+            active_gemini_key = user_gemini_key
         else:
             active_gemini_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
             if not active_gemini_key:

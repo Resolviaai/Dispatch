@@ -1941,14 +1941,21 @@ def list_youtube_inbox(status: Optional[str] = None, limit: int = 50, user_id: O
         return [dict(row) for row in cursor.fetchall()]
 
 
-def delete_youtube_inbox_item(video_id: str) -> bool:
-    """Delete an item from youtube_inbox by video_id, dispatch_id, or session_id."""
+def delete_youtube_inbox_item(video_id: str, user_id: Optional[str] = None) -> bool:
+    """Delete an item from youtube_inbox by video_id, dispatch_id, or session_id,
+    scoped to user_id if provided."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM youtube_inbox WHERE video_id = ? OR dispatch_id = ? OR session_id = ?",
-            (video_id, video_id, video_id)
-        )
+        if user_id:
+            cursor.execute(
+                "DELETE FROM youtube_inbox WHERE (video_id = ? OR dispatch_id = ? OR session_id = ?) AND user_id = ?",
+                (video_id, video_id, video_id, user_id)
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM youtube_inbox WHERE video_id = ? OR dispatch_id = ? OR session_id = ?",
+                (video_id, video_id, video_id)
+            )
         conn.commit()
         return cursor.rowcount > 0
 

@@ -250,7 +250,24 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
             from dispatch.sync.receiver import verify_token
             verify_token(device_token)
             owners = authorized_pc_owner_ids()
-            return owners[0] if owners else None
+            explicit_user = (os.getenv("DISPATCH_USER_ID") or "").strip()
+            if explicit_user:
+                if not owners or explicit_user in owners:
+                    return explicit_user
+                logger.warning(
+                    "DISPATCH_USER_ID is set to '%s', but is not in authorized_pc_owner_ids: %s. Failing closed.",
+                    explicit_user, owners
+                )
+                return None
+            if len(owners) == 1:
+                return owners[0]
+            if len(owners) > 1:
+                logger.warning(
+                    "Paired device token presented, but multiple PC owners configured (%d owners: %s) without explicit DISPATCH_USER_ID. Failing closed.",
+                    len(owners), owners
+                )
+                return None
+            return None
         except HTTPException:
             pass
 
@@ -1042,11 +1059,14 @@ async def list_clips(request: Request):
 @app.get("/api/clips/{clip_id}")
 async def get_clip_detail(clip_id: str, request: Request):
     """Return single clip metadata with source URL and render status."""
-    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
+    verify_dashboard_auth(request)
+    caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+    if clip.get("user_id") and clip["user_id"] != caller_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
+    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
         raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
     populate_clip_media_urls(clip)
     chunk = db.get_chunk_by_id(clip.get("chunk_id")) if clip.get("chunk_id") else None
@@ -2791,7 +2811,26 @@ async def get_youtube_inbox_items(request: Request):
 async def delete_youtube_inbox_entry(video_id: str, request: Request):
     """Delete a session or YouTube video from the local inbox."""
     verify_dashboard_auth(request)
-    deleted = db.delete_youtube_inbox_item(video_id)
+    caller_user_id = resolve_caller_user_id(request)
+
+    with db.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id FROM youtube_inbox WHERE video_id = ? OR dispatch_id = ? OR session_id = ?",
+            (video_id, video_id, video_id)
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail="Session not found in inbox or already deleted")
+
+        for r in rows:
+            row_user = r["user_id"]
+            if row_user and row_user != caller_user_id:
+                raise HTTPException(status_code=403, detail="Forbidden: Inbox item belongs to another user")
+            if caller_user_id and row_user and row_user != caller_user_id:
+                raise HTTPException(status_code=403, detail="Forbidden: Inbox item belongs to another user")
+
+    deleted = db.delete_youtube_inbox_item(video_id, user_id=caller_user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found in inbox or already deleted")
     return {"status": "success", "deleted": True}
@@ -2819,10 +2858,15 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
 
     user_id = None
     try:
-        user_info = get_authenticated_user(request)
-        user_id = user_info.get("id")
+        user_id = resolve_caller_user_id(request)
     except Exception:
         pass
+    if not user_id:
+        try:
+            user_info = get_authenticated_user(request)
+            user_id = user_info.get("user_id") or user_info.get("id")
+        except Exception:
+            pass
 
     # Start background processing thread so API returns immediately to client
     catcher = YouTubeInboxCatcher()

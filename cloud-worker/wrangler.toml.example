@@ -12,4 +12,5 @@ binding = "BUCKET"
 bucket_name = "REPLACE_WITH_PRIVATE_BUCKET_NAME"
 
 [triggers]
-# no cron yet; scheduled cleanup/reconciliation is the next batch (plan Phase D/G)
+# Runs scheduled cleanup and reconciliation every 15 minutes
+crons = ["*/15 * * * *"]

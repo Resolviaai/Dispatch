@@ -412,6 +412,91 @@ class TestYouTubeChannelIdentity(unittest.TestCase):
         self.assertFalse(is_valid_youtube_channel_id(""))
         self.assertFalse(is_valid_youtube_channel_id("invalid with spaces"))
 
+    # -------------------------------------------------------------------------
+    # 8. Dispatch Main Daemon Poller Startup & Shutdown Lifecycle
+    # -------------------------------------------------------------------------
+
+    @patch("dispatch.main.acquire_single_instance_lock", return_value=True)
+    @patch("dispatch.main.release_single_instance_lock")
+    @patch("dispatch.main.db.init_db")
+    @patch("dispatch.main.recover_laptop_orchestrator", return_value={})
+    @patch("dispatch.main.governor.set_low_process_priority")
+    @patch("dispatch.main.shutil.which", return_value="ffmpeg")
+    @patch("dispatch.transcription.worker.TranscriptionWorker")
+    @patch("dispatch.ai_clips.worker.HighlightWorker")
+    @patch("dispatch.publisher.outbox.PublishingOutboxWorker")
+    @patch("dispatch.youtube_inbox.poller.YouTubeInboxPoller")
+    @patch("dispatch.cloud.sync.start_cloud_sync_worker")
+    @patch("dispatch.main.uvicorn.run")
+    def test_start_dispatch_starts_and_stops_youtube_inbox_poller(
+        self,
+        mock_uvicorn_run,
+        mock_sync_worker,
+        mock_poller_cls,
+        mock_outbox_cls,
+        mock_highlight_cls,
+        mock_transcription_cls,
+        mock_which,
+        mock_priority,
+        mock_recover,
+        mock_init_db,
+        mock_release_lock,
+        mock_acquire_lock,
+    ):
+        from dispatch.main import start_dispatch
+
+        mock_poller_instance = MagicMock()
+        mock_poller_cls.return_value = mock_poller_instance
+
+        # Simulate normal web server exit
+        mock_uvicorn_run.return_value = None
+
+        start_dispatch(run_web=True)
+
+        # Poller must be instantiated and started
+        mock_poller_cls.assert_called_once()
+        mock_poller_instance.start.assert_called_once()
+        # Poller must be stopped cleanly upon exit in finally block
+        mock_poller_instance.stop.assert_called_once()
+        mock_release_lock.assert_called_once()
+
+    @patch("dispatch.main.acquire_single_instance_lock", return_value=True)
+    @patch("dispatch.main.release_single_instance_lock")
+    @patch("dispatch.main.db.init_db")
+    @patch("dispatch.main.recover_laptop_orchestrator", return_value={})
+    @patch("dispatch.main.governor.set_low_process_priority")
+    @patch("dispatch.main.shutil.which", return_value="ffmpeg")
+    @patch("dispatch.transcription.worker.TranscriptionWorker")
+    @patch("dispatch.ai_clips.worker.HighlightWorker")
+    @patch("dispatch.publisher.outbox.PublishingOutboxWorker")
+    @patch("dispatch.youtube_inbox.poller.YouTubeInboxPoller")
+    @patch("dispatch.cloud.sync.start_cloud_sync_worker")
+    @patch("dispatch.main.uvicorn.run")
+    def test_start_dispatch_respects_poller_disabled_toggle(
+        self,
+        mock_uvicorn_run,
+        mock_sync_worker,
+        mock_poller_cls,
+        mock_outbox_cls,
+        mock_highlight_cls,
+        mock_transcription_cls,
+        mock_which,
+        mock_priority,
+        mock_recover,
+        mock_init_db,
+        mock_release_lock,
+        mock_acquire_lock,
+    ):
+        from dispatch.main import start_dispatch
+
+        os.environ["DISPATCH_ROUTE_A_POLLER"] = "0"
+        try:
+            mock_uvicorn_run.return_value = None
+            start_dispatch(run_web=True)
+            mock_poller_cls.assert_not_called()
+        finally:
+            del os.environ["DISPATCH_ROUTE_A_POLLER"]
+
 
 if __name__ == "__main__":
     unittest.main()

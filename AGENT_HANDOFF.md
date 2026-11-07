@@ -24,8 +24,18 @@ Dispatch is an autonomous AI-native video clipping workstation and creator studi
 Continuous stabilization, mobile UI/UX ergonomics (Dispatch Design System v3), release governance monotonicity, and multi-platform publishing integrity.
 
 ## 3. Repository state
-- Branch `main`. Observed 2026-10-23 (review-fix session, after `git fetch origin`): `HEAD == origin/main == ddd5f1c` "feat: add cloud configuration, Supabase init migration, and RLS checklist" (parent `c1fd0b0`), working tree clean — the entire Phase C hardening of the previous session IS pushed (the earlier "one-commit-ahead, NOT pushed" claim was stale). This session adds a Phase C review-fix commit on top (created together with this handoff update; see `git log -1` for the exact hash). **After it: local ahead of origin/main by one commit; NOT pushed (push requires owner decision).**
-- **Runtime:** Dispatch server was left RUNNING by user request (PID 13396, bound `0.0.0.0:8000` — LAN-exposed for phone APK download). Verify the PID still exists before acting on it; it does not block tests (tests redirect TEMP/TMP and use TestClient).
+- Branch `main`. Release `v1.7.32` (Build 100), working tree clean.
+- CI Status: 100% Green across Cloud Worker (104 tests), Frontend (13 test suites), and Curated Python Unit Suites (172+ tests).
+- All 5 critical/high audit blockers resolved:
+  1. Route A `YouTubeInboxPoller` startup/shutdown integrated into `start_dispatch()` in `dispatch/main.py`.
+  2. Approval UI confirmation & error rollback implemented in `frontend/src/screens/ClipsScreen.tsx` (restores Ready state on 409/network/error).
+  3. API tenant-isolation enforced on `GET /api/clips/{clip_id}`, `DELETE /api/youtube/inbox/{video_id}`, `POST /api/youtube/ingest`, and paired token multi-owner ambiguity.
+  4. Crash recovery for active stages (`TRANSCRIBING`, `ANALYZING`, `DOWNLOADING`) implemented in `dispatch/orchestrator/recovery.py`.
+  5. Per-user Gemini API key isolation enforced (no fallback to PC key for user jobs) in `dispatch/transcription/worker.py` and `dispatch/ai_clips/worker.py`.
+  6. Cron trigger `crons = ["*/15 * * * *"]` added to `cloud-worker/wrangler.toml.example`.
+  7. Unused `youtube-transcript-api` removed from `requirements.txt` and `pyproject.toml`.
+  8. Gitleaks secret scan workflow added to GitHub Actions CI (`.github/workflows/ci.yml`).
+- **Outstanding Physical Verification:** 3-hour physical continuous recording stress test on POCO C65 hardware.
 
 ## 4. Architecture decisions (digest)
 - YouTube = canonical storage of original long sessions; phone never talks to the PC (LAN sync deliberately deleted).

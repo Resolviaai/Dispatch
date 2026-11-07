@@ -4138,7 +4138,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   };
 
   // 5. Approve & Publish Handler (Phone-First On-Device & Cloud Queue)
-  const handleApprove = () => {
+  const handleApprove = async () => {
     if (offlineReadOnly) {
       setFeedback('Reconnect to approve and publish.');
       return;
@@ -4163,169 +4163,213 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     const previousViewMode = viewMode;
     const previousSelectedClipId = selectedClipId;
 
-    // Show tactile spinner for one render frame before navigating away
+    // Enter submitting state (tactile spinner / disabled triggers)
     setIsSubmitting(true);
+    setFeedback('Approving clip…');
 
-    // Instant Optimistic State Update:
-    const approvedItem: ClipItem = {
-      ...clipToApprove,
-      title: optimisticTitle,
-      description: optimisticDescription,
-      layout_mode: optimisticLayout,
-      publish_mode: optimisticMode,
-      status: 'approved',
-      approved_at: new Date().toISOString(),
-    };
-
-    setReadyClips((prev) => prev.filter((c) => c.id !== clipToApprove.id));
-    setApprovedClips((prev) => [approvedItem, ...prev.filter((c) => c.id !== clipToApprove.id)]);
-    setFeedback('Queued for rendering & publishing…');
-    setViewMode('library');
-    setSelectedClipId(null);
-    setIsSubmitting(false);
-
-    // Restore a failed approve: clip back to Ready, user back to where they were
+    // Helper to roll back UI state on failure
     const restoreToReady = (message: string) => {
       setApprovedClips((prev) => prev.filter((c) => c.id !== clipToApprove.id));
       setReadyClips((prev) => (prev.some((c) => c.id === clipToApprove.id) ? prev : [clipToApprove, ...prev]));
       setViewMode(previousViewMode);
       setSelectedClipId(previousSelectedClipId);
       setFeedback(message);
+      setIsSubmitting(false);
     };
 
-    // Asynchronous background execution:
-    (async () => {
-      try {
-        // 1. If running natively on Android, trigger on-device Media3 rendering & background upload
-        const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
-        if (bridge?.startRenderAndPublish) {
-          // P0-B: Synthesize complete project_document if untouched so Android Media3 renders exact range and live captions
-          const rawDoc = clipToApprove.project_document;
-          const parsedDoc = typeof rawDoc === 'string' ? JSON.parse(rawDoc) : (rawDoc && Object.keys(rawDoc).length > 0 ? rawDoc : null);
-          const clipStart = Number(clipToApprove.start_time || 0);
-          const clipEnd = Number(clipToApprove.end_time || (clipStart + 30));
-          const sourceDur = Number(clipToApprove.source_duration || clipEnd || 60);
+    // Helper to transition UI state on verified backend success
+    const markApproved = (message: string) => {
+      const approvedItem: ClipItem = {
+        ...clipToApprove,
+        title: optimisticTitle,
+        description: optimisticDescription,
+        layout_mode: optimisticLayout,
+        publish_mode: optimisticMode,
+        status: 'approved',
+        approved_at: new Date().toISOString(),
+      };
+      setReadyClips((prev) => prev.filter((c) => c.id !== clipToApprove.id));
+      setApprovedClips((prev) => [approvedItem, ...prev.filter((c) => c.id !== clipToApprove.id)]);
+      setViewMode('library');
+      setSelectedClipId(null);
+      setFeedback(message);
+      setIsSubmitting(false);
+      setTimeout(() => { fetchClips(); }, 1500);
+    };
 
-          const effectiveDoc = parsedDoc ? { ...parsedDoc } : {
-            version: 1,
-            timeline: {
-              source_duration: sourceDur,
-              segments: [{
-                id: 'seg_1',
-                source_start: clipStart,
-                source_end: clipEnd,
-              }],
-              kept_duration: roundMs(clipEnd - clipStart),
-            },
-            tracks: [],
-          };
+    try {
+      // 1. If running natively on Android, trigger on-device Media3 rendering & background upload
+      const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
+      if (bridge?.startRenderAndPublish) {
+        const rawDoc = clipToApprove.project_document;
+        const parsedDoc = typeof rawDoc === 'string' ? JSON.parse(rawDoc) : (rawDoc && Object.keys(rawDoc).length > 0 ? rawDoc : null);
+        const clipStart = Number(clipToApprove.start_time || 0);
+        const clipEnd = Number(clipToApprove.end_time || (clipStart + 30));
+        const sourceDur = Number(clipToApprove.source_duration || clipEnd || 60);
 
-          if (captionTrack && (!effectiveDoc.tracks || effectiveDoc.tracks.length === 0)) {
-            effectiveDoc.tracks = [{
-              ...captionTrack,
-              kind: 'captions',
-              id: captionTrack.id || 'caption_primary',
-            }];
-          }
+        const effectiveDoc = parsedDoc ? { ...parsedDoc } : {
+          version: 1,
+          timeline: {
+            source_duration: sourceDur,
+            segments: [{
+              id: 'seg_1',
+              source_start: clipStart,
+              source_end: clipEnd,
+            }],
+            kept_duration: roundMs(clipEnd - clipStart),
+          },
+          tracks: [],
+        };
 
-          const renderJobPayload = {
+        if (captionTrack && (!effectiveDoc.tracks || effectiveDoc.tracks.length === 0)) {
+          effectiveDoc.tracks = [{
+            ...captionTrack,
+            kind: 'captions',
+            id: captionTrack.id || 'caption_primary',
+          }];
+        }
+
+        const renderJobPayload = {
+          clip_id: clipToApprove.id,
+          project_document: effectiveDoc,
+          source_video_path: (clipToApprove as any).local_path || (clipToApprove as any).video_path || '',
+          layout_mode: optimisticLayout,
+          target_resolution: '1080p',
+          render_fingerprint: (clipToApprove as any).render_fingerprint || '',
+          title: optimisticTitle,
+          description: optimisticDescription,
+          platforms: platformsToPublish,
+          publish_mode: optimisticMode,
+        };
+        bridge.startRenderAndPublish(JSON.stringify(renderJobPayload));
+        markApproved('Started on-device video rendering (Media3 Transformer)…');
+        return;
+      }
+
+      const session = await currentSession();
+      const token = session?.access_token || bridge?.getAuthToken?.();
+
+      // If clip was already published, directly submit to cloud publishing queue without re-rendering
+      if (clipToApprove.status === 'published') {
+        if (!token) {
+          restoreToReady('Cannot re-publish: authentication required.');
+          return;
+        }
+        const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
             clip_id: clipToApprove.id,
-            project_document: effectiveDoc,
-            source_video_path: (clipToApprove as any).local_path || (clipToApprove as any).video_path || '',
-            layout_mode: optimisticLayout,
-            target_resolution: '1080p',
-            render_fingerprint: (clipToApprove as any).render_fingerprint || '',
             title: optimisticTitle,
             description: optimisticDescription,
             platforms: platformsToPublish,
             publish_mode: optimisticMode,
-          };
-          bridge.startRenderAndPublish(JSON.stringify(renderJobPayload));
-          setFeedback('Started on-device video rendering (Media3 Transformer)…');
+            rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
+          }),
+        });
+        if (!cloudRes.ok) {
+          let errorDetail = `Publish failed (${cloudRes.status})`;
+          try {
+            const errJson = await cloudRes.json();
+            if (errJson?.error || errJson?.message) errorDetail = errJson.error || errJson.message;
+          } catch {}
+          restoreToReady(errorDetail);
           return;
         }
+        markApproved(`Publishing to ${platformsToPublish}…`);
+        return;
+      }
 
-        const session = await currentSession();
-        const token = session?.access_token || bridge?.getAuthToken?.();
-
-        // If clip was already published, directly submit to cloud publishing queue without re-rendering
-        if (clipToApprove.status === 'published' && token) {
-          const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              clip_id: clipToApprove.id,
-              title: optimisticTitle,
-              description: optimisticDescription,
-              platforms: platformsToPublish,
-              publish_mode: optimisticMode,
-              rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
-            }),
-          });
-          if (cloudRes.ok) {
-            setFeedback(`Publishing to ${platformsToPublish}…`);
-            setTimeout(() => { fetchClips(); }, 3000);
-            return;
-          }
-        }
-
-        // 2. Submit to Cloud Publishing Queue (Cloudflare Worker + Supabase)
-        if (token) {
-          const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              clip_id: clipToApprove.id,
-              title: optimisticTitle,
-              description: optimisticDescription,
-              platforms: platformsToPublish,
-              publish_mode: optimisticMode,
-              rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
-            }),
-          });
-          if (cloudRes.ok) {
-            setFeedback('Clip enqueued in cloud publishing queue.');
-          }
-        }
-
-        // 3. Optional PC ping if PC happens to be running locally
-        if (pcHost) {
-          if (trackSnapshot) {
-            const capBaseRevision = localCaptionsRevisionRef.current.get(clipToApprove.id)
-              ?? Number(clipToApprove.captions_revision ?? 0);
-            fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
+      // 2. PC Workstation approval (if connected to PC)
+      let pcSuccess = false;
+      if (pcHost) {
+        if (trackSnapshot) {
+          const capBaseRevision = localCaptionsRevisionRef.current.get(clipToApprove.id)
+            ?? Number(clipToApprove.captions_revision ?? 0);
+          try {
+            await fetch(apiUrl(`/api/clips/${clipToApprove.id}/captions`, pcHost), {
               method: 'POST',
               headers: getAuthHeaders(),
               body: JSON.stringify({ ...trackSnapshot, base_revision: capBaseRevision }),
-            }).catch(() => {});
+            });
+          } catch (capErr) {
+            console.warn('Caption pre-save non-fatal error:', capErr);
           }
-
-          fetch(apiUrl(`/api/clips/${clipToApprove.id}/approve`, pcHost), {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-              title: optimisticTitle,
-              hashtags: optimisticDescription,
-              publish_mode: optimisticMode,
-              platforms: platformsToPublish,
-              account_ids: accountsMap,
-              layout_mode: optimisticLayout,
-              range_revision: rev,
-            }),
-          }).catch(() => {});
         }
 
-        setTimeout(() => { fetchClips(); }, 3000);
-      } catch (err) {
-        console.error('Background publish error:', err);
+        const pcRes = await fetch(apiUrl(`/api/clips/${clipToApprove.id}/approve`, pcHost), {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            title: optimisticTitle,
+            hashtags: optimisticDescription,
+            publish_mode: optimisticMode,
+            platforms: platformsToPublish,
+            account_ids: accountsMap,
+            layout_mode: optimisticLayout,
+            range_revision: rev,
+          }),
+        });
+
+        if (!pcRes.ok) {
+          let errorDetail = `PC approval failed (${pcRes.status})`;
+          try {
+            const errJson = await pcRes.json();
+            if (errJson?.detail) errorDetail = errJson.detail;
+          } catch {}
+          restoreToReady(errorDetail);
+          return;
+        }
+        pcSuccess = true;
       }
-    })();
+
+      // 3. Cloud queue submission (if in cloud mode or authenticated)
+      let cloudSuccess = false;
+      if (token && (isCloudMode || !pcHost)) {
+        const cloudRes = await fetch(`${WORKER_BASE}/publish/queue`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            clip_id: clipToApprove.id,
+            title: optimisticTitle,
+            description: optimisticDescription,
+            platforms: platformsToPublish,
+            publish_mode: optimisticMode,
+            rendered_fingerprint: (clipToApprove as any).rendered_fingerprint,
+          }),
+        });
+
+        if (!cloudRes.ok) {
+          let errorDetail = `Cloud publish failed (${cloudRes.status})`;
+          try {
+            const errJson = await cloudRes.json();
+            if (errJson?.error || errJson?.message) errorDetail = errJson.error || errJson.message;
+          } catch {}
+          if (!pcSuccess) {
+            restoreToReady(errorDetail);
+            return;
+          }
+        } else {
+          cloudSuccess = true;
+        }
+      }
+
+      if (!pcSuccess && !cloudSuccess) {
+        restoreToReady('Cannot approve: No PC connection or cloud authentication available.');
+        return;
+      }
+
+      markApproved('Queued for rendering & publishing…');
+    } catch (err: any) {
+      console.error('Approval execution error:', err);
+      restoreToReady(`Approval failed: ${err?.message || err}`);
+    }
   };
 
   // 6. Double Confirmation Reject Handlers
