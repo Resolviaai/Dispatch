@@ -4318,7 +4318,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     setFeedback(`Found ${ensemble.length} speech cleanup suggestions (${geminiProposals.length > 0 ? 'AI + ' : ''}on-device).`);
     setAutoCutLoading(false);
   };
-  };
 
   const handleApplyAutoCut = async () => {
     if (!currentClip || autoCutProposals.length === 0) return;
