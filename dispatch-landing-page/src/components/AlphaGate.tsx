@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { RELEASE, RELEASES, REPOSITORY, RELEASE_FACTS } from '../data/site';
+import { RELEASE, REPOSITORY, RELEASE_FACTS, DIRECT_APK, RELEASE_APK } from '../data/site';
 import { ExternalHint } from './ExternalHint';
 
 export const PREVIEW_INVITE_CODE = 'DSP-ALPHA';
@@ -62,11 +62,20 @@ export function AlphaGate() {
                 <div className="gate-downloads">
                   <a
                     className="button button--primary"
-                    href={RELEASES}
+                    href={RELEASE_APK}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    Download the APK
+                    Download APK (GitHub)
+                    <ExternalHint />
+                  </a>
+                  <a
+                    className="button button--quiet"
+                    href={DIRECT_APK}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Direct APK Mirror
                     <ExternalHint />
                   </a>
                   <a className="text-link" href={REPOSITORY} target="_blank" rel="noreferrer">
@@ -79,7 +88,7 @@ export function AlphaGate() {
                   </a>
                 </div>
                 <p className="gate-note">
-                  The Android build is 1.7.23. The Windows companion runs from the repository with
+                  The Android build is {RELEASE_FACTS[0].value}. The Windows companion runs from the repository with
                   Python and FFmpeg.
                 </p>
               </div>
@@ -176,7 +185,18 @@ export function AlphaGate() {
         </div>
 
         <div className="release-strip">
-          <h3 className="release-strip-title">Current build</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem' }}>
+            <h3 className="release-strip-title" style={{ margin: 0 }}>Current build (v{RELEASE_FACTS[0].value})</h3>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <a className="button button--primary" href={DIRECT_APK} style={{ fontSize: '0.8125rem', padding: '0.375rem 0.875rem' }}>
+                Download APK
+              </a>
+              <a className="text-link" href={RELEASE} target="_blank" rel="noreferrer" style={{ fontSize: '0.8125rem' }}>
+                Release Notes
+                <ExternalHint />
+              </a>
+            </div>
+          </div>
           <dl className="release-facts">
             {RELEASE_FACTS.map((fact) => (
               <div key={fact.label}>
