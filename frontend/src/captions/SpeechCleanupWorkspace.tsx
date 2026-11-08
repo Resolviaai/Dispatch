@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Scissors,
   X,
@@ -58,9 +58,11 @@ export interface SpeechCleanupWorkspaceProps {
   onFilterChange: (newFilter: AutoCutFilterCategory) => void;
   filmstrip: FilmstripData | null;
   currentTime: number;
+  sourceTime?: number;
   duration: number;
   clipStart?: number;
   clipEnd?: number;
+  isPlaying?: boolean;
   previewingProposalId?: string | null;
   onPreviewContext: (range: ContextPreviewRange) => void;
   onSeekSourceTime?: (sourceTime: number) => void;
@@ -236,6 +238,7 @@ interface DetectionCardProps {
   clipStart: number;
   clipEnd: number;
   currentTime: number;
+  sourceTime?: number;
   previewingProposalId: string | null;
   onPreviewContext: (range: ContextPreviewRange) => void;
   onSeekSourceTime?: (sourceTime: number) => void;
@@ -255,6 +258,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
     clipStart,
     clipEnd,
     currentTime,
+    sourceTime,
     previewingProposalId,
     onPreviewContext,
     onSeekSourceTime,
@@ -269,6 +273,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
 
     return (
       <div
+        id={`detection-card-${proposal.id}`}
         className={`transition-colors border-l-2 ${
           effective === 'cut'
             ? 'border-l-primary'
@@ -349,6 +354,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
               sourceStart={proposal.source_start}
               sourceEnd={proposal.source_end}
               currentTime={currentTime}
+              sourceTime={sourceTime}
               clipStartOffset={clipStart}
               onSeek={onSeekSourceTime}
               onUpdateRange={(newStart, newEnd) => onUpdateProposalRange?.(proposal.id, newStart, newEnd)}
@@ -461,9 +467,11 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   onFilterChange,
   filmstrip,
   currentTime,
+  sourceTime,
   duration,
   clipStart = 0,
   clipEnd = 60,
+  isPlaying = false,
   previewingProposalId = null,
   onPreviewContext,
   onSeekSourceTime,
@@ -479,6 +487,22 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
 }) => {
   // Only ONE detection may be expanded at a time
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // 1. User manual interaction lock (prevents auto-follow from overriding user taps or trims)
+  const userInteractingUntilRef = useRef<number>(0);
+
+  const handleToggleExpand = useCallback((id: string) => {
+    userInteractingUntilRef.current = Date.now() + 5000;
+    setExpandedId((prev) => (prev === id ? null : id));
+  }, []);
+
+  const handleUpdateRangeWrapped = useCallback(
+    (proposalId: string, newStart: number, newEnd: number) => {
+      userInteractingUntilRef.current = Date.now() + 5000;
+      onUpdateProposalRange?.(proposalId, newStart, newEnd);
+    },
+    [onUpdateProposalRange]
+  );
 
   // Compute category counts
   const counts = useMemo(() => {
@@ -503,6 +527,55 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
     if (filter === 'all') return proposals;
     return proposals.filter((p) => p.decision === filter);
   }, [proposals, filter]);
+
+  // 2. Real-time timeline auto-follow during playback (with midpoint handoff between adjacent proposals)
+  useEffect(() => {
+    if (!isPlaying || Date.now() < userInteractingUntilRef.current || filteredProposals.length === 0) {
+      return;
+    }
+
+    const effectiveSourceTime =
+      sourceTime != null
+        ? sourceTime
+        : currentTime >= clipStart - 0.5 && currentTime <= clipEnd + 0.5
+        ? currentTime
+        : currentTime + clipStart;
+
+    let targetId: string | null = null;
+
+    for (let i = 0; i < filteredProposals.length; i++) {
+      const p = filteredProposals[i];
+      const prev = i > 0 ? filteredProposals[i - 1] : null;
+      const next = i < filteredProposals.length - 1 ? filteredProposals[i + 1] : null;
+
+      // Clean midpoint boundaries between adjacent proposals (zero flapping)
+      const windowStart = prev
+        ? Math.max(p.source_start - 2.5, (prev.source_end + p.source_start) / 2)
+        : Math.max(clipStart, p.source_start - 2.5);
+
+      const windowEnd = next
+        ? Math.min(p.source_end + 1.5, (p.source_end + next.source_start) / 2)
+        : Math.min(clipEnd, p.source_end + 1.5);
+
+      if (effectiveSourceTime >= windowStart && effectiveSourceTime < windowEnd) {
+        targetId = p.id;
+        break;
+      }
+    }
+
+    if (targetId !== expandedId) {
+      setExpandedId(targetId);
+    }
+  }, [isPlaying, currentTime, sourceTime, clipStart, clipEnd, filteredProposals, expandedId]);
+
+  // 3. Smooth auto-scroll when a proposal expands
+  useEffect(() => {
+    if (!expandedId) return;
+    const el = document.getElementById(`detection-card-${expandedId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [expandedId]);
 
   return (
     <div
@@ -583,17 +656,18 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
               key={prop.id}
               proposal={prop}
               isExpanded={expandedId === prop.id}
-              onToggleExpand={(id) => setExpandedId(expandedId === id ? null : id)}
+              onToggleExpand={handleToggleExpand}
               filmstrip={filmstrip}
               clipDuration={duration}
               clipStart={clipStart}
               clipEnd={clipEnd}
               currentTime={currentTime}
+              sourceTime={sourceTime}
               previewingProposalId={previewingProposalId}
               onPreviewContext={onPreviewContext}
               onSeekSourceTime={onSeekSourceTime}
               onToggleDecision={onToggleDecision}
-              onUpdateProposalRange={onUpdateProposalRange}
+              onUpdateProposalRange={handleUpdateRangeWrapped}
               waveformSamples={waveformSamples}
               transcriptWords={transcriptWords}
             />

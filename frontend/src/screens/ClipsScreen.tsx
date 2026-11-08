@@ -1820,6 +1820,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [activePreviewProposalId, setActivePreviewProposalId] = useState<string | null>(null);
   const [autoCutWaveform, setAutoCutWaveform] = useState<Array<{ time: number; amplitude: number }>>([]);
   const stopPreviewRef = useRef<() => void>(() => {});
+  const lastJumpedCutIdRef = useRef<string | null>(null);
 
   // Canonical Caption Track with Stale Protection
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -2822,6 +2823,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   const totalSourceDur = Number(timelineSourceDuration || currentClip?.source_duration || clipEnd || 60);
 
+  const activeSourceTime = useMemo(() => {
+    const v = videoRef.current;
+    const start = Number(currentClip?.start_time || 0);
+    const end = Number(currentClip?.end_time || duration || 40);
+    if (v) {
+      const isSource = Boolean(isSourceTimebase && v.duration >= (end - 1.0));
+      return isSource ? v.currentTime : v.currentTime + start;
+    }
+    return currentTime + start;
+  }, [currentTime, isPlaying, isSourceTimebase, currentClip?.start_time, currentClip?.end_time, duration]);
+
   // Always remap captions, including a single remaining EDL range. The persisted
   // source origin must not follow mutable currentClip.start_time after edits.
   const presentationCaptionTrack = useMemo(() => {
@@ -2890,12 +2902,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       video.pause();
       if (bgVideoRef.current) bgVideoRef.current.pause();
       contextPreviewRef.current = null;
+      lastJumpedCutIdRef.current = null;
       setIsPlaying(false);
     }
   };
 
   const handleSeek = (targetSec: number) => {
     contextPreviewRef.current = null;
+    lastJumpedCutIdRef.current = null;
     if (previewAnimRef.current?.active) {
       previewAnimRef.current = null;
     }
@@ -3132,6 +3146,40 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       return;
     }
 
+    // 0ms Real-time Jump-Cut Auditioning during continuous playback in Auto-Cut drawer
+    if (showAutoCutDrawer && isPlaying && !contextPreviewRef.current && autoCutProposals.length > 0) {
+      const isSourceTimeline = Boolean(isSourceTimebase && video.duration >= (clipEnd - 1.0));
+      const timeOffset = isSourceTimeline ? 0 : clipStart;
+      for (const p of autoCutProposals) {
+        const pStart = Math.max(0, p.source_start - timeOffset);
+        const pEnd = Math.min(video.duration || clipDuration, p.source_end - timeOffset);
+        if (pEnd > pStart) {
+          if (getEffectiveDecision(p) === 'cut') {
+            if (cur >= pStart - 0.04 && cur < pEnd - 0.02) {
+              if (lastJumpedCutIdRef.current !== p.id) {
+                lastJumpedCutIdRef.current = p.id;
+                if (typeof (video as any).fastSeek === 'function') {
+                  (video as any).fastSeek(pEnd);
+                } else {
+                  video.currentTime = pEnd;
+                }
+                if (bgVideoRef.current && layoutMode === 'fit_blur') {
+                  bgVideoRef.current.currentTime = pEnd;
+                }
+                const newCurTime = clamp(pEnd + (isSourceTimeline ? -clipStart : 0), 0, clipDuration);
+                lastTimeUpdateRef.current = newCurTime;
+                setCurrentTime(newCurTime);
+                return;
+              }
+            }
+          }
+          if (lastJumpedCutIdRef.current === p.id && (cur < pStart - 0.2 || cur > pEnd + 0.2)) {
+            lastJumpedCutIdRef.current = null;
+          }
+        }
+      }
+    }
+
     const effectiveSource = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
 
     if (effectiveSource) {
@@ -3199,7 +3247,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       // 4. In-piece presentation time progression
       const concatTime = sourceToConcat(effectiveRanges, cur, totalSourceDur);
       if (concatTime !== null) {
-        if (Math.abs(concatTime - lastTimeUpdateRef.current) >= 0.08 || concatTime <= 0.05) {
+        if (showAutoCutDrawer || Math.abs(concatTime - lastTimeUpdateRef.current) >= 0.08 || concatTime <= 0.05) {
           lastTimeUpdateRef.current = concatTime;
           setCurrentTime(concatTime);
         }
@@ -3240,7 +3288,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         return;
       }
 
-      if (Math.abs(cur - lastTimeUpdateRef.current) >= 0.12 || cur <= 0.05) {
+      if (showAutoCutDrawer || Math.abs(cur - lastTimeUpdateRef.current) >= 0.12 || cur <= 0.05) {
         lastTimeUpdateRef.current = cur;
         setCurrentTime(cur);
       }
@@ -4205,6 +4253,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   };
 
   const handleToggleAutoCutDecision = (proposalId: string, choice: 'cut' | 'keep') => {
+    lastJumpedCutIdRef.current = null;
     setAutoCutProposals((prev) => {
       const updated: AutoCutProposal[] = prev.map((p) => {
         if (p.id !== proposalId) return p;
@@ -4248,6 +4297,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   };
 
   const handleUpdateAutoCutRange = (proposalId: string, newStart: number, newEnd: number) => {
+    lastJumpedCutIdRef.current = null;
     setAutoCutProposals((prev) => {
       const updated: AutoCutProposal[] = prev.map((p) => {
         if (p.id !== proposalId) return p;
@@ -4274,6 +4324,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
   const handleSeekSourceTime = (sourceSec: number) => {
     contextPreviewRef.current = null;
+    lastJumpedCutIdRef.current = null;
     const video = videoRef.current;
     if (!video) return;
     const isSourceTimeline = Boolean(isSourceTimebase && video.duration >= (clipEnd - 1.0));
@@ -6514,9 +6565,11 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 onFilterChange={setAutoCutFilter}
                 filmstrip={filmstripData}
                 currentTime={currentTime}
+                sourceTime={activeSourceTime}
                 duration={duration || currentClip.duration || 40}
                 clipStart={currentClip.start_time || 0}
                 clipEnd={currentClip.end_time || duration || 40}
+                isPlaying={isPlaying}
                 previewingProposalId={activePreviewProposalId}
                 onPreviewContext={handlePreviewContext}
                 onSeekSourceTime={handleSeekSourceTime}
@@ -6527,6 +6580,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 onApply={handleApplyAutoCut}
                 onClose={() => {
                   stopPreviewRef.current();
+                  lastJumpedCutIdRef.current = null;
                   setShowAutoCutDrawer(false);
                 }}
                 isLoading={autoCutLoading}

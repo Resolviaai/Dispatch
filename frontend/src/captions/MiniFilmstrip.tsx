@@ -8,6 +8,7 @@ export interface MiniFilmstripProps {
   sourceStart: number;
   sourceEnd: number;
   currentTime: number;
+  sourceTime?: number;
   onSeek?: (sourceTime: number) => void;
   clipStartOffset?: number;
   onUpdateRange?: (newStart: number, newEnd: number) => void;
@@ -47,6 +48,7 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
   sourceStart,
   sourceEnd,
   currentTime,
+  sourceTime,
   onSeek,
   clipStartOffset = 0,
   onUpdateRange,
@@ -89,9 +91,11 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
   const rawCutWidthPct = ((activeEnd - activeStart) / winSpan) * 100;
   const cutWidthPct = clamp(rawCutWidthPct, 2, 100 - cutLeftPct);
 
-  // 3. Proportional playhead percentage
+  // 3. Proportional playhead percentage (direct source-time coordinate matching with zero jitter)
   const effectivePlayheadTime =
-    currentTime >= winStart - 0.5 && currentTime <= winEnd + 0.5
+    sourceTime != null
+      ? sourceTime
+      : currentTime >= winStart - 0.5 && currentTime <= winEnd + 0.5
       ? currentTime
       : currentTime + clipStartOffset;
   const isPlayheadInWindow =
@@ -428,10 +432,10 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
           </div>
         </div>
 
-        {/* LAYER: Interactive Scrubbing Playhead */}
+        {/* LAYER: Interactive Scrubbing Playhead (instant 60fps tracking without CSS lag) */}
         {playheadPct !== null && (
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-white z-40 pointer-events-none shadow-md transition-all duration-75"
+            className="absolute top-0 bottom-0 w-0.5 bg-white z-40 pointer-events-none shadow-md transition-none"
             style={{ left: `${playheadPct}%` }}
           >
             <div className="w-2.5 h-2.5 bg-white rounded-full -translate-x-1 -top-1 shadow border border-black/40" />
