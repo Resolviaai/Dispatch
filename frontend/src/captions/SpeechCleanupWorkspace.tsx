@@ -65,6 +65,9 @@ export interface SpeechCleanupWorkspaceProps {
   onPreviewContext: (range: ContextPreviewRange) => void;
   onSeekSourceTime?: (sourceTime: number) => void;
   onToggleDecision: (proposalId: string, choice: 'cut' | 'keep') => void;
+  onUpdateProposalRange?: (proposalId: string, newStart: number, newEnd: number) => void;
+  waveformSamples?: Array<{ time: number; amplitude: number }>;
+  transcriptWords?: Array<{ start: number; end: number }>;
   onApply: () => void;
   onClose: () => void;
   isApplying?: boolean;
@@ -237,6 +240,9 @@ interface DetectionCardProps {
   onPreviewContext: (range: ContextPreviewRange) => void;
   onSeekSourceTime?: (sourceTime: number) => void;
   onToggleDecision: (proposalId: string, choice: 'cut' | 'keep') => void;
+  onUpdateProposalRange?: (proposalId: string, newStart: number, newEnd: number) => void;
+  waveformSamples?: Array<{ time: number; amplitude: number }>;
+  transcriptWords?: Array<{ start: number; end: number }>;
 }
 
 const DetectionCard: React.FC<DetectionCardProps> = React.memo(
@@ -253,6 +259,9 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
     onPreviewContext,
     onSeekSourceTime,
     onToggleDecision,
+    onUpdateProposalRange,
+    waveformSamples,
+    transcriptWords,
   }) => {
     const effective = getEffectiveDecision(proposal);
     const { title, icon } = getProposalPresentation(proposal);
@@ -308,7 +317,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
                 effective === 'cut'
                   ? 'bg-primary/15 text-primary border-primary/25'
                   : effective === 'keep'
-                  ? 'bg-surface-3 text-text-muted border-border'
+                  ? 'bg-surface-3 text-text-muted border-white/[0.08]'
                   : 'bg-amber-500/15 text-amber-300 border-amber-500/25'
               }`}
             >
@@ -332,8 +341,8 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
 
         {/* 3. EXPANDED INSPECTION INTERACTION */}
         {isExpanded && (
-          <div className="px-3 pb-3 pt-1 space-y-2.5 bg-surface-2/20 border-t border-border/60 animate-in fade-in duration-150">
-            {/* Miniature Filmstrip (Captions Reference) */}
+          <div className="px-3 pb-3 pt-1.5 space-y-2.5 bg-surface-2/20 border-t border-white/[0.08] animate-in fade-in duration-150">
+            {/* Miniature Filmstrip (60:40 Video + Audio Waveform + Interactive Trimming Levers) */}
             <MiniFilmstrip
               filmstrip={filmstrip}
               clipDuration={clipDuration}
@@ -342,6 +351,9 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
               currentTime={currentTime}
               clipStartOffset={clipStart}
               onSeek={onSeekSourceTime}
+              onUpdateRange={(newStart, newEnd) => onUpdateProposalRange?.(proposal.id, newStart, newEnd)}
+              waveformSamples={waveformSamples}
+              transcriptWords={transcriptWords}
             />
 
             {/* Action Controls Row: Single Toggle Decision + Contextual Jump-Cut Preview */}
@@ -369,7 +381,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
                 className={`h-11 min-h-[44px] px-3.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all ${
                   isPreviewingThis
                     ? 'bg-primary/20 border-primary text-primary shadow-hero-sm font-semibold'
-                    : 'bg-surface-2 hover:bg-surface-3 border-border text-text-main'
+                    : 'bg-surface-2 hover:bg-surface-3 border-white/[0.08] text-text-main'
                 }`}
                 title={
                   isPreviewingThis
@@ -400,7 +412,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
                 className={`h-11 min-h-[44px] px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 active:scale-[0.97] transition-all border ${
                   effective === 'cut'
                     ? 'bg-primary text-white border-primary shadow-hero-glow'
-                    : 'bg-surface-2 text-text-secondary hover:text-text-main border-border'
+                    : 'bg-surface-2 text-text-secondary hover:text-text-main border-white/[0.08]'
                 }`}
                 title={effective === 'cut' ? 'Marked for removal. Click to keep.' : 'Kept. Click to cut.'}
               >
@@ -424,7 +436,6 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
   },
   (prev, next) => {
     // Strict memoization for 60fps playback smoothness:
-    // If neither was or is expanded, suppress 30fps time updates completely!
     if (!prev.isExpanded && !next.isExpanded) {
       return (
         prev.proposal === next.proposal &&
@@ -437,7 +448,9 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
       prev.currentTime === next.currentTime &&
       prev.previewingProposalId === next.previewingProposalId &&
       prev.filmstrip === next.filmstrip &&
-      prev.clipDuration === next.clipDuration
+      prev.clipDuration === next.clipDuration &&
+      prev.waveformSamples === next.waveformSamples &&
+      prev.transcriptWords === next.transcriptWords
     );
   }
 );
@@ -455,6 +468,9 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   onPreviewContext,
   onSeekSourceTime,
   onToggleDecision,
+  onUpdateProposalRange,
+  waveformSamples,
+  transcriptWords,
   onApply,
   onClose,
   isApplying = false,
@@ -491,10 +507,10 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
   return (
     <div
       onClick={(e) => e.stopPropagation()}
-      className="w-full h-full flex flex-col bg-surface border-t border-border text-text-main select-none overflow-hidden"
+      className="w-full h-full flex flex-col bg-surface border-t border-white/[0.08] text-text-main select-none overflow-hidden"
     >
       {/* 1. COMPACT HEADER: Category Filters & Re-analyze Action */}
-      <header className="shrink-0 h-9 px-2.5 border-b border-border bg-surface flex items-center justify-between gap-1.5">
+      <header className="shrink-0 h-9 px-2.5 border-b border-white/[0.08] bg-surface flex items-center justify-between gap-1.5">
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 min-w-0">
           {(
             [
@@ -513,7 +529,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
                 className={`h-6 px-2 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-all shrink-0 active:scale-[0.98] border ${
                   isActive
                     ? 'bg-primary text-white border-primary shadow-hero-sm font-semibold'
-                    : 'bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 border-border'
+                    : 'bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 border-white/[0.08]'
                 }`}
               >
                 <span>{tab.label}</span>
@@ -530,7 +546,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
             type="button"
             onClick={onReanalyze}
             disabled={isLoading || isApplying}
-            className="h-6 px-2 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-all shrink-0 active:scale-[0.98] border border-border bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 disabled:opacity-40"
+            className="h-6 px-2 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-all shrink-0 active:scale-[0.98] border border-white/[0.08] bg-surface-2 text-text-secondary hover:text-text-main hover:bg-surface-3 disabled:opacity-40"
             title="Re-analyze speech with Gemini Flash-Lite (bypass cache)"
             aria-label="Re-analyze speech"
           >
@@ -541,7 +557,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
       </header>
 
       {/* 2. COMPACT DETECTION LIST */}
-      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-border">
+      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-white/[0.08]">
         {isLoading && filteredProposals.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-8 text-center text-text-muted gap-2 text-xs">
             <RotateCw size={18} className="animate-spin text-primary" />
@@ -554,7 +570,7 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
               <button
                 type="button"
                 onClick={onReanalyze}
-                className="mt-1 h-7 px-3 rounded-lg border border-border bg-surface-2 hover:bg-surface-3 text-text-main text-xs font-medium flex items-center gap-1.5 active:scale-95 transition-all"
+                className="mt-1 h-7 px-3 rounded-lg border border-white/[0.08] bg-surface-2 hover:bg-surface-3 text-text-main text-xs font-medium flex items-center gap-1.5 active:scale-95 transition-all"
               >
                 <RotateCw size={12} className={isLoading ? 'animate-spin' : ''} />
                 <span>Run fresh analysis</span>
@@ -577,17 +593,20 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
               onPreviewContext={onPreviewContext}
               onSeekSourceTime={onSeekSourceTime}
               onToggleDecision={onToggleDecision}
+              onUpdateProposalRange={onUpdateProposalRange}
+              waveformSamples={waveformSamples}
+              transcriptWords={transcriptWords}
             />
           ))
         )}
       </div>
 
       {/* 4. STICKY BOTTOM ACTION BAR (Equal 50/50 CSS Grid - zero unevenness, 44px biomechanical hitboxes) */}
-      <footer className="px-3 py-2 border-t border-border bg-surface grid grid-cols-2 gap-2.5 shrink-0 pb-[max(8px,env(safe-area-inset-bottom,0px))]">
+      <footer className="px-3 py-2 border-t border-white/[0.08] bg-surface grid grid-cols-2 gap-2.5 shrink-0 pb-[max(8px,env(safe-area-inset-bottom,0px))]">
         <button
           type="button"
           onClick={onClose}
-          className="w-full h-11 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-text-main text-xs font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
+          className="w-full h-11 min-h-[44px] px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-white/[0.08] text-text-main text-xs font-semibold flex items-center justify-center active:scale-[0.98] transition-all"
         >
           Cancel
         </button>

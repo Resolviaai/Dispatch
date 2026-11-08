@@ -1814,9 +1814,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     restoreTime: number;
     hasJumped?: boolean;
     isSourceTimeline?: boolean;
+    isPrimed?: boolean;
   }
   const contextPreviewRef = useRef<ContextPreviewState | null>(null);
   const [activePreviewProposalId, setActivePreviewProposalId] = useState<string | null>(null);
+  const [autoCutWaveform, setAutoCutWaveform] = useState<Array<{ time: number; amplitude: number }>>([]);
   const stopPreviewRef = useRef<() => void>(() => {});
 
   // Canonical Caption Track with Stale Protection
@@ -1841,6 +1843,49 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     () => allClips.find((c) => c.id === selectedClipId) || null,
     [allClips, selectedClipId]
   );
+
+  // Real audio waveform fetch from PC backend when speech cleanup workspace is open
+  useEffect(() => {
+    if (!showAutoCutDrawer || !currentClip?.id || !pcHost || !isPcOnline) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const start = currentClip.start_time || 0;
+        const end = currentClip.end_time || currentClip.duration || 60;
+        const url = apiUrl(
+          `/api/clips/${encodeURIComponent(currentClip.id)}/waveform?start=${start}&end=${end}&samples_count=120`,
+          pcHost
+        );
+        const res = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && Array.isArray(data?.samples)) {
+            setAutoCutWaveform(data.samples);
+          }
+        }
+      } catch {
+        /* ignore waveform background fetch error */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showAutoCutDrawer, currentClip?.id, currentClip?.start_time, currentClip?.end_time, currentClip?.duration, pcHost, isPcOnline]);
+
+  const captionWords = useMemo(() => {
+    if (!captionTrack?.groups) return [];
+    const words: Array<{ start: number; end: number }> = [];
+    for (const g of captionTrack.groups) {
+      if (Array.isArray(g.words)) {
+        for (const w of g.words) {
+          words.push({ start: Number(w.start), end: Number(w.end) });
+        }
+      } else {
+        words.push({ start: Number(g.start), end: Number(g.end) });
+      }
+    }
+    return words;
+  }, [captionTrack]);
 
   useEffect(() => {
     if (!currentClip) {
@@ -2974,9 +3019,6 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     };
     setActivePreviewProposalId(range.proposalId || null);
 
-    video.currentTime = mediaStart;
-    if (bgVideoRef.current) bgVideoRef.current.currentTime = mediaStart;
-
     // High-frequency frame checker for instantaneous seamless jump
     const checkJump = () => {
       const v = videoRef.current;
@@ -2984,16 +3026,32 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       if (!v || !ctx || v.paused) return;
       const now = v.currentTime;
 
+      // 1. Priming guard: wait until video has actually reached the audition window
+      if (!ctx.isPrimed) {
+        if (Math.abs(now - ctx.sourceStart) < 0.25 || now >= ctx.sourceStart - 0.05) {
+          ctx.isPrimed = true;
+        } else {
+          requestAnimationFrame(checkJump);
+          return;
+        }
+      }
+
+      // 2. Seamless jump across cut section
       if (ctx.isCut && ctx.cutStart != null && ctx.cutEnd != null && !ctx.hasJumped) {
-        if (now >= ctx.cutStart - 0.04 && now <= ctx.cutEnd + 0.1) {
+        if (now >= ctx.cutStart - 0.04 && now < ctx.cutEnd) {
           ctx.hasJumped = true;
-          v.currentTime = ctx.cutEnd;
+          if (typeof (v as any).fastSeek === 'function') {
+            (v as any).fastSeek(ctx.cutEnd);
+          } else {
+            v.currentTime = ctx.cutEnd;
+          }
           if (bgVideoRef.current) bgVideoRef.current.currentTime = ctx.cutEnd;
           setCurrentTime(clamp(ctx.cutEnd + (ctx.isSourceTimeline ? -clipStart : 0), 0, clipDuration));
         }
       }
 
-      if (now >= ctx.sourceEnd - 0.05) {
+      // 3. Natural finish at end of audition window
+      if (ctx.isPrimed && now >= ctx.sourceEnd - 0.05) {
         handleStopPreviewContext();
         return;
       }
@@ -3003,17 +3061,51 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
     };
 
-    video.play().then(() => {
-      setIsPlaying(true);
-      if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
-      requestAnimationFrame(checkJump);
-    }).catch(() => {
-      contextPreviewRef.current = null;
-      setActivePreviewProposalId(null);
-      setIsPlaying(false);
-      setPlaybackFeedback('Source preview could not start. Tap play manually.');
-      setTimeout(() => setPlaybackFeedback(null), 3500);
-    });
+    // Pre-seek with fastSeek if available
+    const needsSeek = Math.abs(video.currentTime - mediaStart) > 0.06;
+    if (needsSeek) {
+      if (typeof (video as any).fastSeek === 'function') {
+        (video as any).fastSeek(mediaStart);
+      } else {
+        video.currentTime = mediaStart;
+      }
+      if (bgVideoRef.current) bgVideoRef.current.currentTime = mediaStart;
+    } else {
+      contextPreviewRef.current.isPrimed = true;
+    }
+
+    const startPlay = () => {
+      video.play().then(() => {
+        setIsPlaying(true);
+        if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
+        requestAnimationFrame(checkJump);
+      }).catch(() => {
+        contextPreviewRef.current = null;
+        setActivePreviewProposalId(null);
+        setIsPlaying(false);
+        setPlaybackFeedback('Source preview could not start. Tap play manually.');
+        setTimeout(() => setPlaybackFeedback(null), 3500);
+      });
+    };
+
+    if (needsSeek && video.seeking) {
+      const onSeeked = () => {
+        video.removeEventListener('seeked', onSeeked);
+        if (contextPreviewRef.current) {
+          contextPreviewRef.current.isPrimed = true;
+          startPlay();
+        }
+      };
+      video.addEventListener('seeked', onSeeked, { once: true });
+      setTimeout(() => {
+        video.removeEventListener('seeked', onSeeked);
+        if (contextPreviewRef.current && !isPlaying) {
+          startPlay();
+        }
+      }, 150);
+    } else {
+      startPlay();
+    }
   };
 
   const handleTimeUpdate = () => {
@@ -4153,6 +4245,31 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         });
       }
     }
+  };
+
+  const handleUpdateAutoCutRange = (proposalId: string, newStart: number, newEnd: number) => {
+    setAutoCutProposals((prev) => {
+      const updated: AutoCutProposal[] = prev.map((p) => {
+        if (p.id !== proposalId) return p;
+        const safeStart = Math.max(0, Math.min(newStart, newEnd - 0.05));
+        const safeEnd = Math.max(safeStart + 0.05, newEnd);
+        const newDur = Math.max(0.05, safeEnd - safeStart);
+        return {
+          ...p,
+          source_start: safeStart,
+          source_end: safeEnd,
+          duration: newDur,
+        };
+      });
+      if (currentClip?.id) {
+        const sig = autoCutCacheRef.current.get(currentClip.id)?.signature;
+        if (sig) {
+          autoCutCacheRef.current.set(currentClip.id, { signature: sig, proposals: updated });
+          writeAutoCutCache(currentClip.id, sig, updated);
+        }
+      }
+      return updated;
+    });
   };
 
   const handleSeekSourceTime = (sourceSec: number) => {
@@ -6404,6 +6521,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 onPreviewContext={handlePreviewContext}
                 onSeekSourceTime={handleSeekSourceTime}
                 onToggleDecision={handleToggleAutoCutDecision}
+                onUpdateProposalRange={handleUpdateAutoCutRange}
+                waveformSamples={autoCutWaveform}
+                transcriptWords={captionWords}
                 onApply={handleApplyAutoCut}
                 onClose={() => {
                   stopPreviewRef.current();

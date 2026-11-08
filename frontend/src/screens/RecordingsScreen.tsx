@@ -297,7 +297,7 @@ function extractDirectThumbnail(
   if (typeof window === 'undefined') return;
   const v = document.createElement('video');
   v.crossOrigin = 'anonymous';
-  v.preload = 'auto';
+  v.preload = 'metadata';
   v.muted = true;
   v.playsInline = true;
   let done = false;
@@ -307,11 +307,9 @@ function extractDirectThumbnail(
     v.src = '';
     v.remove();
   };
-  const timer = setTimeout(finish, 10000);
-  v.onloadeddata = () => {
-    v.currentTime = Math.min(1.0, Math.max(0.1, (v.duration || 1) / 4));
-  };
-  v.onseeked = () => {
+  const timer = setTimeout(finish, 4000);
+
+  const captureFrame = () => {
     if (done) return;
     clearTimeout(timer);
     try {
@@ -328,10 +326,23 @@ function extractDirectThumbnail(
           const raw = videoId.replace(/^dir_/, '');
           localStorage.setItem('thumb_' + raw, dataUrl);
           localStorage.setItem('thumb_dir_' + raw, dataUrl);
+          if (raw.includes('-')) {
+            localStorage.setItem('thumb_dir_' + raw.replace(/-/g, ''), dataUrl);
+          }
         } catch {}
       }
     } catch {}
     finish();
+  };
+
+  v.onloadedmetadata = () => {
+    v.currentTime = Math.min(0.5, Math.max(0.1, (v.duration || 1) / 4));
+  };
+  v.onseeked = captureFrame;
+  v.onloadeddata = () => {
+    if (v.currentTime === 0) {
+      v.currentTime = 0.2;
+    }
   };
   v.onerror = () => {
     clearTimeout(timer);
@@ -377,7 +388,26 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>({});
   const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
   const [resolvedBytes, setResolvedBytes] = useState<Record<string, number>>({});
-  const [directThumbnails, setDirectThumbnails] = useState<Record<string, string>>({});
+  const [directThumbnails, setDirectThumbnails] = useState<Record<string, string>>(() => {
+    if (typeof window === 'undefined') return {};
+    const map: Record<string, string> = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('thumb_')) {
+          const val = localStorage.getItem(key);
+          if (val) {
+            const id = key.replace(/^thumb_/, '');
+            map[id] = val;
+            if (!id.startsWith('dir_')) {
+              map['dir_' + id] = val;
+            }
+          }
+        }
+      }
+    } catch {}
+    return map;
+  });
   const probedDirectIdsRef = useRef<Set<string>>(new Set());
   const lastSchedulerNudgeRef = useRef(0);
 
@@ -1071,13 +1101,15 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     }
 
     if (selectedSessionId.startsWith('dir_')) {
-      if (pcHost && pcStatus.online) {
-        setRouteCMediaUrl(apiUrl('/api/clips/' + selectedSessionId + '/source', pcHost));
-        return;
-      }
-      // If we already resolved the stream URL for this session ID, use it directly without clearing or re-fetching
+      // 1. If we already resolved the stream URL for this session ID, use it directly
       if (routeCMediaUrls[selectedSessionId]) {
         setRouteCMediaUrl(routeCMediaUrls[selectedSessionId]);
+        return;
+      }
+
+      // 2. If PC is online on LAN, use local high-speed source
+      if (pcHost && pcStatus.online) {
+        setRouteCMediaUrl(apiUrl('/api/clips/' + selectedSessionId + '/source', pcHost));
         return;
       }
 

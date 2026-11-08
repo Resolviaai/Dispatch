@@ -32,6 +32,7 @@ from dispatch.config import (
     INCOMING_DIR,
     STORAGE_DIR,
     FONTS_DIR,
+    YOUTUBE_INBOX_DIR,
     MAX_CLIP_DURATION,
     MIN_CLIP_DURATION,
     MAX_REQUEST_BODY_BYTES,
@@ -1150,7 +1151,16 @@ async def get_clip_source_media(clip_id: str, request: Request):
         if not source_path:
             clean_yt_id = clip_id.replace("yt_", "").strip()
             yt_row = db.get_youtube_video(clean_yt_id)
-            if yt_row and yt_row.get("local_video_path"):
+            if not yt_row and clean_yt_id.startswith("dir_"):
+                raw_hex = clean_yt_id[4:].replace("-", "")
+                dashed = f"dir_{raw_hex[:8]}-{raw_hex[8:12]}-{raw_hex[12:16]}-{raw_hex[16:20]}-{raw_hex[20:]}" if len(raw_hex) == 32 else clean_yt_id
+                yt_row = db.get_youtube_video(dashed) or db.get_youtube_video(f"dir_{raw_hex}")
+                if not yt_row:
+                    for cand in [YOUTUBE_INBOX_DIR / f"{clean_yt_id}.mp4", YOUTUBE_INBOX_DIR / f"{dashed}.mp4", YOUTUBE_INBOX_DIR / f"dir_{raw_hex}.mp4"]:
+                        if cand.exists() and cand.is_file():
+                            source_path = cand
+                            break
+            if yt_row and yt_row.get("local_video_path") and not source_path:
                 yp = Path(yt_row["local_video_path"])
                 if yp.exists():
                     source_path = yp
@@ -1535,6 +1545,101 @@ async def get_autocut_proposals(clip_id: str, request: Request):
         "clip_id": clip_id,
         "proposals": proposals,
         "count": len(proposals),
+    }
+
+
+@app.get("/api/clips/{clip_id}/waveform")
+async def get_clip_waveform(
+    clip_id: str,
+    request: Request,
+    start: Optional[float] = None,
+    end: Optional[float] = None,
+    samples_count: int = 120
+):
+    """Return normalized real audio waveform RMS amplitude points (0.0 to 1.0)
+    for accurate visualization in the speech cleanup mini filmstrip.
+    """
+    verify_dashboard_auth(request)
+    clip = db.get_clip_by_id(clip_id)
+    source_path = None
+    clip_start = 0.0
+    clip_end = 0.0
+    
+    if clip:
+        source_path = resolve_clip_source_path(clip)
+        clip_start = float(clip.get("start_time") or 0.0)
+        clip_end = float(clip.get("end_time") or (clip_start + 30.0))
+    else:
+        clean_yt_id = clip_id.replace("yt_", "").strip()
+        yt_row = db.get_youtube_video(clean_yt_id)
+        if not yt_row and clean_yt_id.startswith("dir_"):
+            raw_hex = clean_yt_id[4:].replace("-", "")
+            dashed = f"dir_{raw_hex[:8]}-{raw_hex[8:12]}-{raw_hex[12:16]}-{raw_hex[16:20]}-{raw_hex[20:]}" if len(raw_hex) == 32 else clean_yt_id
+            yt_row = db.get_youtube_video(dashed) or db.get_youtube_video(f"dir_{raw_hex}")
+            if not yt_row:
+                for cand in [YOUTUBE_INBOX_DIR / f"{clean_yt_id}.mp4", YOUTUBE_INBOX_DIR / f"{dashed}.mp4", YOUTUBE_INBOX_DIR / f"dir_{raw_hex}.mp4"]:
+                    if cand.exists() and cand.is_file():
+                        source_path = cand
+                        break
+        if yt_row and yt_row.get("local_video_path") and not source_path:
+            yp = Path(yt_row["local_video_path"])
+            if yp.exists():
+                source_path = yp
+                clip_end = float(yt_row.get("duration", 0.0))
+
+    if not source_path or not Path(source_path).exists():
+        raise HTTPException(status_code=404, detail="Source media not found for waveform")
+
+    win_start = start if start is not None else clip_start
+    win_end = end if end is not None else (clip_end if clip_end > win_start else win_start + 10.0)
+    
+    from dispatch.video_engine.waveform import extract_pcm_samples, compute_rms_profile
+    cache_dir = STORAGE_DIR / "clips" / "waveform_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"{clip_id.replace('-', '_')}.json"
+    
+    profile = None
+    if cache_file.exists():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached_data = json.load(f)
+                profile = cached_data.get("profile")
+        except Exception:
+            profile = None
+            
+    if not profile:
+        raw_bytes, sample_rate, num_samples = await asyncio.to_thread(extract_pcm_samples, Path(source_path), 16000)
+        profile = compute_rms_profile(raw_bytes, sample_rate=16000, frame_duration_ms=50.0)
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump({"clip_id": clip_id, "profile": profile}, f)
+        except Exception:
+            pass
+
+    in_range = [pt for pt in profile if win_start <= pt[0] <= win_end]
+    if not in_range:
+        in_range = profile[:samples_count]
+        
+    count = max(10, min(300, samples_count))
+    sampled_bars = []
+    if len(in_range) <= count:
+        sampled_bars = in_range
+    else:
+        step = len(in_range) / count
+        for i in range(count):
+            idx = int(i * step)
+            sampled_bars.append(in_range[idx])
+
+    normalized = []
+    for t_sec, db_val in sampled_bars:
+        val = max(0.0, min(1.0, (db_val + 55.0) / 45.0))
+        normalized.append({"time": t_sec, "amplitude": round(val, 3)})
+
+    return {
+        "clip_id": clip_id,
+        "start": win_start,
+        "end": win_end,
+        "samples": normalized
     }
 
 
