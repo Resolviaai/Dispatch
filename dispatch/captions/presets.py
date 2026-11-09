@@ -2,6 +2,7 @@
 Provides instant, professional styling mimicking CapCut, Hormozi, and MrBeast.
 """
 import os
+import copy
 from typing import Dict, Any
 from dispatch.captions.model import StyleConfig, LayoutConfig, AnimationConfig
 
@@ -196,4 +197,5 @@ def get_default_preset_id() -> str:
 
 def get_preset(preset_id: str) -> Dict[str, Any]:
     """Retrieve preset by ID with fallback to 'yellow_pop'."""
-    return CAPTION_PRESETS.get(preset_id, CAPTION_PRESETS["yellow_pop"])
+    raw = CAPTION_PRESETS.get(preset_id, CAPTION_PRESETS["yellow_pop"])
+    return copy.deepcopy(raw)

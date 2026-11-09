@@ -2,6 +2,7 @@
 Translates raw word-level speech transcripts into short-form, high-retention CaptionGroups.
 Enforces monotonic timings, natural pause boundaries, and word limits.
 """
+import copy
 from typing import List, Dict, Any, Optional
 from dispatch.captions.model import Word, CaptionGroup, CaptionTrack, StyleConfig, LayoutConfig, AnimationConfig
 from dispatch.captions.presets import get_preset
@@ -185,6 +186,10 @@ def apply_template_to_track(track: CaptionTrack, tpl_captions: Optional[Dict[str
     """Apply user editing template caption properties over an existing CaptionTrack."""
     if not tpl_captions or not isinstance(tpl_captions, dict):
         return track
+
+    track.default_style = copy.deepcopy(track.default_style)
+    track.default_layout = copy.deepcopy(track.default_layout)
+    track.default_animation = copy.deepcopy(track.default_animation)
 
     if tpl_captions.get("font_family"):
         track.default_style.font_family = str(tpl_captions["font_family"])

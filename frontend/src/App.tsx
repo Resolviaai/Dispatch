@@ -405,18 +405,22 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentTab === 'sessions' && (
-            <RecordingsScreen 
-              recordings={recordings} 
-              isYouTubeConnected={isYouTubeConnected}
-              onNavigateToSettings={() => setCurrentTab('settings')}
-              onRetryUpload={handleRetryUpload} 
-              onNavigateToClips={handleNavigateToClips}
-              onNavigateToRecord={() => handleTabChange('record')}
-              onDeleteSession={(sessionId) => setRecordings(prev => prev.filter(r => (r.sessionId || 'direct') !== sessionId && r.segmentId !== sessionId))}
-              pcHost={pcHost}
-            />
-          )}
+          {/* Kept mounted across tab switches: cache, editor state and in-flight
+              reconciliation survive without a refetch-on-return. */}
+          <div className={currentTab === 'sessions' ? 'h-full' : 'hidden'} aria-hidden={currentTab !== 'sessions'}>
+            <ScreenErrorBoundary title="Sessions could not render" resetKey={`sessions:${pcHost}`}>
+              <RecordingsScreen 
+                recordings={recordings} 
+                isYouTubeConnected={isYouTubeConnected}
+                onNavigateToSettings={() => setCurrentTab('settings')}
+                onRetryUpload={handleRetryUpload} 
+                onNavigateToClips={handleNavigateToClips}
+                onNavigateToRecord={() => handleTabChange('record')}
+                onDeleteSession={(sessionId) => setRecordings(prev => prev.filter(r => (r.sessionId || 'direct') !== sessionId && r.segmentId !== sessionId))}
+                pcHost={pcHost}
+              />
+            </ScreenErrorBoundary>
+          </div>
 
           {/* Kept mounted across tab switches: cache, editor state and in-flight
               reconciliation survive without a refetch-on-return. */}

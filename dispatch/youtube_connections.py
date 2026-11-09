@@ -269,7 +269,7 @@ def get_account_id_for_video(video_id: str, user_id: Optional[str] = None) -> Op
         if not url or not key:
             return None
         resp = httpx.get(
-            f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}&select=account_id,user_id&limit=1",
+            f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}&select=user_id&limit=1",
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
             timeout=5.0
         )

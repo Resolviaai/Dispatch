@@ -157,6 +157,7 @@ def get_source_videos_status(now: Optional[datetime] = None) -> List[Dict[str, A
             "mtime": mtime_dt,
             "file_size": file_size,
             "clips": matched_clips,
+            "status": str(ch["status"] or "").lower(),
         }
 
     # Process youtube_inbox items
@@ -194,6 +195,7 @@ def get_source_videos_status(now: Optional[datetime] = None) -> List[Dict[str, A
                 "mtime": mtime_dt,
                 "file_size": file_size,
                 "clips": matched_clips,
+                "status": str(yt["status"] or "").lower(),
                 "youtube_video_id": vid,
             }
 
@@ -228,8 +230,18 @@ def get_source_videos_status(now: Optional[datetime] = None) -> List[Dict[str, A
             (now - latest_publish_dt).total_seconds() if latest_publish_dt else 0.0
         )
 
+        # Guard against premature pruning: never prune videos that are still active or in-flight
+        st = str(item.get("status") or "").lower()
+        is_active_pipeline = st in ("queued", "downloaded", "processing", "transcribing", "analyzing", "in_progress")
+        is_terminal = st in ("completed", "failed", "rejected", "purged", "clips_created")
+
         # Tier 1: 7-Day Source Retention (168 hours)
-        eligible_7_day = age_seconds >= SEVEN_DAYS_SECONDS
+        # Safety invariant: if 0 clips were generated, ONLY prune after 7 days if status is terminal (not in-flight!)
+        eligible_7_day = (
+            age_seconds >= SEVEN_DAYS_SECONDS
+            and not is_active_pipeline
+            and (total_clips > 0 or is_terminal)
+        )
 
         # Tier 2: 72-Hour Post-Publish Grace
         eligible_72_hour_post_publish = (
@@ -239,7 +251,7 @@ def get_source_videos_status(now: Optional[datetime] = None) -> List[Dict[str, A
         )
 
         # Candidate for cleanup under normal (non-ceiling) policy
-        eligible_for_cleanup = eligible_7_day or eligible_72_hour_post_publish
+        eligible_for_cleanup = (eligible_7_day or eligible_72_hour_post_publish) and not is_active_pipeline
 
         results.append({
             **item,

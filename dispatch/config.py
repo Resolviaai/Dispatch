@@ -96,7 +96,7 @@ SUBTITLE_HIGHLIGHT_COLOR = "&H0000FFFF"  # Yellow for active word
 
 # Default Application Modes
 DEFAULT_PUBLISH_MODE = os.getenv("DISPATCH_PUBLISH_MODE", "private")  # "private" or "public"
-WEB_HOST = os.getenv("DISPATCH_WEB_HOST", "127.0.0.1")
+WEB_HOST = os.getenv("DISPATCH_WEB_HOST", "0.0.0.0" if not _is_test_env else "127.0.0.1")
 WEB_PORT = int(os.getenv("DISPATCH_WEB_PORT", "8000"))
 
 # Dashboard LAN-trust switch (dashboard hardening 2026-10-28, remediation work item D1).

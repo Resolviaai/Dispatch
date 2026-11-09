@@ -36,6 +36,11 @@ class TestTemplateStudioEndpointsAndPersistence(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
 
+    def tearDown(self):
+        with db.get_db_connection() as conn:
+            conn.execute("DELETE FROM editing_templates WHERE name LIKE '%Creator%' OR name LIKE '%Nested%'")
+            conn.commit()
+
     def test_appassets_origin_accepted_by_local_network_trust(self):
         """Android WebView's appassets.androidplatform.net origin must be allowed without 403."""
         # Querying an endpoint with Android WebView origin

@@ -158,10 +158,11 @@ class TestYouTubeCatcher(unittest.TestCase):
         # Invalid URL
         self.assertIsNone(extract_youtube_video_id("invalid-link"))
 
+    @patch("dispatch.youtube_inbox.catcher.transcribe_media")
     @patch("dispatch.youtube_inbox.catcher.identify_and_save_highlights")
     @patch("dispatch.youtube_inbox.catcher.render_clip")
     @patch("dispatch.video_engine.renderer.slice_clean_clip")
-    def test_process_video_mock_pipeline(self, mock_slice, mock_render, mock_highlights):
+    def test_process_video_mock_pipeline(self, mock_slice, mock_render, mock_highlights, mock_transcribe):
         mock_slice.return_value = {"duration": 15.0, "video_path": Path("storage/clips/mock.mp4")}
         catcher = YouTubeInboxCatcher()
         test_id = "mock_vid_99"
@@ -187,6 +188,7 @@ class TestYouTubeCatcher(unittest.TestCase):
             {"start": 0.0, "end": 15.0, "text": "Basically here is the trick to automate video production.", "words": []},
             {"start": 15.0, "end": 35.0, "text": "You record on your phone, upload to YouTube private, and laptop catches it.", "words": []}
         ]
+        mock_transcribe.return_value = {"segments": mock_segments, "source": "youtube", "words": []}
         catcher.fetch_youtube_captions = MagicMock(return_value=mock_segments)
 
         # Mock highlight finder to register real clip in database

@@ -351,6 +351,8 @@ function extractDirectThumbnail(
   v.src = streamUrl;
 }
 
+const globalSubmittedSessionYtIds = new Set<string>();
+
 interface RecordingsScreenProps {
   recordings: RecordingItem[];
   isYouTubeConnected: boolean;
@@ -386,7 +388,23 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const [routeCMediaUrls, setRouteCMediaUrls] = useState<Record<string, string>>({});
   const [isRouteCLoading, setIsRouteCLoading] = useState(false);
   const [resolvedDurations, setResolvedDurations] = useState<Record<string, number>>({});
-  const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
+  const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>(() => {
+    if (typeof window === 'undefined') return {};
+    const map: Record<string, string> = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('yt_title_')) {
+          const val = localStorage.getItem(key);
+          if (val && !val.startsWith('http')) {
+            const id = key.replace(/^yt_title_/, '');
+            map[id] = val;
+          }
+        }
+      }
+    } catch {}
+    return map;
+  });
   const [resolvedBytes, setResolvedBytes] = useState<Record<string, number>>({});
   const [directThumbnails, setDirectThumbnails] = useState<Record<string, string>>(() => {
     if (typeof window === 'undefined') return {};
@@ -410,6 +428,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   });
   const probedDirectIdsRef = useRef<Set<string>>(new Set());
   const lastSchedulerNudgeRef = useRef(0);
+  const hasInboxHydratedRef = useRef(false);
 
   useEffect(() => {
     setVideoPlaybackError(null);
@@ -548,8 +567,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             if (data.duration && data.duration > 0) {
               setResolvedDurations(prev => ({ ...prev, [ytId]: data.duration, [item.video_id]: data.duration }));
             }
-            if (data.title && typeof data.title === 'string' && data.title.trim()) {
-              setResolvedTitles(prev => ({ ...prev, [ytId]: data.title.trim(), [item.video_id]: data.title.trim() }));
+            if (data.title && typeof data.title === 'string' && data.title.trim() && !data.title.startsWith('http')) {
+              const cleanT = data.title.trim();
+              setResolvedTitles(prev => ({ ...prev, [ytId]: cleanT, [item.video_id]: cleanT }));
+              try {
+                localStorage.setItem(`yt_title_${ytId}`, cleanT);
+                localStorage.setItem(`yt_title_${item.video_id}`, cleanT);
+              } catch {}
             }
           }
         } catch {
@@ -558,8 +582,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`)
               .then(r => r.json())
               .then(d => {
-                if (d?.title) {
-                  setResolvedTitles(prev => ({ ...prev, [ytId]: d.title, [item.video_id]: d.title }));
+                if (d?.title && typeof d.title === 'string' && !d.title.startsWith('http')) {
+                  const cleanT = d.title.trim();
+                  setResolvedTitles(prev => ({ ...prev, [ytId]: cleanT, [item.video_id]: cleanT }));
+                  try {
+                    localStorage.setItem(`yt_title_${ytId}`, cleanT);
+                    localStorage.setItem(`yt_title_${item.video_id}`, cleanT);
+                  } catch {}
                 }
               })
               .catch(() => null);
@@ -695,6 +724,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         if (res.ok) {
           const data = await res.json();
           setInboxItems(Array.isArray(data.items) ? data.items : []);
+          hasInboxHydratedRef.current = true;
           return;
         }
       }
@@ -749,6 +779,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
             }
           });
           setInboxItems(Array.from(jobMap.values()));
+          hasInboxHydratedRef.current = true;
         }
       }
     } catch {
@@ -810,9 +841,14 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     return groups;
   }, [recordings]);
 
-  // Clean raw titles (strip internal [DISPATCH] prefixes)
+  // Clean raw titles (strip internal [DISPATCH] prefixes and filter out raw URLs)
   const cleanTitle = (raw: string): string => {
-    return raw.replace(/^\[DISPATCH\]\s*[-:–—]?\s*/i, '').trim() || raw;
+    if (!raw) return '';
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('www.')) {
+      return '';
+    }
+    return trimmed.replace(/^\[DISPATCH\]\s*[-:–—]?\s*/i, '').trim();
   };
 
   const formatDuration = (sec: number) => {
@@ -1022,19 +1058,22 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
         status = 'queued';
       }
 
-      const firstClipWithTitle = itemClips.find(c => c.source_title);
+      const firstClipWithTitle = itemClips.find(c => c.source_title && !c.source_title.startsWith('http'));
       const resolved = (itemYtId && resolvedTitles[itemYtId]) || resolvedTitles[item.video_id];
       let displayTitle = '';
-      if (resolved) {
+      if (resolved && !resolved.startsWith('http')) {
         displayTitle = cleanTitle(resolved);
       } else if (firstClipWithTitle?.source_title) {
         displayTitle = cleanTitle(firstClipWithTitle.source_title);
-      } else if (item.title && !item.title.startsWith('http')) {
+        if (itemYtId) {
+          try { localStorage.setItem(`yt_title_${itemYtId}`, firstClipWithTitle.source_title); } catch {}
+        }
+      } else if (item.title && !item.title.startsWith('http') && !item.title.startsWith('YouTube ')) {
         displayTitle = cleanTitle(item.title);
       } else if (item.video_id.startsWith('dir_')) {
         displayTitle = 'Direct Video Upload';
       } else if (itemYtId) {
-        displayTitle = `YouTube ${itemYtId}`;
+        displayTitle = 'YouTube Video';
       } else {
         displayTitle = `Session ${item.video_id.slice(0, 10)}`;
       }
@@ -1212,22 +1251,47 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     Bridge.ensureUploadScheduler();
   }, [unifiedSessions]);
 
+  // Isolated background queue submission: NEVER touches user input state (importState/importUrl/importError)
+  const submitBackgroundJob = async (ytId: string) => {
+    try {
+      const url = `https://youtu.be/${ytId}`;
+      const sess = await currentSession().catch(() => null);
+      if (sess?.access_token) {
+        await fetch(`${WORKER_BASE}/jobs/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess.access_token}` },
+          body: JSON.stringify({ url, source_type: 'youtube_self_heal' })
+        });
+      } else if (pcHost && pcStatus.online) {
+        await fetch(apiUrl('/api/youtube/ingest', pcHost), {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ url })
+        });
+      }
+    } catch {
+      /* Silent background self-heal error, left for next sync cycle */
+    }
+  };
+
   // Self-heal: ensure phone recordings uploaded to YouTube are submitted to the cloud job queue
-  const submittedSessionYtIdsRef = useRef(new Set<string>());
   useEffect(() => {
+    // Invariant: Never fire self-heal before the inbox has completed initial network hydration
+    if (!hasInboxHydratedRef.current) return;
+
     const unsubmitted = unifiedSessions.filter(
       s => s.origin === 'phone'
         && s.youtubeVideoId
         && s.clipCount === 0
         && (s.status === 'processing' || s.status === 'queued')
         && !inboxItems.some(it => it.video_id === s.youtubeVideoId || it.session_id === s.id)
-        && !submittedSessionYtIdsRef.current.has(s.youtubeVideoId)
+        && !globalSubmittedSessionYtIds.has(s.youtubeVideoId)
     );
     if (unsubmitted.length === 0) return;
     unsubmitted.forEach(s => {
       if (s.youtubeVideoId) {
-        submittedSessionYtIdsRef.current.add(s.youtubeVideoId);
-        handleImportSubmit(`https://youtu.be/${s.youtubeVideoId}`);
+        globalSubmittedSessionYtIds.add(s.youtubeVideoId);
+        submitBackgroundJob(s.youtubeVideoId);
       }
     });
   }, [unifiedSessions, inboxItems]);
@@ -1243,13 +1307,18 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   const handleImportSubmit = async (rawOverride?: string) => {
     const value = (rawOverride ?? importUrl).trim();
     const videoId = extractVideoId(value);
+    const isManualInput = !rawOverride;
     if (!videoId) {
-      setImportState('error');
-      setImportError('Enter a valid YouTube video link or ID.');
+      if (isManualInput) {
+        setImportState('error');
+        setImportError('Enter a valid YouTube video link or ID.');
+      }
       return;
     }
-    setImportState('submitting');
-    setImportError(null);
+    if (isManualInput) {
+      setImportState('submitting');
+      setImportError(null);
+    }
 
     try {
       const sess = await currentSession().catch(() => null);
@@ -1269,20 +1338,32 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
       }
 
       if (res.ok) {
-        setImportState('queued');
-        setImportUrl('');
+        if (isManualInput) {
+          setImportState('queued');
+          setImportUrl('');
+        }
         showToast('Video added! Your PC will create clips.');
         fetchInbox();
       } else {
         const body = await res.json().catch(() => ({}));
-        setImportState('error');
-        setImportError(body.error || `Failed to add video (${res.status})`);
+        if (isManualInput) {
+          setImportState('error');
+          setImportError(body.error || `Failed to add video (${res.status})`);
+        } else {
+          showToast(body.error || `Failed to add video (${res.status})`, 'error');
+        }
       }
     } catch (e: any) {
-      setImportState('error');
-      setImportError(e.message || 'Network error.');
+      if (isManualInput) {
+        setImportState('error');
+        setImportError(e.message || 'Network error.');
+      } else {
+        showToast(e.message || 'Network error.', 'error');
+      }
     } finally {
-      setTimeout(() => setImportState('idle'), 3000);
+      if (isManualInput) {
+        setTimeout(() => setImportState('idle'), 3000);
+      }
     }
   };
 
@@ -2015,26 +2096,35 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
               <h1 className="text-lg font-semibold tracking-tight text-text-main leading-tight">
                 Sessions
               </h1>
-              {/* Server status: Green Online if LAN PC reachable, Offline otherwise */}
+              {/* Multi-Tier Server Status: Green Online (LAN Direct), Creator Blue (Cloud Relay), or Offline */}
               {pcStatus.checking ? null : pcStatus.online ? (
                 <span
                   className="inline-flex items-center gap-1.5 leading-none"
-                  title="Server online — clips can process and publish"
-                  aria-label="Server online"
+                  title="PC Server online (LAN direct connection)"
+                  aria-label="Server online LAN"
                 >
                   <Server size={13} strokeWidth={1.5} className="text-status-success animate-pulse" />
                   <span className="text-xs font-medium text-status-success">Online</span>
+                </span>
+              ) : pcStatus.isCloudMode ? (
+                <span
+                  className="inline-flex items-center gap-1.5 leading-none"
+                  title="Cloud Relay active — jobs and clips sync autonomously across cellular & remote networks"
+                  aria-label="Server online Cloud Relay"
+                >
+                  <Server size={13} strokeWidth={1.5} className="text-primary animate-pulse" />
+                  <span className="text-xs font-medium text-primary">Cloud Online</span>
                 </span>
               ) : (
                 <button
                   type="button"
                   onClick={() => {
                     checkPcStudio();
-                    showToast('Checking PC status…');
+                    showToast('Checking server status…');
                   }}
                   className="inline-flex items-center gap-1.5 leading-none p-3.5 -m-3.5 rounded-lg text-text-muted hover:text-text-secondary active:scale-[0.98] active:bg-transparent transition-all focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary"
-                  title="Start Dispatch on your computer to process clips. Tap to retry."
-                  aria-label="Server offline — start Dispatch on your computer to process clips. Tap to retry."
+                  title="Start Dispatch on your computer or connect to the internet to process clips. Tap to retry."
+                  aria-label="Server offline. Tap to retry."
                 >
                   <Server size={13} strokeWidth={1.5} className="shrink-0" />
                   <span className="text-xs font-medium">Offline</span>
@@ -2266,8 +2356,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
 
                 {/* Title + Metadata */}
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
-                    {session.title}
+                  <h3 className="text-sm font-semibold text-text-main leading-snug line-clamp-2 min-h-[2.5rem]">
+                    {session.title || 'YouTube Video'}
                   </h3>
 
                   <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted tabular-nums truncate">

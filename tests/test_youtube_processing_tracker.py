@@ -24,6 +24,9 @@ class TestYouTubeProcessingTracker(unittest.TestCase):
 
     def setUp(self):
         db.init_db()
+        p_align = patch("dispatch.youtube_inbox.poller.verify_channel_alignment", return_value={"matched": True})
+        p_align.start()
+        self.addCleanup(p_align.stop)
         self.temp_dir = Path(tempfile.mkdtemp())
         self.catcher = YouTubeInboxCatcher(storage_dir=self.temp_dir)
         self.poller = YouTubeInboxPoller(catcher=self.catcher)

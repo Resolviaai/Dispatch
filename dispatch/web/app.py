@@ -129,7 +129,7 @@ ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|appassets\.androidplatform\.net)(:\d+)?$",
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|appassets\.androidplatform\.net|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -3020,8 +3020,6 @@ async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
         try:
             user_info = get_authenticated_user(request)
             user_id = user_info.get("user_id") or user_info.get("id")
-        except HTTPException:
-            raise
         except Exception:
             pass
 

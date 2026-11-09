@@ -43,6 +43,58 @@ class RecoverableTranscriptionError(RuntimeError):
     pass
 
 
+def _safe_parse_json(raw_text: str) -> Any:
+    """Safely extracts and parses JSON payload from raw LLM output, handling markdown fences and trailing text."""
+    if not raw_text or not raw_text.strip():
+        return []
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            if lines[-1].startswith("```"):
+                cleaned = "\n".join(lines[1:-1]).strip()
+            else:
+                cleaned = "\n".join(lines[1:]).strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # Extract bracket bounds for JSON array
+    start_bracket = cleaned.find("[")
+    end_bracket = cleaned.rfind("]")
+    if start_bracket != -1 and end_bracket != -1 and end_bracket > start_bracket:
+        try:
+            return json.loads(cleaned[start_bracket:end_bracket + 1])
+        except Exception:
+            pass
+
+    # Fallback to decoder.raw_decode
+    decoder = json.JSONDecoder()
+    if start_bracket != -1:
+        try:
+            obj, _ = decoder.raw_decode(cleaned[start_bracket:])
+            return obj
+        except Exception:
+            pass
+
+    start_brace = cleaned.find("{")
+    end_brace = cleaned.rfind("}")
+    if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
+        try:
+            return json.loads(cleaned[start_brace:end_brace + 1])
+        except Exception:
+            pass
+    if start_brace != -1:
+        try:
+            obj, _ = decoder.raw_decode(cleaned[start_brace:])
+            return obj
+        except Exception:
+            pass
+
+    raise RecoverableTranscriptionError(f"gemini-3.5-flash-lite returned unparseable JSON: {cleaned[:160]}")
+
+
 def is_permanent_auth_error(exc: Exception) -> bool:
     """Check if an exception indicates a permanent authentication or authorization failure."""
     if isinstance(exc, PermanentAuthError):
@@ -311,7 +363,7 @@ def _transcribe_chunk_fallback(
         )
         logger.info("Fallback gemini-3.5-flash-lite completed in %.2fs", time.time() - t0)
 
-        raw_segments = json.loads(getattr(response, "text", "") or "[]")
+        raw_segments = _safe_parse_json(getattr(response, "text", "") or "[]")
         if not isinstance(raw_segments, list):
             raise RecoverableTranscriptionError("gemini-3.5-flash-lite returned non-list transcript")
 
@@ -326,28 +378,50 @@ def _transcribe_chunk_fallback(
             en = _parse_stage1_time(seg.get("end", 0.0))
             if en < st:
                 continue
-            text = str(seg.get("text", "")).strip()
+            text = str(seg.get("text") or seg.get("word") or "").strip()
             spk = str(seg.get("speaker", "spk:0")).strip()
             if text:
                 full_text_pieces.append(text)
 
-            # Interpolate word timings if words not provided
             seg_words = []
-            tokens = text.split()
-            if tokens:
-                duration = max(0.05, en - st)
-                step = duration / len(tokens)
-                for w_idx, tok in enumerate(tokens):
-                    w_st = round(st + w_idx * step, 3)
-                    w_en = round(st + (w_idx + 1) * step, 3)
-                    seg_words.append({
-                        "word": tok,
-                        "start": w_st,
-                        "end": w_en,
-                        "probability": 0.9,
-                        "speaker": spk,
-                    })
-                    all_words.append(seg_words[-1])
+            if "word" in seg and "text" not in seg:
+                w_item = {
+                    "word": text,
+                    "start": st,
+                    "end": en,
+                    "probability": float(seg.get("probability", 0.9)),
+                    "speaker": spk,
+                }
+                seg_words.append(w_item)
+                all_words.append(w_item)
+            elif "words" in seg and isinstance(seg["words"], list):
+                for w in seg["words"]:
+                    if isinstance(w, dict):
+                        w_item = {
+                            "word": str(w.get("word", "")),
+                            "start": _parse_stage1_time(w.get("start", st)),
+                            "end": _parse_stage1_time(w.get("end", en)),
+                            "probability": float(w.get("probability", 0.9)),
+                            "speaker": str(w.get("speaker", spk)),
+                        }
+                        seg_words.append(w_item)
+                        all_words.append(w_item)
+            else:
+                tokens = text.split()
+                if tokens:
+                    duration = max(0.05, en - st)
+                    step = duration / len(tokens)
+                    for w_idx, tok in enumerate(tokens):
+                        w_st = round(st + w_idx * step, 3)
+                        w_en = round(st + (w_idx + 1) * step, 3)
+                        seg_words.append({
+                            "word": tok,
+                            "start": w_st,
+                            "end": w_en,
+                            "probability": 0.9,
+                            "speaker": spk,
+                        })
+                        all_words.append(seg_words[-1])
 
             segments.append({
                 "id": idx,
