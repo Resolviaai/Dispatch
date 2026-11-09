@@ -1454,7 +1454,7 @@ def import_cloud_timeline_data(
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT user_id, segments_revision, active_state_revision, rendered_fingerprint FROM clips WHERE id = ?",
+            "SELECT user_id, start_time, end_time, duration, segments_revision, active_state_revision, rendered_fingerprint FROM clips WHERE id = ?",
             (clip_id,),
         )
         row = cursor.fetchone()
@@ -1487,6 +1487,36 @@ def import_cloud_timeline_data(
                 caption_json = json.dumps(trk, ensure_ascii=False)
                 break
 
+        # Derive timeline bounds and total kept duration from segments
+        segs = doc_obj.get("timeline", {}).get("segments", [])
+        new_start = None
+        new_end = None
+        calculated_kept_dur = 0.0
+        if isinstance(segs, list) and len(segs) > 0:
+            try:
+                first_seg = segs[0]
+                last_seg = segs[-1]
+                new_start = float(first_seg.get("source_start", first_seg.get("start", first_seg[0] if isinstance(first_seg, (list, tuple)) else 0)))
+                new_end = float(last_seg.get("source_end", last_seg.get("end", last_seg[1] if isinstance(last_seg, (list, tuple)) else 0)))
+                for s in segs:
+                    st = float(s.get("source_start", s.get("start", s[0] if isinstance(s, (list, tuple)) else 0)))
+                    en = float(s.get("source_end", s.get("end", s[1] if isinstance(s, (list, tuple)) else 0)))
+                    if en > st:
+                        calculated_kept_dur += (en - st)
+                calculated_kept_dur = round(calculated_kept_dur, 2)
+            except Exception:
+                new_start = None
+                new_end = None
+
+        if kept_dur <= 0.0 and calculated_kept_dur > 0.0:
+            kept_dur = calculated_kept_dur
+        new_duration = kept_dur if kept_dur > 0 else (round(new_end - new_start, 2) if new_start is not None and new_end is not None else None)
+
+        range_changed = 0
+        if new_start is not None and new_end is not None:
+            if abs(new_start - float(clip.get("start_time") or 0)) > 0.01 or abs(new_end - float(clip.get("end_time") or 0)) > 0.01:
+                range_changed = 1
+
         cursor.execute("""
             UPDATE clips
             SET project_document = ?,
@@ -1499,7 +1529,11 @@ def import_cloud_timeline_data(
                 render_fingerprint = ?,
                 kept_duration = ?,
                 render_stale = ?,
-                caption_data = COALESCE(?, caption_data)
+                caption_data = COALESCE(?, caption_data),
+                start_time = COALESCE(?, start_time),
+                end_time = COALESCE(?, end_time),
+                duration = COALESCE(?, duration),
+                range_revision = range_revision + ?
             WHERE id = ?
         """, (
             doc_str,
@@ -1513,6 +1547,10 @@ def import_cloud_timeline_data(
             kept_dur,
             render_stale,
             caption_json,
+            new_start,
+            new_end,
+            new_duration,
+            range_changed,
             clip_id,
         ))
 
@@ -1641,6 +1679,41 @@ def get_clips_for_review(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
             cursor.execute("SELECT * FROM clips WHERE status = 'ready_review' AND user_id = ? ORDER BY created_at DESC", (user_id,))
         else:
             cursor.execute("SELECT * FROM clips WHERE status = 'ready_review' ORDER BY created_at DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_clips_for_session(session_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all clips belonging to a given session_id ordered by start_time."""
+    if not session_id:
+        return []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clips WHERE session_id = ? ORDER BY start_time ASC", (session_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_recent_approved_clips(limit: int = 5, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Owner-scoped positive style anchors: retrieve recent approved or published clips.
+    
+    A caller with an owner identity only ever sees that owner's rows. Callers
+    without an identity get legacy rows (user_id IS NULL) only.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if user_id:
+            cursor.execute(
+                "SELECT id, title, hook, description, start_time, end_time, duration, virality_score "
+                "FROM clips WHERE status IN ('approved', 'published') AND user_id = ? "
+                "ORDER BY COALESCE(approved_at, created_at) DESC, rowid DESC LIMIT ?",
+                (user_id, limit),
+            )
+        else:
+            cursor.execute(
+                "SELECT id, title, hook, description, start_time, end_time, duration, virality_score "
+                "FROM clips WHERE status IN ('approved', 'published') AND user_id IS NULL "
+                "ORDER BY COALESCE(approved_at, created_at) DESC, rowid DESC LIMIT ?",
+                (limit,),
+            )
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -2039,6 +2112,12 @@ def save_clip_definitions(
                 WHERE chunk_id = ? AND (video_path IS NULL OR video_path = '') AND status = 'ready_review'
                   AND range_revision = 0 AND caption_data IS NULL
             """, (chunk_id,))
+        elif session_id:
+            cursor.execute("""
+                DELETE FROM clips 
+                WHERE session_id = ? AND (video_path IS NULL OR video_path = '') AND status = 'ready_review'
+                  AND range_revision = 0 AND caption_data IS NULL
+            """, (session_id,))
 
         # 2. Insert all validated clips
         for idx, c in enumerate(clip_defs):

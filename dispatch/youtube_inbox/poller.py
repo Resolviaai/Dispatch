@@ -61,6 +61,7 @@ class YouTubeInboxPoller:
         self._worker_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self.last_poll_time: float = 0.0
+        self._last_alignment_error: Optional[str] = None
 
     def start(self):
         """Start the background polling thread."""
@@ -123,8 +124,17 @@ class YouTubeInboxPoller:
             # Verify Route A channel alignment between PC OAuth and Cloud Vault
             alignment = verify_channel_alignment(user_id=self.user_id)
             if not alignment.get("matched"):
-                logger.error("Route A Poller ABORTED: %s", alignment.get("error"))
+                err = alignment.get("error", "channel alignment failed")
+                if err != self._last_alignment_error:
+                    self._last_alignment_error = err
+                    if alignment.get("status") in ("unauthenticated", "no_cloud_account") or "not authenticated" in str(err).lower() or "no local youtube token" in str(err).lower():
+                        logger.info("Route A Poller idle: %s (connect YouTube in Settings to enable automated inbox)", err)
+                    else:
+                        logger.warning("Route A Poller: %s", err)
+                else:
+                    logger.debug("Route A Poller: %s", err)
                 return []
+            self._last_alignment_error = None
 
             # 1. Fetch recent authenticated uploads
             try:

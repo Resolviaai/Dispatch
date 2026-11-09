@@ -12,7 +12,12 @@ import requests
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from dispatch.config import GEMINI_API_KEY, MIN_CLIP_DURATION, MAX_CLIP_DURATION
-from dispatch.ai_clips.prompt_templates import HIGHLIGHT_SYSTEM_PROMPT, build_highlight_user_prompt
+import math
+from dispatch.ai_clips.prompt_templates import (
+    HIGHLIGHT_SYSTEM_PROMPT,
+    build_highlight_user_prompt,
+    compute_optimal_clip_quota
+)
 from dispatch.ai_clips.preference_learner import get_negative_feedback_prompt
 from dispatch.video_engine.silence import analyze_silence_gaps, find_natural_subsection_within_limit
 from dispatch import db
@@ -40,6 +45,14 @@ class HighlightCandidate(BaseModel):
     virality_score: int = Field(default=70, ge=1, le=100)
     layout_recommendation: str = Field(default="fit_blur")
     reason: Optional[str] = ""
+    start_words: Optional[str] = None
+    end_words: Optional[str] = None
+    tier: Optional[str] = "A"
+    hook_type: Optional[str] = "claim"
+    archetype: Optional[str] = None
+    arousal_state: Optional[str] = None
+    ignition_quote: Optional[str] = None
+    score_breakdown: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
     def validate_timestamps(self) -> "HighlightCandidate":
@@ -103,6 +116,19 @@ def compute_interval_overlap(start1: float, end1: float, start2: float, end2: fl
     return intersection / union
 
 
+def compute_containment_ratio(start1: float, end1: float, start2: float, end2: float) -> float:
+    """Compute the overlap ratio relative to the shorter interval (containment)."""
+    inter_start = max(start1, start2)
+    inter_end = min(end1, end2)
+    intersection = max(0.0, inter_end - inter_start)
+    if intersection == 0.0:
+        return 0.0
+    min_dur = min(end1 - start1, end2 - start2)
+    if min_dur <= 0.0:
+        return 0.0
+    return intersection / min_dur
+
+
 def clean_speech_restarts_and_boundaries(
     start_t: float,
     end_t: float,
@@ -136,6 +162,7 @@ def clean_speech_restarts_and_boundaries(
 
     # 1. Detect opening or early false starts / repeated phrases
     # Look for matching phrases (2 to 8 words) starting within the first 30 seconds of the candidate
+    restart_detected = False
     for n in (2, 3, 4, 5, 6, 7, 8):
         for i in range(min(12, len(clip_words) - n * 2)):
             phrase1 = norm_words[i:i + n]
@@ -161,10 +188,11 @@ def clean_speech_restarts_and_boundaries(
                                 " ".join(phrase1), gap, t2_start
                             )
                             start_t = max(start_t, t2_start - 0.15)
+                            restart_detected = True
                             break
-            if start_t > float(clip_words[0].get("start", 0.0)):
+            if restart_detected:
                 break
-        if start_t > float(clip_words[0].get("start", 0.0)):
+        if restart_detected:
             break
 
     # 2. Detect trailing abandoned fragments near candidate end
@@ -200,6 +228,379 @@ def detect_and_trim_opening_false_start(
     cleaned_start, _ = clean_speech_restarts_and_boundaries(start_t, end_t, segments, end_t)
     return cleaned_start
 
+def match_quote_anchor(
+    quote: Optional[str],
+    segments: List[Dict[str, Any]],
+    approx_time: float,
+    prefer_start: bool = True,
+    search_window: float = 25.0
+) -> Optional[float]:
+    """Find the exact word timestamp for a 3-8 word quote anchor within search_window of approx_time."""
+    if not quote or not segments:
+        return None
+
+    tokens = [t for t in re.findall(r'\b\w+\b', quote.lower()) if t]
+    if not tokens:
+        return None
+
+    window_words: List[Tuple[str, float, float]] = []
+    for s in segments:
+        for w in s.get("words", []):
+            w_time = float(w.get("start" if prefer_start else "end", 0.0))
+            if abs(w_time - approx_time) <= search_window:
+                norm_w = re.sub(r'[^\w]', '', w.get("word", "")).lower()
+                if norm_w:
+                    window_words.append((norm_w, float(w.get("start", 0.0)), float(w.get("end", 0.0))))
+
+    if len(window_words) < len(tokens):
+        return None
+
+    best_match_idx = -1
+    best_match_score = 0
+    k = len(tokens)
+
+    for i in range(len(window_words) - k + 1):
+        slice_words = [window_words[i + j][0] for j in range(k)]
+        matches = sum(1 for a, b in zip(slice_words, tokens) if a == b)
+        if matches > best_match_score and matches >= max(2, int(k * 0.6)):
+            best_match_score = matches
+            best_match_idx = i
+
+    if best_match_idx >= 0:
+        if prefer_start:
+            return window_words[best_match_idx][1]
+        else:
+            return window_words[best_match_idx + k - 1][2]
+
+    return None
+
+
+FILLER_TOKENS = {
+    "so", "um", "uh", "okay", "ok", "basically", "like", "actually",
+    "right", "now", "well", "toh", "matlab", "dekho", "suno", "haan",
+    "arre", "yaar", "aur", "and", "but", "ki"
+}
+
+
+def strip_leading_filler_words(
+    start_t: float,
+    end_t: float,
+    segments: List[Dict[str, Any]]
+) -> float:
+    """Advance start_t past opening filler tokens to the core statement."""
+    clip_words = []
+    for s in segments:
+        for w in s.get("words", []):
+            w_start = float(w.get("start", 0.0))
+            if start_t - 0.1 <= w_start <= start_t + 4.0:
+                clip_words.append(w)
+
+    if len(clip_words) < 4:
+        return start_t
+
+    new_start = start_t
+    stripped_count = 0
+    for w in clip_words:
+        token = re.sub(r'[^\w]', '', w.get("word", "")).lower()
+        if token in FILLER_TOKENS and stripped_count < 3:
+            w_end = float(w.get("end", 0.0))
+            if end_t - w_end >= MIN_CLIP_DURATION:
+                new_start = w_end
+                stripped_count += 1
+            else:
+                break
+        else:
+            if stripped_count > 0:
+                w_start = float(w.get("start", 0.0))
+                new_start = max(start_t, w_start - 0.10)
+            break
+
+    return new_start
+
+
+CONJUNCTION_TOKENS = {"and", "but", "because", "so", "which", "or", "ki", "aur", "ya", "lekin", "magar", "kyunki"}
+
+
+def trim_trailing_conjunctions(
+    start_t: float,
+    end_t: float,
+    segments: List[Dict[str, Any]]
+) -> float:
+    """Trim end_t if the candidate ends mid-thought on a dangling conjunction."""
+    trailing_words = []
+    for s in segments:
+        for w in s.get("words", []):
+            w_end = float(w.get("end", 0.0))
+            if end_t - 3.0 <= w_end <= end_t + 0.5:
+                trailing_words.append(w)
+
+    if len(trailing_words) < 2:
+        return end_t
+
+    last_w = trailing_words[-1]
+    last_token = re.sub(r'[^\w]', '', last_w.get("word", "")).lower()
+    if last_token in CONJUNCTION_TOKENS:
+        prev_w = trailing_words[-2]
+        prev_end = float(prev_w.get("end", 0.0))
+        if prev_end - start_t >= MIN_CLIP_DURATION:
+            logger.info("Trimmed dangling trailing conjunction '%s' at end of clip (%.2fs -> %.2fs)",
+                        last_token, end_t, prev_end + 0.15)
+            return prev_end + 0.15
+
+    return end_t
+
+
+
+SARCASM_RETRACTION_REGEX = re.compile(
+    r"(?i)\b("
+    r"just kidding|just joking|kidding|joking|mazak tha|mazaak tha|"
+    r"mazak kar raha tha|obviously not|obviously don't|i'm joking|i am joking|"
+    r"not actually|sarcasm tha|don't actually do this|i was joking"
+    r")\b"
+)
+
+
+def apply_sarcasm_and_irony_lookahead(
+    start_t: float,
+    end_t: float,
+    segments: List[Dict[str, Any]],
+    total_duration: float,
+    lookahead_seconds: float = 10.0
+) -> Tuple[float, float, bool]:
+    """Scan window immediately following candidate end_t for sarcasm/irony retraction markers.
+
+    If a bold/outrageous statement is retracted ('just kidding', 'mazak tha'), we must either:
+    1. Extend end_t to incorporate the retraction and its resolution clause (if <= MAX_CLIP_DURATION).
+    2. Reject the candidate (return is_safe=False) if extending would exceed maximum allowable clip duration,
+       preventing viral misinformation and misleading out-of-context clips.
+    """
+    if not segments:
+        return start_t, end_t, True
+
+    lookahead_end = min(total_duration, end_t + lookahead_seconds)
+    subsequent_words = []
+    for s in segments:
+        for w in s.get("words", []):
+            w_s = float(w.get("start", 0.0))
+            if end_t <= w_s <= lookahead_end:
+                subsequent_words.append(w)
+
+    if not subsequent_words:
+        lookahead_text = " ".join(
+            s.get("text", "") for s in segments
+            if float(s.get("start", 0.0)) >= end_t and float(s.get("start", 0.0)) <= lookahead_end
+        )
+        match = SARCASM_RETRACTION_REGEX.search(lookahead_text)
+        if match:
+            matching_segs = [
+                s for s in segments
+                if float(s.get("start", 0.0)) >= end_t and float(s.get("start", 0.0)) <= lookahead_end
+            ]
+            if matching_segs:
+                new_end = min(total_duration, float(matching_segs[0].get("end", end_t)) + 0.25)
+                if (new_end - start_t) <= MAX_CLIP_DURATION:
+                    return start_t, new_end, True
+                return start_t, end_t, False
+        return start_t, end_t, True
+
+    lookahead_text = " ".join(w.get("word", "") for w in subsequent_words)
+    match = SARCASM_RETRACTION_REGEX.search(lookahead_text)
+    if not match:
+        return start_t, end_t, True
+
+    cur_char = 0
+    matched_word_idx = -1
+    for idx, w in enumerate(subsequent_words):
+        w_text = w.get("word", "")
+        w_end_idx = cur_char + len(w_text)
+        cur_char = w_end_idx + 1
+        if w_end_idx >= match.end():
+            matched_word_idx = idx
+            break
+
+    if matched_word_idx < 0:
+        matched_word_idx = len(subsequent_words) - 1
+
+    clause_end_idx = matched_word_idx
+    for k in range(matched_word_idx, min(len(subsequent_words), matched_word_idx + 4)):
+        clause_end_idx = k
+        if subsequent_words[k].get("word", "").endswith((".", "!", "?")):
+            break
+
+    retraction_end_t = float(subsequent_words[clause_end_idx].get("end", end_t))
+    extended_end = min(total_duration, round(retraction_end_t + 0.25, 2))
+
+    if (extended_end - start_t) <= MAX_CLIP_DURATION:
+        logger.info("Detected sarcasm/irony marker '%s' after %.2fs. Safely extended end to %.2fs.",
+                    match.group(0), end_t, extended_end)
+        return start_t, extended_end, True
+    else:
+        logger.info("Detected sarcasm/irony marker '%s', but extended duration (%.2fs) exceeds max %.1fs. Rejecting candidate.",
+                    match.group(0), extended_end - start_t, MAX_CLIP_DURATION)
+        return start_t, end_t, False
+
+
+SPONSOR_PROMO_REGEX = re.compile(
+    r"(?i)\b("
+    r"sponsored by|promo code|coupon code|use code|discount code|"
+    r"link in (the )?(description|bio)|affiliate link|patreon\.com|"
+    r"support (us|me) on|check out the link below|click the link below|"
+    r"smash that like button|subscribe to (the |my )?channel|"
+    r"don't forget to like and subscribe|leave a comment down below|"
+    r"merch link|buy my course|our sponsor today"
+    r")\b"
+)
+
+
+def detect_sponsor_promo_contamination(
+    start_t: float,
+    end_t: float,
+    segments: List[Dict[str, Any]]
+) -> Tuple[float, float, bool]:
+    """Detect sponsor pitches, promo codes, and subscribe asks in candidate clip.
+
+    If located at edge, surgically trims. If contaminating core body or dominant, returns is_clean=False.
+    """
+    if not segments or end_t <= start_t:
+        return start_t, end_t, True
+
+    clip_words = []
+    for s in segments:
+        for w in s.get("words", []):
+            w_s = float(w.get("start", 0.0))
+            if start_t - 0.2 <= w_s <= end_t + 0.2:
+                clip_words.append(w)
+
+    full_clip_text = " ".join(w.get("word", "") for w in clip_words) if clip_words else " ".join(
+        s.get("text", "") for s in segments if float(s.get("end", 0.0)) > start_t and float(s.get("start", 0.0)) < end_t
+    )
+
+    match = SPONSOR_PROMO_REGEX.search(full_clip_text)
+    if not match:
+        return start_t, end_t, True
+
+    if clip_words:
+        cur_char = 0
+        p_start_time = None
+        p_end_time = None
+        for w in clip_words:
+            w_text = w.get("word", "")
+            w_end_idx = cur_char + len(w_text)
+            if p_start_time is None and w_end_idx > match.start():
+                p_start_time = float(w.get("start", start_t))
+            if w_end_idx >= match.end():
+                p_end_time = float(w.get("end", end_t))
+                break
+            cur_char = w_end_idx + 1
+
+        p_start_time = p_start_time or start_t
+        p_end_time = p_end_time or end_t
+
+        if (p_start_time - start_t) <= 8.0:
+            rem_dur = end_t - p_end_time
+            if rem_dur >= MIN_CLIP_DURATION:
+                logger.info("Trimming opening sponsor read '%s' (start %.2fs -> %.2fs)",
+                            match.group(0), start_t, p_end_time + 0.15)
+                return p_end_time + 0.15, end_t, True
+
+        if (end_t - p_end_time) <= 8.0:
+            rem_dur = p_start_time - start_t
+            if rem_dur >= MIN_CLIP_DURATION:
+                logger.info("Trimming trailing sponsor/subscribe ask '%s' (end %.2fs -> %.2fs)",
+                            match.group(0), end_t, p_start_time - 0.15)
+                return start_t, p_start_time - 0.15, True
+
+    logger.info("Rejecting candidate contaminated with sponsor/promo read: '%s'", match.group(0))
+    return start_t, end_t, False
+
+
+LAUGHTER_REGEX = re.compile(r"(?i)(\[(laughter|laugh|applause)\]|\b(haha+|hehe+|chuckle|giggle|lol)\b)")
+
+
+def apply_laughter_release_window(
+    end_t: float,
+    segments: List[Dict[str, Any]],
+    total_duration: float,
+    max_release_seconds: float = 2.0
+) -> float:
+    """Extend end_t by up to 2.0s when laughter or applause follows a comedic punchline.
+
+    Ensures the comedic timing breathes naturally instead of cutting off mid-chuckle.
+    """
+    if not segments or end_t >= total_duration:
+        return end_t
+
+    search_end = min(total_duration, end_t + max_release_seconds + 0.5)
+    last_reaction_end = end_t
+
+    for s in segments:
+        s_start = float(s.get("start", 0.0))
+        s_end = float(s.get("end", 0.0))
+        if end_t <= s_start <= search_end:
+            s_text = s.get("text", "")
+            if LAUGHTER_REGEX.search(s_text):
+                last_reaction_end = max(last_reaction_end, min(s_end, end_t + max_release_seconds))
+        for w in s.get("words", []):
+            w_s = float(w.get("start", 0.0))
+            w_e = float(w.get("end", 0.0))
+            if end_t <= w_s <= search_end:
+                if LAUGHTER_REGEX.search(w.get("word", "")):
+                    last_reaction_end = max(last_reaction_end, min(w_e, end_t + max_release_seconds))
+
+    if last_reaction_end > end_t:
+        extended = min(total_duration, round(last_reaction_end + 0.20, 2))
+        logger.info("Extended comedic punchline release window (%.2fs -> %.2fs) for laughter decay", end_t, extended)
+        return extended
+
+    return end_t
+
+def snap_clip_to_stage2_words(
+    target_start: float,
+    target_end: float,
+    stage2_words: List[Dict[str, Any]],
+    padded_start: float,
+    padded_end: float,
+    max_snap_tolerance: float = 2.0
+) -> Tuple[float, float]:
+    """Snap candidate start and end to the closest stage2 precision words around target_start and target_end.
+
+    Crucial fix for Bug #2: Does NOT use words[0] or words[-1] of the padded slice (which would pull in
+    4 seconds of unrelated lead-in and lead-out speech). Instead, snaps strictly to the spoken words
+    closest to target_start and target_end.
+    """
+    if not stage2_words:
+        return target_start, target_end
+
+    abs_words = []
+    for w in stage2_words:
+        w_s = padded_start + float(w.get("start", 0.0))
+        w_e = padded_start + float(w.get("end", 0.0))
+        abs_words.append((w_s, w_e, w.get("word", "")))
+
+    if not abs_words:
+        return target_start, target_end
+
+    best_start = target_start
+    min_start_diff = float("inf")
+    for w_s, w_e, _ in abs_words:
+        diff = abs(w_s - target_start)
+        if diff < min_start_diff and diff <= max_snap_tolerance:
+            min_start_diff = diff
+            best_start = max(padded_start, round(w_s - 0.15, 2))
+
+    best_end = target_end
+    min_end_diff = float("inf")
+    for w_s, w_e, _ in abs_words:
+        diff = abs(w_e - target_end)
+        if diff < min_end_diff and diff <= max_snap_tolerance:
+            min_end_diff = diff
+            best_end = min(padded_end, round(w_e + 0.25, 2))
+
+    if best_end - best_start < MIN_CLIP_DURATION:
+        return target_start, target_end
+
+    return best_start, best_end
+
 
 DEVANAGARI_REGEX = re.compile(r'[\u0900-\u097F]')
 
@@ -210,36 +611,124 @@ def has_devanagari(text: str) -> bool:
 
 
 _DEVANAGARI_MAP = {
+    # Signs / Modifiers
+    '\u0900': 'n',   # Inverted Chandrabindu
+    '\u0901': 'n',   # Chandrabindu
+    '\u0902': 'n',   # Anusvara
+    '\u0903': 'h',   # Visarga
+
     # Independent vowels
-    '\u0905': 'a', '\u0906': 'aa', '\u0907': 'i', '\u0908': 'ee', '\u0909': 'u',
-    '\u090a': 'oo', '\u090b': 'ri', '\u090f': 'e', '\u0910': 'ai', '\u0913': 'o',
+    '\u0904': 'a',   # Short A
+    '\u0905': 'a',
+    '\u0906': 'aa',
+    '\u0907': 'i',
+    '\u0908': 'ee',
+    '\u0909': 'u',
+    '\u090a': 'oo',
+    '\u090b': 'ri',
+    '\u090c': 'li',
+    '\u090d': 'e',   # Chandra E
+    '\u090e': 'e',   # Short E
+    '\u090f': 'e',
+    '\u0910': 'ai',
+    '\u0911': 'o',   # Chandra O (ऑ)
+    '\u0912': 'o',   # Short O
+    '\u0913': 'o',
     '\u0914': 'au',
+
     # Consonants
     '\u0915': 'k', '\u0916': 'kh', '\u0917': 'g', '\u0918': 'gh', '\u0919': 'ng',
     '\u091a': 'ch', '\u091b': 'chh', '\u091c': 'j', '\u091d': 'jh', '\u091e': 'ny',
     '\u091f': 't', '\u0920': 'th', '\u0921': 'd', '\u0922': 'dh', '\u0923': 'n',
     '\u0924': 't', '\u0925': 'th', '\u0926': 'd', '\u0927': 'dh', '\u0928': 'n',
+    '\u0929': 'n',   # NNNA
     '\u092a': 'p', '\u092b': 'ph', '\u092c': 'b', '\u092d': 'bh', '\u092e': 'm',
-    '\u092f': 'y', '\u0930': 'r', '\u0932': 'l', '\u0935': 'v', '\u0936': 'sh',
-    '\u0937': 'sh', '\u0938': 's', '\u0939': 'h',
-    # Nukta consonants
-    '\u0958': 'q', '\u0959': 'kh', '\u095a': 'g', '\u095b': 'z', '\u095c': 'r',
-    '\u095d': 'rh', '\u095e': 'f',
+    '\u092f': 'y', '\u0930': 'r', '\u0931': 'r',   # RRA
+    '\u0932': 'l', '\u0933': 'l', '\u0934': 'l',   # LLA, LLLA
+    '\u0935': 'v', '\u0936': 'sh', '\u0937': 'sh', '\u0938': 's', '\u0939': 'h',
+
+    # Additional signs & vowels
+    '\u093a': 'oe',
+    '\u093b': 'ooe',
+    '\u093c': '',    # Nukta (standalone fallback)
+    '\u093d': "'",   # Avagraha (ऽ)
+
     # Dependent vowel signs (matras)
     '\u093e': 'aa', '\u093f': 'i', '\u0940': 'ee', '\u0941': 'u', '\u0942': 'oo',
-    '\u0943': 'ri', '\u0947': 'e', '\u0948': 'ai', '\u094b': 'o', '\u094c': 'au',
-    # Modifiers
-    '\u0902': 'n', '\u0901': 'n', '\u0903': 'h',
+    '\u0943': 'ri', '\u0944': 'ri', '\u0945': 'e', '\u0946': 'e', '\u0947': 'e',
+    '\u0948': 'ai', '\u0949': 'o', '\u094a': 'o', '\u094b': 'o', '\u094c': 'au',
+    '\u094e': 'e', '\u094f': 'aw',
+
+    # Om & Accents
+    '\u0950': 'Om',
+    '\u0951': '', '\u0952': '', '\u0953': '', '\u0954': '',
+    '\u0955': 'e', '\u0956': 'u', '\u0957': 'oo',
+
+    # Nukta consonants
+    '\u0958': 'q', '\u0959': 'kh', '\u095a': 'g', '\u095b': 'z', '\u095c': 'r',
+    '\u095d': 'rh', '\u095e': 'f', '\u095f': 'y',
+
+    # Additional Sanskrit vowels
+    '\u0960': 'ri', '\u0961': 'li', '\u0962': 'li', '\u0963': 'li',
+
+    # Danda & Punctuation
+    '\u0964': '.', '\u0965': '.',
+
+    # Digits (०-९)
+    '\u0966': '0', '\u0967': '1', '\u0968': '2', '\u0969': '3', '\u096a': '4',
+    '\u096b': '5', '\u096c': '6', '\u096d': '7', '\u096e': '8', '\u096f': '9',
+
+    # Devanagari extensions
+    '\u0970': '.', '\u0971': '', '\u0972': 'a', '\u0973': 'oe', '\u0974': 'ooe',
+    '\u0975': 'aw', '\u0976': 'ue', '\u0977': 'uue', '\u0978': 'd', '\u0979': 'z',
+    '\u097a': 'y', '\u097b': 'g', '\u097c': 'j', '\u097d': '', '\u097e': 'd',
+    '\u097f': 'b',
 }
+
+_NUKTA_REPLACE = {
+    '\u0915\u093c': '\u0958',  # क़ -> q
+    '\u0916\u093c': '\u0959',  # ख़ -> kh
+    '\u0917\u093c': '\u095a',  # ग़ -> g
+    '\u091c\u093c': '\u095b',  # ज़ -> z
+    '\u0921\u093c': '\u095c',  # ड़ -> r
+    '\u0922\u093c': '\u095d',  # ढ़ -> rh
+    '\u0928\u093c': '\u0929',  # ऩ -> n
+    '\u092b\u093c': '\u095e',  # फ़ -> f
+    '\u092f\u093c': '\u095f',  # य़ -> y
+    '\u0930\u093c': '\u0931',  # ऱ -> r
+    '\u0933\u093c': '\u0934',  # ऴ -> l
+}
+
 _HALANT = '\u094d'
-_CONSONANTS = set('\u0915\u0916\u0917\u0918\u0919\u091a\u091b\u091c\u091d\u091e\u091f\u0920\u0921\u0922\u0923\u0924\u0925\u0926\u0927\u0928\u092a\u092b\u092c\u092d\u092e\u092f\u0930\u0932\u0935\u0936\u0937\u0938\u0939\u0958\u0959\u095a\u095b\u095c\u095d\u095e')
-_MATRAS = set('\u093e\u093f\u0940\u0941\u0942\u0943\u0947\u0948\u094b\u094c')
+_CONSONANTS = set(
+    '\u0915\u0916\u0917\u0918\u0919'
+    '\u091a\u091b\u091c\u091d\u091e'
+    '\u091f\u0920\u0921\u0922\u0923'
+    '\u0924\u0925\u0926\u0927\u0928\u0929'
+    '\u092a\u092b\u092c\u092d\u092e'
+    '\u092f\u0930\u0931\u0932\u0933\u0934\u0935\u0936\u0937\u0938\u0939'
+    '\u0958\u0959\u095a\u095b\u095c\u095d\u095e\u095f'
+    '\u0978\u0979\u097a\u097b\u097c\u097e\u097f'
+)
+_MATRAS = set(
+    '\u093e\u093f\u0940\u0941\u0942\u0943\u0944\u0945\u0946\u0947\u0948\u0949\u094a\u094b\u094c'
+    '\u094e\u094f\u0955\u0956\u0957\u0962\u0963'
+)
+_WORD_DELIMITERS = set('\u0964\u0965.,!?;:\'\"()[]{}-_/\r\n\t')
 
 
 def phonetic_devanagari_to_roman(text: str) -> str:
-    """Deterministic phonetic transliteration of Devanagari Hindi into readable Roman Hinglish."""
+    """Deterministic phonetic transliteration of Devanagari Hindi into readable Roman Hinglish.
+    Exhaustively handles all Devanagari codepoints (U+0900..U+097F) with zero unmapped characters."""
     if not text:
         return ""
+
+    # Normalize decomposed nukta sequences
+    for comp, precomp in _NUKTA_REPLACE.items():
+        text = text.replace(comp, precomp)
+    # Strip any remaining standalone nuktas
+    text = text.replace('\u093c', '')
+
     result = []
     chars = list(text)
     n = len(chars)
@@ -253,13 +742,18 @@ def phonetic_devanagari_to_roman(text: str) -> str:
                 result.append(base)
             elif next_ch and next_ch in _CONSONANTS:
                 result.append(base + 'a')
-            elif next_ch is None:
+            elif next_ch in ('\u0901', '\u0902'):
+                result.append(base + 'a')
+            elif next_ch is None or next_ch.isspace() or next_ch in _WORD_DELIMITERS:
                 result.append(base)
             else:
                 result.append(base + 'a')
         elif ch in _DEVANAGARI_MAP:
             result.append(_DEVANAGARI_MAP[ch])
         elif ch == _HALANT:
+            pass
+        elif 0x0900 <= ord(ch) <= 0x097F:
+            # Fallback guarantee: never leak any unmapped Devanagari characters
             pass
         else:
             result.append(ch)
@@ -301,7 +795,7 @@ def transliterate_tokens_to_hinglish(tokens: List[str], timeout: int = 25) -> Li
                     break
 
         if candidate_list is not None and len(candidate_list) == len(tokens):
-            return [str(t) for t in candidate_list]
+            return [phonetic_devanagari_to_roman(str(t)) if has_devanagari(str(t)) else str(t) for t in candidate_list]
 
         logger.warning(
             "Gemini model '%s' transliteration returned unexpected structure or count (%s, expected %d). Using phonetic fallback.",
@@ -445,7 +939,7 @@ def validate_and_filter_candidates(
     raw_candidates: List[Dict[str, Any]],
     segments: List[Dict[str, Any]],
     total_duration: float,
-    max_clips: int = MAX_HIGHLIGHTS_PER_CHUNK
+    max_clips: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """Validate, snap, clamp, filter, and deduplicate candidate clips.
     
@@ -477,9 +971,45 @@ def validate_and_filter_candidates(
         start_t = max(0.0, min(total_duration, start_t))
         end_t = max(0.0, min(total_duration, end_t))
 
+        # Quote anchor snapping (millisecond accuracy based on exact spoken words)
+        anchor_s_text = cand.start_words or cand.ignition_quote
+        if segments and anchor_s_text:
+            matched_s = match_quote_anchor(anchor_s_text, segments, start_t, prefer_start=True)
+            if matched_s is not None:
+                start_t = matched_s
+
+        if segments and cand.end_words:
+            matched_e = match_quote_anchor(cand.end_words, segments, end_t, prefer_start=False)
+            if matched_e is not None:
+                end_t = matched_e
+
+        # Sponsor & housekeeping contamination filter
+        if segments:
+            start_t, end_t, is_clean = detect_sponsor_promo_contamination(start_t, end_t, segments)
+            if not is_clean:
+                continue
+
+        # Sarcasm and irony lookahead safeguard
+        if segments:
+            start_t, end_t, is_safe = apply_sarcasm_and_irony_lookahead(start_t, end_t, segments, total_duration)
+            if not is_safe:
+                continue
+
         # Clean speech restarts and false starts throughout candidate
         if segments:
             start_t, end_t = clean_speech_restarts_and_boundaries(start_t, end_t, segments, total_duration)
+
+        # Strip opening filler tokens (so, basically, um, toh, matlab)
+        if segments:
+            start_t = strip_leading_filler_words(start_t, end_t, segments)
+
+        # Trim dangling trailing conjunctions (and, but, because, so, kyunki)
+        if segments:
+            end_t = trim_trailing_conjunctions(start_t, end_t, segments)
+
+        # Laughter release window for comedic punchlines
+        if segments:
+            end_t = apply_laughter_release_window(end_t, segments, total_duration)
 
         # Boundary snapping with safe audio padding margin (0.15s start, 0.20s end)
         if segments:
@@ -535,39 +1065,61 @@ def validate_and_filter_candidates(
         p_start = max(0.0, round(start_t - 4.0, 2))
         p_end = min(total_duration, round(end_t + 4.0, 2))
 
+        cand_title = cand.title.strip()
+        cand_hook = (cand.hook or "").strip()
+        cand_desc = (cand.description or "").strip()
+        if has_devanagari(cand_title):
+            cand_title = phonetic_devanagari_to_roman(cand_title)
+        if has_devanagari(cand_hook):
+            cand_hook = phonetic_devanagari_to_roman(cand_hook)
+        if has_devanagari(cand_desc):
+            cand_desc = phonetic_devanagari_to_roman(cand_desc)
+
         valid_candidates.append({
             "start_time": start_t,
             "end_time": end_t,
             "padded_start": p_start,
             "padded_end": p_end,
             "duration": duration,
-            "title": cand.title.strip(),
-            "hook": (cand.hook or "").strip(),
-            "description": (cand.description or "").strip(),
+            "title": cand_title,
+            "hook": cand_hook,
+            "description": cand_desc,
             "hashtags": (cand.hashtags or "#Shorts #Reels").strip(),
             "virality_score": int(cand.virality_score),
             "layout_recommendation": layout,
             "reason": (cand.reason or "").strip(),
-            "silence_cuts": cuts
+            "silence_cuts": cuts,
+            "start_words": cand.start_words,
+            "end_words": cand.end_words,
+            "tier": (cand.tier or "A").upper(),
+            "hook_type": cand.hook_type or "claim"
         })
 
-    # Sort primarily by virality_score descending, then duration
-    valid_candidates.sort(key=lambda c: (c["virality_score"], c["duration"]), reverse=True)
+    eff_max_clips = max_clips if max_clips is not None else compute_optimal_clip_quota(total_duration)
 
-    # Deduplicate overlapping candidates (IoU > 0.5)
+    # Sort primarily by tier ("A" first), then virality_score descending, then duration
+    valid_candidates.sort(
+        key=lambda c: (1 if c.get("tier") == "A" else 0, c["virality_score"], c["duration"]),
+        reverse=True
+    )
+
+    # Deduplicate overlapping candidates (IoU > 0.45 or Containment > 0.45)
     deduped: List[Dict[str, Any]] = []
     for cand in valid_candidates:
         overlap = False
         for accepted in deduped:
             iou = compute_interval_overlap(cand["start_time"], cand["end_time"], accepted["start_time"], accepted["end_time"])
-            if iou > 0.5:
+            containment = compute_containment_ratio(cand["start_time"], cand["end_time"], accepted["start_time"], accepted["end_time"])
+            if iou > 0.45 or containment > 0.45:
                 overlap = True
-                logger.debug("Suppressing overlapping candidate '%s' (IoU %.2f with '%s')",
-                             cand["title"], iou, accepted["title"])
+                logger.debug(
+                    "Suppressing overlapping candidate '%s' (IoU %.2f, Containment %.2f with '%s')",
+                    cand["title"], iou, containment, accepted["title"]
+                )
                 break
         if not overlap:
             deduped.append(cand)
-            if len(deduped) >= max_clips:
+            if len(deduped) >= eff_max_clips:
                 break
 
     # Re-sort chronologically by start_time for a logical presentation
@@ -601,12 +1153,12 @@ def call_gemini_generate_content(
     }
 
     payload = {
+        "systemInstruction": {
+            "parts": [{"text": system_instruction}]
+        },
         "contents": [
             {
-                "parts": [
-                    {"text": system_instruction},
-                    {"text": user_prompt}
-                ]
+                "parts": [{"text": user_prompt}]
             }
         ],
         "generationConfig": {
@@ -702,7 +1254,8 @@ def call_gemini_generate_content(
 def extract_clips_gemini(transcript_text: str, segments: List[Dict[str, Any]], user_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Compatibility wrapper for extract_clips_gemini."""
     negative_context = get_negative_feedback_prompt(user_id)
-    user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
+    tot_dur = segments[-1]["end"] if segments else None
+    user_prompt = build_highlight_user_prompt(transcript_text, negative_context, total_duration=tot_dur)
     try:
         raw_clips, _ = call_gemini_generate_content(user_prompt)
         return raw_clips
@@ -814,6 +1367,117 @@ def extract_clips_local_heuristic(segments: List[Dict[str, Any]], total_duration
     return candidate_clips
 
 
+
+
+def extract_highlights_windowed(
+    segments: List[Dict[str, Any]],
+    total_duration: float,
+    negative_context: str = "",
+    api_key: Optional[str] = None,
+    candidate_models: Optional[List[str]] = None,
+    window_duration: float = 720.0,
+    window_overlap: float = 90.0
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Extract highlights from long recordings by partitioning into overlapping 12-minute windows.
+
+    Prevents single-pass attention loss on long videos (>12m) while deduplicating globally.
+    """
+    if total_duration <= window_duration:
+        transcript_lines = []
+        prev_end = 0.0
+        for s in segments:
+            s_start = float(s.get("start", 0.0))
+            s_end = float(s.get("end", 0.0))
+            if prev_end > 0.0 and (s_start - prev_end) >= 0.5:
+                transcript_lines.append(f"[PAUSE: {s_start - prev_end:.1f}s]")
+            start_m, start_s = divmod(s_start, 60)
+            end_m, end_s = divmod(s_end, 60)
+            transcript_lines.append(
+                f"[{int(start_m):02d}:{start_s:05.2f} ({s_start:.1f}s) -> {int(end_m):02d}:{end_s:05.2f} ({s_end:.1f}s)] {s.get('text', '')}"
+            )
+            prev_end = max(prev_end, s_end)
+
+        transcript_text = "\n".join(transcript_lines)
+        user_prompt = build_highlight_user_prompt(transcript_text, negative_context, total_duration=total_duration)
+        return call_gemini_generate_content(
+            user_prompt,
+            api_key=api_key,
+            candidate_models=candidate_models
+        )
+
+    step = window_duration - window_overlap
+    all_raw_candidates: List[Dict[str, Any]] = []
+    winning_model = "windowed_gemini"
+
+    num_windows = int(math.ceil((total_duration - window_duration) / step)) + 1
+    logger.info("Partitioning %.1fs recording into %d overlapping extraction windows of %.0fs (step %.0fs)",
+                total_duration, num_windows, window_duration, step)
+
+    current_start = 0.0
+    win_idx = 0
+    while current_start < total_duration:
+        current_end = min(total_duration, current_start + window_duration)
+        win_idx += 1
+
+        win_segments = [
+            s for s in segments
+            if float(s.get("end", 0.0)) > current_start and float(s.get("start", 0.0)) < current_end
+        ]
+
+        if not win_segments or not any(s.get("text", "").strip() for s in win_segments):
+            logger.debug("Window #%d [%.1fs - %.1fs] contains no speech; skipping.", win_idx, current_start, current_end)
+            current_start += step
+            continue
+
+        transcript_lines = []
+        prev_end = 0.0
+        for s in win_segments:
+            s_start = float(s.get("start", 0.0))
+            s_end = float(s.get("end", 0.0))
+            if prev_end > 0.0 and (s_start - prev_end) >= 0.5:
+                transcript_lines.append(f"[PAUSE: {s_start - prev_end:.1f}s]")
+            start_m, start_s = divmod(s_start, 60)
+            end_m, end_s = divmod(s_end, 60)
+            transcript_lines.append(
+                f"[{int(start_m):02d}:{start_s:05.2f} ({s_start:.1f}s) -> {int(end_m):02d}:{end_s:05.2f} ({s_end:.1f}s)] {s.get('text', '')}"
+            )
+            prev_end = max(prev_end, s_end)
+
+        transcript_text = "\n".join(transcript_lines)
+        win_duration = current_end - current_start
+        user_prompt = build_highlight_user_prompt(transcript_text, negative_context, total_duration=win_duration)
+
+        try:
+            raw_clips, model_used = call_gemini_generate_content(
+                user_prompt,
+                api_key=api_key,
+                candidate_models=candidate_models
+            )
+            winning_model = model_used
+
+            for c in raw_clips:
+                c_start = float(c.get("start_time", 0.0))
+                c_end = float(c.get("end_time", 0.0))
+                if c_start < (current_start - 30.0) and current_start > 0.0:
+                    c["start_time"] = round(c_start + current_start, 2)
+                    c["end_time"] = round(c_end + current_start, 2)
+                all_raw_candidates.append(c)
+
+            logger.info("Window #%d [%.1fs - %.1fs] extracted %d candidates via %s",
+                        win_idx, current_start, current_end, len(raw_clips), model_used)
+
+        except Exception as win_err:
+            logger.warning("Extraction window #%d [%.1fs - %.1fs] failed (%s); continuing other windows",
+                           win_idx, current_start, current_end, win_err)
+
+        current_start += step
+
+    if not all_raw_candidates:
+        raise RuntimeError("All windowed extraction passes failed or produced 0 candidate clips.")
+
+    return all_raw_candidates, winning_model
+
+
 def identify_and_save_highlights(
     chunk_id: Optional[str],
     session_id: Optional[str],
@@ -821,7 +1485,8 @@ def identify_and_save_highlights(
     total_duration: float,
     publish_mode: str = "private",
     video_id: Optional[str] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    api_key: Optional[str] = None
 ) -> List[str]:
     """Identify highlights via Gemini and save candidate definitions.
     
@@ -833,20 +1498,49 @@ def identify_and_save_highlights(
             db.update_youtube_video(video_id=video_id, status="CLIPS_DEFINED")
         return []
 
-    # Build timestamped transcript string
-    transcript_lines = []
-    for s in segments:
-        start_m, start_s = divmod(s.get("start", 0.0), 60)
-        end_m, end_s = divmod(s.get("end", 0.0), 60)
-        transcript_lines.append(f"[{int(start_m):02d}:{start_s:05.2f} -> {int(end_m):02d}:{end_s:05.2f}] {s.get('text', '')}")
-    transcript_text = "\n".join(transcript_lines)
+    eff_user_id = user_id
+    if not eff_user_id and video_id:
+        v = db.get_youtube_video(video_id)
+        if v and v.get("user_id"):
+            eff_user_id = v["user_id"]
+    if not eff_user_id and chunk_id:
+        chk = db.get_chunk_by_id(chunk_id)
+        if chk and chk.get("user_id"):
+            eff_user_id = chk["user_id"]
+    if not eff_user_id and session_id:
+        with db.get_db_connection() as conn:
+            r = conn.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if r and r["user_id"]:
+                eff_user_id = r["user_id"]
 
-    negative_context = get_negative_feedback_prompt(user_id)
-    user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
+    # Multi-tenant API key resolution: strictly prevent falling back to PC host key when user identity exists
+    active_gemini_key = api_key
+    if not active_gemini_key:
+        if eff_user_id:
+            try:
+                from dispatch.youtube_connections import get_user_gemini_key
+                active_gemini_key = get_user_gemini_key(eff_user_id)
+            except Exception as ke:
+                logger.debug("User Gemini key lookup note for %s: %s", eff_user_id, ke)
+            if not active_gemini_key:
+                err_msg = f"User {eff_user_id} has not configured a Gemini API key in cloud vault. Refusing fallback to PC host GEMINI_API_KEY."
+                if video_id:
+                    db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
+                raise RuntimeError(err_msg)
+        else:
+            active_gemini_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
-    # Gemini API call with local heuristic fallback when offline / rate-limited
+    from dispatch.ai_clips.preference_learner import get_editorial_guidance_prompt
+    editorial_context = get_editorial_guidance_prompt(eff_user_id)
+
+    # Gemini extraction (windowed for recordings > 12m) with local heuristic fallback when offline
     try:
-        raw_clips, model_used = call_gemini_generate_content(user_prompt)
+        raw_clips, model_used = extract_highlights_windowed(
+            segments=segments,
+            total_duration=total_duration,
+            negative_context=editorial_context,
+            api_key=active_gemini_key
+        )
     except Exception as e:
         logger.warning("Gemini highlight extraction failed (%s). Falling back to local heuristic extractor.", e)
         raw_clips = extract_clips_local_heuristic(segments, total_duration)
@@ -855,12 +1549,14 @@ def identify_and_save_highlights(
     extraction_source = "heuristic_fallback" if model_used == "heuristic_fallback" else "gemini"
     extraction_model = model_used
 
+    optimal_quota = compute_optimal_clip_quota(total_duration)
+
     # Validate and filter
     validated_clips = validate_and_filter_candidates(
         raw_candidates=raw_clips,
         segments=segments,
         total_duration=total_duration,
-        max_clips=MAX_HIGHLIGHTS_PER_CHUNK
+        max_clips=optimal_quota
     )
 
     eff_user_id = user_id

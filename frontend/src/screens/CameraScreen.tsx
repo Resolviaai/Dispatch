@@ -19,7 +19,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { Bridge, RecordingItem, ExposureInfo, CameraStateEvent, FocusResultEvent, ExposureResultEvent, triggerHaptic, getAuthHeaders } from '../bridge';
-import { getDefaultLensPref } from './SettingsScreen';
+import { getDefaultLensPref } from '../settings/lensPref';
 import {
   applyExposureResult,
   applyFocusResult,

@@ -1,0 +1,1282 @@
+by claude sonnet 5.5:- Reading your uploaded files and diffing them against the repo first, so my advice is based on the code that actually runs.
+
+Repo is now at `bd7ec56` (v1.7.45, Nov 9). Three of your uploads differ from it, so I need to know which side is newer before reviewing.
+
+Status: I've finished reading your highlight pipeline end to end. I'm doing one last check on how word timestamps are produced, then I'll write up the plan.
+
+Finished reading your pipeline. Here is the review and the plan. I changed no code and ran no tests or live Gemini calls.
+
+**Commit your local edits first.** Your uploaded `prompt_templates.py`, `highlight_finder.py` and `gemini_engine.py` contain changes that are not on GitHub (`bd7ec56`): the 30–75 s sweet spot, density guidance, the Roman-script rule and the big transliteration table. I reviewed your uploads as the truth. If you don't commit them, the next agent will work from the older GitHub copy.
+
+## The research doc
+
+| Keep | Cut |
+|---|---|
+| Archetypes as prompt guidance | 4 separate LLM passes (4–7× your Gemini quota) |
+| Hook / standalone / payoff checklist | 100-point formula, dopamine and Zeigarnik terms. An LLM can't measure these, so they add tokens, not accuracy. |
+| Sponsor and sarcasm traps | The 1–100 virality score (the same fake metric as T05) |
+| Laugh tail, duration-scaled yield | "Reject if the answer comes in the first 8 s". That is wrong for talking-head clips. |
+
+## Your 4 questions
+
+1. **Outline first, then extract per theme?** No. Chapter boundaries from a model are as unreliable as clip boundaries, and errors compound. Use **windowed passes** instead:
+   - For one long video, cut it into 12-minute windows with 90 s overlap and run the same prompt per window.
+   - Then merge and dedupe in code.
+   - A 60-minute video costs 6 calls, and videos under 15 minutes still cost 1.
+   - Your transcription already works in 10-minute windows with 5 s overlap, so this mirrors it.
+2. **True hook vs "So guys, today…"?** Don't ask the model to judge "hook" in the abstract.
+   - Code strips leading filler tokens (so, um, okay, basically, toh, matlab) before snapping the start.
+   - The prompt gives a closed test: the first sentence must be a claim, question, number, conflict, or a story already in motion, never a greeting or reference to the video.
+   - The model returns a `hook_type` from a short list.
+3. **Audio signals?** Start cheap.
+   - Your transcript prompt never asks for `[laughter]` or `[music]` tags (I found no such words in `gemini_engine.py`). Adding that one line to the transcription prompt costs nothing.
+   - Add speech rate from word timings (words per second, free) and your existing `[PAUSE]` marks.
+   - Defer loudness and pitch tags. I have no evidence they improve Gemini's picks, so test them against your own approvals first.
+4. **Few-shot?** The best examples are **your own approved clips**. `preference_learner.py` only learns from rejections. Add the first and last sentence of your last 3 approved clips as "style anchors", plus 2 static bad/good boundary pairs (below).
+
+## Bugs capping quality now
+
+| P | Problem |
+|---|---|
+| **P0** | `identify_and_save_highlights` (called by `pipeline_runner.py:184` and `catcher.py:831`) calls Gemini with no `api_key`, so it uses **your host key** for everyone. The "no owner-key fallback" rule exists only in the other path (`HighlightWorker`). I didn't trace whether friends' jobs take this path, so check. |
+| **P1** | **Two highlight paths have drifted apart.** The legacy path has density guidance and a silent local-heuristic fallback (the module docstring says "never silent heuristic"), but no `[PAUSE]` markers. The worker path has pause markers and stitching, but never passes `total_duration`, so your density and sweet-spot guidance is **never sent** there. |
+| **P1** | **Stitching causes duplicates and the T04 409.** Every part of a multi-chunk session re-runs the whole stitched session. It saves clips with session-global times under one chunk's ID, so there are overlapping duplicates across runs. **I was wrong last time** when I called T04's premise doubtful. I had only checked `_resolve_chunk_and_transcript`, not the stitching. |
+| **P1** | **Hard cap of 8 clips per video, regardless of length.** The prompt asks for up to 10, then the code cuts to 8. A 60-minute video yields at most 8 clips. |
+| **P1** | **The prompt forces mediocrity.** Rule 9 says zero clips is allowed only for silence, and the "don't hold out for 10/10" philosophy pushes weak clips. This is T06, still pending. It conflicts with your goal of clips that perform. |
+| **P2** | The Gemini call has no `responseSchema`, sends the system prompt as a normal content part (not `systemInstruction`), uses a 45 s timeout, and drops to lite models after one failure without retrying. |
+| **P2** | Dedupe uses IoU > 0.5, which misses a clip that repeats half of another. Use overlap relative to the shorter clip. |
+| **P2** | Ranking depends on `virality_score`, which defaults to 70 when omitted. |
+| **P2** | Boundaries snap to the nearest word end, not a sentence end. Fixed pads of 0.15/0.20 s can clip a neighbouring word. Restart cleaning only moves the start and end, though its docstring says "throughout". |
+
+## Edge cases and fixes
+
+| Edge case | Fix |
+|---|---|
+| Preamble, throat-clearing | Filler stoplist, "ignition" rule in the prompt, quote anchors (below) |
+| Model hallucinates timestamps | Quote anchors. If anchors aren't found in the transcript, **reject** the clip, don't guess. |
+| Mid-thought or "because" ending | Reject or extend when the first word is `and/but/because/so/which` (and Hinglish equivalents) or the end word is one |
+| Punchline cut off | Keep up to 1.5 s of pause or `[LAUGH]` after the end |
+| Sarcasm or hypothetical | Prompt rule, plus a guard: if "kidding/just joking/mazak" appears within 12 s after the end, extend or drop |
+| Sponsor, promo, "subscribe" | Regex blocklist plus a prompt rule |
+| Same point restated | Containment dedupe, plus "return only the better one" |
+| Tangent or mid-clip restart | Later: the model proposes `cut_ranges` that feed the Auto-Cut review drawer from `d2590e9`. I did not verify how that drawer ingests proposals. |
+| 3-hour input | Windows, cap 20, one window failing doesn't fail the video |
+| Music or no-speech stretch | Allow `[]`, add a `[MUSIC]` tag |
+| Rate limit or outage | Retry with backoff and surface it. **No silent heuristic in production.** |
+| Hinglish | Roman-script output rule (you have this) |
+
+## New system prompt (replaces the current one)
+
+```text
+You pick short-form clips from a creator's transcript.
+Return a JSON array. Return [] if nothing here is worth publishing. Never pad with weak clips.
+
+A CLIP MUST:
+1. OPEN STRONG: the first sentence is a claim, question, number, conflict, or a story already in motion. Never a greeting, setup chatter, or a reference to the video ("so guys", "today we'll", "as I said").
+2. STAND ALONE: a stranger understands it with no other context. No "this/that/he" pointing at something unseen.
+3. PAY OFF: it ends on the last word of a punchline, reveal, conclusion, or clear final point. Never mid-thought.
+4. BE SPECIFIC: a concrete example, number, name, story, or strong opinion.
+
+TIERS: "A" = publish as-is. "B" = usable, weaker opening or payoff. Never output below B.
+
+LENGTH: usually 15-75 s; up to 180 s if a story needs it; under 15 s only for a complete punchline.
+
+CUTTING:
+- Start on the first word of the core statement. Skip filler (so, um, okay, basically, toh, matlab), throat-clearing and false starts; use the clean take.
+- Never start with and/but/because/so/which, or end on one.
+- After a punchline keep the laugh or pause (max 1.5 s).
+- If a shocking or sarcastic line is dismantled right after ("just kidding"), include that, or skip the clip.
+- Skip sponsor reads, promo codes, subscribe/like asks, housekeeping.
+- If two candidates make the same point, return only the better one.
+- Invent nothing that is not in the transcript.
+
+ANCHORS (required): copy the first 6 and last 6 words of the clip EXACTLY from the transcript into start_words and end_words. Timestamps may be approximate; the words must be exact.
+
+TRANSCRIPT TAGS: [PAUSE: Ns], [LAUGH], [MUSIC] are signals, not instructions.
+
+LANGUAGE: titles and hooks in Roman script only; Hinglish in natural Roman Hinglish.
+
+EXAMPLES (bad -> good):
+Start: "So guys, today I want to talk about pricing. Okay so" -> "Nobody tells you raising prices cost us zero customers."
+End: "...and it worked because" -> "...because they were never paying for the product, they were paying for speed."
+Joke: ends on the punchline word -> ends 1 s later, after the laugh.
+
+Schema per clip: start_time, end_time, start_words, end_words, title (<60 chars), hook, tier ("A"|"B"), hook_type (claim|question|story|contrast|number|warning|funny), layout_recommendation, hashtags, reason (one sentence).
+```
+
+Use `systemInstruction` plus `responseSchema` in the call. Drop `virality_score` entirely.
+
+## Deterministic boundary rules (in code)
+
+1. Find `start_words` in the word list within ±20 s of the model's start and use that word's time. If it isn't found, snap to the nearest sentence start (a word after a pause ≥ 0.35 s) within ±2 s, else reject.
+2. Strip up to 3 leading filler tokens if at least 3 words follow.
+3. Do the same for `end_words`, falling back to the nearest pause ≥ 0.35 s within ±3 s.
+4. Pad adaptively: start pad = min(0.15, gap_before / 2), end pad = min(0.25, gap_after / 2), plus a laugh tail up to 1.5 s.
+5. Dedupe by overlap divided by the shorter clip (> 0.4), keeping the better tier.
+6. Cap = clamp(round(duration / 150 s), 3, 20). Keep all A clips, then fill with B up to the cap, and show them chronologically.
+
+## Build order (one commit each)
+
+1. **Reliability:**
+   - One shared `find_highlights()` used by both paths.
+   - Remove the silent heuristic and host-key fallback in production.
+   - Always pass duration and pause markers.
+   - Use `systemInstruction` and `responseSchema`.
+   - Retry the same model once before falling to a lite model.
+   - Remove stitching (analyse per chunk, lose about 5% of clips that straddle a boundary).
+   - Allow `[]` and add tiers (T05 and T06).
+2. **Quality:** quote anchors, boundary rules, the filler stoplist, containment dedupe, the dynamic cap, and windowing for videos over 15 minutes.
+3. **Learning:** positive examples from approvals, log `tier` and `hook_type` per clip, and add `[LAUGH]` and `[MUSIC]` to the transcription prompt.
+
+Defer `cut_ranges` and loudness or pitch features until after a measured test.
+
+Tests should be hermetic: use recorded Gemini JSON fixtures, not live calls. Cover `[]` handling, anchors found and not found, filler stripping, containment dedupe, cap math, and window offset mapping.
+
+## How to know it got better
+
+You can't validate "viral" without data. Pick 5 of your own sessions, hand-mark the clips you would publish, and measure two numbers before and after each batch: how many of your picks it finds, and how far its boundaries are off. Then, after about 30 clips, compare approval rate by `hook_type`. That is the only real feedback loop you have.
+
+
+by chatgpt :- Dispatch Highlighter: Complete architectural audit and improvement plan
+I've inspected the actual uploaded Python files and compared them with the live GitHub repository. Your two main problems are related, but they need separate solutions:
+Discovery: Find every genuinely valuable moment throughout a long recording.
+Editorial precision: Turn each discovered moment into a clip with an excellent opening, complete context, natural pacing and satisfying ending.
+A system that scores clips brilliantly but misses 70% of the good moments is still a poor highlighter. Equally, a system that extracts 30 clips but produces confusing or incomplete edits is not useful.
+My recommendation is to build a multi-pass discovery and editorial selection engine, with deterministic boundary verification and an optional acoustic intelligence layer.
+Recommended architecture
+Multi-pass discovery + candidate recall + precision ranking + boundary verification.
+1. What I found in your existing implementation
+The live repository currently contains dispatch/ai_clips/prompt_templates.py, highlight_finder.py, worker.py, and preference_learner.py. The uploaded files provide additional snapshots and research.
+Area
+Current implementation
+Problem
+Discovery
+One Gemini extraction call
+A long transcript can receive uneven attention
+Prompt
+Broad editorial instructions
+No explicit exhaustive discovery protocol
+Target count
+Older uploaded prompt has a duration-based target, but the current live prompt does not
+Yield guidance is inconsistent
+Candidate cap
+8 per chunk by default
+Can limit discovery before global selection
+Hook scoring
+One overall virality score
+No independently inspectable hook assessment
+Boundary snapping
+Nearest word boundary within 2 seconds
+Can snap to the wrong word or sentence
+Restart detection
+Repeated phrases of 2–8 words
+Some false starts and non-identical restarts escape detection
+Duration handling
+Expands short clips and truncates long ones through existing helpers
+Expansion can add irrelevant context
+Deduplication
+IoU above 0.5
+Can suppress genuinely different editorial moments
+Fallback
+Regex keyword heuristic
+Can generate arbitrary long blocks with misleading scores
+Personalization
+Up to 15 recent rejections
+Approval information is not equally represented
+Audio intelligence
+Transcript and silence handling
+No integrated pitch, energy or laughter annotations in the highlighter
+Session continuity
+Session transcript stitching exists
+Missing transcript segments can prevent stitching
+Sources: highlight_finder.py, prompt_templates.py, worker.py, and preference_learner.py.
+highlight_finder.py
+worker.py
+preference_learner.py
+Five problems I would prioritize
+1. The eight-clip ceiling.
+MAX_HIGHLIGHTS_PER_CHUNK defaults to eight. Candidate mining should not be capped so early. The engine needs to discover broadly, then rank and select globally.
+2. Keyword fallback is not editorial intelligence.
+The fallback adds score points for phrases such as so, basically, actually, secret and system. Those words are not evidence that a moment is worth publishing. It can even start a fallback clip at 0 seconds.
+This fallback should become a safe recovery mechanism, not pretend to be a virality model.
+3. Timestamp snapping is too permissive.
+A two-second snapping tolerance can change the intended start or end by a significant amount. Worse, the current implementation chooses the nearest word boundary without confirming that the resulting clip preserves the intended meaning.
+highlight_finder.py
+4. Candidate ranking and diversity are coupled incorrectly.
+The current implementation ranks by virality score and duration, removes candidates with IoU above 0.5, then keeps the highest-ranked results.
+That can eliminate two valuable moments that happen to overlap but have different editorial purposes.
+5. There is no independent quality gate.
+The extraction model effectively proposes, scores and packages its own candidates. An independent review stage is needed to challenge its decisions.
+2. The architecture I recommend
+Do not simply make one massive prompt and ask Gemini to think harder. Divide the job into specialized stages.
+Dispatch Highlight Engine v2
+Input: Complete timestamped transcript
+Word timestamps, speaker IDs, source duration, optional acoustic metadata
+Pass 1 — Global narrative mapping
+Identify chapters, themes, topic transitions, stories, arguments, jokes, emotional turning points and unresolved questions.
+Pass 2 — Exhaustive candidate discovery
+Search each chapter and overlapping local window. Discover multiple possible moments without premature ranking or suppression.
+Pass 3 — Editorial boundary refinement
+Find the actual opening, context, clean speech boundary, narrative resolution and final acoustic release.
+Pass 4 — Independent quality evaluation
+Evaluate hooks, completeness, entertainment, emotional intensity, payoff, originality and contextual risks.
+Pass 5 — Algorithmic selection and deduplication
+Choose the best set while maximizing quality, coverage, archetype diversity and distinct moments.
+Pass 6 — Final verification and packaging
+Validate timestamps, speech integrity, duration, speaker continuity and metadata before saving clips.
+Final review-ready clips
+Chronologically ordered, individually scored and ready for rendering
+Why multi-pass instead of one pass?
+I recommend a hybrid:
+Pass 1 runs once for the entire recording.
+Pass 2 runs independently on overlapping transcript windows.
+Pass 3 refines each candidate using its surrounding context.
+Pass 4 evaluates candidates independently, potentially in batches.
+Pass 5 performs deterministic global selection.
+Pass 6 verifies all final clip boundaries.
+This avoids sending one enormous transcript to every model request, while preserving the global context needed to understand stories that span multiple sections.
+Pass 1: Global narrative mapping
+The model should identify:
+Information
+What to detect
+Chapters
+Thematic sections and their timestamps
+Topic transitions
+When the speaker moves to another idea
+Narrative arcs
+Setup, conflict, turning point, resolution
+Emotional peaks
+Anger, excitement, surprise, vulnerability, amusement
+Curiosity points
+Questions, mysteries, unresolved claims
+Strong opinions
+Disagreement, counterarguments, controversial positions
+Stories
+Personal anecdotes, failures, events and experiences
+Recurring themes
+Ideas revisited later in the recording
+Potential endings
+Conclusions, punchlines and revelations
+A crucial distinction: chapters are not clips.
+One chapter might contain five strong candidates, while another might contain none.
+Do not force the same number of clips from every chapter.
+Pass 2: Exhaustive candidate discovery
+This is where we solve under-extraction.
+Use overlapping windows of approximately 120–180 seconds, with 20–30 seconds of transcript overlap as an initial engineering configuration.
+These are starting parameters to benchmark, not proven optimal values.
+Every window receives:
+Its chronological transcript.
+The global chapter map.
+Adjacent context.
+The recording's absolute timestamps.
+Relevant acoustic annotations when available.
+Ask the model to identify all plausible standalone moments, not just its top three.
+The model should discover:
+A complete story.
+A surprising statement.
+A useful explanation.
+An unexpected observation.
+A funny exchange.
+An emotional confession.
+A valuable demonstration.
+A strong opinion.
+An interesting analogy.
+A dramatic or satisfying conclusion.
+Important: Candidate generation should optimize recall. The final quality evaluator should optimize precision.
+Do not make discovery and final selection the same decision.
+Pass 3: Boundary refinement
+For every promising candidate, inspect the surrounding transcript, not just the proposed interval.
+The model must identify:
+The opening ignition point.
+Any introductory filler.
+Required grammatical context.
+Necessary setup.
+The central development.
+The resolution.
+Any important qualification.
+The natural ending.
+The opening should be the earliest point at which the actual thought becomes clear, not necessarily the first noun or verb.
+Likewise, the ending should preserve the complete thought, including a meaningful reaction or punchline.
+Pass 4: Independent evaluation
+A second evaluation pass should assess candidates without inheriting the discovery model's confidence.
+Ideally, it receives the transcript and candidate timestamps, not just the original model's title and reasoning.
+This prevents the evaluator from simply agreeing with the first model.
+3. Hook detection: genuine hooks versus introductory filler
+This deserves its own scoring system.
+The presence of an attention-grabbing word does not make a sentence a hook.
+Compare these examples.
+Opening
+Classification
+"Hey guys, today we are going to discuss AI."
+Generic introduction
+"So basically, I wanted to explain something."
+Preamble
+"The biggest mistake founders make is hiring too early."
+Strong claim
+"I lost ₹50,000 because I ignored one warning."
+Personal high-stakes hook
+"Why does working harder sometimes make you poorer?"
+Curiosity question
+"I thought I was improving, but I was actually getting worse."
+Reversal
+"You know, there is something interesting about this."
+Weak setup
+"This one change doubled the time people spent watching."
+Concrete result, subject to verification
+The five hook dimensions
+Dimension
+Question
+Pattern interruption
+Does the opening disrupt expectations?
+Information gap
+Does it create a meaningful question?
+Specificity
+Is there a concrete claim, event or detail?
+Stakes
+Does the viewer have a reason to care?
+Authenticity
+Is the hook actually supported by the recording?
+A strong hook can use several different psychological mechanisms:
+Contradiction: Challenges conventional thinking.
+Open loop: Introduces something unresolved.
+Confession: Reveals a personal mistake or experience.
+Warning: Highlights a consequence worth avoiding.
+Curiosity: Introduces an intriguing unknown.
+Humor: Sets up an unexpected observation or punchline.
+Demonstration: Shows a surprising result or transformation.
+Conflict: Introduces a strong disagreement.
+The first-three-seconds test
+Make the evaluator inspect the first 0.5–3 seconds of every proposed clip.
+Ask:
+What exactly makes this opening interesting?
+Is the speaker communicating something meaningful immediately?
+Is there an unnecessary introduction?
+Does the opening require context from before the clip?
+Does the opening promise something the rest of the clip never delivers?
+A clip should not receive a high hook score merely because its opening contains words such as secret, truth, never, mistake or important.
+4. Six content archetypes and the few-shot library
+Your existing research correctly identifies six important content archetypes.
+Pasted text (2)(20261109-094936).txt
+I would expand them into a broader editorial taxonomy.
+[Turing CEO, Jonathan Siddharth: Who Wins in Data Labelling & Why 99% of Knowledge Work Will Disappear](https://images.openai.com/static-rsc-4/Tj4d1hh4VDrJ_1q7qckt_Jydvfz3yKNylodBiJoO3J9B9bM9ZOZD5xRghpPBvAiXqhrnPtAiRPriR15RhQdEaiT_jQPX1JpspyU0qJBzAjHPKuRfB9AYX_UUkex3k7ZwasnSMbJIs2YGMS8OyKk1xAqsm37E8C2DJrqNabtoUZA?purpose=inline)
+1. Counter-intuitive truth
+Unexpected facts, myths being challenged, unconventional explanations and surprising conclusions.
+Example: "Working harder is sometimes the reason your business isn't growing."
+[Marina Diamandis calls out the ways women are shamed during emotional interview | The Independent | The Independent](https://images.openai.com/static-rsc-4/RRKRMV8nhE2oea9wuGdP4zzFZurRx9dUl-kp2M94PPptsltblzeP9Z5i9Y4kVjVCAd_V3hyQU4OBgO96g_fW69ilrn9tarvxObwXHoJHwTEbNuAohqh-x6n9QPLqGtXol9zW_p0SQ_UwXGx9mqG8JMKsfFrRo0V-HZcqArDQn9I?purpose=inline)
+2. Vulnerable confession / high-stakes story
+Personal failures, financial losses, difficult decisions, unexpected experiences and lessons.
+Example: "I nearly lost everything because of this one decision."
+[Podcast Transcription Services | 60 Minutes Free Every Month – DictaAI](https://images.openai.com/static-rsc-4/QGs7q5W3lwm33ix_HRpcUQxHE9Hwk_Pjf-3Gv6DjT306Y-VzNrC2NdujBx8zUe0hFt7VlRFftIM6MflHR875XK_2vqYkRc54RrvlP2zB0sfAgP_H_npDcAL0rTPgsl2E-47ijh9Tz9w5YBV2Q4HVvpAMQDrIFw06fBavNR8-xUE?purpose=inline)
+3. Witty rant / spontaneous humor
+Comedic observations, relatable frustration, sarcastic comments and unexpected reactions.
+Example: A spontaneous comparison that makes the audience laugh.
+[Exploring TPRS: A Deep Dive into Teaching Proficiency through Reading and Storytelling](https://images.openai.com/static-rsc-4/LfZZnLACY2Tayi2thQFRY4Qj2yzl0GePqXx_AtpjJPnLgnPQCDhEsvLkgroVBbwM9bYs8HAn1YbFSc9dD7fuYDSs5tsZqbP62idz_EPoo0VJDPzFckhvmdXBsUzPoELOI8K4P8PBNLyI_PQgyjxq3BvU1nUDDKtLL_lZViCQbzk?purpose=inline)
+4. Aha analogy / mental model
+Simple comparisons that make complex things understandable.
+Example: Explaining a business using the analogy of a leaking bucket.
+[Debate Stock Footage: Royalty-Free Video Clips - Storyblocks](https://images.openai.com/static-rsc-4/_awP_aynvWLQB6CWu9DxkqK73unfAbBBehXl7D2yBGG5NWcQ0qYTk4C0lgE87JSF82jzienNnuLtx_vsAbJn_z0js-aHVe5FajkZ-RtOPBgNx4PIPMUeNiVXJasOnxArWUu-lG5cisy21ba9EWoRdJwKTupMmTEQ18xu5W9Y2nw?purpose=inline)
+5. Passionate polarity / debate
+Strong arguments, disagreements, myth-busting and challenging conventional beliefs.
+Example: "Most people are solving the wrong problem."
+[Global Race for Sustainability — issNOW.earth](https://images.openai.com/static-rsc-4/y4QQ5n1nBxFupeg8OQcMj4_EhI-TemzIN_j1DBMjJfAReNisA5kyqS4FZN3ZoNhRLO226w_16m3A1MabxEnWCjjgaM_A6eKd3Im215Fi-JoZc7ExwXHAd2oOCcCAfckqYWGTlGJM6UgVKha9NqZpxPp9kM1ptk7cTIZs78MkQmA?purpose=inline)
+6. Breakthrough / resilience peak
+Moments where a person overcomes a challenge, discovers something or changes their perspective.
+Example: "That was the moment I realized I had been doing everything backwards."
+I would add four more categories to avoid overlooking valuable content:
+Additional category
+Examples
+Practical demonstration
+Showing how to do something, before/after results
+Timely information
+Relevant news, updates, explanations and changes
+Relatable everyday observations
+Common frustrations, habits and social situations
+Human interaction
+Unexpected questions, surprising responses and powerful exchanges
+These categories should be allowed to overlap. A single clip can be both a personal story and a counter-intuitive lesson.
+Few-shot examples: good boundaries versus bad boundaries
+The following are synthetic examples for training the editorial logic, not actual clips from your uploaded recordings.
+Example A — Removing generic preamble
+Bad boundary
+"Hey guys, so today I want to tell you something about business. The biggest mistake founders make is hiring too early."
+Better boundary
+"The biggest mistake founders make is hiring too early."
+Why: Removes nonessential introduction while preserving a complete claim.
+Example B — Preserving necessary context
+Bad boundary
+"That's why it failed."
+Better boundary
+"We spent six months building a product nobody wanted. That's why it failed."
+Why: The second version explains what failed and makes the conclusion independently understandable.
+Example C — Preserving a punchline
+Bad boundary
+"I told my boss I was working remotely…"
+Better boundary
+"I told my boss I was working remotely. Technically, I was working from my bed. And then I fell asleep during the meeting."
+Why: The second version preserves the comedic payoff.
+Example D — Avoiding mid-thought cuts
+Bad boundary
+"You should invest in this only because…"
+Better boundary
+"You should invest in this only because you've already built an emergency fund and can afford the risk."
+Why: Preserves the complete qualifying condition.
+Example E — False-start removal
+Bad boundary
+"The problem with AI is… what I mean is… the actual problem with AI is that people trust it blindly."
+Better boundary
+"The actual problem with AI is that people trust it blindly."
+Why: Removes abandoned attempts without deleting intentional repetition.
+Example F — Hinglish preservation
+Bad boundary
+"Basically, I want to explain one thing. Maine usko bola ki yeh scalable nahi hai."
+Better boundary
+"Maine usko bola ki yeh scalable nahi hai."
+Why: Preserve natural Roman Hinglish, not awkward translation.
+Example G — Sarcasm and irony
+Bad boundary
+"We should just rob a bank and retire."
+Better boundary
+"We should just rob a bank and retire. Obviously, I'm kidding. The actual point is that we need to stop spending without tracking our cash flow."
+Why: Preserve the context that makes the original statement a joke rather than a literal recommendation.
+Example H — Interview context
+Bad boundary
+Interviewer: "What happened next?"
+Guest: "I lost everything."
+Better boundary
+Guest: "After the company shut down, I lost everything. That's when I decided to start again."
+Why: Provides enough context to understand the guest's response.
+The prompt should contain a compact version of these examples. The complete library should live in a separate version-controlled few-shot dataset so we can test and improve it without making the system prompt enormous.
+5. Virality scoring: replace one vague score with inspectable dimensions
+I recommend an initial 100-point quality score.
+Dimension
+Maximum
+What it measures
+Hook potency
+25
+Opening strength and curiosity
+Standalone completeness
+25
+Context, coherence and intelligibility
+Emotional / entertainment impact
+20
+Humor, tension, surprise, inspiration and emotion
+Narrative progression
+15
+Development and retention
+Payoff
+15
+Resolution, conclusion, reveal or punchline
+Total
+100
+Then apply explicit penalties.
+Penalty
+Deduction
+Generic opening or unnecessary preamble
+−5 to −10
+Missing context or unclear reference
+−10 to −20
+Incomplete thought
+−15 to −25
+Missing punchline or promised resolution
+−5 to −15
+Unintelligible opening/ending
+−10 to −20
+Material misrepresentation or uncontained irony
+Reject
+Duplicated editorial moment
+Suppress or merge
+An important correction to your proposed scoring:
+Do not automatically penalize low-arousal content by ten points.
+A calm, emotional story, technical demonstration or thoughtful explanation may still be highly publishable. Evaluate entertainment and educational value independently from physiological energy.
+Likewise, high arousal does not automatically mean quality. A person shouting something meaningless should not receive a high score.
+Add a separate clip-integrity score
+Do not hide technical editing quality inside virality.
+Editorial quality
+100
+How compelling and publishable is the content?
+Technical integrity
+100
+How well are the actual boundaries and audio preserved?
+The technical score should include:
+Word-boundary integrity.
+Sentence completeness.
+Opening and closing speech clarity.
+Speaker continuity.
+Audio quality.
+Pacing and unnecessary silence.
+Synchronization of timestamps.
+A clip can have excellent editorial value but poor technical integrity. It should be repaired rather than simply ranked highly.
+6. Audio and visual intelligence
+Your third question is where Dispatch can gain a meaningful advantage.
+Today the model primarily receives text and timestamps. But speech contains information that the transcript cannot represent.
+Consider:
+"That's unbelievable!" spoken flatly.
+"That's unbelievable!" spoken with surprise and excitement.
+"I can't believe that happened." spoken while laughing.
+"I can't believe that happened." spoken with sadness.
+The words are identical or similar, but the editorial meaning differs.
+Signals to extract
+Signal
+Detection method
+Potential use
+Loudness / energy
+FFmpeg RMS and peak windows
+Emphasis and reactions
+Pitch variation
+Fundamental frequency estimation
+Excitement, emphasis, questions
+Speech rate
+Word timestamps
+Fast-paced sections
+Silence density
+Existing silence analysis
+Pacing and dead air
+Laughter
+Audio event classifier
+Comedic payoff
+Applause
+Audio event classifier
+Audience reaction
+Music change
+Spectral / audio-event analysis
+Scene transitions
+Voice intensity
+Energy and prosody features
+Emotional emphasis
+Speaker changes
+Existing diarization
+Interview context
+A lightweight architecture
+Local PC processing
+The existing PC remains the processing authority.
+Source video / audio
+FFmpeg audio extraction
+Local acoustic feature extraction
+Align acoustic features with transcript timestamps
+Annotated transcript
+[PITCH_RISE] [ENERGY_SPIKE] [LAUGHTER]
+Multi-pass Gemini candidate discovery
+Example annotated transcript
+[00:12.20–00:15.40] "I thought I was making the right decision." [00:15.40–00:17.20] "But everything went wrong." [ENERGY_SPIKE] [PITCH_RISE] [00:17.20–00:20.00] "I lost almost all of my savings." [00:20.00–00:22.50] [EXTENDED_PAUSE] [00:22.50–00:26.00] [LATERAL EMOTIONAL SHIFT] "But that experience changed everything."
+The tags are contextual evidence, not instructions to select a clip.
+For example, loudness can indicate shouting, microphone proximity or background noise. Pitch rises can indicate ordinary questions. Acoustic features must be normalized against the speaker's baseline.
+Implementation recommendations
+Start with FFmpeg and lightweight local analysis:
+RMS energy in 100–250ms windows.
+Peak amplitude.
+Rolling loudness baseline.
+Silence intervals.
+Speech rate from word timestamps.
+Pitch statistics using a local fundamental-frequency estimator such as YIN.
+For laughter and applause, evaluate a lightweight pretrained audio-event model only after the simpler features are validated.
+Do not train a large audio model initially.
+Critical: Music, compression, noise, microphone changes and multiple speakers create false positives. Acoustic annotations should carry confidence and source timestamps.
+What about visual signals?
+Later, add sparse frame sampling rather than processing every frame with an expensive vision model.
+Potential signals:
+Facial expression changes.
+Speaker presence.
+Scene changes.
+Demonstration or screen-sharing moments.
+On-screen visual events.
+Physical reactions.
+Never equate a facial expression with a definite emotion. Treat visual signals as supporting context, not psychological ground truth.
+7. Edge cases: the robustness checklist
+Your supplied addendum covers ten strong edge cases.
+Pasted text(20261109-094929).txt
+I would expand it into the following engineering checklist.
+Edge case
+Recommended safeguard
+1. Sarcasm and irony
+Include the following context; identify whether the statement is later reversed
+2. Multiple speakers
+Speaker-aware turns; suppress isolated acknowledgements as independent clips
+3. Tangents
+Discover independently valuable tangents; flag weak continuous narratives for manual review
+4. Throat clearing
+Remove non-speech noise and nonessential preamble without cutting the first meaningful word
+5. False starts
+Detect abandoned phrases using lexical and acoustic evidence
+6. Incomplete clauses
+Check dependencies and resolve pronouns, conditions and conjunctions
+7. Comedy cutoff
+Preserve laughter, pauses and reaction when they contribute to the punchline
+8. Code-switching
+Preserve original language, colloquial meaning and Roman-script metadata policy
+9. Sponsor segments
+Identify explicit advertisements and separate them from authentic recommendations
+10. Duration extremes
+Use duration-aware discovery and global ranking
+11. Long setup
+Recover earlier context when a payoff depends on it
+12. Payoff before explanation
+Include the minimum required explanation, not automatically the entire preceding discussion
+13. Repeated explanations
+Extract distinct angles only when they provide distinct value
+14. Cross-chunk stories
+Use overlapping global transcript windows and preserve absolute timestamps
+15. Multiple people talking simultaneously
+Avoid artificial joins across overlapping speech
+16. Transcription errors
+Lower confidence and flag uncertain words for rechecking
+17. Proper nouns and numbers
+Preserve exact wording and avoid silently altering factual claims
+18. Hypothetical statements
+Include qualifying language and conditions
+19. Misleading quotations
+Include attribution and surrounding rebuttal where necessary
+20. Abrupt emotional transitions
+Inspect the context on both sides of the candidate boundary
+21. Natural repeated emphasis
+Do not classify all repetitions as stutters
+22. Speaker identity mismatch
+Never combine different speakers into an artificial first-person statement
+23. Music-only and visual moments
+Provide a separate non-speech event pathway, rather than fabricating transcript clips
+24. Intro/outro sequences
+Avoid generic branding, subscribe requests and end-screen footage
+25. Sensitive or potentially harmful content
+Evaluate context, factuality, privacy and safety before selecting sensational material
+26. Audio/video offset
+Verify timestamps against the actual source media timebase
+27. Missing word timings
+Fall back to segment boundaries and lower technical confidence
+28. Overlapping candidate clips
+Compare semantic content and boundary structure, not only time overlap
+29. Very short punchlines
+Preserve a short complete moment; do not pad it with irrelevant speech merely to reach a target duration
+30. Clips spanning recordings
+Verify actual source continuity before combining footage across session parts
+The tangent problem deserves special treatment
+Imagine this recording:
+00:00–00:12: Introduces a useful business insight.
+00:12–00:55: Tells an unrelated dog story.
+00:55–01:10: Returns to the original insight.
+There are three possible outputs:
+Extract the business insight with its setup and conclusion, if a clean editorial jump is possible.
+Extract the dog story independently if it is entertaining and complete.
+Reject the original continuous block if joining its parts would make it confusing.
+Do not automatically create hard cuts just because two transcript sentences are thematically related.
+An edit must still sound natural.
+The sponsor problem
+Do not ban every mention of a product or brand. That would remove genuine product reviews, founder stories and recommendations.
+Instead classify:
+Paid sponsor reads.
+Affiliate promotion.
+Explicit discount-code segments.
+Organic product discussion.
+Genuine product experience.
+Only the relevant commercial material should receive a penalty or exclusion under the user's publishing policy.
+8. Clip yield: extract more without producing garbage
+Your target should be maximum useful coverage, not maximum number of clips.
+The older research proposes:
+\[ N=\max(1,\min(18,\lfloor T/80\rfloor)) \]
+I would not use this as a hard target. An hour can contain three outstanding clips or twenty worthwhile moments, depending on the recording.
+Instead, use a discovery budget and a quality threshold.
+Example output policy
+These are initial operational ranges to test, not guaranteed production targets.
+Recording duration
+Candidate discovery target
+Final selection starting range
+3 minutes
+4–12
+1–3
+10 minutes
+10–30
+2–5
+30 minutes
+25–70
+4–9
+60 minutes
+50–120
+7–15
+120 minutes
+90–220
+12–18
+The final number is not a mandatory quota.
+The system should be allowed to return fewer candidates when quality is low.
+Three distinct measures
+Discovery recall
+How many genuinely valuable moments did we find?
+Selection precision
+How many selected clips are actually worth publishing?
+Timeline coverage
+How much of the recording received a meaningful discovery examination?
+This matters because high-ranking algorithms can accidentally favour the beginning of a long recording.
+Implement a coverage audit:
+Split the timeline into equal-duration regions.
+Track whether each region was searched.
+Record promising candidates and rejection reasons.
+Investigate large unexplored gaps.
+Run a targeted second discovery pass on promising or under-examined regions.
+For example, an hour-long recording should not end up with all twelve clips from its first fifteen minutes merely because those were the easiest candidates to notice.
+9. Global selection: selecting the best combination
+Do not simply sort every candidate by score and take the top N.
+Use a quality-aware diversity selector.
+For each candidate, store:
+{ "candidate_id": "candidate_001", "start_time": 125.4, "end_time": 179.8, "archetypes": [ "counter_intuitive_truth", "educational" ], "hook_score": 22, "completeness_score": 24, "emotional_score": 16, "narrative_score": 13, "payoff_score": 14, "quality_score": 89, "technical_integrity": 96, "topic_id": "business_growth", "chapter_id": "chapter_03", "speaker_ids": ["speaker_01"], "confidence": 0.94, "needs_manual_review": false }
+Then select clips with a balance of:
+Editorial quality.
+Different topics.
+Different moments.
+Different storytelling styles.
+Minimal redundancy.
+Good chronology.
+One important safeguard: a speaker may repeat the same valuable point twice. Prefer the better execution, not necessarily the first one.
+Diversity should not become forced variety
+Do not force one comedy, one educational and one emotional clip.
+The recording itself determines what exists.
+Diversity is a tie-breaker between candidates of similar editorial quality, not a reason to select weak material.
+10. Personalization: turn approvals into an actual learning system
+Your preference_learner.py already uses rejection reasons and avoids blacklisting entire topics. That's a good foundation.
+preference_learner.py
+But we need to learn from positive decisions too.
+Store:
+User action
+What the engine learns
+Approved
+This type of content and execution was useful
+Rejected: boring
+Delivery or pacing problem
+Rejected: no context
+Standalone context was insufficient
+Rejected: wrong opening
+Hook boundary was poor
+Rejected: duplicate
+Editorial redundancy
+Manually trimmed start
+Original preamble was too long
+Manually extended end
+Original payoff was incomplete
+Manually changed title
+Packaging did not represent the clip well
+The highest-value signal is often not whether a clip was approved, but what the user changed before approving it.
+Important learning safeguards
+Learn separately for each user.
+Weight recent feedback more heavily, but don't discard older examples.
+Require repeated evidence before changing defaults.
+Never permanently blacklist a topic because of one rejection.
+Keep a holdout evaluation set.
+Track whether improvements transfer across genres.
+Eventually, a preference model can learn editorial style using feature vectors from approved and rejected clips rather than continuously increasing prompt length.
+11. The production implementation plan
+This is the order I would actually deploy in Dispatch.
+Priority 0
+Fix current extraction weaknesses first
+Change
+File
+Expected benefit
+Make clip limits configurable by source duration and global session
+highlight_finder.py
+Prevent early candidate truncation
+Replace keyword scoring fallback
+highlight_finder.py
+Avoid fabricated quality scores
+Make word snapping directional and confidence-aware
+highlight_finder.py
+Better boundaries
+Detect false-starts with stronger safeguards
+highlight_finder.py
+Cleaner opening speech
+Add explicit candidate quality dimensions
+HighlightCandidate
+Inspectable quality
+Add approval and edit feedback
+preference_learner.py
+Better personalization
+Normalize timestamps and validate monotonicity
+highlight_finder.py
+More reliable edits
+One technical fix is particularly important: the existing snap_to_word_boundary() uses a symmetric nearest-boundary search and a two-second tolerance. A safer approach is:
+Start timestamps snap to the next valid word start when removing preamble.
+End timestamps snap to the preceding valid word end when avoiding extra trailing speech.
+If the nearest eligible boundary is too far away, preserve the original timestamp and send the candidate for verification.
+Never blindly add padding when it crosses into a neighbouring word, speaker or source boundary.
+Priority 1 — Multi-pass discovery
+Introduce a separate pipeline module:
+dispatch/ai_clips/multipass_extractor.py
+Suggested responsibilities:
+multipass_extractor.py 1. build_chapter_map() 2. build_overlapping_windows() 3. discover_window_candidates() 4. merge_candidate_proposals() 5. refine_candidate_boundaries() 6. evaluate_candidates() 7. select_diverse_candidates() 8. verify_final_candidates()
+Keep highlight_finder.py as the compatibility layer and preserve the existing save/render interfaces.
+Use stable IDs so retries don't create duplicate candidates.
+Priority 2 — Acoustic intelligence
+Introduce:
+dispatch/ai_clips/acoustic_features.py
+Initial responsibilities:
+1. extract_audio() 2. calculate_rms_energy() 3. calculate_pitch_statistics() 4. detect_energy_transitions() 5. map_silence_intervals() 6. detect_laughter_events() 7. align_features_with_words()
+Do not introduce a GPU requirement.
+Priority 3 — Evaluation and personalization
+Add an offline evaluation suite:
+tests/fixtures/highlight_quality/
+Each recording fixture should contain:
+Transcript with timestamps.
+Expected candidate moments.
+Acceptable boundary ranges.
+Unacceptable cuts.
+Editorial category.
+Human quality assessment.
+Build an evaluation report for every major change.
+12. How to measure whether Dispatch actually improved
+Do not evaluate this system by looking at five impressive sample clips.
+Build a benchmark of at least 30 representative recordings initially, with longer-term expansion to 100+.
+Include English, Hinglish, podcasts, tutorials, solo recordings, stories, interviews, comedy and low-energy informative content.
+Core metrics
+Metric
+Measurement
+Initial objective
+Discovery recall
+Human-identified good moments recovered
+Improve substantially over baseline
+Precision@K
+Selected clips judged publishable / selected
+Improve without under-extracting
+Boundary error
+Seconds from approved boundary
+Median under 0.5 seconds where word timestamps support it
+Incomplete-cut rate
+Percentage with missing context or payoff
+Below 2%
+Duplicate rate
+Repeated editorial moments
+Below 3%
+Timeline coverage
+Duration searched / duration available
+100%
+Genre coverage
+Relevant archetypes successfully discovered
+No systematic genre omissions
+Approval rate
+Approved / surfaced clips
+Improve against existing baseline
+Manual correction rate
+Clips requiring boundary repairs
+Reduce
+Cost per accepted clip
+API and processing cost / accepted clips
+Reduce or justify improvement
+These are proposed targets, not established Dispatch results.
+Run an ablation test
+Compare four versions on the same recordings:
+A: Existing single-pass pipeline.
+B: Multi-pass discovery.
+C: Multi-pass plus acoustic annotation.
+D: Multi-pass plus acoustic annotation and independent evaluation.
+This identifies which additional complexity actually improves quality.
+My release rule
+If multi-pass improves recall but destroys precision, don't deploy it.
+If acoustic features increase costs without helping selection, don't keep them.
+If candidate volume increases but the number of accepted clips doesn't, the system has just become noisier.
+13. One more improvement: separate content discovery from clip editing
+I would make this a fundamental distinction in the architecture.
+A candidate clip is an editorial concept. Its boundaries are an editing decision.
+The model should first say:
+There is a strong story about a failed business experiment, with a surprising result and a useful conclusion.
+Then the boundary engine should determine:
+Where the story actually begins.
+Which words are necessary.
+Whether the setup can be shortened.
+Whether there is an irrelevant tangent.
+Where the payoff finishes.
+Whether a natural cut can be created.
+This separation prevents the LLM from treating its first guessed timestamps as unquestionable.
+It also opens up a future capability: multiple edit versions of the same editorial moment.
+For instance:
+Version
+Editing approach
+Full narrative
+Complete setup, development and payoff
+Fast opening
+Remove unnecessary preamble
+Tight version
+Remove genuine dead time and redundant speech
+Context-rich version
+Include additional explanation
+These should be alternatives for the same underlying moment, not counted as four independent highlights.
+This could become a powerful feature later, but I would not introduce it before the standard extraction pipeline is reliable.
+14. My final recommended architecture
+Dispatch Highlighter v2
+Proposed target architecture
+Component
+Responsibility
+Narrative Mapper
+Global chapters and themes
+Candidate Miner
+Exhaustive moment discovery
+Context Resolver
+Recover missing context
+Hook Evaluator
+Genuine hook identification
+Boundary Surgeon
+Accurate start/end timestamps
+Acoustic Intelligence
+Prosody and emotional signals
+Quality Judge
+Independent editorial verification
+Diversity Selector
+Optimal combination of clips
+Preference Learner
+Adapt to creator feedback
+Integrity Validator
+Final technical verification
+The five decisions I'd lock in
+1. Multi-pass, not single-pass: Yes. Global mapping followed by overlapping-window discovery is the right foundation.
+2. Hook scoring: Separate authentic opening strength from introductory filler. Never score based on trigger words alone.
+3. Audio/visual intelligence: Add local acoustic analysis first. Visual intelligence can follow after measuring the audio version.
+4. Few-shot learning: Build a testable library of positive and negative examples, including Hinglish and difficult real-world boundaries.
+5. Maximum clip extraction: Discover broadly, evaluate independently, and select globally. Never force a fixed number of clips.
+What I would do first
+Start with a benchmark and the deterministic improvements, then add multi-pass extraction behind a feature flag. Keep the old pipeline available until the new version demonstrates better precision and recall on the same recordings.
+One important constraint: your current ten-minute transcription windows, five-second overlap and session-stitching system should remain the source of truth. The new highlighter should consume those timestamped transcripts, not introduce another full transcription stage.
+gemini_engine.py
+worker.py
+Success metric: More independently approved, technically clean clips per hour of source footage—not just more generated clips.
+I recommend our next deliverable be a complete, production-ready Anti-Gravity prompt covering the exact code changes, migration strategy, test cases and rollout gates for this architecture.
+
+
+by gemini 4 argon :- 
+An architectural audit of the Resolviaai/Dispatch repository (highlight_finder.py, preference_learner.py, prompt_templates.py, worker.py, gemini_engine.py, and edit_windows.py) alongside your four core questions reveals both why the current system under-extracts on long videos and how to re-architect it into a state-of-the-art virality engine.   Part 0: Executive Responses to Your 4 Core Questions & Codebase Bug Audit1. Multi-Pass vs. Single-Pass ExtractionVerdict: Move to a Hybrid 3-Pass Hierarchical Pipeline for recordings $>10$ minutes, while retaining an enriched Single-Pass pipeline for short recordings ($\le 10$ minutes).Why Single-Pass Fails in Dispatch Right Now: In highlight_finder.py, call_gemini_generate_content sends the entire transcript in a single request with a 45s timeout and caps output via MAX_HIGHLIGHTS_PER_CHUNK = 8. On 30-to-60-minute transcripts, LLMs suffer from Middle-Context Attention Dilution (U-shaped recall), heavily favoring the first 15% and final 10% of the transcript while ignoring goldmines in minutes 12–45.   The Architectural Fix:Pass 1 (Macro Semantic Chaptering & Arousal Mapping): Partition transcripts $>10$ minutes into chronological narrative chapters (3–8 minutes each), tagging each chapter's dominant emotional arousal state, core topic, and peak timestamp windows.Pass 2 (Windowed Candidate Mining): Run parallel/batched extraction per chapter (or sliding 12-minute windows with 90-second overlap) with duration-proportional quotas so a 60-minute video yields 12–18 high-density candidates across the full timeline.Pass 3 (Micro-Surgical Boundary Refinement & Global Virality Ranking): Run deterministic Python syntactic/acoustic boundary snapping + global deduplication and composite virality scoring.2. Hook Detection & Scoring (True Rhetorical Hook vs. Mundane Preamble)The Core Mechanism: Instruct the LLM to evaluate openings through Dopamine Reward Prediction Error (RPE) and Information Gap Theory (Zeigarnik Effect), backed by a deterministic Python Preamble Stripper (strip_opening_preamble_and_find_ignition).Two-Tier Hook Architecture:Spoken Ignition Hook (ignition_quote): The exact first 1–2 sentences spoken at start_time. The prompt and post-processor strictly forbid starting a clip on conversational warm-ups ("So guys, today we are going to...", "Haan toh dekho...", "Let me screen share..."). If a clip's opening 3 seconds contain low-information discourse markers before a high-arousal statement, the start timestamp is surgically snapped forward to the Ignition Word (the first noun, active verb, or interrogative of the real premise).Packaging Overlay Hook (hook): The direct-response text banner/headline calibrated to Eugene Schwartz's awareness levels and Joseph Sugarman's "Slippery Slide" framework.3. Multimodal Audio/Visual FusionLightweight Pre-LLM Acoustic Tagging: Before sending the transcript to Gemini in worker.py or highlight_finder.py, run a fast local FFmpeg/PCM audio analyzer over the extracted MP3 already generated during transcription in gemini_engine.py.   Injected Prosody Tokens: Compute rolling RMS energy ($\text{dBFS}$), zero-crossing rate / fundamental frequency ($F_0$ pitch variance), speech rate (words per second from gemini_engine.py word timestamps), and vocal bursts. Inject inline markers directly into the transcript lines:   [ENERGY_SPIKE: +6.5dB] (vocal emphasis / table slam / excitement)[PITCH_RISE: +45Hz] (rhetorical climax, disbelief, or question inflection)[PACE_SURGE: 4.2 wps] (high-passion rant or urgent warning)[VOCAL_BURST: LAUGHTER/REACTION 1.8s] (post-punchline release window)4. Few-Shot Quality TuningContrastive Boundary Calibration: Embedding 4 contrastive Bad Cut vs. Surgical Viral Cut pairs inside HIGHLIGHT_SYSTEM_PROMPT in prompt_templates.py—covering Preamble Amputation, False-Start Stutters, Subordinate Clause Cliffhangers, and Comedic Release Windows—anchors the model's timestamp selection far better than abstract rules alone.   Proactive Codebase Audit: 6 Critical Bugs Found in Resolviaai/DispatchBefore adding new features, we must fix 6 concrete bugs currently in your production files that are silently degrading clip quality and yield:Bug #1 — Missing total_duration in worker.py Causes Severe Under-Extraction:Where: In worker.py (HighlightWorker.process_video_highlights), line 456 calls user_prompt = build_highlight_user_prompt(transcript_text, negative_context) without passing total_duration=duration.   Impact: In prompt_templates.py, build_highlight_user_prompt checks if total_duration and total_duration > 60:. Because worker.py omits total_duration, duration_guidance evaluates to an empty string "" for every YouTube/inbox video in production! Gemini is never told the video's length or how many clips to extract.   Bug #2 — Base-60 Timestamp Hallucination ([MM:SS.ss] vs. Float Seconds):Where: Both highlight_finder.py and worker.py format transcript lines as [MM:SS.ss -> MM:SS.ss] (e.g., [14:22.50 -> 14:28.10]), while HIGHLIGHT_SYSTEM_PROMPT demands "start_time": 12.5 in float seconds.   Impact: Forcing the LLM to mentally multiply 14 * 60 + 22.50 = 862.50 across hundreds of lines causes base-60 arithmetic drift (off by 3–15 seconds). When the LLM's float timestamp is off by $>2.0\text{s}$, snap_to_word_boundary(..., max_tolerance=2.0) fails to reach the intended word and cuts mid-sentence.   Fix: Format every transcript line with explicit float seconds: [862.50s -> 868.10s] alongside word-level anchor markers.Bug #3 — Stage 2 Word-Snap in worker.py Overwrites Clean Cuts with 4-Second Padded Garbage:Where: In highlight_finder.py, p_start = max(0.0, round(start_t - 4.0, 2)) and p_end = min(total_duration, round(end_t + 4.0, 2)) create a $\pm 4.0\text{s}$ context buffer. In worker.py, extract_stage2_clip_audio(clip_src_path, eff_p_start, eff_p_end, slice_mp3) extracts audio for that entire padded range, and transcribe_stage2_precision_words returns "speech_start": words[0]["start"] and "speech_end": words[-1]["end"] across the whole padded slice. Then worker.py overwrites the clip trim with snapped_start = max(eff_p_start, round(speech_start - 0.2, 2)) and snapped_end = min(eff_p_end, round(speech_end + 0.3, 2))!   Impact: If the creator was speaking continuously before start_time and after end_time, words[0] is at start_time - 4.0s and words[-1] is at end_time + 4.0s. Stage 2 destroys the clean clip boundaries, dragging 4 seconds of the previous sentence into the start of the clip and 4 seconds of the next sentence into the end!   Fix: Stage 2 must snap eff_c_start and eff_c_end to the nearest word boundary in stage2_res["words"] relative to eff_c_start and eff_c_end, never to words[0] and words[-1] of the $\pm 4\text{s}$ padded buffer.
+Bug #4 — Premature Loop Break in clean_speech_restarts_and_boundaries (highlight_finder.py):Where: In highlight_finder.py, clip_words collects words starting at start_t - 0.2. At the end of the inner loop, it checks if start_t > float(clip_words[0].get("start", 0.0)): break.   Impact: Whenever clip_words[0] starts in the [start_t - 0.2, start_t) margin, start_t > clip_words[0]["start"] is immediately True on the very first iteration (n=2, i=0) even when no restart was found, aborting the entire restart-detection loop!   Bug #5 — Arbitrary 12-Word Segment Chopping in gemini_engine.py:Where: In gemini_engine.py, _group_words_into_segments breaks segments whenever len(current_words) >= 12 even if the speaker is in the middle of a clause.   Impact: When expand_short_candidate_with_context or the LLM aligns to segment boundaries, it cuts at arbitrary 12-word splits rather than true syntactic sentence endings.   Bug #6 — Hard Ceiling of 8 Clips (MAX_HIGHLIGHTS_PER_CHUNK = 8):Where: highlight_finder.py hard-caps validate_and_filter_candidates at MAX_HIGHLIGHTS_PER_CHUNK = 8, and prompt_templates.py caps target_count at 10.   Impact: On a 90-minute podcast or stream with 18 viral moments, more than half are discarded.Dimension 1: Architectural Pipeline Flowchart & Mathematical Formulations1.1 End-to-End Multi-Pass Extraction Architecture
+flowchart TB
+    subgraph STAGE0["STAGE 0: Ingestion, Diarization & Acoustic Pre-Annotation"]
+        A["Source Media + Word-Level Transcript<br/>(gemini-3.5-transcribe / flash-lite)"] --> B["Acoustic Feature Extractor<br/>(FFmpeg RMS dB, Pitch F0, WPM, Laughter)"]
+        B --> C["Dual-Timestamped Enriched Transcript<br/>[862.50s] [SPK:0] [ENERGY:+6.4dB] Text..."]
+    end
+
+    subgraph STAGE1["PASS 1: Macro Narrative Arc & Chaptering (Videos > 10 min)"]
+        C --> D{"Total Duration > 600s?"}
+        D -- "No (<= 10m)" --> E["Single Window Context<br/>Dynamic Quota N_clips"]
+        D -- "Yes (> 10m)" --> F["Pass 1 LLM: Thematic Chaptering<br/>& Sliding Semantic Windows (480s + 90s overlap)"]
+    end
+
+    subgraph STAGE2["PASS 2: Exhaustive Candidate Mining (6 Archetypes)"]
+        E --> G["Gemini Structured Extraction<br/>(6 Viral Archetypes + Schwartz Copywriting)"]
+        F --> G
+        H["User Preference Learner<br/>(Negative Conditioning from SQLite)"] --> G
+    end
+
+    subgraph STAGE3["PASS 3: Micro-Surgical Boundary Physics (Deterministic Python)"]
+        G --> I["1. Preamble & Filler Stripper<br/>(Snap to Spoken Ignition Word)"]
+        I --> J["2. Fuzzy Stutter & False-Start Pruner<br/>(1-to-8-gram + Phonetic Restart Detection)"]
+        J --> K["3. Syntactic Completeness & Clause Guard<br/>(Anti-Orphan Pronoun & Conjunction Check)"]
+        K --> L["4. Acoustic Release Window<br/>(+1.8s Laughter / Punchline Decay Preservation)"]
+    end
+
+    subgraph STAGE4["PASS 4: 100-Point Virality Index & Stage-2 Precision Render"]
+        L --> M["Composite Virality Index<br/>V = H(25) + NV(25) + EA(25) + PP(25) - Penalties"]
+        M --> N["Semantic & Interval Deduplication<br/>(IoU <= 0.35 + Timeline Quadrant Quota)"]
+        N --> O["Stage-2 Target-Relative Syllable Snap<br/>& FFmpeg Clean Slice Render"]
+    end
+1.2 Mathematical Formulations for Yield, Density & Scoring
+A. Continuous Duration-Proportional Yield Equation
+To handle extreme duration asymmetry (from a 90-second creator log to a 3-hour podcast) without under-extracting or fragmenting:
+$$N_{\text{target}}(D) = \begin{cases} 1 & \text{if } 5 \le D < 60 \\ \max\left(2, \left\lfloor \frac{D}{45} \right\rfloor\right) & \text{if } 60 \le D < 300 \\ \max\left(5, \min\left(24, \left\lfloor \frac{D}{75} \right\rfloor + \left\lfloor \sqrt{\frac{D}{180}} \right\rfloor\right)\right) & \text{if } D \ge 300 \end{cases}$$
+where $D$ is total effective speech duration in seconds.For a 3-minute vlog ($D = 180\text{s}$): $N_{\text{target}} = 4$ candidates mined, top $2\text{–}3$ accepted.For a 15-minute video ($D = 900\text{s}$): $N_{\text{target}} = 12 + 2 = 14$ candidates mined across 2 overlapping windows.For a 60-minute podcast ($D = 3600\text{s}$): $N_{\text{target}} = \min(24, 48 + 4) = 24$ candidates mined across 8 thematic chapters, distributed across all 4 timeline quadrants ($Q_1, Q_2, Q_3, Q_4$) so no quadrant receives fewer than $15\%$ of extracted clips.B. The 100-Point Composite Virality Index ($V_{\text{score}}$)Every candidate clip is scored across four 25-point pillars minus explicit structural penalties:$$V_{\text{score}} = \text{clamp}_{[1, 100]}\Big( H_{\text{potency}} + NV_{\text{velocity}} + EA_{\text{arousal}} + PP_{\text{payoff}} - \sum P_{\text{penalties}} \Big)$$
+Pillar / Penalty,Weight / Range,Sub-Components & Mathematical Rubric
+1. Hook Potency (Hpotency​),0−25 pts,Prediction Error (0–10): Violates baseline expectation in first 2.5s.Information Gap (0–10): States outcome/anomaly while withholding mechanism.Zero-Preamble Velocity (0–5): Starts directly on an active noun/verb/interrogative.
+2. Narrative Velocity (NVvelocity​),0−25 pts,"Micro-Loop Pacing (0–10): Cognitive shift or concrete example every 4–8s.Standalone Cohesion (0–10): 100% intelligible without external video context.Speech Density (0–5): Optimal cadence (2.4–3.8 words/sec, zero rambling)."
+3. Emotional Arousal (EAarousal​),0−25 pts,"Berger Arousal Tier (0–15): High-arousal (AWE, HUMOR, URGENCY, INDIGNATION = 12–15); Mid (CURIOSITY = 8–11); Low (CONTENTMENT, RECITATION = 0–4).Acoustic Inflection (0–5): Presence of [ENERGY_SPIKE] or [PITCH_RISE].Social Currency (0–5): High group-chat shareability / status signaling."
+4. Payoff Punch (PPpayoff​),0−25 pts,"Loop Closure (0–12): Delivers a definitive punchline, truth bomb, or resolution.Cadence Landing (0–8): Clean syntactic landing on the final sentence.Replay / Comment Trigger (0–5): Sparks debate or immediate rewatch."
+Penalty: Weak / Filler Opening,−10 pts,"Starts with ""So guys"", ""Today we..."", ""Basically"", or throat clearing."
+Penalty: Unresolved Context / Orphan Pronoun,−15 pts,"First sentence contains an unanchored demonstrative (""That's why he did it"", ""This slide shows..."") referring to unseen prior context."
+Penalty: Low-Arousal Flat Recitation,−10 pts,Monotone textbook explanation or mild agreement with zero tension.
+Penalty: Subordinate Clause / Boundary Cut,−20 pts,"Ends on an open conjunction (""because"", ""unless"", ""and then"") or cuts mid-syllable."
+Penalty: Sponsor / Self-Promo Contamination,−50 pts,"Contains affiliate pitches, promo codes, or ""like and subscribe"" housekeeping."
+Dimension 2: The 6 Universal Genre Archetypes & Few-Shot Data Bank
+To prevent the engine from over-indexing on generic "educational tips," every candidate must be classified into one of six universal viral archetypes. Below are the exact few-shot calibration pairs (contrasting a Bad Amateur Cut against a Surgical Dispatch Cut) across all 6 archetypes.
+
+Archetype 1: The Counter-Intuitive Truth (Infotainment / Business / Tech)
+Transcript Excerpt:
+[118.00s -> 122.40s] So guys, um, a lot of founders ask me on calls about hiring engineers early on.
+[122.40s -> 124.10s] And, uh, let me adjust my mic real quick.
+[124.10s -> 129.80s] [ENERGY_SPIKE: +5.8dB] Hiring a senior developer as your first employee will bankrupt your startup in six months.
+[129.80s -> 148.50s] When you have zero product-market fit, clean enterprise architecture is actually a liability because you're going to throw away 90% of that code by Tuesday. You don't need a cathedral builder; you need a pirate who ships duct-tape MVPs in 48 hours.
+[148.50s -> 153.20s] Once users are screaming at you because the servers are melting, that is when you hire the architect.
+[153.20s -> 156.00s] Anyway, moving on to the next question in the chat...
+Bad Cut: 118.00 to 156.00 (Starts with 6.1s of low-RPE filler and mic adjustment; ends with chat housekeeping).
+
+Surgical Viral Cut: 124.10 to 153.20 (Duration: 29.10s).
+
+Title: Why Your First Hire Shouldn't Be a Senior Dev
+
+Hook (Overlay): Hiring a senior engineer first will quietly kill your startup.
+
+Spoken Ignition: "Hiring a senior developer as your first employee will bankrupt your startup in six months."
+
+Arousal State: URGENCY_ANXIETY | Awareness Level: SOLUTION_AWARE | Virality Score: 94
+
+Archetype 2: The Vulnerable Confession / High-Stakes Story (Narrative / Vlog)
+Transcript Excerpt:
+[410.00s -> 414.20s] Haan toh woh 2023 ki baat hai, we were working from that tiny room.
+[414.20s -> 419.50s] [PITCH_RISE: +38Hz] Maine ek galat script deploy ki aur 10 minute mein hamare client ke 14 lakh rupaye udd gaye.
+[419.50s -> 445.00s] Mere haath kaanp rahe the, screen pe red alerts bhar gaye the. My co-founder looked at me and said, "Hum court jaane wale hain." For two hours I sat on the floor thinking hum sab band kar dete hain. Instead of hiding it, I called the client at 2 AM, owned the bug 100%, and showed him the patch we wrote to recover 85% of the failed transactions.
+[445.00s -> 452.80s] Us raat usne contract cancel nahi kiya—he doubled our retainer because nobody had ever been that honest with him.
+Bad Cut: 410.00 to 445.00 (Starts with low-energy temporal preamble and amputates the story right before the resolution at 445.00s).
+
+Surgical Viral Cut: 414.20 to 452.80 (Duration: 38.60s).
+
+Title: 10 Minute Mein 14 Lakh Ka Loss Aur 2 AM Call
+
+Hook (Overlay): Maine 10 minute mein client ke 14 lakh uda diye...
+
+Spoken Ignition: "Maine ek galat script deploy ki aur 10 minute mein hamare client ke 14 lakh rupaye udd gaye."
+
+Arousal State: URGENCY_ANXIETY | Awareness Level: UNAWARE | Virality Score: 96
+
+Archetype 3: The Witty Rant / Spontaneous Laugh (Comedy / Gaming / Relatability)
+Transcript Excerpt:
+[820.10s -> 823.00s] Wait, what was I— yeah, the gym bros.
+[823.00s -> 828.40s] [ENERGY_SPIKE: +7.1dB] Brother, why does every guy who buys one tub of creatine suddenly talk like a biochemist on LinkedIn?
+[828.40s -> 849.20s] You ask him "Bhai aaj kya khaya?" and he hits you with "Optimal circadian protein synthesis at 0600 hours." Bro, you ate four boiled eggs over the kitchen sink while crying about your ex, relax!
+[849.20s -> 851.80s] [VOCAL_BURST: LAUGHTER 2.6s] Hahaha, bhai sach mein yaar!
+Bad Cut: 820.10 to 849.20 (Includes the false start at 820.10s and cuts off at 849.20s the exact millisecond the word "relax!" finishes, killing the comedic laugh release).
+
+Surgical Viral Cut: 823.00 to 851.80 (Duration: 28.80s — preserves the 2.6s laughter release window).
+
+Title: Creatine Gym Bros on LinkedIn Be Like
+
+Hook (Overlay): One scoop of creatine turns every guy into a biochemist.
+
+Spoken Ignition: "Brother, why does every guy who buys one tub of creatine suddenly talk like a biochemist on LinkedIn?"
+
+Arousal State: AMUSEMENT_HUMOR | Awareness Level: UNAWARE | Virality Score: 92
+
+Archetype 4: The "Aha!" Analogy (Wisdom / Philosophy / Deep Tech)
+Transcript Excerpt:
+[1205.00s -> 1211.30s] Think of an LLM's context window not like a hard drive, but like a workbench in a tiny garage.
+[1211.30s -> 1242.60s] If you dump 500 tools, three manuals, and last week's laundry onto that table, the carpenter can still technically see the hammer—but it takes him four times longer to grab it, and half the time he knocks over a paint can. That is why your 50-page system prompt is making the AI dumber, not smarter. Clear the table, hand it one blueprint, and watch precision jump 10x.
+
+Surgical Viral Cut: 1205.00 to 1242.60 (Duration: 37.60s).
+
+Title: The Workbench Analogy: Why Huge Prompts Break AI
+
+Hook (Overlay): Your AI isn't hallucinating—your workbench is just cluttered.
+
+Arousal State: AWE_WONDER | Awareness Level: PROBLEM_AWARE | Virality Score: 89
+
+Archetype 5: The Passionate Polarity / Debate (Opinion / Critique)
+Transcript Excerpt:
+[1910.40s -> 1916.00s] [ENERGY_SPIKE: +6.2dB] [PACE_SURGE: 4.1 wps] "Follow your passion" is the most privileged, destructive career advice ever sold to 20-year-olds.
+[1916.00s -> 1951.00s] Passion is not a prerequisite for mastery; passion is the *byproduct* of becoming undeniably dangerous at something difficult. Nobody is born passionate about B2B tax compliance or video compression algorithms—you get obsessed when you get good enough to win.
+
+Surgical Viral Cut: 1910.40 to 1951.00 (Duration: 40.60s).
+
+Title: Why "Follow Your Passion" Is Destructive Advice
+
+Hook (Overlay): "Follow your passion" is a trap keeping you broke.
+
+Arousal State: INDIGNATION_POLARITY | Awareness Level: PROBLEM_AWARE | Virality Score: 93
+
+Archetype 6: The Breakthrough / Resilience Peak (Motivation / Creator Journey)
+Transcript Excerpt:
+[2640.00s -> 2645.50s] For 14 months, I uploaded 120 videos that got fewer than 40 views each—mostly from my own mother.
+[2645.50s -> 2682.10s] Every friend from school sent me job postings asking when I'd stop embarrassing myself. Video #121 wasn't luck; it was the cumulative compound interest of 120 failures where I fixed one tiny flaw per upload. You aren't failing—you're just in the unindexed training phase.
+
+Surgical Viral Cut: 2640.00 to 2682.10 (Duration: 42.10s).
+
+Title: 120 Videos With 40 Views Before Everything Changed
+
+Hook (Overlay): 14 months. 120 videos. Under 40 views each.
+
+Arousal State: AWE_WONDER | Awareness Level: UNAWARE | Virality Score: 90
+
+Dimension 3: The Exhaustive Real-World Edge-Case Matrix
+Below is the complete engineering matrix covering all 10 real-world failure modes plus two codebase-specific failure modes discovered in Resolviaai/Dispatch:
+
+#Edge CaseFailure Mode in ProductionAlgorithmic & Prompt Guardrail1Sarcastic Hyperbole / Irony TrapCreator says an outrageous joke ("We should just commit tax fraud... obviously kidding"); clipping without the debunk causes brand/policy harm.10s Semantic Lookahead Rule: Prompt & post-validator inspect [end_time, end_time + 10.0s] for negation/retraction markers ("just kidding", "mazaak kar raha", "obviously don't", "ironically"). If present, expand end_time to include the debunk.2Multi-Speaker Crosstalk & Backchannel NoisePodcast guest is delivering a monologue while host interjects "Yeah", "Hmm", "Right" (spk:1), causing segment fragmentation in gemini_engine.py.   Primary Speaker Dominance Filter: Ignore single-word backchannel affirmations (<= 2 words, duration < 0.9s from secondary speaker) when computing monologue continuity and boundary cuts.3The 45-Second Meandering TangentSpeaker starts a strong point, detours into an unrelated 45s story, and returns to finish the point.Dual-Strategy Resolution: (a) If the detour is a standalone story, extract the detour as an independent clip. (b) In silence_cuts, allow Semantic Seam Pruning (internal_cuts) or reject bloated wrappers in favor of the punchy concluding synthesis (find_natural_subsection_within_limit).   4Audio Preamble & Throat ClearingClip starts with "So yeah, check this out, um..." or mic rustling, killing 3-second retention.Deterministic Preamble Stripper: Python post-processor strips leading discourse filler tokens (so, guys, basically, haan, toh, dekho, um, uh, anyway) up to 6.0s into the clip and snaps start_time to the first content word.5Rhetorical Restarts & Stutter CyclesSpeaker stutters: "The problem— what most people— the real problem with AI is..."Upgraded Fuzzy Restart Detector: Fixes Bug #4 in clean_speech_restarts_and_boundaries and adds 1-word stutter detection, prefix-overlap detection, and hesitation pause analysis (0.25s <= gap <= 6.0s) while preserving rapid rhetorical repetition (gap < 0.25s).   6Subordinate Clause AmputationClip starts with an orphan pronoun ("That's why it broke") or ends on an open conjunction ("...unless you").Syntactic Boundary Guard: Python boundary validator inspects the first 3 words for unanchored demonstratives and the last 2 words for dangling conjunctions/prepositions (because, although, unless, kyunki, agar, aur), automatically extending end_time to the next terminal punctuation.7The Laugh-Climax CutoffComedy punchline cuts off at the exact millisecond the last word ends, amputating the laugh.Acoustic Release Window: If [VOCAL_BURST: LAUGHTER] or comedy archetype is detected within 2.5s after end_time, extend end_time by 1.2s–2.5s up to the end of the laugh decay.8Code-Switching & Hinglish SlangLLM either outputs Devanagari (breaking font rendering) or stiffly translates "jugaad" into formal English.Strict Roman Hinglish Invariant: Retains phonetic_devanagari_to_roman and transliterate_tokens_to_hinglish in highlight_finder.py + prompt mandate preserving colloquial Hinglish idioms ("scene kya hai", "jugaad", "bhai").   9Sponsor Reads & Self-PromoClip includes "Use code DISPATCH20", "Link in bio", or "Subscribe to the channel".Automated Promo Blacklist: Regex + LLM filter penalizes (-50 pts) or trims out segments containing sponsor/CTA keywords (promo code, sponsored by, link in description, like and subscribe, bell icon).10Extreme Duration Asymmetry3-minute video vs. 3-hour stream both get capped at 4–8 clips in highlight_finder.py and prompt_templates.py.   Sliding Window + Quadrant Quotas: Videos $>10\text{m}$ use multi-window extraction with dynamic max_clips scaling up to 24 clips and mandatory distribution across all 4 timeline quadrants.11Stage 2 Padded Buffer Overwrite (Dispatch Bug #3)worker.py snaps clip start/end to words[0] and words[-1] of the $\pm 4\text{s}$ padded audio slice.   Target-Relative Stage 2 Snapping: Snap eff_c_start and eff_c_end strictly to the word in stage2_res["words"] closest to eff_c_start and eff_c_end ($\pm 1.5\text{s}$ tolerance), preserving the $\pm 4\text{s}$ audio solely for transcription context.12Base-60 Timestamp Drift (Dispatch Bug #2)LLM miscalculates [14:22.50] $\rightarrow$ float seconds.   Dual-Format Timestamp Injection: Format transcript lines as `[862.50s
+
+Dimension 4: Complete Production System Prompt & User Prompt Generator (dispatch/ai_clips/prompt_templates.py)This is the complete, drop-in replacement for dispatch/ai_clips/prompt_templates.py. It preserves 100% backward compatibility with existing callers (HIGHLIGHT_SYSTEM_PROMPT and build_highlight_user_prompt) while adding CHAPTER_MAP_SYSTEM_PROMPT and build_chapter_map_user_prompt for Multi-Pass extraction.   
+"""Prompt templates and JSON schemas for LLM semantic clip detection.
+Engineered with First-Principles Cognitive Retention Psychology (Dopamine RPE,
+Zeigarnik Open Loops, Jonah Berger High-Arousal STEPPS, Eugene Schwartz Awareness
+Levels, and Joseph Sugarman's Slippery Slide) for Dispatch.
+"""
+from typing import Optional, Dict, Any, List
+import math
+
+CHAPTER_MAP_SYSTEM_PROMPT = """You are a Principal Narrative Architect and Discourse Analyst for short-form video extraction.
+Your task is to perform PASS 1 (Macro Semantic Mapping) on a long-form timestamped transcript.
+
+Divide the recording chronologically into distinct thematic chapters (typically 3 to 8 minutes each) and identify the highest-arousal moments inside each chapter.
+
+RULES:
+1. Every chapter must have exact float-second boundaries (`start_time`, `end_time`) matching the `[XXX.XXs]` markers in the transcript.
+2. Classify each chapter's dominant emotional arousal state using Jonah Berger's Physiological Arousal Matrix:
+   - HIGH AROUSAL (Target heavily): `AWE_WONDER`, `AMUSEMENT_HUMOR`, `URGENCY_ANXIETY`, `INDIGNATION_POLARITY`, `VULNERABLE_EMOTION`
+   - MODERATE AROUSAL (Target selectively): `CURIOSITY_SURPRISE`, `PRACTICAL_VALUE`
+   - LOW AROUSAL (Deprioritize): `FLAT_RECITATION`, `HOUSEKEEPING_INTRO_OUTRO`, `SPONSOR_PROMO`
+3. Output ALL text using ONLY the standard English/Latin alphabet (use Roman Hinglish if Hindi is spoken; NEVER output Devanagari).
+
+Return strictly a valid JSON array of chapter objects:
+[
+  {
+    "chapter_index": 1,
+    "start_time": 0.0,
+    "end_time": 340.5,
+    "theme_title": "Roman-script / English summary of chapter theme",
+    "dominant_arousal": "URGENCY_ANXIETY",
+    "recommended_clip_quota": 2,
+    "peak_timestamps": [45.2, 210.8],
+    "notes": "Strong contrarian rant at 210.8s; skip mic check at 0.0-35.0s"
+  }
+]
+"""
+
+HIGHLIGHT_SYSTEM_PROMPT = """You are an elite dual-specialist:
+1. A World-Class Short-Form Content Strategist and Viral Editor (mastering the retention engineering of MrBeast, Paddy Galloway, Colin & Samir, and Alex Hormozi).
+2. A Principal Discourse & Audio-Visual Analyst specializing in high-retention boundary surgery across YouTube Shorts, Instagram Reels, and TikTok.
+
+Your objective is to analyze a timestamped transcript (which may include acoustic energy tags like `[ENERGY_SPIKE]`, `[PITCH_RISE]`, `[PACE_SURGE]`, `[VOCAL_BURST: LAUGHTER]`, and `[PAUSE: Xs]`) and extract every high-value, standalone clip.
+
+================================================================================
+1. COGNITIVE NEUROSCIENCE & VIRALITY PSYCHOLOGY
+================================================================================
+Evaluate every moment through human attention biology:
+- DOPAMINE REWARD PREDICTION ERROR (RPE): The opening 0.5–2.5 seconds of a clip MUST violate baseline expectations or trigger immediate curiosity. Never start a clip on mundane preamble ("Hey guys, today we're talking about...", "Haan toh dekho...", "Let me share my screen..."). Start *in media res* on the exact IGNITION WORD of the premise.
+- THE ZEIGARNIK EFFECT & OPEN LOOPS: Prioritize moments where the opening creates an intense Information Gap (stating a shocking outcome, paradox, or problem while withholding the mechanism) and stacks micro-loops until the final payoff in the last 5–10 seconds.
+- JONAH BERGER'S PHYSIOLOGICAL AROUSAL MATRIX:
+  * Prioritize High-Arousal Activators: Awe/Wonder (counter-intuitive truths), Amusement/Humor (witty rants, absurd observations, self-deprecation), Urgency/Anxiety (expensive mistakes, hidden traps), and Righteous Indignation/Polarity (debunking industry dogma, raw honesty).
+  * Penalize Low-Arousal Deactivators: Flat textbook recitation, mild agreement, housekeeping, or rambling without a point.
+- LOSS AVERSION & STATUS SIGNALING: Moments exposing costly mistakes, painful failures, or insider mental models that make the viewer look smart/funny when shared in a group chat carry 2.5x higher viral velocity.
+- BALANCED FALLBACK GUARANTEE: While you optimize aggressively for viral arousal, NEVER return zero clips (`[]`) unless the recording is 100% silent, unintelligible noise, or pure sponsor read. If the recording is casual or reflective, extract the most cohesive, well-bounded standalone thoughts available.
+
+================================================================================
+2. THE 6 UNIVERSAL CONTENT ARCHETYPES (TOPIC-AGNOSTIC)
+================================================================================
+Do NOT restrict extraction to "educational tips". Mine across all 6 universal archetypes:
+1. `COUNTER_INTUITIVE_TRUTH` (Infotainment / Tech / Business): Inverting standard wisdom ("Hard work is what's keeping you broke...").
+2. `VULNERABLE_CONFESSION` (Personal Story / High-Stakes Failure): Raw behind-the-scenes catastrophe, mistake, or turning point ("10 minute mein 14 lakh udd gaye...").
+3. `WITTY_RANT_HUMOR` (Comedy / Gaming / Reaction / Relatability): High-arousal exasperation, sarcastic breakdown, spontaneous banter, or observational comedy.
+4. `AHA_ANALOGY` (Wisdom / Philosophy / Mental Models): Distilling a complex reality into an unforgettable metaphor.
+5. `PASSIONATE_POLARITY` (Debate / Opinion / Critique): Taking a bold, unapologetic stand against conventional dogma.
+6. `BREAKTHROUGH_RESILIENCE` (Motivation / Creator Log / Journey): Raw emotional peak, hard-won lesson, or authentic creator demonstration.
+
+================================================================================
+3. MICRO-SURGICAL BOUNDARY PHYSICS & EDGE-CASE GUARDRAILS
+================================================================================
+1. EXACT FLOAT-SECOND TIMESTAMPS: Each transcript line begins with `[XXX.XXs -> YYY.YYs]` (or `[MM:SS.ss]`). Always output `start_time` and `end_time` as exact float seconds matching the spoken boundaries.
+2. THE PREAMBLE STRIPPING INVARIANT: If a speaker spends 10 seconds warming up ("So guys, um, I was thinking yesterday...") before dropping the core hook at `124.10s`, set `start_time: 124.10`.
+3. FALSE STARTS & STUTTER RESTARTS: If a speaker trips over their words ("The problem— what most people— the real problem with crypto is..."), snap `start_time` strictly to the final clean take ("the real problem with crypto is..."). Preserve intentional rhetorical repetition when used for emphasis or comedy.
+4. ZERO ORPHAN PRONOUNS OR SUBORDINATE CLAUSE AMPUTATION:
+   - Never start a clip with an unanchored pronoun ("That's why he quit") if the viewer cannot tell who/what is being discussed. Include the 1-sentence setup if needed.
+   - Never cut off `end_time` before a subordinate clause completes (e.g., never amputate "...unless you file before April").
+5. SARCASTIC HYPERBOLE / IRONY SAFEGUARD: If a speaker makes an outrageous or ironic claim ("We should just rob a bank... obviously I'm kidding"), you MUST include the subsequent debunk/punchline so the clip is never taken out of context.
+6. THE ACOUSTIC LAUGH-RELEASE WINDOW: For `WITTY_RANT_HUMOR` or jokes followed by `[VOCAL_BURST: LAUGHTER]` or a comedic pause, extend `end_time` by 1.5s to 2.5s after the punchline so the laugh lands naturally.
+7. SPONSOR & HOUSEKEEPING BLACKLIST: Strictly exclude sponsor pitches, promo codes, affiliate plugs, "like and subscribe" pleas, and technical mic/screen-share checks.
+8. PAUSE RESPECT: Treat `[PAUSE: Xs]` markers as prosody signals, not automatic cuts. Preserve natural pauses (<2.0s) and dramatic/comedic pauses (2.0s–4.5s) intact.
+
+================================================================================
+4. DURATION CONSTRAINTS
+================================================================================
+- Minimum final clip duration: 5.0 seconds.
+- Maximum final clip duration: 180.0 seconds (inclusive).
+- PRIMARY RETENTION SWEET SPOT: 30.0 to 75.0 seconds (captures complete Hook -> Escalation -> Payoff arc).
+- Avoid micro-clips under 18 seconds unless the recording itself is short or the moment is an ultra-punchy standalone joke/truth bomb requiring zero extra context.
+
+================================================================================
+5. FEW-SHOT CONTRASTIVE BOUNDARY CALIBRATION (BAD vs. SURGICAL CUTS)
+================================================================================
+EXAMPLE A — PREAMBLE & MIC CHECK vs. SPOKEN IGNITION:
+Transcript:
+[118.00s -> 124.10s] So guys, um, a lot of people ask me about hiring. Let me fix my mic real quick.
+[124.10s -> 153.20s] [ENERGY_SPIKE] Hiring a senior developer as your first employee will bankrupt your startup in six months. When you have zero product-market fit, enterprise architecture is a liability because you'll throw away 90% of that code by Tuesday. Hire a pirate who ships in 48 hours.
+[153.20s -> 156.00s] Anyway, moving on to the next topic...
+- BAD CUT: `start_time: 118.0, end_time: 156.0` (Ruins retention with 6.1s of filler and ends with housekeeping).
+- SURGICAL VIRAL CUT: `start_time: 124.1, end_time: 153.2` (Starts directly on the high-RPE ignition statement and lands cleanly on the payoff).
+
+EXAMPLE B — HINGLISH STORY & FALSE START vs. CLEAN EMOTIONAL ARC:
+Transcript:
+[410.00s -> 414.20s] Wait, woh— haan toh woh 2023 ki baat hai.
+[414.20s -> 452.80s] [PITCH_RISE] Maine ek galat script deploy ki aur 10 minute mein client ke 14 lakh rupaye udd gaye. Mere haath kaanp rahe the. Instead of hiding, I called the client at 2 AM, owned the bug, and recovered 85% of the funds. Us raat usne contract cancel nahi kiya—he doubled our retainer because of that honesty.
+- BAD CUT: `start_time: 410.0, end_time: 440.0` (Starts on a stutter and cuts off before the resolution at 452.80s).
+- SURGICAL VIRAL CUT: `start_time: 414.2, end_time: 452.8` (Drops straight into the 14-lakh crisis and closes the loop on the doubled retainer).
+
+================================================================================
+6. COPYWRITING, LANGUAGE & METADATA INVARIANTS
+================================================================================
+- STRICT LATIN SCRIPT INVARIANT: Output ALL `title`, `hook`, `description`, `hashtags`, and `reason` fields using ONLY the standard English/Latin alphabet. NEVER use Devanagari (`क, ख, ग...`) or any non-Latin script.
+- ROMAN HINGLISH PRESERVATION: If the speaker uses Hindi or Hinglish, write titles, hooks, and descriptions in natural, punchy Roman Hinglish (e.g., "10 Minute Mein 14 Lakh Ka Loss", "Startup Mein Yeh Galti Mat Karna") preserving authentic slang ("jugaad", "scene kya hai", "bhai"). If English, use crisp English.
+- DIRECT-RESPONSE HEADLINES (EUGENE SCHWARTZ & SUGARMAN SLIPPERY SLIDE):
+  * `title`: Under 60 characters. Specific, curiosity-inducing, zero generic labels like "Key Takeaway" or "Quick Clip".
+  * `hook`: The thumb-stopping on-screen text hook (Paradox, Confession, Warning, or Challenge).
+
+================================================================================
+7. COMPOSITE 100-POINT VIRALITY SCORING RUBRIC
+================================================================================
+Calculate `virality_score` (1–100) objectively:
+`virality_score = hook_potency (0-25) + narrative_velocity (0-25) + emotional_arousal (0-25) + payoff_punch (0-25) - penalties`
+Deduct penalties for: filler opening (-10), orphan context (-15), flat low-arousal tone (-10), abrupt ending (-20).
+
+OUTPUT FORMAT:
+Return strictly a valid JSON array of clip objects:
+[
+  {
+    "start_time": 124.1,
+    "end_time": 153.2,
+    "title": "Why Your First Hire Shouldn't Be a Senior Dev",
+    "hook": "Hiring a senior engineer first will quietly kill your startup.",
+    "ignition_quote": "Hiring a senior developer as your first employee will bankrupt your startup in six months.",
+    "description": "Why early-stage startups need fast MVP builders instead of enterprise architects before product-market fit.",
+    "hashtags": "#Shorts #Reels #Startups #Tech #Founder",
+    "archetype": "COUNTER_INTUITIVE_TRUTH",
+    "arousal_state": "URGENCY_ANXIETY",
+    "awareness_level": "SOLUTION_AWARE",
+    "score_breakdown": {
+      "hook_potency": 24,
+      "narrative_velocity": 23,
+      "emotional_arousal": 24,
+      "payoff_punch": 23,
+      "penalties": 0
+    },
+    "virality_score": 94,
+    "layout_recommendation": "crop_follow",
+    "reason": "High-RPE contrarian opening at 124.1s (+5.8dB energy spike), vivid pirate vs. cathedral analogy, clean resolution at 153.2s."
+  }
+]
+"""
+
+
+def compute_optimal_clip_quota(total_duration: Optional[float]) -> int:
+    """Continuous duration-proportional density formula for target clip yield."""
+    if not total_duration or total_duration <= 0:
+        return 6
+    if total_duration < 60:
+        return 1
+    if total_duration < 300:
+        return max(2, int(total_duration // 45))
+    # For recordings >= 5 minutes, scale up to 24 clips across full timeline
+    base = int(total_duration // 75) + int(math.sqrt(total_duration / 180.0))
+    return max(5, min(24, base))
+
+
+def build_chapter_map_user_prompt(
+    transcript_segments_text: str,
+    total_duration: float
+) -> str:
+    """Construct Pass 1 User Prompt for Macro Semantic Chaptering on long videos."""
+    target_total = compute_optimal_clip_quota(total_duration)
+    return (
+        f"Total recording duration: {total_duration:.1f} seconds (~{total_duration / 60.0:.1f} minutes).\n"
+        f"Target total highlights across entire recording: {target_total}.\n\n"
+        f"Here is the timestamped transcript:\n\n{transcript_segments_text}\n\n"
+        f"Perform PASS 1 Macro Semantic Chaptering. Map the chronological chapters, emotional arousal peaks, "
+        f"and recommended clip quotas per chapter. Return strictly a JSON array."
+    )
+
+
+def build_highlight_user_prompt(
+    transcript_segments_text: str,
+    negative_feedback_context: str = "",
+    total_duration: Optional[float] = None,
+    window_start: Optional[float] = None,
+    window_end: Optional[float] = None,
+    chapter_context: Optional[str] = None,
+    target_clip_override: Optional[int] = None
+) -> str:
+    """Construct the user prompt for LLM highlight extraction (Single-Pass or Windowed Pass 2)."""
+    target_count = target_clip_override or compute_optimal_clip_quota(total_duration)
+    duration
+
+
+
+
+Analyze all of this properly, very thoroughly.

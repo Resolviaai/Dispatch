@@ -107,8 +107,8 @@ class TestEndToEnd(unittest.TestCase):
 
         # 4. Run end-to-end processing pipeline on the staged chunk
         mock_candidates = [{
-            "start_time": 0.5,
-            "end_time": 8.5,
+            "start_time": 0.0,
+            "end_time": 12.0,
             "title": "Dispatch Highlight",
             "hook": "Check this out",
             "description": "Automated clip",

@@ -27,5 +27,22 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, '../android/app/src/main/assets/web'),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler') || id.includes('motion')) {
+              return 'vendor-framework';
+            }
+            if (id.includes('@supabase')) {
+              return 'vendor-supabase';
+            }
+            if (id.includes('lucide-react')) {
+              return 'vendor-icons';
+            }
+          }
+        },
+      },
+    },
   },
 });

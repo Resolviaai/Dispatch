@@ -4,11 +4,11 @@ import { AuthGate } from './auth/AuthGate';
 import { CameraScreen } from './screens/CameraScreen';
 import { RecordingsScreen } from './screens/RecordingsScreen';
 import { ClipsScreen } from './screens/ClipsScreen';
-import { SettingsScreen } from './screens/SettingsScreen';
 import { BottomNav, TabType } from './components/BottomNav';
 import { RecordingItem, Bridge, apiUrl, getAuthHeaders } from './bridge';
 import { Smartphone, Monitor, Wifi, Battery } from 'lucide-react';
-import { StudioWorkstation } from './studio/StudioWorkstation';
+const StudioWorkstation = React.lazy(() => import('./studio/StudioWorkstation').then(m => ({ default: m.StudioWorkstation })));
+const SettingsScreen = React.lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
 import { ScreenErrorBoundary } from './components/ScreenErrorBoundary';
 import { ActivityProvider } from './context/ActivityContext';
 
@@ -312,15 +312,17 @@ export const App: React.FC = () => {
   if (!isNative && !isMobileFrame) {
     return (
       <ScreenErrorBoundary title="Studio could not render" resetKey={pcHost}>
-        <StudioWorkstation
-          pcHost={pcHost}
-          onSwitchToMobileFrame={() => {
-            setIsMobileFrame(true);
-            if (typeof localStorage !== 'undefined') {
-              localStorage.setItem('dispatch_view_mode', 'mobile');
-            }
-          }}
-        />
+        <React.Suspense fallback={<div className="h-full w-full bg-studio flex items-center justify-center text-text-muted">Loading Studio...</div>}>
+          <StudioWorkstation
+            pcHost={pcHost}
+            onSwitchToMobileFrame={() => {
+              setIsMobileFrame(true);
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('dispatch_view_mode', 'mobile');
+              }
+            }}
+          />
+        </React.Suspense>
       </ScreenErrorBoundary>
     );
   }
@@ -418,6 +420,7 @@ export const App: React.FC = () => {
                 onNavigateToRecord={() => handleTabChange('record')}
                 onDeleteSession={(sessionId) => setRecordings(prev => prev.filter(r => (r.sessionId || 'direct') !== sessionId && r.segmentId !== sessionId))}
                 pcHost={pcHost}
+                isPcOnline={isPcOnline}
               />
             </ScreenErrorBoundary>
           </div>
@@ -439,7 +442,9 @@ export const App: React.FC = () => {
           </div>
 
           {currentTab === 'settings' && (
-            <SettingsScreen pcHost={pcHost} onEditorOpenChange={setIsEditorOpen} />
+            <React.Suspense fallback={<div className="h-full w-full bg-studio flex items-center justify-center text-text-muted">Loading Settings...</div>}>
+              <SettingsScreen pcHost={pcHost} onEditorOpenChange={setIsEditorOpen} />
+            </React.Suspense>
           )}
         </div>
 

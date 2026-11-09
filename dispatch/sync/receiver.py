@@ -67,7 +67,7 @@ def _derive_receipt_hmac_key(token: str) -> bytes:
     return hmac.new(token.encode("utf-8"), b"dispatch-ack-receipt-v1", hashlib.sha256).digest()
 
 
-def verify_token(token: Optional[str] = None):
+def verify_token(token: Optional[str] = None, log_warning: bool = True):
     """Enforce token validation for sync endpoints.
     Rejects missing or invalid tokens with HTTP 401 Unauthorized.
     """
@@ -80,7 +80,8 @@ def verify_token(token: Optional[str] = None):
         clean_token = clean_token[7:].strip()
 
     if not secrets.compare_digest(clean_token, expected_token):
-        logger.warning("Rejected sync request: invalid auth token")
+        if log_warning:
+            logger.warning("Rejected sync request: invalid auth token")
         raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 

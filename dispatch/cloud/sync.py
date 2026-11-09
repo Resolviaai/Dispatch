@@ -380,9 +380,8 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
     if not user_id:
         user_id = resolve_single_profile_owner()
     if not user_id:
-        logger.error(
-            "Clip %s has no owner and no safe default account is available; "
-            "skipping cloud sync (set DISPATCH_PC_OWNER_USER_IDS to authorize this PC).",
+        logger.debug(
+            "Clip %s has no owner and no safe default account is available; skipping cloud sync.",
             clip_id,
         )
         return False

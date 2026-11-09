@@ -14,11 +14,12 @@ import sys
 import uuid
 import ipaddress
 import urllib.parse
+import hashlib
 import email.utils
 from functools import wraps
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, Response, Body
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -135,6 +136,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_ROUTINE_POLL_PATHS = frozenset({
+    "/api/status",
+    "/api/clips",
+    "/api/youtube/inbox",
+    "/api/integrations/status",
+    "/api/storage/breakdown",
+})
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     client_ip = request.client.host if request.client else "unknown"
@@ -157,12 +166,22 @@ async def log_requests(request: Request, call_next):
                 content={"detail": f"Request body too large: {declared_length} bytes exceeds the {MAX_REQUEST_BODY_BYTES}-byte limit"},
             )
 
-    logger.info("--> [HTTP REQ] %s %s from %s (Origin: %s, Range: %s)",
-                request.method, request.url.path, client_ip,
-                request.headers.get("origin"), request.headers.get("range"))
+    is_routine_poll = (
+        request.method in ("GET", "HEAD", "OPTIONS")
+        and request.url.path in _ROUTINE_POLL_PATHS
+    )
+    if is_routine_poll:
+        logger.debug("--> [HTTP REQ] %s %s from %s", request.method, request.url.path, client_ip)
+    else:
+        logger.info("--> [HTTP REQ] %s %s from %s (Origin: %s, Range: %s)",
+                    request.method, request.url.path, client_ip,
+                    request.headers.get("origin"), request.headers.get("range"))
     try:
         response = await call_next(request)
-        logger.info("<-- [HTTP RES] %s %s status=%d", request.method, request.url.path, response.status_code)
+        if is_routine_poll and response.status_code < 400:
+            logger.debug("<-- [HTTP RES] %s %s status=%d", request.method, request.url.path, response.status_code)
+        else:
+            logger.info("<-- [HTTP RES] %s %s status=%d", request.method, request.url.path, response.status_code)
         return response
     except Exception as e:
         logger.error("<-- [HTTP ERR] %s %s error: %s", request.method, request.url.path, e)
@@ -171,14 +190,24 @@ async def log_requests(request: Request, call_next):
 app.include_router(sync_router)
 
 
+_AUTH_USER_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_AUTH_CACHE_TTL_SECONDS = 60.0
+_AUTH_CACHE_LOCK = threading.Lock()
+
+
+def _clear_auth_cache() -> None:
+    """Clear in-memory JWT cache (used in test fixtures)."""
+    with _AUTH_CACHE_LOCK:
+        _AUTH_USER_CACHE.clear()
+
+
 def get_authenticated_user(request: Request) -> Dict[str, Any]:
     """Identity boundary: verifies the Supabase JWT from the Authorization header
     or x-auth-token header against Supabase itself (signature + expiry validated
     server-side by Supabase). Returns {user_id, email}. Fails closed with 401 for
     missing/invalid tokens. Loopback dashboard calls keep their existing
-    device-token path. Remediation D3: the legacy `?token=` query-parameter
-    acceptance was removed (no frontend call site consumes it; tokens in URLs leak
-    into logs/history)."""
+    device-token path. Verified sessions are cached for 60s in-memory to prevent
+    outbound network storms on high-frequency polling."""
     auth = request.headers.get("authorization") or ""
     token = None
     if auth.lower().startswith("bearer "):
@@ -188,6 +217,14 @@ def get_authenticated_user(request: Request) -> Dict[str, Any]:
 
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
+
+    tok_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = time.time()
+    with _AUTH_CACHE_LOCK:
+        cached = _AUTH_USER_CACHE.get(tok_hash)
+        if cached and now < cached[0]:
+            return cached[1]
+
     try:
         import httpx
         globals()['httpx'] = httpx  # patchable in tests
@@ -202,7 +239,12 @@ def get_authenticated_user(request: Request) -> Dict[str, Any]:
     if resp.status_code != 200:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     user = resp.json()
-    return {"user_id": user.get("id", ""), "email": user.get("email", "")}
+    user_info = {"user_id": user.get("id", ""), "email": user.get("email", "")}
+    with _AUTH_CACHE_LOCK:
+        if len(_AUTH_USER_CACHE) > 500:
+            _AUTH_USER_CACHE.clear()
+        _AUTH_USER_CACHE[tok_hash] = (now + _AUTH_CACHE_TTL_SECONDS, user_info)
+    return user_info
 
 
 def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Optional[str]:
@@ -237,19 +279,23 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
                 return None
         return None
 
-    # LAN caller: first attempt Supabase session token authentication
-    try:
-        user = get_authenticated_user(request)
-        return user.get("user_id") or None
-    except HTTPException:
-        pass
-
-    # LAN caller fallback: paired device authentication (DispatchBridge x-auth-token)
+    auth_header = request.headers.get("authorization") or ""
     device_token = request.headers.get("x-auth-token")
-    if device_token:
+
+    # 1. Supabase Bearer JWT in Authorization header
+    if auth_header.lower().startswith("bearer "):
+        try:
+            user = get_authenticated_user(request)
+            return user.get("user_id") or None
+        except HTTPException:
+            pass
+
+    # 2. LAN caller paired device authentication (DispatchBridge x-auth-token or raw token)
+    candidate_sync_token = device_token or (auth_header if not auth_header.lower().startswith("bearer ") else None)
+    if candidate_sync_token:
         try:
             from dispatch.sync.receiver import verify_token
-            verify_token(device_token)
+            verify_token(candidate_sync_token, log_warning=False)
             owners = authorized_pc_owner_ids()
             explicit_user = (os.getenv("DISPATCH_USER_ID") or "").strip()
             if explicit_user:
@@ -272,11 +318,19 @@ def resolve_caller_user_id(request: Request, allow_lan_peer: bool = False) -> Op
                 )
                 raise HTTPException(
                     status_code=403,
-                    detail="Paired device owner is ambiguous: multiple PC owners configured without DISPATCH_USER_ID"
+                    detail="ambiguous paired device identity: multiple PC owners configured without explicit DISPATCH_USER_ID disambiguation"
                 )
             return None
-        except HTTPException:
-            raise
+        except HTTPException as e:
+            if e.status_code == 403:
+                raise
+
+    # 3. LAN caller fallback: attempt Supabase session token authentication
+    try:
+        user = get_authenticated_user(request)
+        return user.get("user_id") or None
+    except HTTPException:
+        pass
 
     if allow_lan_peer and _is_local_network_peer(client_host):
         return None
@@ -377,19 +431,34 @@ def verify_dashboard_auth(request: Request) -> None:
     - When DISPATCH_TRUST_LAN is on: legacy full-trust behavior for local-network
       callers (Host/Origin hygiene, then allow), guarded by a startup warning.
     """
-    token = request.headers.get("x-auth-token") or request.headers.get("authorization")
-    if token:
-        try:
-            from dispatch.sync.receiver import verify_token
-            verify_token(token)
-            return
-        except HTTPException:
-            pass
+    auth_header = request.headers.get("authorization") or ""
+    x_token = request.headers.get("x-auth-token")
+
+    # 1. Supabase Bearer JWT (browser / dashboard session) wins first for Authorization headers
+    if auth_header.lower().startswith("bearer "):
         try:
             get_authenticated_user(request)
             return
         except HTTPException:
             pass
+
+    # 2. LAN / Paired device token (x-auth-token or raw authorization)
+    candidate_sync_token = x_token or (auth_header if not auth_header.lower().startswith("bearer ") else None)
+    if candidate_sync_token:
+        try:
+            from dispatch.sync.receiver import verify_token
+            verify_token(candidate_sync_token, log_warning=False)
+            return
+        except HTTPException:
+            pass
+
+        # If x-auth-token was supplied and wasn't a local sync PIN, also check Supabase
+        if x_token:
+            try:
+                get_authenticated_user(request)
+                return
+            except HTTPException:
+                pass
 
     client_host = request.client.host if request.client else "unknown"
     if is_trusted_localhost(client_host):

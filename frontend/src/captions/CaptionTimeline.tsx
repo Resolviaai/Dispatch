@@ -306,10 +306,8 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const safeClipDuration = Math.max(1, duration, piecesFallbackEnd);
 
   const timelineDuration = isSourceMode
-    ? Math.max(safeClipDuration, sourceDuration || 0, piecesFallbackEnd)
+    ? Math.max(safeClipDuration, sourceDuration || 0, piecesFallbackEnd, paddedEnd || 0)
     : safeClipDuration;
-
-  const timelineCurrentTime = isSourceMode ? clipTimeToSourceTime(currentTime, clipStart) : currentTime;
 
   // Split group handler & keyboard shortcut
   const selectedGroup = track?.groups?.find((g) => g.id === selectedGroupId);
@@ -355,6 +353,14 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       index: 0,
     }];
   }, [segments, clipStart, clipEnd, duration]);
+
+  const pieceRanges = useMemo<[number, number][]>(() => {
+    return pieces.map((p) => [p.start, p.end]);
+  }, [pieces]);
+
+  const timelineCurrentTime = isSourceMode
+    ? clipTimeToSourceTime(currentTime, clipStart, pieceRanges, sourceDuration)
+    : currentTime;
 
   const piecesMaxEnd = useMemo(() => {
     return pieces.reduce((max, p) => Math.max(max, p.end), 0);
@@ -560,6 +566,72 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
 
   // Dynamic ruler ticks based on zoom level
+
+  // Memoized filmstrip frame boxes to avoid recalculating dozens of DOM elements on playback ticks
+  const computedFilmstripElements = useMemo(() => {
+    if (!filmstrip) {
+      return (
+        <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
+          ))}
+        </div>
+      );
+    }
+    if (filmstrip.frames.length > 1) {
+      return filmstrip.frames.map((frame, idx) => {
+        const box = filmstripFrameBox(frame, filmstrip, { pxPerSec, clipStart, isSourceMode });
+        if (!box) return null;
+        return (
+          <div
+            key={`${idx}-${frame.t}`}
+            className="absolute top-0 bottom-0 overflow-hidden"
+            style={{ left: `${box.left}px`, width: `${box.width}px` }}
+          >
+            <img
+              src={frame.url}
+              alt=""
+              loading="eager"
+              decoding="async"
+              draggable={false}
+              className="h-full w-full object-cover object-center pointer-events-none select-none"
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+          </div>
+        );
+      });
+    }
+    if (filmstrip.frames.length === 1) {
+      const frame = filmstrip.frames[0];
+      const slotSec = 2.0;
+      const slotCount = Math.max(1, Math.ceil(filmstrip.duration / slotSec));
+      return Array.from({ length: slotCount }).map((_, i) => {
+        const t = i * slotSec;
+        const dur = Math.min(slotSec, filmstrip.duration - t);
+        const rulerStart = isSourceMode ? (clipStart + t) : t;
+        const left = Math.round(rulerStart * pxPerSec);
+        const width = Math.max(1, Math.round(dur * pxPerSec));
+        return (
+          <div
+            key={`tile-${i}`}
+            className="absolute top-0 bottom-0 overflow-hidden"
+            style={{ left: `${left}px`, width: `${width}px` }}
+          >
+            <img
+              src={frame.url}
+              alt=""
+              loading="eager"
+              decoding="async"
+              draggable={false}
+              className="h-full w-full object-cover object-center pointer-events-none select-none"
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+          </div>
+        );
+      });
+    }
+    return null;
+  }, [filmstrip, pxPerSec, clipStart, isSourceMode]);
 
   const rulerTicks = useMemo(() => {
 
@@ -997,7 +1069,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       const clipTime = isSourceMode
 
-        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2))
+        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration, pieceRanges, sourceDuration).toFixed(2))
 
         : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2));
 
@@ -1153,7 +1225,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       const clipSeekTime = isSourceMode
 
-        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration).toFixed(2))
+        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration, pieceRanges, sourceDuration).toFixed(2))
 
         : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2));
 
@@ -1839,7 +1911,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     const sourceSeek = drag.side === 'start' ? nextRange.start : nextRange.end;
 
-    scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration));
+    scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration, pieceRanges, sourceDuration));
 
   };
 
@@ -1943,7 +2015,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       const sourceSeek = drag.side === 'start' ? finalRange.start : finalRange.end;
 
-      flushSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration));
+      flushSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration, pieceRanges, sourceDuration));
 
       trimDragRef.current = null;
 
@@ -2045,7 +2117,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     // Live scrub preview to trimmed edge
     const sourceSeek = drag.side === 'start' ? newStart : newEnd;
-    scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration));
+    scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration, pieceRanges, sourceDuration));
   };
 
   const handlePieceTrimPointerUp = async (e: React.PointerEvent) => {
@@ -2231,7 +2303,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       {/* TIMELINE UTILITY BAR: Magnet Snapping + Clean compact zoom controls */}
 
-      <div className="h-6 px-2 bg-[#16191E] border-b border-[#232832] flex items-center justify-between text-text-secondary text-[10px] shrink-0">
+      <div className="h-8 px-2 bg-[#16191E] border-b border-[#232832] flex items-center justify-between text-text-secondary text-[11px] shrink-0">
 
         {/* Left side: Snap / Magnet toggle */}
 
@@ -2243,7 +2315,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             onClick={() => setIsSnapEnabled(!isSnapEnabled)}
 
-            className={`px-1.5 h-4.5 rounded flex items-center gap-1 text-[10px] font-semibold transition-all active:scale-95 ${
+            className={`px-2 min-h-[28px] rounded-md flex items-center gap-1.5 text-[11px] font-semibold transition-all active:scale-[0.98] ${
 
               isSnapEnabled
 
@@ -2259,7 +2331,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
           >
 
-            <Magnet size={11} className={isSnapEnabled ? 'text-primary' : 'text-text-muted'} />
+            <Magnet size={13} className={isSnapEnabled ? 'text-primary' : 'text-text-muted'} />
 
             <span>Snap {isSnapEnabled ? 'ON' : 'OFF'}</span>
 
@@ -2279,7 +2351,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             onClick={() => handleZoom(-15)}
 
-            className="w-5 h-5 rounded flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-[#232832] active:scale-95 transition-all"
+            className="w-7 h-7 rounded-md flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-[#232832] active:scale-[0.98] transition-all"
 
             title="Zoom Out"
 
@@ -2287,7 +2359,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
           >
 
-            <ZoomOut size={12} />
+            <ZoomOut size={14} />
 
           </button>
 
@@ -2299,7 +2371,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             onClick={() => handleZoom(15)}
 
-            className="w-5 h-5 rounded flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-[#232832] active:scale-95 transition-all"
+            className="w-7 h-7 rounded-md flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-[#232832] active:scale-[0.98] transition-all"
 
             title="Zoom In"
 
@@ -2307,7 +2379,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
           >
 
-            <ZoomIn size={12} />
+            <ZoomIn size={14} />
 
           </button>
 
@@ -2319,7 +2391,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             onClick={handleZoomFit}
 
-            className="w-5 h-5 rounded flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-[#232832] active:scale-95 transition-all"
+            className="w-7 h-7 rounded-md flex items-center justify-center text-text-secondary hover:text-text-main hover:bg-[#232832] active:scale-[0.98] transition-all"
 
             title="Fit to Timeline"
 
@@ -2327,7 +2399,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
           >
 
-            <Maximize2 size={11} />
+            <Maximize2 size={13} />
 
           </button>
 
@@ -2337,107 +2409,6 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
 
 
-      {canEditSelection && !hideTrimControls && (
-
-        <div
-
-          aria-label="Selected source range controls"
-
-          className="h-9 px-3 bg-[#16191E] border-b border-[#232832] flex items-center gap-2 overflow-x-auto no-scrollbar whitespace-nowrap text-[11px]"
-
-        >
-
-          <span className="text-text-secondary font-mono tabular-nums text-[10px] shrink-0" aria-live="polite">
-
-            Start {formatTimeRuler(activeTrim.start)} · End {formatTimeRuler(activeTrim.end)} · {selectionDuration.toFixed(1)} s
-
-          </span>
-
-          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving' || activeTrim.start <= 0.05}
-
-            onClick={() => applyRangeExtension('start', -RANGE_CONTROL_STEP_SECONDS)}
-
-            className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium disabled:opacity-40 active:scale-95 transition-all shrink-0"
-
-            aria-label={`Extend selection start earlier by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
-
-            −0.5s Start
-
-          </button>
-
-          <button type="button" disabled={!canEditSelection || trimSaveState === 'saving' || activeTrim.end >= ((sourceDuration || 0) > 0 ? sourceDuration! : (clipEnd ?? (clipStart + duration))) - 0.05}
-
-            onClick={() => applyRangeExtension('end', RANGE_CONTROL_STEP_SECONDS)}
-
-            className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium disabled:opacity-40 active:scale-95 transition-all shrink-0"
-
-            aria-label={`Extend selection end later by ${RANGE_CONTROL_STEP_SECONDS} seconds`}>
-
-            +0.5s End
-
-          </button>
-
-          {beforeContext && onPreviewContext && sourceTimebase && (
-
-            <button type="button" disabled={trimSaveState === 'saving'}
-
-              onClick={() => beforeContext && onPreviewContext?.(beforeContext)}
-
-              className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium active:scale-95 transition-all shrink-0"
-
-              aria-label="Preview context before range">
-
-              ◀ Context
-
-            </button>
-
-          )}
-
-          {afterContext && onPreviewContext && sourceTimebase && (
-
-            <button type="button" disabled={trimSaveState === 'saving'}
-
-              onClick={() => afterContext && onPreviewContext?.(afterContext)}
-
-              className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium active:scale-95 transition-all shrink-0"
-
-              aria-label="Preview context after range">
-
-              Context ▶
-
-            </button>
-
-          )}
-
-          {onSplitGroup && selectedGroup && (
-            <button
-              type="button"
-              disabled={!canSplit}
-              onClick={() => canSplit && onSplitGroup?.(selectedGroup.id, currentTime)}
-              className="h-6 px-2 rounded border border-border bg-surface-200 hover:bg-surface-300 text-text-main text-[10px] font-medium disabled:opacity-40 active:scale-95 transition-all shrink-0 flex items-center gap-1"
-              title={canSplit ? `Split group at ${currentTime.toFixed(2)}s (S)` : 'Place playhead inside selection to split'}
-              aria-label="Split selected group at playhead"
-            >
-              <Scissors size={10} />
-              <span>Split</span>
-            </button>
-          )}
-
-          {trimSaveState && (
-
-            <span role="status" className={`text-[10px] shrink-0 ${trimSaveState === 'error' ? 'text-red-400' : 'text-text-muted'}`}>
-
-              {trimSaveState === 'saving' ? 'Saving…' : trimSaveState === 'saved' ? 'Saved' : 'Error'}
-
-            </span>
-
-          )}
-
-          {track?.timing_warning && <span role="alert" className="text-amber-400 text-[10px] shrink-0">{track.timing_warning}</span>}
-
-        </div>
-
-      )}
 
 
 
@@ -2791,6 +2762,22 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                   >
 
+                    {/* Stage 2: Bounded Edit Window boundary (context container around the clip) */}
+                    {isSourceMode && paddedStart !== undefined && paddedEnd !== undefined && paddedEnd > paddedStart && (
+                      <div
+                        className="absolute top-0 bottom-0 pointer-events-none rounded-lg border border-primary/25 bg-primary/[0.04] z-0 flex items-start"
+                        style={{
+                          left: `${Math.round(paddedStart * pxPerSec)}px`,
+                          width: `${Math.max(12, Math.round((paddedEnd - paddedStart) * pxPerSec))}px`,
+                        }}
+                        title={`Edit Window: ${paddedStart.toFixed(1)}s - ${paddedEnd.toFixed(1)}s`}
+                      >
+                        <span className="px-1.5 py-0.5 text-[9px] font-mono tracking-tight text-primary/70 uppercase select-none">
+                          Edit Window
+                        </span>
+                      </div>
+                    )}
+
                     {pieces.map((piece, pieceIdx) => {
 
                       const isPieceSelected =
@@ -2889,66 +2876,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                             >
 
-                              {filmstrip && filmstrip.frames.length > 1 ? (
-                                filmstrip.frames.map((frame, idx) => {
-                                  const box = filmstripFrameBox(frame, filmstrip, { pxPerSec, clipStart, isSourceMode });
-                                  if (!box) return null;
-                                  return (
-                                    <div
-                                      key={`${idx}-${frame.t}`}
-                                      className="absolute top-0 bottom-0 overflow-hidden"
-                                      style={{ left: `${box.left}px`, width: `${box.width}px` }}
-                                    >
-                                      <img
-                                        src={frame.url}
-                                        alt=""
-                                        loading="eager"
-                                        decoding="async"
-                                        draggable={false}
-                                        className="h-full w-full object-cover object-center pointer-events-none select-none"
-                                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                                      />
-                                    </div>
-                                  );
-                                })
-                              ) : filmstrip && filmstrip.frames.length === 1 ? (
-                                (() => {
-                                  // Continuously tile the single fallback thumbnail across the whole clip duration
-                                  const frame = filmstrip.frames[0];
-                                  const slotSec = 2.0;
-                                  const slotCount = Math.max(1, Math.ceil(filmstrip.duration / slotSec));
-                                  return Array.from({ length: slotCount }).map((_, i) => {
-                                    const t = i * slotSec;
-                                    const dur = Math.min(slotSec, filmstrip.duration - t);
-                                    const rulerStart = isSourceMode ? (clipStart + t) : t;
-                                    const left = Math.round(rulerStart * pxPerSec);
-                                    const width = Math.max(1, Math.round(dur * pxPerSec));
-                                    return (
-                                      <div
-                                        key={`tile-${i}`}
-                                        className="absolute top-0 bottom-0 overflow-hidden"
-                                        style={{ left: `${left}px`, width: `${width}px` }}
-                                      >
-                                        <img
-                                          src={frame.url}
-                                          alt=""
-                                          loading="eager"
-                                          decoding="async"
-                                          draggable={false}
-                                          className="h-full w-full object-cover object-center pointer-events-none select-none"
-                                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                                        />
-                                      </div>
-                                    );
-                                  });
-                                })()
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-around opacity-30 px-2">
-                                  {Array.from({ length: 8 }).map((_, i) => (
-                                    <div key={i} className="w-10 h-7 rounded bg-[#2A313C] border border-[#3A4350]" />
-                                  ))}
-                                </div>
-                              )}
+                              {computedFilmstripElements}
 
                             </div>
 

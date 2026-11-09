@@ -23,10 +23,16 @@ from dispatch.captions.presets import get_default_preset_id
 from dispatch.ai_clips.highlight_finder import (
     call_gemini_generate_content,
     validate_and_filter_candidates,
+    snap_clip_to_stage2_words,
+    extract_highlights_windowed,
     transliterate_segments_to_hinglish,
     MAX_HIGHLIGHTS_PER_CHUNK,
 )
-from dispatch.ai_clips.prompt_templates import HIGHLIGHT_SYSTEM_PROMPT, build_highlight_user_prompt
+from dispatch.ai_clips.prompt_templates import (
+    HIGHLIGHT_SYSTEM_PROMPT,
+    build_highlight_user_prompt,
+    compute_optimal_clip_quota
+)
 from dispatch.ai_clips.preference_learner import get_negative_feedback_prompt
 
 logger = logging.getLogger("dispatch.ai_clips.worker")
@@ -486,10 +492,9 @@ class HighlightWorker:
                         logger.info("Preserving full range for direct clip %s (no speech-snap trim)", clip_id)
                     else:
                         # 2.2 Word-Snap: tight cut to millisecond start and end of spoken syllables
-                        speech_start = eff_p_start + stage2_res.get("speech_start", 0.0)
-                        speech_end = eff_p_start + stage2_res.get("speech_end", eff_c_end - eff_p_start)
-                        snapped_start = max(eff_p_start, round(speech_start - 0.2, 2))
-                        snapped_end = min(eff_p_end, round(speech_end + 0.3, 2))
+                        snapped_start, snapped_end = snap_clip_to_stage2_words(
+                            eff_c_start, eff_c_end, words, eff_p_start, eff_p_end
+                        )
                         range_trimmed = db.update_clip_trim(
                             clip_id, snapped_start, snapped_end,
                             expected_range_revision=range_revision,
@@ -787,6 +792,22 @@ class HighlightWorker:
 
         # Cross-boundary highlight support: check for multi-segment session transcript stitching
         if session_id:
+            # Bug #4 Fix: Check if sibling chunk in multi-part session already completed highlights
+            session_items = db.get_session_inbox_items(session_id)
+            if len(session_items) > 1:
+                sibling_defined = [p for p in session_items if p.get("video_id") != video_id and p.get("status") in ("CLIPS_DEFINED", "ANALYZED", "COMPLETED")]
+                existing_clips = db.get_clips_for_session(session_id)
+                if sibling_defined and existing_clips:
+                    logger.info("Session %s highlights already extracted by sibling chunk (%d clips exist). Marking %s as CLIPS_DEFINED without re-extracting.",
+                                session_id, len(existing_clips), video_id)
+                    db.update_youtube_video(video_id=video_id, status="CLIPS_DEFINED")
+                    return {
+                        "video_id": video_id,
+                        "status": "CLIPS_DEFINED",
+                        "clips_count": len(existing_clips),
+                        "model_used": "session_cached"
+                    }
+
             stitched = self._resolve_session_stitched_transcript(session_id)
             if stitched:
                 segments, duration = stitched
@@ -831,13 +852,16 @@ class HighlightWorker:
 
             start_m, start_s = divmod(s_start, 60)
             end_m, end_s = divmod(s_end, 60)
-            transcript_lines.append(f"[{int(start_m):02d}:{start_s:05.2f} -> {int(end_m):02d}:{end_s:05.2f}] {s.get('text', '')}")
+            transcript_lines.append(
+                f"[{int(start_m):02d}:{start_s:05.2f} ({s_start:.1f}s) -> {int(end_m):02d}:{end_s:05.2f} ({s_end:.1f}s)] {s.get('text', '')}"
+            )
             prev_end = max(prev_end, s_end)
 
         transcript_text = "\n".join(transcript_lines)
 
-        negative_context = get_negative_feedback_prompt((item.get("user_id") or "").strip() or None)
-        user_prompt = build_highlight_user_prompt(transcript_text, negative_context)
+        from dispatch.ai_clips.preference_learner import get_editorial_guidance_prompt
+        editorial_context = get_editorial_guidance_prompt((item.get("user_id") or "").strip() or None)
+        user_prompt = build_highlight_user_prompt(transcript_text, editorial_context, total_duration=duration)
 
         attempt_count = int(item.get("ai_attempt_count") or 0) + 1
 
@@ -864,15 +888,25 @@ class HighlightWorker:
                 raise RuntimeError(err_msg)
 
         try:
-            # Strictly call Gemini API with active key (user-vaulted or server fallback)
-            raw_clips, model_used = call_gemini_generate_content(user_prompt, api_key=active_gemini_key)
+            # Multi-window extraction for long recordings (>12m) to prevent attention drift; single call otherwise
+            if duration > 720.0:
+                raw_clips, model_used = extract_highlights_windowed(
+                    segments=segments,
+                    total_duration=duration,
+                    negative_context=negative_context,
+                    api_key=active_gemini_key
+                )
+            else:
+                raw_clips, model_used = call_gemini_generate_content(user_prompt, api_key=active_gemini_key)
+
+            optimal_quota = compute_optimal_clip_quota(duration)
 
             # Validate, filter, snap, clamp, and deduplicate
             validated_clips = validate_and_filter_candidates(
                 raw_candidates=raw_clips,
                 segments=segments,
                 total_duration=duration,
-                max_clips=MAX_HIGHLIGHTS_PER_CHUNK
+                max_clips=optimal_quota
             )
 
             publish_mode = db.get_setting("publish_mode", DEFAULT_PUBLISH_MODE)

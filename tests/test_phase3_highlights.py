@@ -34,6 +34,56 @@ class TestPhase3HighlightsAndCaptions(unittest.TestCase):
         res_hain = phonetic_devanagari_to_roman("हैं")
         self.assertIn("hai", res_hain.lower())
 
+    def test_phonetic_devanagari_exhaustive_unicode_range(self):
+        """Verify that every single Devanagari codepoint in U+0900..U+097F converts to Roman with 0 Devanagari characters remaining."""
+        for code in range(0x0900, 0x0980):
+            ch = chr(code)
+            res = phonetic_devanagari_to_roman(ch)
+            self.assertFalse(has_devanagari(res), f"U+{code:04X} ({ch}) still contains Devanagari after transliteration: {res}")
+
+    def test_phonetic_devanagari_special_characters_and_combinations(self):
+        """Verify Chandra O, Danda, Nukta combinations, Digits, Avagraha, Visarga, Anusvara, Chandrabindu."""
+        # Chandra O (independent and matra)
+        res_auto = phonetic_devanagari_to_roman("ऑटो")
+        self.assertFalse(has_devanagari(res_auto))
+        self.assertIn("o", res_auto.lower())
+
+        res_doctor = phonetic_devanagari_to_roman("डॉक्टर")
+        self.assertFalse(has_devanagari(res_doctor))
+        self.assertIn("dokt", res_doctor.lower())
+
+        # Danda (single and double)
+        res_danda = phonetic_devanagari_to_roman("नमस्ते दोस्त।")
+        self.assertFalse(has_devanagari(res_danda))
+        self.assertTrue(res_danda.endswith("."))
+
+        res_double_danda = phonetic_devanagari_to_roman("सब ठीक॥")
+        self.assertFalse(has_devanagari(res_double_danda))
+        self.assertTrue("." in res_double_danda)
+
+        # Nukta decomposed and precomposed
+        res_phone = phonetic_devanagari_to_roman("फ़ोन")  # \u092b\u093c\u094b\u0928
+        self.assertFalse(has_devanagari(res_phone))
+        self.assertIn("fon", res_phone.lower())
+
+        res_zindagi = phonetic_devanagari_to_roman("ज़िंदगी")  # \u091c\u093c...
+        self.assertFalse(has_devanagari(res_zindagi))
+        self.assertIn("zin", res_zindagi.lower())
+
+        # Digits ०-९
+        res_digits = phonetic_devanagari_to_roman("वर्ष २०२६")
+        self.assertFalse(has_devanagari(res_digits))
+        self.assertIn("2026", res_digits)
+
+        # Avagraha
+        res_avagraha = phonetic_devanagari_to_roman("सोऽहम्")
+        self.assertFalse(has_devanagari(res_avagraha))
+
+        # Visarga
+        res_visarga = phonetic_devanagari_to_roman("अतः")
+        self.assertFalse(has_devanagari(res_visarga))
+        self.assertIn("atah", res_visarga.lower())
+
     def test_transliterate_tokens_fallback_1to1(self):
         """Verify transliterate_tokens_to_hinglish preserves exact 1:1 list length and strips Devanagari."""
         tokens = ["नमस्ते", "dosto", "आप", "सब", "कैसे", "हैं"]
@@ -76,6 +126,29 @@ class TestPhase3HighlightsAndCaptions(unittest.TestCase):
         finally:
             if test_ass.exists():
                 test_ass.unlink()
+
+    def test_phonetic_devanagari_additional_nuktas(self):
+        """Verify additional nuktas (\u0928\u093c, \u0930\u093c, \u0933\u093c) are properly transliterated."""
+        res_nnna = phonetic_devanagari_to_roman("ऩ")
+        self.assertFalse(has_devanagari(res_nnna))
+        self.assertEqual(res_nnna.lower(), "n")
+
+        res_rra = phonetic_devanagari_to_roman("ऱ")
+        self.assertFalse(has_devanagari(res_rra))
+        self.assertEqual(res_rra.lower(), "r")
+
+        res_llla = phonetic_devanagari_to_roman("ऴ")
+        self.assertFalse(has_devanagari(res_llla))
+        self.assertEqual(res_llla.lower(), "l")
+
+    def test_highlight_prompt_density_guidance(self):
+        """Verify highlight prompt incorporates density and sweet spot guidance for long recordings."""
+        from dispatch.ai_clips.prompt_templates import build_highlight_user_prompt
+        prompt_10min = build_highlight_user_prompt("00:01 Test segment", total_duration=602.0)
+        self.assertIn("RECORDING COVERAGE & DENSITY GUIDANCE", prompt_10min)
+        self.assertIn("602 seconds (~10 minutes)", prompt_10min)
+        self.assertIn("SWEET-SPOT DURATION: Target 30 to 75 seconds", prompt_10min)
+        self.assertIn("9 distinct", prompt_10min)
 
 
 if __name__ == "__main__":

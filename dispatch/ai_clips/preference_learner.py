@@ -83,3 +83,36 @@ def get_negative_feedback_prompt(user_id: str | None = None) -> str:
         lines.append("- Diversity note: The user has rejected redundant clips. Ensure candidate clips are distinct and cover different moments.")
 
     return "\n".join(lines)
+
+def get_positive_style_anchors(user_id: str | None = None, limit: int = 3) -> str:
+    """Retrieve recent user-approved clips to act as gold-standard few-shot style anchors.
+
+    Invariants:
+      1. Grounds LLM in actual real-world approved boundaries, hooks, and titles.
+      2. Owner-scoped: never leaks one user's private approved clips to another user.
+      3. Returns empty string if no approved clips exist yet.
+    """
+    approved = db.get_recent_approved_clips(limit=limit, user_id=user_id)
+    if not approved:
+        return ""
+
+    lines = [
+        "\nUSER-APPROVED HIGH-PERFORMANCE STYLE ANCHORS (POSITIVE USER PREFERENCES):",
+        "The creator previously approved and published these clips. Emulate their high-energy opening hooks, direct-response titles, and punchy complete payoffs:"
+    ]
+    for idx, c in enumerate(approved, 1):
+        title = (c.get("title") or "").strip()
+        hook = (c.get("hook") or "").strip()
+        dur = float(c.get("duration") or 0.0)
+        lines.append(f"- Approved Anchor #{idx}: Title: \"{title}\" | Hook: \"{hook}\" | Duration: {dur:.1f}s")
+
+    return "\n".join(lines)
+
+
+def get_editorial_guidance_prompt(user_id: str | None = None) -> str:
+    """Combines negative rejection feedback with positive approved style anchors."""
+    neg = get_negative_feedback_prompt(user_id)
+    pos = get_positive_style_anchors(user_id)
+    parts = [p for p in (neg, pos) if p.strip()]
+    return "\n\n".join(parts) if parts else ""
+

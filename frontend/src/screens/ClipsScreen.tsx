@@ -1219,13 +1219,16 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
   }, [sourceVideoUrl, _videoUrl, fallbackVideoUrl, layoutMode]);
 
   // Canonical Architecture media resolution:
-  // _videoUrl is the unbaked clean slice (native 16:9, no baked-in blur, no burned subtitles).
-  // It is the primary interactive media. Falls back to sourceVideoUrl or fallbackVideoUrl if missing.
-  const candidateVideoUrl = !videoFailed && _videoUrl
-    ? _videoUrl
-    : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null);
+  // When preferRendered is true (review screen): prioritize pre-rendered cut clip (_videoUrl)
+  // When preferRendered is false (studio / editor): prioritize source video (sourceVideoUrl)
+  // or bounded edit window proxy (fallbackVideoUrl) to allow full scrub and trim context!
+  const candidateVideoUrl = preferRendered
+    ? (!videoFailed && _videoUrl ? _videoUrl : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : null))
+    : (!sourceFailed && sourceVideoUrl ? sourceVideoUrl : (!fallbackFailed && fallbackVideoUrl ? fallbackVideoUrl : (!videoFailed && _videoUrl ? _videoUrl : null)));
 
-  const activeVideoUrl = candidateVideoUrl || (!fallbackFailed && fallbackVideoUrl ? fallbackVideoUrl : null);
+  const activeVideoUrl = preferRendered
+    ? (candidateVideoUrl || (!fallbackFailed && fallbackVideoUrl ? fallbackVideoUrl : null))
+    : candidateVideoUrl;
 
   const isFallbackTimebase = Boolean(fallbackVideoUrl && activeVideoUrl === fallbackVideoUrl && activeVideoUrl !== _videoUrl);
   const isSourceTimebase = isFallbackTimebase || Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
@@ -1573,7 +1576,12 @@ function idempotencyToken(): string {
 }
 
 const cleanTitle = (raw: string): string => {
-  return raw.replace(/^\[DISPATCH\]\s*[-:–—]?\s*/i, '').trim() || raw;
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('www.')) {
+    return '';
+  }
+  return trimmed.replace(/^\[DISPATCH\]\s*[-:–—]?\s*/i, '').trim();
 };
 
 export const ClipsScreen: React.FC<ClipsScreenProps> = ({
@@ -1614,7 +1622,23 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [approvedClips, setApprovedClips] = useState<ClipItem[]>([]);
   const [rejectedClips, setRejectedClips] = useState<RejectedCloudClip[]>([]);
   const [restoringId, setRestoringId] = useState<string | null>(null);
-  const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>({});
+  const [resolvedTitles, setResolvedTitles] = useState<Record<string, string>>(() => {
+    if (typeof window === 'undefined') return {};
+    const map: Record<string, string> = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('yt_title_')) {
+          const val = localStorage.getItem(key);
+          if (val && !val.startsWith('http')) {
+            const id = key.replace(/^yt_title_/, '');
+            map[id] = val;
+          }
+        }
+      }
+    } catch {}
+    return map;
+  });
   const mountedOnceRef = useRef(false);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -2021,6 +2045,17 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     });
   }, []);
 
+  const handleSelectPiece = useCallback((idx: number) => {
+    setSelectedPieceIndex(idx);
+    setIsVideoSelected(true);
+    setSelectedGroupId(null);
+  }, []);
+
+  const handleSelectVideo = useCallback(() => {
+    setIsVideoSelected(true);
+    setSelectedGroupId(null);
+  }, []);
+
   const handleSelectGroup = useCallback((id: string | null) => {
     if (!id) {
       handleClearSelection();
@@ -2275,7 +2310,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         if (res.ok) {
           const data = await res.json();
           if (data?.title && typeof data.title === 'string' && data.title.trim()) {
-            setResolvedTitles(prev => ({ ...prev, [vId]: data.title.trim() }));
+            const cleanT = data.title.trim();
+            setResolvedTitles(prev => ({ ...prev, [vId]: cleanT }));
+            try { localStorage.setItem(`yt_title_${vId}`, cleanT); } catch {}
             return;
           }
         }
@@ -2286,7 +2323,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         .then(r => r.json())
         .then(d => {
           if (d?.title && typeof d.title === 'string' && d.title.trim()) {
-            setResolvedTitles(prev => ({ ...prev, [vId]: d.title.trim() }));
+            const cleanT = d.title.trim();
+            setResolvedTitles(prev => ({ ...prev, [vId]: cleanT }));
+            try { localStorage.setItem(`yt_title_${vId}`, cleanT); } catch {}
           }
         })
         .catch(() => null);
@@ -4023,6 +4062,22 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             setSaveStatus('saved');
             setLastFailedAction(null);
             lastFailedTimelineCommitRef.current = null;
+
+            if (actionType === 'trim_edge') {
+              captionTrackCache.delete(currentClip.id);
+              fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/captions`, pcHost), {
+                headers: getAuthHeaders(),
+              })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((newTrackData) => {
+                  if (newTrackData && Array.isArray(newTrackData.groups) && newTrackData.groups.length > 0) {
+                    const norm = normalizeCaptionTrack(newTrackData, currentClip.id, newKeptDuration);
+                    setCaptionTrack(norm, false);
+                  }
+                })
+                .catch(() => {});
+            }
+
             return true;
           }
         } catch {
@@ -4583,19 +4638,20 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     ]);
 
     let sourceSplitTime: number;
-    if (isSourceTimebase) {
-      try {
-        sourceSplitTime = roundMs(concatToSource(ranges, splitTime, sourceDuration));
-      } catch {
-        const windowStart = Number((currentClip as any).edit_window?.start ?? clipStart);
-        sourceSplitTime = roundMs(windowStart + splitTime);
-      }
-    } else {
-      sourceSplitTime = roundMs(splitTime);
+    try {
+      sourceSplitTime = roundMs(concatToSource(ranges, splitTime, sourceDuration));
+    } catch {
+      const segStart = ranges && ranges.length > 0 ? ranges[0][0] : clipStart;
+      sourceSplitTime = roundMs(segStart + splitTime);
     }
 
-    const newRanges = splitAt(ranges, sourceSplitTime, sourceDuration);
-    await commitTimeline(newRanges, 'split', `Split clip at ${splitTime.toFixed(1)}s (${newRanges.length} pieces).`);
+    try {
+      const newRanges = splitAt(ranges, sourceSplitTime, sourceDuration);
+      await commitTimeline(newRanges, 'split', `Split clip at ${splitTime.toFixed(1)}s (${newRanges.length} pieces).`);
+    } catch (err: any) {
+      console.warn('Split clip failed:', err);
+      setFeedback(err?.message || 'Cannot split at this point (keep at least 0.1s on both sides).');
+    }
   };
 
   const handleDeletePiece = async (segmentIndex: number) => {
@@ -4623,7 +4679,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     await commitTimeline(newRanges, 'delete_piece', `Deleted piece (${newRanges.length} remaining).`);
   };
 
-  const handleTrimPiece = async (pieceIndex: number, side: 'start' | 'end', newSourceTime: number) => {
+  const handleTrimPiece = useCallback(async (pieceIndex: number, side: 'start' | 'end', newSourceTime: number) => {
     if (!currentClip) return false;
     const sourceDuration = timelineSourceDuration > 0 ? timelineSourceDuration : (currentClip.source_duration || currentClip.end_time || 40);
     const existingDoc = (currentClip as any).project_document;
@@ -4644,9 +4700,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       console.warn('Trim piece failed:', err);
       return false;
     }
-  };
+  }, [currentClip, timelineSourceDuration, commitTimeline]);
 
-  const handleTrimChange = async (sourceStart: number, sourceEnd: number): Promise<boolean> => {
+  const handleTrimChange = useCallback(async (sourceStart: number, sourceEnd: number): Promise<boolean> => {
     if (!currentClip) return false;
     const sourceDuration = timelineSourceDuration > 0 ? timelineSourceDuration : (currentClip.source_duration || currentClip.end_time || 40);
     const newStart = Math.max(0, Number(sourceStart.toFixed(2)));
@@ -4691,13 +4747,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     );
 
     if (success) {
-      if (pcHost) {
-        fetch(apiUrl(`/api/clips/${currentClip.id}/trim`, pcHost), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body: JSON.stringify({ start_time: newStart, end_time: newEnd, range_revision: currentClip.range_revision || 0 }),
-        }).catch(() => {});
-      }
       if (isSourceTimebase && videoRef.current) {
         videoRef.current.currentTime = newStart;
         if (bgVideoRef.current && layoutMode === 'fit_blur') bgVideoRef.current.currentTime = newStart;
@@ -4708,7 +4757,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       }
     }
     return success;
-  };
+  }, [currentClip, timelineSourceDuration, isSourceTimebase, layoutMode, commitTimeline]);
 
   const handleDeleteGroup = (groupId: string) => {
     if (!captionTrack) return;
@@ -5503,7 +5552,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                           setSelectedClipId(clip.id);
                           setViewMode('detail');
                         }}
-                        className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors"
+                        className="group w-full py-3 flex items-start gap-3 cursor-pointer active:bg-surface-2 transition-colors [content-visibility:auto] [contain-intrinsic-size:auto_100px]"
                       >
                         {/* Layout-specific thumbnail: 58px 9:16 portrait for vertical shorts, 124px 16:9 for widescreen */}
                         <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">
@@ -6693,11 +6742,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     isVideoSelected={isVideoSelected}
                     segments={activeSegments}
                     selectedPieceIndex={selectedPieceIndex}
-                    onSelectPiece={(idx) => {
-                      setSelectedPieceIndex(idx);
-                      setIsVideoSelected(true);
-                      setSelectedGroupId(null);
-                    }}
+                    onSelectPiece={handleSelectPiece}
                     onTrimPiece={handleTrimPiece}
                     isPlaying={isPlaying}
                     filmstrip={filmstripData}

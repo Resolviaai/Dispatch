@@ -213,14 +213,21 @@ def _group_words_into_segments(words: List[Dict[str, Any]], max_gap_seconds: flo
         w_word = w["word"].strip()
         w_spk = w.get("speaker", "spk:0")
 
-        # Check segment break conditions
+        # Check segment break conditions (Bug #5 fix: preserve natural sentence & clause boundaries)
         is_break = False
         if current_words:
             prev_end = current_words[-1]["end"]
             gap = w_start - prev_end
-            if gap > max_gap_seconds or w_spk != current_speaker or len(current_words) >= 12:
+            prev_word = current_words[-1]["word"].rstrip()
+            if prev_word.endswith((".", "?", "!", "\u0964", "\u0965")):
                 is_break = True
-            elif current_words[-1]["word"].rstrip().endswith((".", "?", "!")):
+            elif w_spk != current_speaker:
+                is_break = True
+            elif gap > max_gap_seconds:
+                is_break = True
+            elif len(current_words) >= 18 and prev_word.endswith((",", ";", ":", "—", "-")):
+                is_break = True
+            elif len(current_words) >= 30:
                 is_break = True
 
         if is_break and current_words:
@@ -349,6 +356,10 @@ def _transcribe_chunk_fallback(
         system_instruction = prompt or (
             "You are an expert audio transcription engine. "
             "Transcribe the spoken audio verbatim in original language (detect Hindi, English, Hinglish). "
+            "CRITICAL SCRIPT REQUIREMENT: Output ALL transcribed text using ONLY the standard English/Latin alphabet. "
+            "NEVER use Devanagari script (e.g., write 'namaste', 'aap kaise hain', not 'नमस्ते'). "
+            "If the speaker speaks Hindi or mixed Hindi/English, transcribe it naturally in Roman Hinglish. "
+            "Preserve non-speech acoustic cues like [laughter], [applause], or [music] as inline tags when clearly audible. "
             "Provide precise timestamps for each spoken segment/phrase in valid JSON format: "
             '[{"start": "00:00.00", "end": "00:02.50", "text": "...", "speaker": "Speaker 1"}]. '
             "Return ONLY the JSON array."
@@ -543,9 +554,13 @@ def transcribe_media(
         all_segments, overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS
     )
 
+    # Defensive transliteration pass: ensure all spoken Hindi/Hinglish is transcribed in Roman Hinglish
+    from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish
+    deduped_segments = transliterate_segments_to_hinglish(deduped_segments)
+
     full_text = " ".join(full_text_pieces).strip()
     if not full_text and deduped_segments:
-        full_text = " ".join(s["text"] for s in deduped_segments)
+        full_text = " ".join(s.get("text", "") for s in deduped_segments)
 
     # Re-index segments sequentially
     for i, s in enumerate(deduped_segments):
@@ -666,8 +681,20 @@ def transcribe_stage2_precision_words(
             res = _transcribe_chunk_fallback(client, audio_path)
 
         words = res.get("words", [])
+        full_text = res.get("full_text", "")
+        from dispatch.ai_clips.highlight_finder import transliterate_tokens_to_hinglish, phonetic_devanagari_to_roman, has_devanagari
+        if words:
+            if any(has_devanagari(w.get("word", "")) for w in words):
+                tokens = [w.get("word", "") for w in words]
+                trans_tokens = transliterate_tokens_to_hinglish(tokens)
+                for w, trans in zip(words, trans_tokens):
+                    w["word"] = trans
+                if not full_text:
+                    full_text = " ".join(w["word"] for w in words)
+        if has_devanagari(full_text):
+            full_text = phonetic_devanagari_to_roman(full_text)
         return {
-            "full_text": res.get("full_text", ""),
+            "full_text": full_text,
             "words": words,
             "speech_start": words[0]["start"] if words else 0.0,
             "speech_end": words[-1]["end"] if words else 0.0,
@@ -777,10 +804,10 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
 
             words = stage2_res.get("words", [])
             if words:
-                speech_start = p_start + stage2_res.get("speech_start", 0.0)
-                speech_end = p_start + stage2_res.get("speech_end", c_end - p_start)
-                snapped_start = max(p_start, round(speech_start - 0.2, 2))
-                snapped_end = min(p_end, round(speech_end + 0.3, 2))
+                from dispatch.ai_clips.highlight_finder import snap_clip_to_stage2_words
+                snapped_start, snapped_end = snap_clip_to_stage2_words(
+                    c_start, c_end, words, p_start, p_end
+                )
                 range_trimmed = db.update_clip_trim(
                     clip_id, snapped_start, snapped_end,
                     expected_range_revision=range_revision,

@@ -362,6 +362,7 @@ interface RecordingsScreenProps {
   onNavigateToRecord?: () => void;
   onDeleteSession?: (sessionId: string) => void;
   pcHost?: string;
+  isPcOnline?: boolean;
 }
 
 export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
@@ -372,7 +373,8 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
   onNavigateToClips,
   onNavigateToRecord,
   onDeleteSession,
-  pcHost
+  pcHost,
+  isPcOnline
 }) => {
   // Navigation & View state
   const [viewMode, setViewMode] = useState<ViewMode>('library');
@@ -440,7 +442,13 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     online: boolean;
     checking: boolean;
     isCloudMode: boolean;
-  }>({ online: false, checking: false, isCloudMode: false });
+  }>({ online: Boolean(isPcOnline), checking: false, isCloudMode: false });
+
+  useEffect(() => {
+    if (typeof isPcOnline === 'boolean') {
+      setPcStatus(prev => ({ ...prev, online: isPcOnline }));
+    }
+  }, [isPcOnline]);
 
   // YouTube Ingest URL State
   const [importUrl, setImportUrl] = useState('');
@@ -616,9 +624,10 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
     setPcStatus(prev => ({ ...prev, checking: true }));
     let lanOnline = false;
 
-    if (pcHost) {
+    const probeTarget = apiUrl('/api/status', pcHost);
+    if (probeTarget) {
       try {
-        const res = await fetch(apiUrl('/api/status', pcHost), {
+        const res = await fetch(probeTarget, {
           signal: AbortSignal.timeout(2000),
           headers: getAuthHeaders()
         });
@@ -2290,7 +2299,7 @@ export const RecordingsScreen: React.FC<RecordingsScreenProps> = ({
                   setSelectedSessionId(session.id);
                   setViewMode('detail');
                 }}
-                className="group w-full py-2.5 flex items-start gap-3 cursor-pointer hover:bg-surface-2/40 active:bg-surface-2 transition-colors rounded-xl px-1 select-none"
+                className="group w-full py-2.5 flex items-start gap-3 cursor-pointer hover:bg-surface-2/40 active:bg-surface-2 transition-colors rounded-xl px-1 select-none [content-visibility:auto] [contain-intrinsic-size:auto_80px]"
               >
                 {/* 16:9 Thumbnail Stage */}
                 <div className="relative w-[132px] aspect-video rounded-lg bg-black overflow-hidden shrink-0 flex items-center justify-center">

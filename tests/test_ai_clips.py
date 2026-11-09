@@ -60,13 +60,18 @@ class TestAIClips(unittest.TestCase):
         self.assertLessEqual(clip["end_time"], 45.0)
         self.assertGreaterEqual(clip["virality_score"], 60)
 
-        # 3. Test saving to DB
-        clip_ids = identify_and_save_highlights(
-            chunk_id=None,
-            session_id=None,
-            segments=mock_segments,
-            total_duration=45.0
-        )
+        # 3. Test saving to DB (mocking Gemini network call)
+        from unittest.mock import patch
+        mock_ai_clips = [
+            {"start_time": 10.5, "end_time": 40.0, "title": "Dispatch Automation", "virality_score": 85, "tier": "A"}
+        ]
+        with patch("dispatch.ai_clips.highlight_finder.call_gemini_generate_content", return_value=(mock_ai_clips, "mock_gemini")):
+            clip_ids = identify_and_save_highlights(
+                chunk_id=None,
+                session_id=None,
+                segments=mock_segments,
+                total_duration=45.0
+            )
         self.assertGreaterEqual(len(clip_ids), 1, "Expected saved clips in DB")
 
         # 4. Test negative preference feedback

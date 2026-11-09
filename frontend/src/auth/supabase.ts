@@ -13,6 +13,16 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true },
 })
 
+export async function currentUser() {
+  try {
+    const { data, error } = await supabase.auth.getUser()
+    if (error || !data.user) return null
+    return data.user
+  } catch {
+    return null
+  }
+}
+
 export async function currentSession(): Promise<Session | null> {
   const { data } = await supabase.auth.getSession()
   return data.session ?? null

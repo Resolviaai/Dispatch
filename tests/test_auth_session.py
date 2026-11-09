@@ -5,12 +5,18 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from fastapi.testclient import TestClient
-from dispatch.web.app import app
+from dispatch.web.app import app, _clear_auth_cache
 
 client = TestClient(app)
 
 
 class TestAuthSession(unittest.TestCase):
+    def setUp(self):
+        _clear_auth_cache()
+
+    def tearDown(self):
+        _clear_auth_cache()
+
     def test_missing_token_is_401(self):
         res = client.get("/api/auth/session")
         self.assertEqual(res.status_code, 401)
@@ -33,6 +39,20 @@ class TestAuthSession(unittest.TestCase):
         with patch("httpx.get", side_effect=ConnectionError("down")):
             res = client.get("/api/auth/session", headers={"Authorization": "Bearer x"})
         self.assertEqual(res.status_code, 503)
+
+    def test_auth_session_caches_within_ttl(self):
+        with patch("httpx.get") as g:
+            g.return_value = MagicMock(status_code=200,
+                json=lambda: {"id": "u-cached", "email": "cached@test.com"})
+            # Call 1: Miss
+            res1 = client.get("/api/auth/session", headers={"Authorization": "Bearer token-1"})
+            self.assertEqual(res1.status_code, 200)
+            self.assertEqual(g.call_count, 1)
+
+            # Call 2: Hit within TTL
+            res2 = client.get("/api/auth/session", headers={"Authorization": "Bearer token-1"})
+            self.assertEqual(res2.status_code, 200)
+            self.assertEqual(g.call_count, 1, "Subsequent call within 60s TTL must hit cache without network request")
 
 
 if __name__ == "__main__":
