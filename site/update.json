@@ -4,9 +4,9 @@
     "versionCode":  113,
     "versionName":  "1.7.45",
     "releaseTag":  "v1.7.45-alpha",
-    "generatedAt":  "2026-11-08T05:42:07Z",
+    "generatedAt":  "2026-11-09T06:22:00Z",
     "releaseNotes":  "Dispatch 1.7.45 alpha build.",
     "apkAsset":  "Dispatch.apk",
-    "apkSizeBytes":  26613483,
-    "apkSha256":  "de9d19de1811b667455c3f869e360bff3b19a1cd751fb0acce9e6836f2cfbb6b"
+    "apkSizeBytes":  26614007,
+    "apkSha256":  "c3961409f0329ee88b18bde0d906742eb9e93dde0b42c627d0089f148a2fc26e"
 }
