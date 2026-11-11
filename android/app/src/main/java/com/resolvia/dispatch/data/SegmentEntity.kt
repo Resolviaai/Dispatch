@@ -6,7 +6,11 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "segments",
-    indices = [Index(value = ["userId"])]
+    indices = [
+        Index(value = ["userId"]),
+        Index(value = ["sessionId", "status"]),
+        Index(value = ["status", "sequenceNumber"])
+    ]
 )
 data class SegmentEntity(
     @PrimaryKey

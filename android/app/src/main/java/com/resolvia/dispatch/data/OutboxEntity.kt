@@ -1,9 +1,16 @@
 package com.resolvia.dispatch.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "outbox")
+@Entity(
+    tableName = "outbox",
+    indices = [
+        Index(value = ["status", "updatedAt"]),
+        Index(value = ["sessionId"])
+    ]
+)
 data class OutboxEntity(
     @PrimaryKey
     val segmentId: String,

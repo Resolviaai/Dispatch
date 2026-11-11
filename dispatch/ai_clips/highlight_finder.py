@@ -760,7 +760,12 @@ def phonetic_devanagari_to_roman(text: str) -> str:
     return "".join(result)
 
 
-def transliterate_tokens_to_hinglish(tokens: List[str], timeout: int = 25) -> List[str]:
+def transliterate_tokens_to_hinglish(
+    tokens: List[str],
+    timeout: int = 25,
+    api_key: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> List[str]:
     """Transliterate a list of Devanagari tokens into Roman Hinglish with 1:1 token preservation.
     Uses Gemini when available, with deterministic phonetic fallback if offline or failed.
     Preserves exact list length to ensure word timestamp alignment."""
@@ -778,9 +783,14 @@ def transliterate_tokens_to_hinglish(tokens: List[str], timeout: int = 25) -> Li
     )
 
     try:
+        eff_key = api_key
+        if not eff_key and user_id and str(user_id).strip():
+            from dispatch.transcription.gemini_engine import resolve_gemini_api_key
+            eff_key = resolve_gemini_api_key(str(user_id), raise_if_missing_host_key=True)
         raw_result, winning_model = call_gemini_generate_content(
             user_prompt=prompt,
             system_instruction="You are a strict 1-to-1 Devanagari-to-Roman Hinglish transliterator. Return only a JSON array of strings with matching length.",
+            api_key=eff_key,
             timeout=timeout
         )
 
@@ -808,7 +818,11 @@ def transliterate_tokens_to_hinglish(tokens: List[str], timeout: int = 25) -> Li
     return [phonetic_devanagari_to_roman(t) if has_devanagari(t) else t for t in tokens]
 
 
-def transliterate_segments_to_hinglish(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def transliterate_segments_to_hinglish(
+    segments: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Transliterate segments and words containing Devanagari into Roman Hinglish with 1:1 timestamp preservation."""
     if not segments:
         return []
@@ -843,7 +857,7 @@ def transliterate_segments_to_hinglish(segments: List[Dict[str, Any]]) -> List[D
                 token_list.append(w.get("word", ""))
 
         if token_list and any(has_devanagari(t) for t in token_list):
-            transliterated = transliterate_tokens_to_hinglish(token_list)
+            transliterated = transliterate_tokens_to_hinglish(token_list, api_key=api_key, user_id=user_id)
             for (s_idx, w_idx), new_word in zip(all_words_meta, transliterated):
                 output_segments[s_idx]["words"][w_idx]["word"] = new_word
             for s in output_segments:
@@ -853,7 +867,7 @@ def transliterate_segments_to_hinglish(segments: List[Dict[str, Any]]) -> List[D
         # Segment-level text transliteration
         seg_texts = [s.get("text", "") for s in output_segments]
         if any(has_devanagari(t) for t in seg_texts):
-            transliterated_texts = transliterate_tokens_to_hinglish(seg_texts)
+            transliterated_texts = transliterate_tokens_to_hinglish(seg_texts, api_key=api_key, user_id=user_id)
             for s, new_text in zip(output_segments, transliterated_texts):
                 s["text"] = new_text
 
@@ -1127,6 +1141,75 @@ def validate_and_filter_candidates(
     return deduped
 
 
+def _strip_json_code_fences(raw_text: str) -> str:
+    """Remove optional markdown code fences around a JSON payload."""
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            if lines[-1].strip().startswith("```"):
+                cleaned = "\n".join(lines[1:-1]).strip()
+            else:
+                cleaned = "\n".join(lines[1:]).strip()
+    return cleaned
+
+
+def _parse_gemini_json_list_response(
+    data: Any,
+    model_name: str,
+    raw_preview: str = "",
+) -> Tuple[Optional[List[Any]], Optional[str]]:
+    """Extract and validate a JSON list payload from Gemini generateContent JSON."""
+    if not isinstance(data, dict):
+        return None, f"Gemini {model_name} returned non-object response ({type(data).__name__})"
+
+    preview = raw_preview or json.dumps(data, ensure_ascii=False)[:200]
+    raw_text = ""
+
+    if "candidates" in data:
+        candidates = data.get("candidates") or []
+        if not candidates:
+            return None, f"Gemini {model_name} returned 200 but empty candidates array: {preview}"
+        content = candidates[0].get("content", {}) if isinstance(candidates[0], dict) else {}
+        parts = content.get("parts", []) if isinstance(content, dict) else []
+        text_parts = [
+            p["text"]
+            for p in parts
+            if isinstance(p, dict) and isinstance(p.get("text"), str) and not p.get("thought")
+        ]
+        if not text_parts:
+            text_parts = [p["text"] for p in parts if isinstance(p, dict) and isinstance(p.get("text"), str)]
+        if not text_parts:
+            return None, f"Gemini {model_name} missing text in candidate parts: {preview}"
+        raw_text = _strip_json_code_fences("".join(text_parts))
+    elif isinstance(data.get("text"), str):
+        raw_text = _strip_json_code_fences(data["text"])
+    else:
+        return None, f"Gemini {model_name} returned 200 but empty candidates array: {preview}"
+
+    parsed = json.loads(raw_text)
+    if isinstance(parsed, dict):
+        for k in ("clips", "highlights", "candidates", "tokens", "words", "transliterated", "result"):
+            if k in parsed and isinstance(parsed[k], list):
+                parsed = parsed[k]
+                break
+
+    if not isinstance(parsed, list):
+        return None, f"Gemini {model_name} did not return a JSON array (got {type(parsed).__name__})"
+    return parsed, None
+
+
+def _is_proxy_auth_error(exc: Exception) -> bool:
+    """Return True when a Worker proxy exception represents a permanent auth/vault failure."""
+    if isinstance(exc, PermissionError):
+        return True
+    msg = str(exc).lower()
+    return any(term in msg for term in (
+        "(401)", "(403)", "api_key_invalid", "permission_denied",
+        "unauthenticated", "gemini_key_missing", "not configured in dispatch cloud vault",
+    ))
+
+
 def call_gemini_generate_content(
     user_prompt: str,
     system_instruction: str = HIGHLIGHT_SYSTEM_PROMPT,
@@ -1142,9 +1225,18 @@ def call_gemini_generate_content(
     Raises:
       RuntimeError: If authentication fails, quota exhausted, or all models fail.
     """
-    key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY is not configured or is empty. Cannot extract highlights.")
+    from dispatch.transcription.gemini_engine import parse_worker_gemini_proxy_user
+
+    try:
+        proxy_user_id = parse_worker_gemini_proxy_user(api_key)
+    except Exception as e:
+        raise RuntimeError(f"Gemini API authentication failed: {e}") from e
+
+    key = ""
+    if not proxy_user_id:
+        key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError("GEMINI_API_KEY is not configured or is empty. Cannot extract highlights.")
 
     models_to_try = candidate_models or get_configured_gemini_models()
     headers = {
@@ -1170,6 +1262,42 @@ def call_gemini_generate_content(
     last_error_details = []
 
     for model_name in models_to_try:
+        if proxy_user_id:
+            try:
+                import dispatch.youtube_connections as yc
+
+                logger.info(
+                    "Requesting Gemini highlight extraction via Cloud Worker proxy using model '%s'...",
+                    model_name,
+                )
+                data = yc.call_user_gemini_proxy(
+                    user_id=proxy_user_id,
+                    contents=payload["contents"],
+                    model=model_name,
+                    generation_config=payload["generationConfig"],
+                    system_instruction=payload["systemInstruction"] if system_instruction else None,
+                    timeout_seconds=float(timeout),
+                )
+                parsed, parse_err = _parse_gemini_json_list_response(data, model_name)
+                if parse_err:
+                    logger.warning(parse_err)
+                    last_error_details.append(parse_err)
+                    continue
+                logger.info("Gemini proxy model '%s' successfully returned %d raw candidate clips.", model_name, len(parsed))
+                return parsed, model_name
+            except Exception as exc:
+                if _is_proxy_auth_error(exc):
+                    err_msg = f"Gemini API authentication failed via Cloud Worker proxy: {exc}"
+                    logger.error(err_msg)
+                    raise RuntimeError(err_msg) from exc
+                if isinstance(exc, json.JSONDecodeError):
+                    err_msg = f"Gemini model '{model_name}' response was not valid JSON: {exc}"
+                else:
+                    err_msg = f"Gemini model '{model_name}' proxy error: {exc}"
+                logger.warning(err_msg)
+                last_error_details.append(err_msg)
+                continue
+
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         try:
             logger.info("Requesting Gemini highlight extraction using model '%s'...", model_name)
@@ -1177,35 +1305,12 @@ def call_gemini_generate_content(
             
             if response.status_code == 200:
                 data = response.json()
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    err_msg = f"Gemini {model_name} returned 200 but empty candidates array: {response.text[:200]}"
-                    logger.warning(err_msg)
-                    last_error_details.append(err_msg)
-                    continue
-
-                content = candidates[0].get("content", {})
-                parts = content.get("parts", [])
-                if not parts or "text" not in parts[0]:
-                    err_msg = f"Gemini {model_name} missing text in candidate parts: {response.text[:200]}"
-                    logger.warning(err_msg)
-                    last_error_details.append(err_msg)
-                    continue
-
-                raw_text = parts[0]["text"].strip()
-                parsed = json.loads(raw_text)
-
-                # Can be a JSON list or dict with list under key "clips", "highlights", "tokens", etc.
-                if isinstance(parsed, dict):
-                    for k in ("clips", "highlights", "candidates", "tokens", "words", "transliterated", "result"):
-                        if k in parsed and isinstance(parsed[k], list):
-                            parsed = parsed[k]
-                            break
-
-                if not isinstance(parsed, list):
-                    err_msg = f"Gemini {model_name} did not return a JSON array (got {type(parsed).__name__})"
-                    logger.warning(err_msg)
-                    last_error_details.append(err_msg)
+                parsed, parse_err = _parse_gemini_json_list_response(
+                    data, model_name, raw_preview=response.text[:200]
+                )
+                if parse_err:
+                    logger.warning(parse_err)
+                    last_error_details.append(parse_err)
                     continue
 
                 logger.info("Gemini model '%s' successfully returned %d raw candidate clips.", model_name, len(parsed))
@@ -1257,7 +1362,11 @@ def extract_clips_gemini(transcript_text: str, segments: List[Dict[str, Any]], u
     tot_dur = segments[-1]["end"] if segments else None
     user_prompt = build_highlight_user_prompt(transcript_text, negative_context, total_duration=tot_dur)
     try:
-        raw_clips, _ = call_gemini_generate_content(user_prompt)
+        active_key: Optional[str] = None
+        if user_id:
+            from dispatch.transcription.gemini_engine import resolve_gemini_api_key
+            active_key = resolve_gemini_api_key(user_id, raise_if_missing_host_key=True)
+        raw_clips, _ = call_gemini_generate_content(user_prompt, api_key=active_key)
         return raw_clips
     except Exception as e:
         logger.warning("extract_clips_gemini wrapper encountered error: %s", e)
@@ -1467,6 +1576,21 @@ def extract_highlights_windowed(
                         win_idx, current_start, current_end, len(raw_clips), model_used)
 
         except Exception as win_err:
+            msg_l = str(win_err).lower()
+            if (
+                isinstance(win_err, PermissionError)
+                or win_err.__class__.__name__ == "PermanentAuthError"
+                or any(term in msg_l for term in (
+                    "authentication failed",
+                    "api_key_invalid",
+                    "gemini_api_key is not configured",
+                    "refusing fallback to pc host gemini_api_key",
+                    "permission_denied",
+                    "(401)",
+                    "(403)",
+                ))
+            ):
+                raise
             logger.warning("Extraction window #%d [%.1fs - %.1fs] failed (%s); continuing other windows",
                            win_idx, current_start, current_end, win_err)
 
@@ -1518,15 +1642,13 @@ def identify_and_save_highlights(
     if not active_gemini_key:
         if eff_user_id:
             try:
-                from dispatch.youtube_connections import get_user_gemini_key
-                active_gemini_key = get_user_gemini_key(eff_user_id)
-            except Exception as ke:
-                logger.debug("User Gemini key lookup note for %s: %s", eff_user_id, ke)
-            if not active_gemini_key:
-                err_msg = f"User {eff_user_id} has not configured a Gemini API key in cloud vault. Refusing fallback to PC host GEMINI_API_KEY."
+                from dispatch.transcription.gemini_engine import resolve_gemini_api_key
+                active_gemini_key = resolve_gemini_api_key(eff_user_id, raise_if_missing_host_key=True)
+            except RuntimeError as ke:
+                err_msg = str(ke)
                 if video_id:
                     db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
-                raise RuntimeError(err_msg)
+                raise
         else:
             active_gemini_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 

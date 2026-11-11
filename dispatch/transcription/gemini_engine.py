@@ -18,6 +18,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
@@ -100,17 +101,317 @@ def _safe_parse_json(raw_text: str) -> Any:
 
 def is_permanent_auth_error(exc: Exception) -> bool:
     """Check if an exception indicates a permanent authentication or authorization failure."""
-    if isinstance(exc, PermanentAuthError):
+    if isinstance(exc, (PermanentAuthError, PermissionError)):
         return True
     msg = str(exc).lower()
     return any(term in msg for term in [
         "401", "403", "api_key_invalid", "permission_denied",
-        "api key not valid", "unauthenticated", "invalid api key"
+        "api key not valid", "unauthenticated", "invalid api key",
+        "gemini_key_missing", "not configured in dispatch cloud vault",
     ])
 
 
+PROXY_KEY_PREFIX = "__worker_gemini_proxy__:"
+
+
+def make_worker_gemini_proxy_key(user_id: str) -> str:
+    """Build an internal sentinel indicating Gemini calls must route via Cloud Worker proxy."""
+    uid = (user_id or "").strip()
+    if not uid:
+        raise ValueError("user_id is required for Worker Gemini proxy")
+    return f"{PROXY_KEY_PREFIX}{uid}"
+
+
+def parse_worker_gemini_proxy_user(api_key: Optional[str]) -> Optional[str]:
+    """Return user_id if api_key is a Worker proxy sentinel; fail closed if malformed."""
+    if isinstance(api_key, str) and api_key.startswith(PROXY_KEY_PREFIX):
+        uid = api_key[len(PROXY_KEY_PREFIX):].strip()
+        if not uid:
+            raise PermanentAuthError("Worker Gemini proxy sentinel is missing user_id")
+        return uid
+    return None
+
+
+def resolve_gemini_api_key(
+    user_id: Optional[str] = None,
+    raise_if_missing_host_key: bool = True,
+) -> str:
+    """Resolve raw vaulted user key, Worker Gemini proxy sentinel, or standalone host key.
+
+    Checks `get_user_gemini_key(user_id)` first for compatibility, then
+    `has_user_gemini_proxy(user_id)`. Fails closed for user-owned jobs (`user_id`
+    non-empty) rather than falling back to PC host `GEMINI_API_KEY`.
+    """
+    uid = (user_id or "").strip()
+    if uid:
+        vaulted_key = ""
+        try:
+            from dispatch.youtube_connections import get_user_gemini_key
+            vaulted_key = get_user_gemini_key(uid) or ""
+        except Exception as e:
+            logger.debug("Failed to retrieve user gemini key for %s: %s", uid, e)
+        if vaulted_key:
+            return vaulted_key
+
+        has_proxy = False
+        try:
+            from dispatch.youtube_connections import has_user_gemini_proxy
+            has_proxy = bool(has_user_gemini_proxy(uid))
+        except Exception as e:
+            logger.debug("Failed to check user gemini proxy for %s: %s", uid, e)
+        if has_proxy:
+            return make_worker_gemini_proxy_key(uid)
+
+        raise RuntimeError(
+            f"User {uid} has not configured a Gemini API key in cloud vault. "
+            "Refusing fallback to PC host GEMINI_API_KEY."
+        )
+
+    host_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+    if raise_if_missing_host_key and not host_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured or is empty on this PC.")
+    return host_key
+
+
+def _snake_to_camel(key: str) -> str:
+    """Convert snake_case config keys into Gemini REST camelCase keys."""
+    if "_" not in key:
+        return key
+    parts = key.split("_")
+    return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:] if p)
+
+
+def _to_rest_json_value(value: Any) -> Any:
+    """Recursively normalize SDK objects and dicts into Gemini REST camelCase JSON."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(by_alias=True, exclude_none=True)
+    if isinstance(value, dict):
+        return {_snake_to_camel(str(k)): _to_rest_json_value(v) for k, v in value.items() if v is not None}
+    if isinstance(value, (list, tuple)):
+        return [_to_rest_json_value(item) for item in value]
+    return value
+
+
+def _serialize_proxy_contents(contents: Any) -> List[Dict[str, Any]]:
+    """Convert SDK `contents` (files, strings, dicts) into Gemini REST `contents`."""
+    if contents is None:
+        return []
+    if isinstance(contents, str):
+        return [{"role": "user", "parts": [{"text": contents}]}]
+    if not isinstance(contents, (list, tuple)):
+        contents = [contents]
+
+    if contents and all(isinstance(item, dict) and "parts" in item for item in contents):
+        return list(contents)
+
+    parts: List[Dict[str, Any]] = []
+    for item in contents:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            parts.append({"text": item})
+        elif hasattr(item, "uri") and getattr(item, "uri", None):
+            parts.append({
+                "fileData": {
+                    "fileUri": str(item.uri),
+                    "mimeType": str(getattr(item, "mime_type", None) or "audio/mp3"),
+                }
+            })
+        elif isinstance(item, dict):
+            if any(k in item for k in ("text", "fileData", "inlineData", "file_data", "inline_data")):
+                parts.append(_to_rest_json_value(item))
+            else:
+                parts.append({"text": json.dumps(item)})
+        elif hasattr(item, "model_dump"):
+            parts.append(item.model_dump(by_alias=True, exclude_none=True))
+        else:
+            parts.append({"text": str(item)})
+    return [{"role": "user", "parts": parts}]
+
+
+def _serialize_proxy_config(
+    config: Any,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Any, Any]:
+    """Split SDK GenerateContentConfig into Worker proxy generate payload fields."""
+    if config is None:
+        return None, None, None, None
+    if hasattr(config, "model_dump"):
+        raw = config.model_dump(by_alias=True, exclude_none=True)
+    elif isinstance(config, dict):
+        raw = dict(config)
+    else:
+        raw = {k: v for k, v in vars(config).items() if not k.startswith("_") and v is not None}
+
+    normalized = _to_rest_json_value(raw)
+    if not isinstance(normalized, dict):
+        return None, None, None, None
+
+    sys_inst = normalized.pop("systemInstruction", None)
+    if isinstance(sys_inst, str):
+        sys_inst = {"parts": [{"text": sys_inst}]}
+    safety = normalized.pop("safetySettings", None)
+    tools = normalized.pop("tools", None)
+    # Strip SDK-only keys that are not valid REST generationConfig fields.
+    for sdk_only in ("httpOptions", "shouldReturnHttpResponse", "automaticFunctionCalling"):
+        normalized.pop(sdk_only, None)
+
+    return (normalized or None), sys_inst, safety, tools
+
+
+def _parse_proxy_generate_response(data: Any) -> SimpleNamespace:
+    """Adapt Worker `/sync/pc/gemini/generate` REST JSON into SDK-compatible attributes."""
+    if not isinstance(data, dict):
+        return SimpleNamespace(text="", candidates=[])
+
+    candidates: List[SimpleNamespace] = []
+    for cand in data.get("candidates") or []:
+        if not isinstance(cand, dict):
+            continue
+        content = cand.get("content") or {}
+        raw_parts = content.get("parts") or []
+        parts: List[SimpleNamespace] = []
+        for p in raw_parts:
+            if not isinstance(p, dict):
+                continue
+            trans = p.get("audioTranscription") or p.get("audio_transcription")
+            trans_obj = None
+            if isinstance(trans, dict):
+                word_objs: List[SimpleNamespace] = []
+                for w in trans.get("words") or []:
+                    if not isinstance(w, dict):
+                        continue
+                    s_off = w.get("startOffset") if w.get("startOffset") is not None else w.get("start_offset", 0.0)
+                    e_off = w.get("endOffset") if w.get("endOffset") is not None else w.get("end_offset", 0.0)
+                    word_objs.append(
+                        SimpleNamespace(
+                            word=w.get("word", ""),
+                            start_offset=s_off,
+                            end_offset=e_off,
+                        )
+                    )
+                spk = trans.get("speakerLabel") or trans.get("speaker_label") or ""
+                trans_obj = SimpleNamespace(
+                    speaker_label=spk,
+                    words=word_objs,
+                    text=trans.get("text") or "",
+                )
+            parts.append(
+                SimpleNamespace(
+                    text=p.get("text") or "",
+                    thought=bool(p.get("thought")),
+                    audio_transcription=trans_obj,
+                )
+            )
+        candidates.append(SimpleNamespace(content=SimpleNamespace(parts=parts)))
+
+    full_text = ""
+    if isinstance(data.get("text"), str) and data.get("text"):
+        full_text = data["text"]
+    elif candidates:
+        first_parts = candidates[0].content.parts
+        non_thought = [p.text for p in first_parts if p.text and not p.thought]
+        if non_thought:
+            full_text = "".join(non_thought)
+        else:
+            any_texts = [p.text for p in first_parts if p.text]
+            if any_texts:
+                full_text = "".join(any_texts)
+            else:
+                trans_texts = [
+                    p.audio_transcription.text
+                    for p in first_parts
+                    if p.audio_transcription and p.audio_transcription.text
+                ]
+                if trans_texts:
+                    full_text = " ".join(trans_texts)
+
+    return SimpleNamespace(text=full_text, candidates=candidates)
+
+
+class _WorkerProxyFiles:
+    """Files adapter routing Gemini Files API uploads through Cloud Worker."""
+
+    def __init__(self, user_id: str):
+        self._user_id = user_id
+
+    def upload(self, file: Any, config: Optional[Any] = None) -> SimpleNamespace:
+        import dispatch.youtube_connections as yc
+
+        file_path = Path(str(file))
+        mime_type = "audio/mp3"
+        if isinstance(config, dict):
+            mime_type = str(config.get("mime_type") or config.get("mimeType") or mime_type)
+        elif config is not None:
+            mime_type = str(getattr(config, "mime_type", None) or getattr(config, "mimeType", None) or mime_type)
+
+        res = yc.upload_user_gemini_media(
+            user_id=self._user_id,
+            file_path=str(file_path),
+            mime_type=mime_type,
+            display_name=file_path.name,
+        )
+        file_info = res.get("file") if isinstance(res, dict) and isinstance(res.get("file"), dict) else (
+            res if isinstance(res, dict) else {}
+        )
+        name = str(file_info.get("name") or "")
+        uri = str(file_info.get("uri") or file_info.get("fileUri") or "")
+        if not uri and name:
+            uri = f"https://generativelanguage.googleapis.com/v1beta/{name.lstrip('/')}"
+        if not uri:
+            raise RecoverableTranscriptionError(
+                f"Worker Gemini media upload returned no file URI for {file_path.name}"
+            )
+        eff_mime = str(file_info.get("mimeType") or file_info.get("mime_type") or mime_type)
+        return SimpleNamespace(name=name or uri, uri=uri, mime_type=eff_mime)
+
+    def delete(self, name: str) -> None:
+        # Gemini Files auto-expire in 48h; Worker file-delete helper is not exposed in youtube_connections.
+        return None
+
+
+class _WorkerProxyModels:
+    """Models adapter routing generateContent calls through Cloud Worker."""
+
+    def __init__(self, user_id: str):
+        self._user_id = user_id
+
+    def generate_content(
+        self,
+        model: str,
+        contents: Any,
+        config: Optional[Any] = None,
+    ) -> SimpleNamespace:
+        import dispatch.youtube_connections as yc
+
+        rest_contents = _serialize_proxy_contents(contents)
+        gen_cfg, sys_inst, safety_settings, tools = _serialize_proxy_config(config)
+        raw_json = yc.call_user_gemini_proxy(
+            user_id=self._user_id,
+            contents=rest_contents,
+            model=model,
+            generation_config=gen_cfg,
+            system_instruction=sys_inst,
+            safety_settings=safety_settings,
+            tools=tools,
+        )
+        return _parse_proxy_generate_response(raw_json)
+
+
+class WorkerGeminiProxyClient:
+    """Minimal google-genai-compatible client backed by Dispatch Cloud Worker proxy."""
+
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self.files = _WorkerProxyFiles(user_id)
+        self.models = _WorkerProxyModels(user_id)
+
+
 def get_gemini_client(api_key: Optional[str] = None):
-    """Lazy initialize and return Google GenAI Client with active API key."""
+    """Lazy initialize and return Google GenAI Client or Cloud Worker proxy client."""
+    proxy_user_id = parse_worker_gemini_proxy_user(api_key)
+    if proxy_user_id:
+        return WorkerGeminiProxyClient(proxy_user_id)
+
     key = api_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
     if not key:
         raise PermanentAuthError("GEMINI_API_KEY is not configured in environment or .env")
@@ -650,7 +951,7 @@ def transcribe_media(
 
     # Defensive transliteration pass: ensure all spoken Hindi/Hinglish is transcribed in Roman Hinglish
     from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish
-    deduped_segments = transliterate_segments_to_hinglish(deduped_segments)
+    deduped_segments = transliterate_segments_to_hinglish(deduped_segments, api_key=api_key)
 
     full_text = " ".join(full_text_pieces).strip()
     if not full_text and deduped_segments:
@@ -786,7 +1087,7 @@ def transcribe_stage2_precision_words(
         if words:
             if any(has_devanagari(w.get("word", "")) for w in words):
                 tokens = [w.get("word", "") for w in words]
-                trans_tokens = transliterate_tokens_to_hinglish(tokens)
+                trans_tokens = transliterate_tokens_to_hinglish(tokens, api_key=api_key)
                 for w, trans in zip(words, trans_tokens):
                     w["word"] = trans
                 if not full_text:
@@ -892,15 +1193,8 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                 logger.info("Daily transcribe quota (25/25) reached while draining queued clips; pausing backlog drain.")
                 break
 
-            user_id = clip.get("user_id")
-            active_key = ""
-            if user_id:
-                try:
-                    from dispatch.youtube_connections import get_user_gemini_key
-                    active_key = get_user_gemini_key(user_id) or ""
-                except Exception:
-                    pass
-            active_key = active_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
+            user_id = (clip.get("user_id") or (chunk.get("user_id") if chunk else None) or "").strip()
+            active_key = resolve_gemini_api_key(user_id, raise_if_missing_host_key=False)
 
             job_dir = get_job_workspace_dir(f"drain_{clip_id}", base_dir=PROCESSING_DIR)
             try:
@@ -945,7 +1239,9 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
 
                 from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish
                 raw_stage2_segments = [{"id": 0, "start": c_start, "end": c_end, "words": clean_words}]
-                clean_stage2_segments = transliterate_segments_to_hinglish(raw_stage2_segments)
+                clean_stage2_segments = transliterate_segments_to_hinglish(
+                    raw_stage2_segments, api_key=active_key or None
+                )
                 if clean_stage2_segments and clean_stage2_segments[0].get("words"):
                     clean_words = clean_stage2_segments[0]["words"]
 

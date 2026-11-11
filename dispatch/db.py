@@ -3,9 +3,12 @@ Provides thread-safe SQLite connection with WAL mode and schema management.
 """
 import os
 import sys
+import types
 import sqlite3
 import json
 import uuid
+import weakref
+import threading
 import contextlib
 import logging
 import math
@@ -41,7 +44,7 @@ def backup_database(backup_dir: Optional[Path] = None) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_file = target_dir / f"dispatch_backup_{timestamp}.db"
 
-    source_conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+    source_conn = sqlite3.connect(str(_resolve_db_file()), timeout=30.0)
     dest_conn = sqlite3.connect(str(backup_file))
     try:
         source_conn.backup(dest_conn)
@@ -62,543 +65,796 @@ def backup_database(backup_dir: Optional[Path] = None) -> Path:
 
 
 _default_db_path = DB_PATH
-_test_db_initialized = False
+_pool_lock = threading.RLock()
+_init_db_lock = threading.RLock()
+_thread_local = threading.local()
 
-def _ensure_test_schema(db_file: str):
-    global _test_db_initialized
-    if _test_db_initialized:
+
+class _ConnSlot:
+    """Thread-owned connection slot tracked weakly for clean DB-switch and teardown."""
+
+    __slots__ = ("conn", "db_file", "depth", "stale", "__weakref__")
+
+    def __init__(self) -> None:
+        self.conn: Optional[sqlite3.Connection] = None
+        self.db_file: Optional[str] = None
+        self.depth: int = 0
+        self.stale: bool = False
+
+    def close_if_idle(self) -> None:
+        if self.depth > 0:
+            self.stale = True
+            return
+        self._close_now()
+
+    def _close_now(self) -> None:
+        conn = self.conn
+        self.conn = None
+        self.db_file = None
+        self.stale = False
+        if conn is not None:
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def __del__(self) -> None:
+        conn = getattr(self, "conn", None)
+        if conn is not None:
+            self.conn = None
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+_active_slots: "weakref.WeakSet[_ConnSlot]" = weakref.WeakSet()
+_initialized_test_dbs: set[str] = set()
+
+
+def _normalize_db_file(raw: Any) -> str:
+    raw_str = os.fspath(raw) if isinstance(raw, Path) else str(raw)
+    if raw_str == ":memory:" or raw_str.startswith("file:"):
+        return raw_str
+    return os.path.abspath(raw_str)
+
+
+def _resolve_db_file() -> str:
+    if DB_PATH != _default_db_path:
+        raw = DB_PATH
+    else:
+        raw = os.getenv("DISPATCH_DB_PATH") or DB_PATH
+    return _normalize_db_file(raw)
+
+
+def _open_connection(db_file: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(
+        str(db_file),
+        timeout=5.0,
+        isolation_level="IMMEDIATE",
+        check_same_thread=False,
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    return conn
+
+
+def close_db_connections(db_file: Optional[Any] = None) -> int:
+    """Close idle cached thread-local SQLite connections (optionally for one db_file).
+
+    Connections currently in use on a thread are marked stale and closed as soon
+    as their outermost context block exits.
+    """
+    target = _normalize_db_file(db_file) if db_file is not None else None
+    closed = 0
+    with _pool_lock:
+        for slot in list(_active_slots):
+            if slot.conn is None:
+                continue
+            if target is not None and slot.db_file != target:
+                continue
+            was_idle = slot.depth == 0
+            slot.close_if_idle()
+            if was_idle:
+                closed += 1
+        if target is None:
+            _initialized_test_dbs.clear()
+        else:
+            _initialized_test_dbs.discard(target)
+    return closed
+
+
+def _ensure_test_schema(db_file: str) -> None:
+    if db_file == ":memory:" or db_file.startswith("file:"):
         return
     is_test = "unittest" in sys.modules or "pytest" in sys.modules or bool(os.getenv("DISPATCH_STORAGE_DIR"))
     if not is_test:
         return
+    with _pool_lock:
+        if db_file in _initialized_test_dbs:
+            p = Path(db_file)
+            if p.exists() and p.stat().st_size > 0:
+                return
+            _initialized_test_dbs.discard(db_file)
     try:
-        raw_conn = sqlite3.connect(str(db_file), timeout=10.0)
-        try:
-            cur = raw_conn.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions';")
-            if not cur.fetchone():
+        with _init_db_lock:
+            with _pool_lock:
+                if db_file in _initialized_test_dbs:
+                    p = Path(db_file)
+                    if p.exists() and p.stat().st_size > 0:
+                        return
+            raw_conn = sqlite3.connect(str(db_file), timeout=5.0)
+            try:
+                cur = raw_conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions';")
+                has_schema = cur.fetchone() is not None
+            finally:
+                raw_conn.close()
+            if not has_schema:
                 init_db()
-            _test_db_initialized = True
-        finally:
-            raw_conn.close()
+            else:
+                with _pool_lock:
+                    _initialized_test_dbs.add(db_file)
     except Exception:
         pass
 
+
 @contextlib.contextmanager
-def get_db_connection():
-    """Context manager yielding a thread-safe SQLite connection with auto-commit and guaranteed close."""
-    import os
-    if DB_PATH != _default_db_path:
-        db_file = str(DB_PATH)
-    else:
-        db_file = os.getenv("DISPATCH_DB_PATH") or str(DB_PATH)
-    _ensure_test_schema(db_file)
-    conn = sqlite3.connect(str(db_file), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA busy_timeout = 30000;")
-    conn.execute("PRAGMA foreign_keys = ON;")
+def _connection_ctx(immediate: bool = False, _skip_test_schema: bool = False):
+    db_file = _resolve_db_file()
+    if not _skip_test_schema:
+        _ensure_test_schema(db_file)
+
+    slot = getattr(_thread_local, "slot", None)
+    if slot is None:
+        slot = _ConnSlot()
+        _thread_local.slot = slot
+        with _pool_lock:
+            _active_slots.add(slot)
+
+    isolated_conn: Optional[sqlite3.Connection] = None
+    with _pool_lock:
+        if slot.depth == 0:
+            if slot.conn is not None:
+                conn_alive = True
+                try:
+                    _ = slot.conn.in_transaction
+                except sqlite3.ProgrammingError:
+                    conn_alive = False
+                if not conn_alive or slot.stale or slot.db_file != db_file:
+                    slot._close_now()
+            if slot.conn is None:
+                slot.conn = _open_connection(db_file)
+                slot.db_file = db_file
+                slot.stale = False
+            slot.depth = 1
+            conn = slot.conn
+            depth = 1
+        elif slot.db_file == db_file:
+            try:
+                _ = slot.conn.in_transaction
+            except sqlite3.ProgrammingError:
+                slot.conn = _open_connection(db_file)
+                slot.stale = False
+            slot.depth += 1
+            conn = slot.conn
+            depth = slot.depth
+        else:
+            isolated_conn = _open_connection(db_file)
+            conn = isolated_conn
+            depth = 1
+
+    if isolated_conn is not None:
+        try:
+            if immediate and not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            if conn.in_transaction:
+                conn.commit()
+        except Exception:
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return
+
+    savepoint_name: Optional[str] = None
+    had_tx = False
     try:
+        if depth == 1:
+            if immediate and not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+        else:
+            had_tx = conn.in_transaction
+            if had_tx:
+                savepoint_name = f"_dispatch_sp_{depth}"
+                conn.execute(f"SAVEPOINT {savepoint_name}")
+            elif immediate:
+                conn.execute("BEGIN IMMEDIATE")
+
         yield conn
-        conn.commit()
+
+        if depth == 1:
+            try:
+                if conn.in_transaction:
+                    conn.commit()
+            except sqlite3.ProgrammingError:
+                pass
+        elif savepoint_name is not None:
+            try:
+                conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            except sqlite3.Error:
+                pass
     except Exception:
-        conn.rollback()
+        if depth == 1:
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            except sqlite3.Error:
+                pass
+        else:
+            if savepoint_name is not None:
+                try:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                except sqlite3.Error:
+                    pass
+            elif not had_tx:
+                try:
+                    if conn.in_transaction:
+                        conn.rollback()
+                except sqlite3.Error:
+                    pass
         raise
     finally:
-        conn.close()
+        with _pool_lock:
+            slot.depth = max(0, slot.depth - 1)
+            if slot.depth == 0 and (slot.stale or slot.db_file != _resolve_db_file()):
+                slot._close_now()
+
+
+def get_db_connection():
+    """Context manager yielding a thread-local persistent SQLite connection with auto-commit."""
+    return _connection_ctx(immediate=False)
+
+
+@contextlib.contextmanager
+def write_transaction():
+    """Context manager yielding a DB connection inside an explicit BEGIN IMMEDIATE write transaction."""
+    with get_db_connection() as conn:
+        if conn.in_transaction is False:
+            conn.execute("BEGIN IMMEDIATE")
+        yield conn
 
 
 def init_db():
     """Initialize database tables, migrations, and initial settings."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
+    with _init_db_lock:
+        db_file = _resolve_db_file()
+        with _connection_ctx(immediate=False, _skip_test_schema=True) as conn:
+            cursor = conn.cursor()
+            mode_row = cursor.execute("PRAGMA journal_mode;").fetchone()
+            current_mode = str(mode_row[0]).lower() if mode_row else ""
+            if current_mode != "wal" and not conn.in_transaction:
+                cursor.execute("PRAGMA journal_mode = WAL;")
 
-        # Check and update schema version
-        cursor.execute("PRAGMA user_version;")
-        user_ver_row = cursor.fetchone()
-        user_ver = user_ver_row[0] if user_ver_row else 0
+            # Check and update schema version
+            cursor.execute("PRAGMA user_version;")
+            user_ver_row = cursor.fetchone()
+            user_ver = user_ver_row[0] if user_ver_row else 0
 
-        # Sessions Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                status TEXT NOT NULL DEFAULT 'recording', -- recording, processing, completed, failed
-                total_chunks INTEGER DEFAULT 0,
-                notes TEXT
-            );
-        """)
+            # Sessions Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'recording', -- recording, processing, completed, failed
+                    total_chunks INTEGER DEFAULT 0,
+                    notes TEXT
+                );
+            """)
 
-        # Video Chunks Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS chunks (
-                id TEXT PRIMARY KEY,
-                session_id TEXT,
-                filename TEXT NOT NULL,
-                filepath TEXT NOT NULL,
-                file_hash TEXT,
-                duration REAL DEFAULT 0.0,
-                width INTEGER DEFAULT 0,
-                height INTEGER DEFAULT 0,
-                aspect_ratio TEXT DEFAULT 'unknown', -- '16:9', '9:16', 'unknown'
-                status TEXT NOT NULL DEFAULT 'incoming', -- incoming, verified, transcribing, transcribed, processed, purged
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE SET NULL
-            );
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_filename ON chunks (filename);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks (session_id);")
+            # Video Chunks Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    filename TEXT NOT NULL,
+                    filepath TEXT NOT NULL,
+                    file_hash TEXT,
+                    duration REAL DEFAULT 0.0,
+                    width INTEGER DEFAULT 0,
+                    height INTEGER DEFAULT 0,
+                    aspect_ratio TEXT DEFAULT 'unknown', -- '16:9', '9:16', 'unknown'
+                    status TEXT NOT NULL DEFAULT 'incoming', -- incoming, verified, transcribing, transcribed, processed, purged
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE SET NULL
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_filename ON chunks (filename);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks (session_id);")
 
-        # Transcripts Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transcripts (
-                id TEXT PRIMARY KEY,
-                chunk_id TEXT NOT NULL,
-                session_id TEXT,
-                full_text TEXT NOT NULL,
-                segments_json TEXT NOT NULL, -- JSON array of timestamped words/segments
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
-            );
-        """)
+            # Transcripts Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transcripts (
+                    id TEXT PRIMARY KEY,
+                    chunk_id TEXT NOT NULL,
+                    session_id TEXT,
+                    full_text TEXT NOT NULL,
+                    segments_json TEXT NOT NULL, -- JSON array of timestamped words/segments
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
+                );
+            """)
 
-        # Extracted Candidate Clips Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clips (
-                id TEXT PRIMARY KEY,
-                session_id TEXT,
-                chunk_id TEXT,
-                start_time REAL NOT NULL,
-                end_time REAL NOT NULL,
-                ai_suggested_start_time REAL,
-                ai_suggested_end_time REAL,
-                duration REAL NOT NULL,
-                range_revision INTEGER NOT NULL DEFAULT 0,
-                captions_revision INTEGER NOT NULL DEFAULT 0,
-                caption_coordinate_system TEXT,
-                caption_range_revision INTEGER,
-                caption_range_start REAL,
-                caption_range_end REAL,
-                caption_timing_warning TEXT,
-                title TEXT NOT NULL,
-                hook TEXT,
-                description TEXT,
-                hashtags TEXT,
-                virality_score INTEGER DEFAULT 0,
-                layout_mode TEXT DEFAULT 'fit_blur', -- crop_follow, fit_blur, native_portrait
-                crop_anchor_x REAL DEFAULT 0.5,
-                rendered_layout_mode TEXT,           -- records the framing mode used for current video_path
-                render_stale INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'ready_review', -- ready_review, approved, rejected, published
-                publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
-                platform_targets TEXT DEFAULT 'youtube,instagram',
-                video_path TEXT,
-                thumbnail_path TEXT,
-                padded_start REAL,
-                padded_end REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                approved_at TIMESTAMP,
-                published_at TIMESTAMP,
-                user_id TEXT,
-                FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE SET NULL
-            );
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_chunk ON clips (chunk_id);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_status ON clips (status);")
+            # Extracted Candidate Clips Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS clips (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    chunk_id TEXT,
+                    start_time REAL NOT NULL,
+                    end_time REAL NOT NULL,
+                    ai_suggested_start_time REAL,
+                    ai_suggested_end_time REAL,
+                    duration REAL NOT NULL,
+                    range_revision INTEGER NOT NULL DEFAULT 0,
+                    captions_revision INTEGER NOT NULL DEFAULT 0,
+                    caption_coordinate_system TEXT,
+                    caption_range_revision INTEGER,
+                    caption_range_start REAL,
+                    caption_range_end REAL,
+                    caption_timing_warning TEXT,
+                    title TEXT NOT NULL,
+                    hook TEXT,
+                    description TEXT,
+                    hashtags TEXT,
+                    virality_score INTEGER DEFAULT 0,
+                    layout_mode TEXT DEFAULT 'fit_blur', -- crop_follow, fit_blur, native_portrait
+                    crop_anchor_x REAL DEFAULT 0.5,
+                    rendered_layout_mode TEXT,           -- records the framing mode used for current video_path
+                    render_stale INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'ready_review', -- ready_review, approved, rejected, published
+                    publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
+                    platform_targets TEXT DEFAULT 'youtube,instagram',
+                    video_path TEXT,
+                    thumbnail_path TEXT,
+                    padded_start REAL,
+                    padded_end REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    approved_at TIMESTAMP,
+                    published_at TIMESTAMP,
+                    user_id TEXT,
+                    FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE SET NULL
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_chunk ON clips (chunk_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_status ON clips (status);")
 
-        # User Rejections Table (for negative feedback learning)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS rejections (
-                id TEXT PRIMARY KEY,
-                clip_id TEXT,
-                title TEXT,
-                transcript_snippet TEXT,
-                reason TEXT,
-                user_id TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
+            # User Rejections Table (for negative feedback learning)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rejections (
+                    id TEXT PRIMARY KEY,
+                    clip_id TEXT,
+                    title TEXT,
+                    transcript_snippet TEXT,
+                    reason TEXT,
+                    user_id TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
 
-        # Publishing Outbox (idempotent multi-platform publishing)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS publishing_outbox (
-                id TEXT PRIMARY KEY,
-                clip_id TEXT NOT NULL,
-                platform TEXT NOT NULL, -- youtube, instagram, linkedin, x
-                account_id TEXT,
-                status TEXT NOT NULL DEFAULT 'queued', -- queued, uploading, published, failed, blocked_needs_auth, reconciliation_required
-                publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
-                attempt_count INTEGER DEFAULT 0,
-                last_error TEXT,
-                idempotency_key TEXT UNIQUE NOT NULL,
-                user_id TEXT,
-                remote_id TEXT,
-                remote_url TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                attempt_started_at TIMESTAMP,
-                next_retry_at TIMESTAMP,
-                processing_started_at TIMESTAMP,
-                processing_attempts INTEGER DEFAULT 0,
-                published_at TIMESTAMP,
-                view_count INTEGER,
-                like_count INTEGER,
-                comment_count INTEGER,
-                stats_updated_at TIMESTAMP,
-                stats_checked_at TIMESTAMP,
-                FOREIGN KEY (clip_id) REFERENCES clips (id) ON DELETE CASCADE
-            );
-        """)
+            # Publishing Outbox (idempotent multi-platform publishing)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS publishing_outbox (
+                    id TEXT PRIMARY KEY,
+                    clip_id TEXT NOT NULL,
+                    platform TEXT NOT NULL, -- youtube, instagram, linkedin, x
+                    account_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'queued', -- queued, uploading, published, failed, blocked_needs_auth, reconciliation_required
+                    publish_mode TEXT NOT NULL DEFAULT 'private', -- private, public
+                    attempt_count INTEGER DEFAULT 0,
+                    last_error TEXT,
+                    idempotency_key TEXT UNIQUE NOT NULL,
+                    user_id TEXT,
+                    remote_id TEXT,
+                    remote_url TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    attempt_started_at TIMESTAMP,
+                    next_retry_at TIMESTAMP,
+                    processing_started_at TIMESTAMP,
+                    processing_attempts INTEGER DEFAULT 0,
+                    published_at TIMESTAMP,
+                    view_count INTEGER,
+                    like_count INTEGER,
+                    comment_count INTEGER,
+                    stats_updated_at TIMESTAMP,
+                    stats_checked_at TIMESTAMP,
+                    FOREIGN KEY (clip_id) REFERENCES clips (id) ON DELETE CASCADE
+                );
+            """)
 
-        # Global Key-Value Settings
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-        """)
+            # Global Key-Value Settings
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+            """)
 
-        # Checkpointed Pipeline Jobs (Durable State Machine, Leases, Heartbeats)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pipeline_jobs (
-                job_id TEXT PRIMARY KEY,
-                chunk_id TEXT NOT NULL,
-                session_id TEXT,
-                current_stage TEXT NOT NULL DEFAULT 'VERIFY', -- VERIFY, TRANSCRIBE, ANALYZE, RENDER, FINALIZE, COMPLETED
-                status TEXT NOT NULL DEFAULT 'QUEUED',        -- QUEUED, PROCESSING, WAITING_FOR_AI, WAITING_FOR_RESOURCES, RETRY_PENDING, COMPLETED, FAILED_PERMANENT
-                worker_id TEXT,
-                lease_expires_at TIMESTAMP,
-                heartbeat_at TIMESTAMP,
-                attempt_count INTEGER DEFAULT 0,
-                max_attempts INTEGER DEFAULT 5,
-                last_error TEXT,
-                next_retry_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
-            );
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_jobs_claim 
-            ON pipeline_jobs (status, next_retry_at, lease_expires_at);
-        """)
+            # Checkpointed Pipeline Jobs (Durable State Machine, Leases, Heartbeats)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    chunk_id TEXT NOT NULL,
+                    session_id TEXT,
+                    current_stage TEXT NOT NULL DEFAULT 'VERIFY', -- VERIFY, TRANSCRIBE, ANALYZE, RENDER, FINALIZE, COMPLETED
+                    status TEXT NOT NULL DEFAULT 'QUEUED',        -- QUEUED, PROCESSING, WAITING_FOR_AI, WAITING_FOR_RESOURCES, RETRY_PENDING, COMPLETED, FAILED_PERMANENT
+                    worker_id TEXT,
+                    lease_expires_at TIMESTAMP,
+                    heartbeat_at TIMESTAMP,
+                    attempt_count INTEGER DEFAULT 0,
+                    max_attempts INTEGER DEFAULT 5,
+                    last_error TEXT,
+                    next_retry_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
+                );
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_jobs_claim 
+                ON pipeline_jobs (status, next_retry_at, lease_expires_at);
+            """)
 
-        # YouTube Transport / Inbox Table (Idempotent cloud queue)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS youtube_inbox (
-                video_id TEXT PRIMARY KEY,
-                dispatch_id TEXT,
-                session_id TEXT,
-                sequence_number INTEGER,
-                title TEXT NOT NULL,
-                channel_id TEXT,
-                upload_time TIMESTAMP,
-                duration REAL DEFAULT 0.0,
-                status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, DOWNLOADING, VALIDATING, DOWNLOADED, WAITING_FOR_TRANSCRIPT, TRANSCRIBED, CLIPS_CREATED, COMPLETED, FAILED
-                local_video_path TEXT,
-                transcript_source TEXT,                    -- 'gemini_transcribe', 'gemini_flash_lite', or 'youtube' (legacy)
-                segments_json TEXT,                        -- JSON array of timestamped segments
-                last_error TEXT,
-                retry_count INTEGER DEFAULT 0,
-                discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                transcript_wait_started_at TIMESTAMP,
-                transcript_wait_deadline TIMESTAMP,
-                next_caption_probe_at TIMESTAMP,
-                ai_attempt_count INTEGER DEFAULT 0,
-                next_ai_attempt_at TIMESTAMP,
-                last_ai_error TEXT,
-                source_sha256 TEXT,
-                source_file_size INTEGER,
-                user_id TEXT,
-                account_id TEXT
-            );
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_youtube_status 
-            ON youtube_inbox (status, updated_at);
-        """)
+            # YouTube Transport / Inbox Table (Idempotent cloud queue)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS youtube_inbox (
+                    video_id TEXT PRIMARY KEY,
+                    dispatch_id TEXT,
+                    session_id TEXT,
+                    sequence_number INTEGER,
+                    title TEXT NOT NULL,
+                    channel_id TEXT,
+                    upload_time TIMESTAMP,
+                    duration REAL DEFAULT 0.0,
+                    status TEXT NOT NULL DEFAULT 'DISCOVERED', -- DISCOVERED, DOWNLOADING, VALIDATING, DOWNLOADED, WAITING_FOR_TRANSCRIPT, TRANSCRIBED, CLIPS_CREATED, COMPLETED, FAILED
+                    local_video_path TEXT,
+                    transcript_source TEXT,                    -- 'gemini_transcribe', 'gemini_flash_lite', or 'youtube' (legacy)
+                    segments_json TEXT,                        -- JSON array of timestamped segments
+                    last_error TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    transcript_wait_started_at TIMESTAMP,
+                    transcript_wait_deadline TIMESTAMP,
+                    next_caption_probe_at TIMESTAMP,
+                    ai_attempt_count INTEGER DEFAULT 0,
+                    next_ai_attempt_at TIMESTAMP,
+                    last_ai_error TEXT,
+                    source_sha256 TEXT,
+                    source_file_size INTEGER,
+                    user_id TEXT,
+                    account_id TEXT
+                );
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_youtube_status 
+                ON youtube_inbox (status, updated_at);
+            """)
 
-        # Migration: Ensure dispatch_id, session_id, sequence_number, transcript wait, and AI retry columns exist if table was created in older schema
-        cursor.execute("PRAGMA table_info(youtube_inbox);")
-        yt_cols = [col[1] for col in cursor.fetchall()]
-        if "dispatch_id" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN dispatch_id TEXT;")
-        if "session_id" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN session_id TEXT;")
-        if "sequence_number" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN sequence_number INTEGER;")
-        if "transcript_wait_started_at" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_started_at TIMESTAMP;")
-        if "transcript_wait_deadline" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_deadline TIMESTAMP;")
-        if "next_caption_probe_at" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_caption_probe_at TIMESTAMP;")
-        if "ai_attempt_count" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN ai_attempt_count INTEGER DEFAULT 0;")
-        if "next_ai_attempt_at" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_ai_attempt_at TIMESTAMP;")
-        if "last_ai_error" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN last_ai_error TEXT;")
-        if "source_sha256" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_sha256 TEXT;")
-        if "source_file_size" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_file_size INTEGER;")
-        if "user_id" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN user_id TEXT;");
-        if "account_id" not in yt_cols:
-            cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN account_id TEXT;");
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_youtube_user_id ON youtube_inbox (user_id);")
+            # Migration: Ensure dispatch_id, session_id, sequence_number, transcript wait, and AI retry columns exist if table was created in older schema
+            cursor.execute("PRAGMA table_info(youtube_inbox);")
+            yt_cols = [col[1] for col in cursor.fetchall()]
+            if "dispatch_id" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN dispatch_id TEXT;")
+            if "session_id" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN session_id TEXT;")
+            if "sequence_number" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN sequence_number INTEGER;")
+            if "transcript_wait_started_at" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_started_at TIMESTAMP;")
+            if "transcript_wait_deadline" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN transcript_wait_deadline TIMESTAMP;")
+            if "next_caption_probe_at" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_caption_probe_at TIMESTAMP;")
+            if "ai_attempt_count" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN ai_attempt_count INTEGER DEFAULT 0;")
+            if "next_ai_attempt_at" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN next_ai_attempt_at TIMESTAMP;")
+            if "last_ai_error" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN last_ai_error TEXT;")
+            if "source_sha256" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_sha256 TEXT;")
+            if "source_file_size" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN source_file_size INTEGER;")
+            if "user_id" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN user_id TEXT;")
+            if "account_id" not in yt_cols:
+                cursor.execute("ALTER TABLE youtube_inbox ADD COLUMN account_id TEXT;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_youtube_user_id ON youtube_inbox (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_youtube_user_status ON youtube_inbox (user_id, status, discovered_at);")
 
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
-            ON youtube_inbox (dispatch_id);
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_youtube_session_id 
-            ON youtube_inbox (session_id);
-        """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_youtube_dispatch_id 
+                ON youtube_inbox (dispatch_id);
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_youtube_session_id 
+                ON youtube_inbox (session_id);
+            """)
 
-        # Migration: Ensure caption_data and rendered_layout_mode columns exist on clips table
-        cursor.execute("PRAGMA table_info(clips);")
-        clip_cols = [col[1] for col in cursor.fetchall()]
-        if "caption_data" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN caption_data TEXT;")
-        if "rendered_layout_mode" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN rendered_layout_mode TEXT;")
-            cursor.execute("UPDATE clips SET rendered_layout_mode = layout_mode WHERE rendered_layout_mode IS NULL AND video_path IS NOT NULL;")
-        if "render_stale" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN render_stale INTEGER NOT NULL DEFAULT 0;")
-        if "padded_start" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN padded_start REAL;")
-        if "padded_end" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN padded_end REAL;")
-        if "ai_suggested_start_time" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_start_time REAL;")
-        if "ai_suggested_end_time" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_end_time REAL;")
-        if "range_revision" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN range_revision INTEGER NOT NULL DEFAULT 0;")
-        if "captions_revision" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN captions_revision INTEGER NOT NULL DEFAULT 0;")
-        if "caption_coordinate_system" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN caption_coordinate_system TEXT;")
-        if "caption_range_revision" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_revision INTEGER;")
-        if "caption_range_start" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_start REAL;")
-        if "caption_range_end" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_end REAL;")
-        if "caption_timing_warning" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN caption_timing_warning TEXT;")
-        if "user_id" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN user_id TEXT;")
-        if "cloud_reject_purge_at" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_reject_purge_at TIMESTAMP;")
-        if "cloud_reject_reason" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_reject_reason TEXT;")
-        if "cloud_rejected_at" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_rejected_at TIMESTAMP;")
-        if "cloud_caption_revision" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_caption_revision INTEGER NOT NULL DEFAULT 0;")
-        if "cloud_r2_purged_at" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN cloud_r2_purged_at TIMESTAMP;")
-        if "render_attempt_count" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN render_attempt_count INTEGER NOT NULL DEFAULT 0;")
-        if "last_render_error" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN last_render_error TEXT;")
-        if "crop_anchor_x" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN crop_anchor_x REAL DEFAULT 0.5;")
-        if "project_document" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN project_document TEXT;")
-        if "segments_json" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN segments_json TEXT;")
-        if "kept_duration" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN kept_duration REAL;")
-        if "segments_revision" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN segments_revision INTEGER NOT NULL DEFAULT 0;")
-        if "active_state_revision" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN active_state_revision INTEGER NOT NULL DEFAULT 0;")
-        if "redo_stack" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN redo_stack TEXT NOT NULL DEFAULT '[]';")
-        if "can_undo" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN can_undo INTEGER NOT NULL DEFAULT 0;")
-        if "can_redo" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN can_redo INTEGER NOT NULL DEFAULT 0;")
-        if "media_fingerprint" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN media_fingerprint TEXT;")
-        if "render_fingerprint" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN render_fingerprint TEXT;")
-        if "rendered_fingerprint" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN rendered_fingerprint TEXT;")
-        if "extraction_source" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_source TEXT;")
-        if "extraction_model" not in clip_cols:
-            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_model TEXT;")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clip_revisions (
-                id TEXT PRIMARY KEY,
-                clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-                revision INTEGER NOT NULL,
-                log_parent_revision INTEGER,
-                state_parent_revision INTEGER,
-                active_state_revision INTEGER NOT NULL,
-                redo_stack TEXT NOT NULL DEFAULT '[]',
-                operation_id TEXT NOT NULL,
-                project_document TEXT NOT NULL,
-                media_fingerprint TEXT NOT NULL,
-                render_fingerprint TEXT NOT NULL,
-                action_type TEXT NOT NULL,
-                action_metadata TEXT,
-                author TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (clip_id, revision),
-                UNIQUE (clip_id, operation_id)
-            );
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_revisions_lookup ON clip_revisions (clip_id, revision DESC);")
+            # Migration: Ensure caption_data and rendered_layout_mode columns exist on clips table
+            cursor.execute("PRAGMA table_info(clips);")
+            clip_cols = [col[1] for col in cursor.fetchall()]
+            if "caption_data" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN caption_data TEXT;")
+            if "rendered_layout_mode" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN rendered_layout_mode TEXT;")
+                cursor.execute("UPDATE clips SET rendered_layout_mode = layout_mode WHERE rendered_layout_mode IS NULL AND video_path IS NOT NULL;")
+            if "render_stale" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN render_stale INTEGER NOT NULL DEFAULT 0;")
+            if "padded_start" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN padded_start REAL;")
+            if "padded_end" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN padded_end REAL;")
+            if "ai_suggested_start_time" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_start_time REAL;")
+            if "ai_suggested_end_time" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN ai_suggested_end_time REAL;")
+            if "range_revision" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN range_revision INTEGER NOT NULL DEFAULT 0;")
+            if "captions_revision" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN captions_revision INTEGER NOT NULL DEFAULT 0;")
+            if "caption_coordinate_system" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN caption_coordinate_system TEXT;")
+            if "caption_range_revision" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_revision INTEGER;")
+            if "caption_range_start" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_start REAL;")
+            if "caption_range_end" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN caption_range_end REAL;")
+            if "caption_timing_warning" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN caption_timing_warning TEXT;")
+            if "user_id" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN user_id TEXT;")
+            if "cloud_reject_purge_at" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN cloud_reject_purge_at TIMESTAMP;")
+            if "cloud_reject_reason" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN cloud_reject_reason TEXT;")
+            if "cloud_rejected_at" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN cloud_rejected_at TIMESTAMP;")
+            if "cloud_caption_revision" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN cloud_caption_revision INTEGER NOT NULL DEFAULT 0;")
+            if "cloud_r2_purged_at" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN cloud_r2_purged_at TIMESTAMP;")
+            if "render_attempt_count" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN render_attempt_count INTEGER NOT NULL DEFAULT 0;")
+            if "last_render_error" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN last_render_error TEXT;")
+            if "crop_anchor_x" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN crop_anchor_x REAL DEFAULT 0.5;")
+            if "project_document" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN project_document TEXT;")
+            if "segments_json" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN segments_json TEXT;")
+            if "kept_duration" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN kept_duration REAL;")
+            if "segments_revision" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN segments_revision INTEGER NOT NULL DEFAULT 0;")
+            if "active_state_revision" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN active_state_revision INTEGER NOT NULL DEFAULT 0;")
+            if "redo_stack" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN redo_stack TEXT NOT NULL DEFAULT '[]';")
+            if "can_undo" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN can_undo INTEGER NOT NULL DEFAULT 0;")
+            if "can_redo" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN can_redo INTEGER NOT NULL DEFAULT 0;")
+            if "media_fingerprint" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN media_fingerprint TEXT;")
+            if "render_fingerprint" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN render_fingerprint TEXT;")
+            if "rendered_fingerprint" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN rendered_fingerprint TEXT;")
+            if "extraction_source" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN extraction_source TEXT;")
+            if "extraction_model" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN extraction_model TEXT;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_status ON clips (user_id, status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_session_status ON clips (session_id, status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_status_purge ON clips (status, cloud_reject_purge_at);")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS clip_revisions (
+                    id TEXT PRIMARY KEY,
+                    clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+                    revision INTEGER NOT NULL,
+                    log_parent_revision INTEGER,
+                    state_parent_revision INTEGER,
+                    active_state_revision INTEGER NOT NULL,
+                    redo_stack TEXT NOT NULL DEFAULT '[]',
+                    operation_id TEXT NOT NULL,
+                    project_document TEXT NOT NULL,
+                    media_fingerprint TEXT NOT NULL,
+                    render_fingerprint TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    action_metadata TEXT,
+                    author TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (clip_id, revision),
+                    UNIQUE (clip_id, operation_id)
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_revisions_lookup ON clip_revisions (clip_id, revision DESC);")
 
 
-        # Suggestions are immutable candidate metadata. Legacy selected ranges
-        # are the only safe backfill source; never rewrite their active bounds.
-        cursor.execute("""
-            UPDATE clips
-            SET ai_suggested_start_time = COALESCE(ai_suggested_start_time, start_time),
-                ai_suggested_end_time = COALESCE(ai_suggested_end_time, end_time)
-            WHERE ai_suggested_start_time IS NULL OR ai_suggested_end_time IS NULL
-        """)
-        # Legacy caption tracks used the active clip's relative timebase. Record
-        # that anchor once so later trims can rebase saved words safely.
-        cursor.execute("""
-            UPDATE clips
-            SET caption_range_revision = COALESCE(caption_range_revision, range_revision, 0),
-                caption_range_start = COALESCE(caption_range_start, start_time),
-                caption_range_end = COALESCE(caption_range_end, end_time)
-            WHERE caption_data IS NOT NULL AND caption_range_revision IS NULL
-        """)
+            # Suggestions are immutable candidate metadata. Legacy selected ranges
+            # are the only safe backfill source; never rewrite their active bounds.
+            cursor.execute("""
+                UPDATE clips
+                SET ai_suggested_start_time = COALESCE(ai_suggested_start_time, start_time),
+                    ai_suggested_end_time = COALESCE(ai_suggested_end_time, end_time)
+                WHERE ai_suggested_start_time IS NULL OR ai_suggested_end_time IS NULL
+            """)
+            # Legacy caption tracks used the active clip's relative timebase. Record
+            # that anchor once so later trims can rebase saved words safely.
+            cursor.execute("""
+                UPDATE clips
+                SET caption_range_revision = COALESCE(caption_range_revision, range_revision, 0),
+                    caption_range_start = COALESCE(caption_range_start, start_time),
+                    caption_range_end = COALESCE(caption_range_end, end_time)
+                WHERE caption_data IS NOT NULL AND caption_range_revision IS NULL
+            """)
 
-        # Migration: Ensure outbox columns exist if created with older schema
-        cursor.execute("PRAGMA table_info(publishing_outbox);")
-        outbox_cols = [col[1] for col in cursor.fetchall()]
-        if "updated_at" not in outbox_cols:
-            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN updated_at TIMESTAMP;")
-        if "attempt_started_at" not in outbox_cols:
-            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN attempt_started_at TIMESTAMP;")
-        if "next_retry_at" not in outbox_cols:
-            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN next_retry_at TIMESTAMP;")
-        if "processing_started_at" not in outbox_cols:
-            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN processing_started_at TIMESTAMP;")
-        if "processing_attempts" not in outbox_cols:
-            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN processing_attempts INTEGER DEFAULT 0;")
-        if "account_id" not in outbox_cols:
-            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN account_id TEXT;")
-        if "user_id" not in outbox_cols:
-            cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN user_id TEXT;");
-        outbox_stats_cols = {
-            "view_count": "INTEGER",
-            "like_count": "INTEGER",
-            "comment_count": "INTEGER",
-            "stats_updated_at": "TIMESTAMP",
-            "stats_checked_at": "TIMESTAMP",
-        }
-        for col, col_type in outbox_stats_cols.items():
-            if col not in outbox_cols:
-                cursor.execute(f"ALTER TABLE publishing_outbox ADD COLUMN {col} {col_type};")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_user_id ON publishing_outbox (user_id);")
+            # Migration: Ensure outbox columns exist if created with older schema
+            cursor.execute("PRAGMA table_info(publishing_outbox);")
+            outbox_cols = [col[1] for col in cursor.fetchall()]
+            if "updated_at" not in outbox_cols:
+                cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN updated_at TIMESTAMP;")
+            if "attempt_started_at" not in outbox_cols:
+                cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN attempt_started_at TIMESTAMP;")
+            if "next_retry_at" not in outbox_cols:
+                cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN next_retry_at TIMESTAMP;")
+            if "processing_started_at" not in outbox_cols:
+                cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN processing_started_at TIMESTAMP;")
+            if "processing_attempts" not in outbox_cols:
+                cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN processing_attempts INTEGER DEFAULT 0;")
+            if "account_id" not in outbox_cols:
+                cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN account_id TEXT;")
+            if "user_id" not in outbox_cols:
+                cursor.execute("ALTER TABLE publishing_outbox ADD COLUMN user_id TEXT;")
+            outbox_stats_cols = {
+                "view_count": "INTEGER",
+                "like_count": "INTEGER",
+                "comment_count": "INTEGER",
+                "stats_updated_at": "TIMESTAMP",
+                "stats_checked_at": "TIMESTAMP",
+            }
+            for col, col_type in outbox_stats_cols.items():
+                if col not in outbox_cols:
+                    cursor.execute(f"ALTER TABLE publishing_outbox ADD COLUMN {col} {col_type};")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_user_id ON publishing_outbox (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_status_retry ON publishing_outbox (status, next_retry_at);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_clip_status ON publishing_outbox (clip_id, status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_outbox_clip_platform ON publishing_outbox (clip_id, platform);")
 
-        # Migration: rejection learning must be owner-scoped (audit 2026-10-28).
-        # Legacy rows keep user_id NULL and are excluded from any owner-scoped prompt.
-        cursor.execute("PRAGMA table_info(rejections);")
-        rejection_cols = [col[1] for col in cursor.fetchall()]
-        if "user_id" not in rejection_cols:
-            cursor.execute("ALTER TABLE rejections ADD COLUMN user_id TEXT;")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rejections_user_id ON rejections (user_id);")
+            # Migration: rejection learning must be owner-scoped (audit 2026-10-28).
+            # Legacy rows keep user_id NULL and are excluded from any owner-scoped prompt.
+            cursor.execute("PRAGMA table_info(rejections);")
+            rejection_cols = [col[1] for col in cursor.fetchall()]
+            if "user_id" not in rejection_cols:
+                cursor.execute("ALTER TABLE rejections ADD COLUMN user_id TEXT;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_rejections_user_id ON rejections (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_rejections_clip_id ON rejections (clip_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_rejections_user_created ON rejections (user_id, created_at DESC);")
 
-        # Migration: Ensure user_id column exists on sessions
-        cursor.execute("PRAGMA table_info(sessions);")
-        sess_cols = [col[1] for col in cursor.fetchall()]
-        if "user_id" not in sess_cols:
-            cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT;")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);")
+            # Migration: Ensure user_id column exists on sessions
+            cursor.execute("PRAGMA table_info(sessions);")
+            sess_cols = [col[1] for col in cursor.fetchall()]
+            if "user_id" not in sess_cols:
+                cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);")
 
-        # Migration: Ensure user_id column exists on chunks
-        cursor.execute("PRAGMA table_info(chunks);")
-        chunk_cols = [col[1] for col in cursor.fetchall()]
-        if "user_id" not in chunk_cols:
-            cursor.execute("ALTER TABLE chunks ADD COLUMN user_id TEXT;")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_user_id ON chunks (user_id);")
+            # Migration: Ensure user_id column exists on chunks
+            cursor.execute("PRAGMA table_info(chunks);")
+            chunk_cols = [col[1] for col in cursor.fetchall()]
+            if "user_id" not in chunk_cols:
+                cursor.execute("ALTER TABLE chunks ADD COLUMN user_id TEXT;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_user_id ON chunks (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_hash ON chunks (file_hash);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks (status);")
 
-        # Migration: Ensure user_id column exists on transcripts
-        cursor.execute("PRAGMA table_info(transcripts);")
-        tx_cols = [col[1] for col in cursor.fetchall()]
-        if "user_id" not in tx_cols:
-            cursor.execute("ALTER TABLE transcripts ADD COLUMN user_id TEXT;")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts (user_id);")
+            # Migration: Ensure user_id column exists on transcripts
+            cursor.execute("PRAGMA table_info(transcripts);")
+            tx_cols = [col[1] for col in cursor.fetchall()]
+            if "user_id" not in tx_cols:
+                cursor.execute("ALTER TABLE transcripts ADD COLUMN user_id TEXT;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_chunk ON transcripts (chunk_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_session ON transcripts (session_id);")
 
-        # Migration: Ensure user_id column exists on pipeline_jobs
-        cursor.execute("PRAGMA table_info(pipeline_jobs);")
-        pj_cols = [col[1] for col in cursor.fetchall()]
-        if "user_id" not in pj_cols:
-            cursor.execute("ALTER TABLE pipeline_jobs ADD COLUMN user_id TEXT;")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_user_id ON pipeline_jobs (user_id);")
+            # Migration: Ensure user_id column exists on pipeline_jobs
+            cursor.execute("PRAGMA table_info(pipeline_jobs);")
+            pj_cols = [col[1] for col in cursor.fetchall()]
+            if "user_id" not in pj_cols:
+                cursor.execute("ALTER TABLE pipeline_jobs ADD COLUMN user_id TEXT;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_user_id ON pipeline_jobs (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_chunk ON pipeline_jobs (chunk_id, status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON pipeline_jobs (status, created_at);")
 
-        # Table: editing_templates
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS editing_templates (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                schema_version INTEGER NOT NULL DEFAULT 1,
-                revision INTEGER NOT NULL DEFAULT 1,
-                name TEXT NOT NULL,
-                template_json TEXT NOT NULL,
-                is_default INTEGER NOT NULL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_user ON editing_templates (user_id);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_default ON editing_templates (user_id, is_default);")
+            # Table: editing_templates
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS editing_templates (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    schema_version INTEGER NOT NULL DEFAULT 1,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    name TEXT NOT NULL,
+                    template_json TEXT NOT NULL,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_user ON editing_templates (user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_editing_templates_default ON editing_templates (user_id, is_default);")
 
-        # AI highlight provenance
-        try:
-            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_source TEXT;")
-        except Exception:
-            pass
-        try:
-            cursor.execute("ALTER TABLE clips ADD COLUMN extraction_model TEXT;")
-        except Exception:
-            pass
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clip_feedback_events (
-                id TEXT PRIMARY KEY,
-                clip_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                extraction_source TEXT,
-                extraction_model TEXT,
-                details TEXT,
-                user_id TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_feedback_clip ON clip_feedback_events (clip_id);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_feedback_event ON clip_feedback_events (event_type);")
+            # AI highlight provenance
+            try:
+                cursor.execute("ALTER TABLE clips ADD COLUMN extraction_source TEXT;")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE clips ADD COLUMN extraction_model TEXT;")
+            except Exception:
+                pass
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS clip_feedback_events (
+                    id TEXT PRIMARY KEY,
+                    clip_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    extraction_source TEXT,
+                    extraction_model TEXT,
+                    details TEXT,
+                    user_id TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_feedback_clip ON clip_feedback_events (clip_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clip_feedback_event ON clip_feedback_events (event_type);")
 
-        cursor.execute("PRAGMA user_version = 3;")
+            cursor.execute("PRAGMA user_version = 3;")
 
-        # Default settings if not already present
-        cursor.execute("""
-            INSERT OR IGNORE INTO settings (key, value) VALUES
-            ('publish_mode', ?),
-            ('auto_process', 'true'),
-            ('youtube_enabled', 'true'),
-            ('instagram_enabled', 'true'),
-            ('youtube_inbox_enabled', 'true'),
-            ('youtube_inbox_marker', '[DISPATCH]');
-        """, (DEFAULT_PUBLISH_MODE,))
+            # Default settings if not already present
+            cursor.execute("""
+                INSERT OR IGNORE INTO settings (key, value) VALUES
+                ('publish_mode', ?),
+                ('auto_process', 'true'),
+                ('youtube_enabled', 'true'),
+                ('instagram_enabled', 'true'),
+                ('youtube_inbox_enabled', 'true'),
+                ('youtube_inbox_marker', '[DISPATCH]');
+            """, (DEFAULT_PUBLISH_MODE,))
 
-        conn.commit()
+            conn.commit()
+        with _pool_lock:
+            if db_file != ":memory:" and not db_file.startswith("file:"):
+                _initialized_test_dbs.add(db_file)
 
 
 # --- Database Helper Functions ---
@@ -612,16 +868,15 @@ def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
 
 
 def set_setting(key: str, value: str):
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-        conn.commit()
 
 
 def create_session(notes: str = "", session_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
     if not session_id:
         session_id = f"sess_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "INSERT OR IGNORE INTO sessions (id, status, notes, user_id) VALUES (?, 'recording', ?, ?)",
@@ -629,13 +884,12 @@ def create_session(notes: str = "", session_id: Optional[str] = None, user_id: O
         )
         if user_id:
             cursor.execute("UPDATE sessions SET user_id = ? WHERE id = ? AND user_id IS NULL", (user_id, session_id))
-        conn.commit()
     return session_id
 
 
 def register_chunk(session_id: Optional[str], filename: str, filepath: str, file_hash: str, user_id: Optional[str] = None) -> str:
     chunk_id = f"chk_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         eff_user_id = user_id
         if session_id:
@@ -648,7 +902,6 @@ def register_chunk(session_id: Optional[str], filename: str, filepath: str, file
             INSERT INTO chunks (id, session_id, filename, filepath, file_hash, status, user_id)
             VALUES (?, ?, ?, ?, ?, 'incoming', ?)
         """, (chunk_id, session_id, filename, filepath, file_hash, eff_user_id))
-        conn.commit()
     return chunk_id
 
 
@@ -670,19 +923,18 @@ def get_chunk_by_file_hash(file_hash: str) -> Optional[Dict[str, Any]]:
 
 
 def update_chunk_metadata(chunk_id: str, duration: float, width: int, height: int, aspect_ratio: str, status: str = 'verified'):
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE chunks 
             SET duration = ?, width = ?, height = ?, aspect_ratio = ?, status = ?
             WHERE id = ?
         """, (duration, width, height, aspect_ratio, status, chunk_id))
-        conn.commit()
 
 
 def save_transcript(chunk_id: str, session_id: Optional[str], full_text: str, segments: List[Dict[str, Any]], user_id: Optional[str] = None) -> str:
     transcript_id = f"tx_{uuid.uuid4().hex[:8]}"
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         eff_user_id = user_id
         if not eff_user_id and chunk_id:
@@ -696,7 +948,6 @@ def save_transcript(chunk_id: str, session_id: Optional[str], full_text: str, se
             VALUES (?, ?, ?, ?, ?, ?)
         """, (transcript_id, chunk_id, session_id, full_text, json.dumps(segments, ensure_ascii=False), eff_user_id))
         cursor.execute("UPDATE chunks SET status = 'transcribed' WHERE id = ?", (chunk_id,))
-        conn.commit()
     return transcript_id
 
 
@@ -726,7 +977,7 @@ def save_clip(
     p_start = padded_start if padded_start is not None else max(0.0, start_time - 4.0)
     p_end = padded_end if padded_end is not None else end_time + 4.0
 
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         eff_user_id = user_id
         if not eff_user_id and chunk_id:
@@ -753,7 +1004,6 @@ def save_clip(
             layout_mode, rendered_layout_mode, publish_mode, platform_targets,
             p_start, p_end, eff_user_id, extraction_source, extraction_model
         ))
-        conn.commit()
     return clip_id
 
 
@@ -765,7 +1015,7 @@ def update_clip_trim(
     expected_range_revision: Optional[int] = None,
 ) -> bool:
     """Persist a source-relative range within source and product duration limits."""
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT cl.video_path, cl.start_time, cl.end_time, cl.range_revision,
@@ -844,7 +1094,7 @@ def update_clip_media(
     guard, audit 2026-10-27). Thumbnail-only updates from any status use
     update_clip_thumbnail() instead.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         revision_clause = (" AND range_revision = ?" if expected_range_revision is not None else "")
         status_clause = " AND status IN ('ready_review', 'queued_transcription')"
@@ -869,7 +1119,6 @@ def update_clip_media(
                 WHERE id = ?""" + status_clause + revision_clause,
                 (video_path, thumbnail_path, clip_id)
                 + ((expected_range_revision,) if expected_range_revision is not None else ()))
-        conn.commit()
         return cursor.rowcount == 1
 
 
@@ -879,13 +1128,12 @@ def update_clip_thumbnail(clip_id: str, thumbnail_path: str) -> bool:
     Safe to call from any status except rejected (whose media is already purged);
     avoids retro-demotion of approved/published clips back into review.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE clips SET thumbnail_path = ? WHERE id = ? AND status != 'rejected'",
             (thumbnail_path, clip_id)
         )
-        conn.commit()
         return cursor.rowcount == 1
 
 
@@ -922,7 +1170,7 @@ def update_clip_metadata(
         return False
 
     revision_clause = " AND range_revision = ?" if expected_range_revision is not None else ""
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE clips SET "
@@ -931,7 +1179,6 @@ def update_clip_metadata(
             tuple(params) + (clip_id,)
             + ((expected_range_revision,) if expected_range_revision is not None else ())
         )
-        conn.commit()
         return cursor.rowcount == 1
 
 
@@ -944,7 +1191,7 @@ def approve_clip(
     custom_layout: Optional[str] = None,
     custom_accounts: Optional[Dict[str, str]] = None
 ):
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
         clip = cursor.fetchone()
@@ -1003,7 +1250,7 @@ def save_clip_caption_data(
     instead of silently overwriting a newer save. Passing None keeps legacy
     behavior but still increments the revision.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         if expected_range_revision is None or source_range_start is None or source_range_end is None:
             cursor.execute(
@@ -1033,7 +1280,6 @@ def save_clip_caption_data(
             sql += " AND captions_revision = ?"
             params.append(int(expected_captions_revision))
         cursor.execute(sql, tuple(params))
-        conn.commit()
         return cursor.rowcount == 1
 
 
@@ -1050,7 +1296,7 @@ def reject_clip(clip_id: str, reason: str = "User rejected") -> bool:
     records rejection in rejections table for negative preference learning,
     and updates clip status to 'rejected'.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
         clip = cursor.fetchone()
@@ -1131,7 +1377,7 @@ def soft_reject_clip(
     24h grace window so a late restore stays possible (Reject != Delete).
     Idempotent across duplicate command deliveries.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
         row = cursor.fetchone()
@@ -1146,7 +1392,6 @@ def soft_reject_clip(
             return "denied"
         if clip["status"] == "rejected" and clip["cloud_reject_purge_at"]:
             _adopt_owner(cursor, clip_id, expected_user_id)
-            conn.commit()
             return "applied"  # duplicate delivery; already tombstoned
         _adopt_owner(cursor, clip_id, expected_user_id)
         cursor.execute("""
@@ -1172,7 +1417,6 @@ def soft_reject_clip(
             datetime.now(timezone.utc).isoformat(),
             clip_id,
         ))
-        conn.commit()
         return "applied"
 
 
@@ -1184,7 +1428,7 @@ def restore_rejected_clip(clip_id: str, expected_user_id: Optional[str] = None) 
     Undo inside grace is a FULL reversal: the negative learning record created
     by the reject is explicitly deleted alongside the tombstone.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
         row = cursor.fetchone()
@@ -1241,7 +1485,7 @@ def purge_expired_rejections(now_truth: Optional[str] = None) -> int:
     """
     purged = 0
     try:
-        with get_db_connection() as conn:
+        with write_transaction() as conn:
             cursor = conn.cursor()
             params: list = []
             sql = """
@@ -1317,7 +1561,7 @@ def mark_cloud_media_purged(clip_id: str) -> bool:
     reports fully purged while a local file or reference still exists.
     """
     try:
-        with get_db_connection() as conn:
+        with write_transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE clips
@@ -1326,7 +1570,6 @@ def mark_cloud_media_purged(clip_id: str) -> bool:
                   AND (video_path IS NULL OR video_path = '')
                   AND (thumbnail_path IS NULL OR thumbnail_path = '')
             """, (datetime.now(timezone.utc).isoformat(), clip_id))
-            conn.commit()
             return cursor.rowcount == 1
     except Exception as e:
         logger.error("mark_cloud_media_purged failed: %s", e)
@@ -1361,7 +1604,7 @@ def import_cloud_caption_data(
         return "invalid"
     if revision <= 0:
         return "invalid"
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT user_id, cloud_caption_revision, range_revision FROM clips WHERE id = ?",
@@ -1398,7 +1641,6 @@ def import_cloud_caption_data(
             str(timing_warning) if timing_warning else None,
             clip_id,
         ))
-        conn.commit()
         logger.info("Imported cloud caption revision %d for clip %s", revision, clip_id)
         return "applied"
 
@@ -1451,7 +1693,7 @@ def import_cloud_timeline_data(
     action_type = str(timeline_data.get("action_type") or "cloud_sync")
     author = str(timeline_data.get("author") or "mobile")
 
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT user_id, start_time, end_time, duration, segments_revision, active_state_revision, rendered_fingerprint FROM clips WHERE id = ?",
@@ -1582,7 +1824,7 @@ def record_render_completion(
     """Record successfully rendered media file on PC.
     Sets rendered_fingerprint and clears render_stale.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT render_fingerprint FROM clips WHERE id = ?", (clip_id,))
         row = cursor.fetchone()
@@ -1598,7 +1840,6 @@ def record_render_completion(
                 last_render_error = NULL
             WHERE id = ?
         """, (rendered_fingerprint, rendered_fingerprint, video_path, thumbnail_path, clip_id))
-        conn.commit()
         return True
 
 
@@ -1608,7 +1849,7 @@ def cleanup_expired_published_clips(retention_days: int = 3) -> int:
     has full thumbnail preview and redirection to the published live video.
     """
     purged_count = 0
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         # Purge ONLY clips the pipeline has verifiably completed: status published AND
         # every remaining path backed by a publishing_outbox row that reached a remote
@@ -1766,7 +2007,7 @@ def record_publication_stats(
     comment_count: Optional[int] = None,
 ) -> None:
     """Persist a stats check; failed checks still advance the retry clock."""
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         if succeeded:
             # A hidden/absent counter must not erase a value we already know.
             assignments = ["stats_updated_at = ?", "stats_checked_at = ?"]
@@ -1791,7 +2032,6 @@ def record_publication_stats(
                 SET stats_checked_at = ?
                 WHERE id = ?
             """, (checked_at, publication_id))
-        conn.commit()
 
 
 def get_active_pipeline_jobs() -> List[Dict[str, Any]]:
@@ -1826,7 +2066,7 @@ def register_youtube_video(
     """Register discovered YouTube video in inbox idempotently.
     Returns True if newly inserted, False if already present.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT video_id FROM youtube_inbox WHERE video_id = ?", (video_id,))
         if cursor.fetchone():
@@ -1839,7 +2079,6 @@ def register_youtube_video(
             INSERT INTO youtube_inbox (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, status, source_sha256, source_file_size, user_id, account_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED', ?, ?, ?, ?)
         """, (video_id, dispatch_id, session_id, sequence_number, title, channel_id, upload_time, duration, source_sha256, source_file_size, user_id, account_id))
-        conn.commit()
         return True
 
 
@@ -1891,7 +2130,7 @@ def update_youtube_video(
     applies when the row still holds the status the caller read. Returns the
     number of rows updated (0 when another writer moved the row first).
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         updates = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
         params: List[Any] = [status]
@@ -1987,10 +2226,9 @@ def update_youtube_video(
 
 def update_youtube_video_title(video_id: str, title: str) -> None:
     """Update title of a YouTube inbox video durably."""
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE youtube_inbox SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE video_id = ?", (title, video_id))
-        conn.commit()
 
 
 def list_youtube_inbox(status: Optional[str] = None, limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -2017,7 +2255,7 @@ def list_youtube_inbox(status: Optional[str] = None, limit: int = 50, user_id: O
 def delete_youtube_inbox_item(video_id: str, user_id: Optional[str] = None) -> bool:
     """Delete an item from youtube_inbox by video_id, dispatch_id, or session_id,
     scoped to user_id if provided."""
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         if user_id:
             cursor.execute(
@@ -2029,7 +2267,6 @@ def delete_youtube_inbox_item(video_id: str, user_id: Optional[str] = None) -> b
                 "DELETE FROM youtube_inbox WHERE video_id = ? OR dispatch_id = ? OR session_id = ?",
                 (video_id, video_id, video_id)
             )
-        conn.commit()
         return cursor.rowcount > 0
 
 
@@ -2099,7 +2336,7 @@ def save_clip_definitions(
             if r and r["user_id"]:
                 effective_user_id = r["user_id"]
 
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
 
         # 1. Clean up prior candidate/unrendered clips for this chunk to ensure idempotency.
@@ -2284,7 +2521,7 @@ def get_default_template(user_id: Optional[str] = None) -> Dict[str, Any]:
 
 def save_default_template(template_data: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
     """Atomically save or update the user's default editing template."""
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         if user_id:
             cursor.execute("""
@@ -2324,7 +2561,6 @@ def save_default_template(template_data: Dict[str, Any], user_id: Optional[str] 
                 INSERT INTO editing_templates (id, user_id, schema_version, revision, name, template_json, is_default, created_at, updated_at)
                 VALUES (?, ?, 1, ?, ?, ?, 1, ?, ?)
             """, (template_id, user_id, revision, name, tpl_json, now, now))
-        conn.commit()
         return tpl_clean
 
 
@@ -2337,7 +2573,7 @@ def split_clip(
     """Split an existing clip into two sequential clips at split_time.
     Words in caption_data are partitioned and re-anchored to each clip's start.
     """
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clips WHERE id = ?", (clip_id,))
         clip = cursor.fetchone()
@@ -2475,12 +2711,11 @@ import uuid as _uuid
 def record_clip_feedback(clip_id: str, event_type: str, details=None, extraction_source=None, extraction_model=None, user_id=None) -> str:
     import json as _json
     fid = str(_uuid.uuid4())
-    with get_db_connection() as conn:
+    with write_transaction() as conn:
         conn.execute(
             "INSERT INTO clip_feedback_events (id, clip_id, event_type, extraction_source, extraction_model, details, user_id) VALUES (?,?,?,?,?,?,?)",
             (fid, clip_id, event_type, extraction_source, extraction_model, _json.dumps(details) if details else None, user_id)
         )
-        conn.commit()
     return fid
 
 
@@ -2497,3 +2732,20 @@ def get_clip_feedback_stats(user_id=None) -> dict:
         key = es or "unknown"
         stats["by_source"][key] = stats["by_source"].get(key, 0) + cnt
     return stats
+
+
+class _DbModule(types.ModuleType):
+    """Module wrapper that closes idle connections when DB_PATH is monkeypatched (Windows safe)."""
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "DB_PATH":
+            old_val = getattr(self, name, None)
+            super().__setattr__(name, value)
+            if old_val is not None and str(old_val) != str(value):
+                close_db_connections()
+            return
+        super().__setattr__(name, value)
+
+
+if __name__ in sys.modules:
+    sys.modules[__name__].__class__ = _DbModule

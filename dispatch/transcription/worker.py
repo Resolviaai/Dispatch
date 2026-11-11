@@ -135,27 +135,11 @@ class TranscriptionWorker:
             return processed
 
     def _resolve_api_key_for_item(self, item: Dict[str, Any]) -> str:
-        """Resolve Gemini API key: user-specific key if vaulted.
+        """Resolve Gemini API key: user-specific key if vaulted, or Worker proxy sentinel.
         Fails closed for user-owned jobs (user_id non-empty) to protect the PC host key/billing boundary.
         Falls back to host GEMINI_API_KEY only for standalone/unauthenticated operator jobs."""
-        user_id = item.get("user_id")
-        if user_id:
-            vaulted_key = ""
-            try:
-                from dispatch.youtube_connections import get_user_gemini_key
-                vaulted_key = get_user_gemini_key(user_id) or ""
-            except Exception as e:
-                logger.debug("Failed to retrieve user gemini key: %s", e)
-            if not vaulted_key:
-                err_msg = f"User {user_id} has not configured a Gemini API key in cloud vault. Refusing fallback to PC host GEMINI_API_KEY."
-                raise RuntimeError(err_msg)
-            return vaulted_key
-
-        from dispatch.config import GEMINI_API_KEY
-        host_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
-        if not host_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured or is empty on this PC.")
-        return host_key
+        from dispatch.transcription.gemini_engine import resolve_gemini_api_key
+        return resolve_gemini_api_key(item.get("user_id"), raise_if_missing_host_key=True)
 
     def process_downloaded_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Transcribe DOWNLOADED item directly via canonical Gemini engine."""

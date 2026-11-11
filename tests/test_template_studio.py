@@ -267,7 +267,12 @@ class TestTemplateStudioEndpointsAndPersistence(unittest.TestCase):
                 {"word": "highlight", "start": 1.3, "end": 2.0, "speaker": "spk:0"}
             ]
 
-            with patch("dispatch.transcription.gemini_engine.extract_stage2_clip_audio", return_value=dummy_src),                  patch("dispatch.transcription.gemini_engine.check_and_increment_daily_transcribe_quota", return_value=True),                  patch("dispatch.transcription.gemini_engine.transcribe_stage2_precision_words", return_value={"words": fake_words, "speech_start": 0.5, "speech_end": 2.0}),                  patch("dispatch.video_engine.renderer.render_clip") as mock_render:
+            with patch("dispatch.youtube_connections.get_user_gemini_key", return_value=""), \
+                 patch("dispatch.youtube_connections.has_user_gemini_proxy", return_value=True), \
+                 patch("dispatch.transcription.gemini_engine.extract_stage2_clip_audio", return_value=dummy_src), \
+                 patch("dispatch.transcription.gemini_engine.check_and_increment_daily_transcribe_quota", return_value=True), \
+                 patch("dispatch.transcription.gemini_engine.transcribe_stage2_precision_words", return_value={"words": fake_words, "speech_start": 0.5, "speech_end": 2.0}), \
+                 patch("dispatch.video_engine.renderer.render_clip") as mock_render:
 
                 drained = drain_queued_transcriptions(max_batch=1)
 

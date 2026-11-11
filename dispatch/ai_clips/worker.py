@@ -244,13 +244,12 @@ class HighlightWorker:
                     user_id = item.get("user_id")
                     active_render_key = ""
                     if user_id:
-                        try:
-                            from dispatch.youtube_connections import get_user_gemini_key
-                            active_render_key = get_user_gemini_key(user_id) or ""
-                        except Exception:
-                            pass
+                        if clip_ids:
+                            from dispatch.transcription.gemini_engine import resolve_gemini_api_key
+                            active_render_key = resolve_gemini_api_key(
+                                user_id, raise_if_missing_host_key=False
+                            )
                     else:
-                        from dispatch.config import GEMINI_API_KEY
                         active_render_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
                     db.update_youtube_video(video_id=video_id, status="RENDERING")
@@ -538,6 +537,12 @@ class HighlightWorker:
                         logger.debug("Clip %s is queued in backlog. Skipping render until quota drain.", clip_id)
                         continue
 
+                    clip_user_id = (clip.get("user_id") or "").strip()
+                    clip_api_key = api_key
+                    if clip_user_id and not clip_api_key:
+                        from dispatch.transcription.gemini_engine import resolve_gemini_api_key
+                        clip_api_key = resolve_gemini_api_key(clip_user_id, raise_if_missing_host_key=True)
+
                     range_revision = int(clip.get("range_revision") or 0)
                     attempt_num = int(clip.get("render_attempt_count") or 0)
                     stage2_request_id = f"stage2:{clip_id}:r{range_revision}:a{attempt_num}:{uuid.uuid4().hex[:8]}"
@@ -573,10 +578,10 @@ class HighlightWorker:
                                 extract_stage2_clip_audio(clip_src_path, eff_p_start, eff_p_end, slice_mp3)
                                 if _accepts_kwarg(transcribe_stage2_precision_words, "request_id"):
                                     stage2_res = transcribe_stage2_precision_words(
-                                        slice_mp3, api_key=api_key, request_id=stage2_request_id
+                                        slice_mp3, api_key=clip_api_key, request_id=stage2_request_id
                                     )
                                 else:
-                                    stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=api_key)
+                                    stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=clip_api_key)
 
                             words = stage2_res.get("words", [])
                             if words:
@@ -620,7 +625,11 @@ class HighlightWorker:
                                         })
 
                                 raw_stage2_segments = [{"id": 0, "start": eff_c_start, "end": eff_c_end, "words": clean_words}]
-                                clean_stage2_segments = transliterate_segments_to_hinglish(raw_stage2_segments)
+                                clean_stage2_segments = transliterate_segments_to_hinglish(
+                                    raw_stage2_segments,
+                                    api_key=clip_api_key or None,
+                                    user_id=clip_user_id or None,
+                                )
                                 if clean_stage2_segments and clean_stage2_segments[0].get("words"):
                                     clean_words = clean_stage2_segments[0]["words"]
 
@@ -660,7 +669,11 @@ class HighlightWorker:
                                         shifted_segs.append(scs)
                                     clip_segs = shifted_segs
 
-                                clean_segs = transliterate_segments_to_hinglish(clip_segs)
+                                clean_segs = transliterate_segments_to_hinglish(
+                                    clip_segs,
+                                    api_key=clip_api_key or None,
+                                    user_id=clip_user_id or None,
+                                )
                                 user_tpl = db.get_default_template(user_id=clip.get("user_id"))
                                 tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
                                 preset_cand = tpl_captions.get("preset_id")
@@ -709,7 +722,11 @@ class HighlightWorker:
                                     shifted_segs.append(scs)
                                 clip_segs = shifted_segs
 
-                            clean_segs = transliterate_segments_to_hinglish(clip_segs)
+                            clean_segs = transliterate_segments_to_hinglish(
+                                clip_segs,
+                                api_key=clip_api_key or None,
+                                user_id=clip_user_id or None,
+                            )
                             try:
                                 user_tpl = db.get_default_template(user_id=clip.get("user_id"))
                                 tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
@@ -954,21 +971,16 @@ class HighlightWorker:
 
         attempt_count = int(item.get("ai_attempt_count") or 0) + 1
 
-        # Resolve user's vaulted Gemini key if available; fail closed if user has no key configured
+        # Resolve user's vaulted Gemini key or Worker proxy if available; fail closed if user has neither
         user_id = item.get("user_id")
         if user_id:
-            user_gemini_key = ""
             try:
-                from dispatch.youtube_connections import get_user_gemini_key
-                user_gemini_key = get_user_gemini_key(user_id)
-            except Exception as ke:
-                logger.debug("User Gemini key lookup note for %s: %s", user_id, ke)
-
-            if not user_gemini_key:
-                err_msg = f"User {user_id} has not configured a Gemini API key in cloud vault. Refusing fallback to PC host GEMINI_API_KEY."
+                from dispatch.transcription.gemini_engine import resolve_gemini_api_key
+                active_gemini_key = resolve_gemini_api_key(user_id, raise_if_missing_host_key=True)
+            except RuntimeError as ke:
+                err_msg = str(ke)
                 db.update_youtube_video(video_id=video_id, status="FAILED", last_ai_error=err_msg)
-                raise RuntimeError(err_msg)
-            active_gemini_key = user_gemini_key
+                raise
         else:
             active_gemini_key = os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
             if not active_gemini_key:
