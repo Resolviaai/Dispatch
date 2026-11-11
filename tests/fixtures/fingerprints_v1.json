@@ -108,5 +108,257 @@
       "deleted_gap": [10.0, 15.0],
       "expected": [[8.0, 10.0], [15.0, 18.0]]
     }
+  ],
+  "timeline_mapper_vectors": {
+    "segments": [
+      { "id": "seg-1", "source_start": 10.0, "source_end": 18.0 },
+      { "id": "seg-2", "source_start": 22.0, "source_end": 30.0 },
+      { "id": "seg-3", "source_start": 35.0, "source_end": 41.25 }
+    ],
+    "expected_kept_duration": 22.25,
+    "source_to_concat_cases": [
+      { "name": "seg1_start", "source_time": 10.0, "expected": { "kind": "ok", "time": 0.0, "segment_index": 0 } },
+      { "name": "seg1_interior", "source_time": 14.125, "expected": { "kind": "ok", "time": 4.125, "segment_index": 0 } },
+      { "name": "seg1_end", "source_time": 18.0, "expected": { "kind": "ok", "time": 8.0, "segment_index": 0 } },
+      {
+        "name": "gap1_just_after_seg1",
+        "source_time": 18.001,
+        "expected": {
+          "kind": "gap",
+          "reason": "deleted_gap",
+          "nearest_segment_start": 22.0,
+          "nearest_segment_end": 18.0,
+          "nearest_concat_time": 8.0
+        }
+      },
+      {
+        "name": "gap1_middle",
+        "source_time": 20.0,
+        "expected": {
+          "kind": "gap",
+          "reason": "deleted_gap",
+          "nearest_segment_start": 22.0,
+          "nearest_segment_end": 18.0,
+          "nearest_concat_time": 8.0
+        }
+      },
+      {
+        "name": "gap1_just_before_seg2",
+        "source_time": 21.999,
+        "expected": {
+          "kind": "gap",
+          "reason": "deleted_gap",
+          "nearest_segment_start": 22.0,
+          "nearest_segment_end": 18.0,
+          "nearest_concat_time": 8.0
+        }
+      },
+      { "name": "seg2_start", "source_time": 22.0, "expected": { "kind": "ok", "time": 8.0, "segment_index": 1 } },
+      { "name": "seg2_interior", "source_time": 26.5, "expected": { "kind": "ok", "time": 12.5, "segment_index": 1 } },
+      { "name": "seg2_end", "source_time": 30.0, "expected": { "kind": "ok", "time": 16.0, "segment_index": 1 } },
+      {
+        "name": "gap2_middle",
+        "source_time": 32.5,
+        "expected": {
+          "kind": "gap",
+          "reason": "deleted_gap",
+          "nearest_segment_start": 35.0,
+          "nearest_segment_end": 30.0,
+          "nearest_concat_time": 16.0
+        }
+      },
+      { "name": "seg3_start", "source_time": 35.0, "expected": { "kind": "ok", "time": 16.0, "segment_index": 2 } },
+      { "name": "seg3_end", "source_time": 41.25, "expected": { "kind": "ok", "time": 22.25, "segment_index": 2 } },
+      {
+        "name": "before_first_segment",
+        "source_time": 5.0,
+        "expected": {
+          "kind": "gap",
+          "reason": "before_first_segment",
+          "nearest_segment_start": 10.0,
+          "nearest_segment_end": null,
+          "nearest_concat_time": 0.0
+        }
+      },
+      {
+        "name": "after_last_segment",
+        "source_time": 45.0,
+        "expected": {
+          "kind": "gap",
+          "reason": "after_last_segment",
+          "nearest_segment_start": null,
+          "nearest_segment_end": 41.25,
+          "nearest_concat_time": 22.25
+        }
+      }
+    ],
+    "snap_gap_opt_in_cases": [
+      { "name": "snap_next", "source_time": 19.0, "snap_gap_to": "next", "expected_time": 8.0, "expected_segment_index": 1 },
+      { "name": "snap_previous", "source_time": 19.0, "snap_gap_to": "previous", "expected_time": 8.0, "expected_segment_index": 0 },
+      { "name": "snap_nearest_closer_prev", "source_time": 19.0, "snap_gap_to": "nearest", "expected_time": 8.0, "expected_segment_index": 0 },
+      { "name": "snap_nearest_tie_prefers_next", "source_time": 20.0, "snap_gap_to": "nearest", "expected_time": 8.0, "expected_segment_index": 1 },
+      { "name": "snap_nearest_closer_next", "source_time": 21.0, "snap_gap_to": "nearest", "expected_time": 8.0, "expected_segment_index": 1 }
+    ],
+    "concat_to_source_cases": [
+      { "name": "start", "concat_time": 0.0, "expected": { "kind": "ok", "time": 10.0, "segment_index": 0 } },
+      { "name": "seg1_interior", "concat_time": 4.125, "expected": { "kind": "ok", "time": 14.125, "segment_index": 0 } },
+      { "name": "seam1_prefers_next_seg", "concat_time": 8.0, "expected": { "kind": "ok", "time": 22.0, "segment_index": 1 } },
+      { "name": "seg2_interior", "concat_time": 12.5, "expected": { "kind": "ok", "time": 26.5, "segment_index": 1 } },
+      { "name": "seam2_prefers_next_seg", "concat_time": 16.0, "expected": { "kind": "ok", "time": 35.0, "segment_index": 2 } },
+      { "name": "end", "concat_time": 22.25, "expected": { "kind": "ok", "time": 41.25, "segment_index": 2 } },
+      { "name": "before_start_unclamped", "concat_time": -0.5, "expected": { "kind": "out_of_range", "reason": "before_start", "clamped_time": 10.0 } },
+      { "name": "after_end_unclamped", "concat_time": 23.0, "expected": { "kind": "out_of_range", "reason": "after_end", "clamped_time": 41.25 } }
+    ],
+    "edit_window_cases": {
+      "window_start": 700.5,
+      "window_end": 940.5,
+      "source_to_proxy": [
+        { "name": "window_start", "source_time": 700.5, "expected": { "kind": "ok", "time": 0.0 } },
+        { "name": "window_interior", "source_time": 714.7, "expected": { "kind": "ok", "time": 14.2 } },
+        { "name": "window_end", "source_time": 940.5, "expected": { "kind": "ok", "time": 240.0 } },
+        { "name": "before_window", "source_time": 700.499, "expected": { "kind": "out_of_window", "reason": "before_window", "clamped_time": 0.0 } },
+        { "name": "after_window", "source_time": 940.501, "expected": { "kind": "out_of_window", "reason": "after_window", "clamped_time": 240.0 } }
+      ],
+      "proxy_to_source": [
+        { "name": "proxy_start", "proxy_time": 0.0, "expected": { "kind": "ok", "time": 700.5 } },
+        { "name": "proxy_interior", "proxy_time": 14.2, "expected": { "kind": "ok", "time": 714.7 } },
+        { "name": "proxy_end", "proxy_time": 240.0, "expected": { "kind": "ok", "time": 940.5 } },
+        { "name": "before_proxy_start", "proxy_time": -0.001, "expected": { "kind": "out_of_window", "reason": "before_window", "clamped_time": 700.5 } },
+        { "name": "after_proxy_end", "proxy_time": 240.001, "expected": { "kind": "out_of_window", "reason": "after_window", "clamped_time": 940.5 } }
+      ]
+    },
+    "playback_descriptor_cases": [
+      {
+        "name": "source_video_identity",
+        "descriptor": { "kind": "source_video", "sourceDuration": 100.0 },
+        "source_time": 25.125,
+        "expected_playback_time": 25.125,
+        "expected_kind": "ok"
+      },
+      {
+        "name": "edit_window_mapping",
+        "descriptor": { "kind": "edit_window", "windowStart": 700.5, "windowEnd": 940.5 },
+        "source_time": 714.7,
+        "expected_playback_time": 14.2,
+        "expected_kind": "ok"
+      },
+      {
+        "name": "rendered_clip_in_segment",
+        "descriptor": {
+          "kind": "rendered_clip",
+          "segments": [
+            { "id": "seg-1", "source_start": 10.0, "source_end": 18.0 },
+            { "id": "seg-2", "source_start": 22.0, "source_end": 30.0 },
+            { "id": "seg-3", "source_start": 35.0, "source_end": 41.25 }
+          ]
+        },
+        "source_time": 26.5,
+        "expected_playback_time": 12.5,
+        "expected_kind": "ok"
+      },
+      {
+        "name": "rendered_clip_in_gap",
+        "descriptor": {
+          "kind": "rendered_clip",
+          "segments": [
+            { "id": "seg-1", "source_start": 10.0, "source_end": 18.0 },
+            { "id": "seg-2", "source_start": 22.0, "source_end": 30.0 }
+          ]
+        },
+        "source_time": 20.0,
+        "expected_kind": "gap"
+      }
+    ],
+    "roundtrip_concat_points": [0.0, 0.001, 4.123, 7.999, 8.0, 12.567, 15.999, 16.0, 19.333, 22.25]
+  },
+  "rfc8785_fingerprint_vectors": [
+    {
+      "name": "nested_settings_unsorted_floats_and_neg_zero",
+      "source_asset_id": "yt_rfc8785_test_1",
+      "ranges": [[10.0, 18.0], [22.0, 30.0]],
+      "layout_mode": "portrait_9_16",
+      "crop_anchor_x": 0.5,
+      "layers": [
+        {
+          "z": 1.0,
+          "id": "cap-1",
+          "style": {
+            "scale": 1.0,
+            "offset": -0.0,
+            "opacity": 0.85,
+            "tiny": 1e-7,
+            "small": 0.000001
+          },
+          "words": [
+            { "end": 2.5, "start": 1.0, "word": "Dispatch" }
+          ]
+        }
+      ],
+      "settings": {
+        "quality": { "crf": 18.0, "fps": 30.0, "gamma": 1.0 },
+        "audio": { "gain_db": -0.0, "normalize": true, "lufs": -14.0 },
+        "big": 1e21,
+        "threshold": 1e20
+      },
+      "expected_canonical_layers_json": "[{\"id\":\"cap-1\",\"style\":{\"offset\":0,\"opacity\":0.85,\"scale\":1,\"small\":0.000001,\"tiny\":1e-7},\"words\":[{\"end\":2.5,\"start\":1,\"word\":\"Dispatch\"}],\"z\":1}]",
+      "expected_canonical_settings_json": "{\"audio\":{\"gain_db\":0,\"lufs\":-14,\"normalize\":true},\"big\":1e+21,\"quality\":{\"crf\":18,\"fps\":30,\"gamma\":1},\"threshold\":100000000000000000000}",
+      "expected_media_fingerprint": "71bd8f31edbff151b33603638e8221bf2ac66094b694160dd812076c7ab677bf",
+      "expected_render_fingerprint": "ac8c1bb0622b02f52b9c29cc23112d4c4d9144edda02949100ec717dde240c1e"
+    },
+    {
+      "name": "nested_settings_reordered_identical_fingerprint",
+      "source_asset_id": "yt_rfc8785_test_1",
+      "ranges": [[10.0, 18.0], [22.0, 26.0], [26.0, 30.0]],
+      "layout_mode": "portrait_9_16",
+      "crop_anchor_x": 0.5004,
+      "layers": [
+        {
+          "words": [
+            { "word": "Dispatch", "start": 1, "end": 2.5 }
+          ],
+          "style": {
+            "small": 1e-6,
+            "tiny": 0.0000001,
+            "opacity": 0.85,
+            "offset": 0,
+            "scale": 1
+          },
+          "id": "cap-1",
+          "z": 1
+        }
+      ],
+      "settings": {
+        "threshold": 100000000000000000000.0,
+        "big": 1e21,
+        "audio": { "lufs": -14, "normalize": true, "gain_db": 0.0 },
+        "quality": { "gamma": 1, "fps": 30, "crf": 18 }
+      },
+      "expected_canonical_layers_json": "[{\"id\":\"cap-1\",\"style\":{\"offset\":0,\"opacity\":0.85,\"scale\":1,\"small\":0.000001,\"tiny\":1e-7},\"words\":[{\"end\":2.5,\"start\":1,\"word\":\"Dispatch\"}],\"z\":1}]",
+      "expected_canonical_settings_json": "{\"audio\":{\"gain_db\":0,\"lufs\":-14,\"normalize\":true},\"big\":1e+21,\"quality\":{\"crf\":18,\"fps\":30,\"gamma\":1},\"threshold\":100000000000000000000}",
+      "expected_media_fingerprint": "71bd8f31edbff151b33603638e8221bf2ac66094b694160dd812076c7ab677bf",
+      "expected_render_fingerprint": "ac8c1bb0622b02f52b9c29cc23112d4c4d9144edda02949100ec717dde240c1e"
+    },
+    {
+      "name": "unicode_utf8_and_escapes",
+      "source_asset_id": "yt_unicode_test_2",
+      "ranges": [[0.0, 12.345]],
+      "layout_mode": "landscape_16_9",
+      "crop_anchor_x": 0.25,
+      "layers": [
+        {
+          "id": "cap-hi",
+          "kind": "captions",
+          "text": "नमस्ते café \"quote\" \\ line1\nline2\t🔥"
+        }
+      ],
+      "settings": {
+        "locale": "hi-IN",
+        "nested": { "a": [1.0, -0.0, true, null, { "b": "slash/ok" }] }
+      },
+      "expected_canonical_layers_json": "[{\"id\":\"cap-hi\",\"kind\":\"captions\",\"text\":\"नमस्ते café \\\"quote\\\" \\\\ line1\\nline2\\t🔥\"}]",
+      "expected_canonical_settings_json": "{\"locale\":\"hi-IN\",\"nested\":{\"a\":[1,0,true,null,{\"b\":\"slash/ok\"}]}}",
+      "expected_media_fingerprint": "afd1530d759e4881f68cfcb99ea015b15a678c11064bb406683565a4e44f8c4f",
+      "expected_render_fingerprint": "875280d3d22351ee3d1342403a35d911b4bc48af958ccacfb40e4761ae548e1a"
+    }
   ]
 }

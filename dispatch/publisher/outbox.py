@@ -1,6 +1,8 @@
 """Publishing Outbox Queue processor.
-Ensures durable, idempotent publishing to YouTube and Instagram with automatic cleanup of published local clips.
+Ensures durable, idempotent publishing to YouTube, Instagram, LinkedIn, X, and Facebook.
 """
+import hashlib
+import json
 import time
 import logging
 import threading
@@ -97,14 +99,170 @@ def is_ambiguous_network_error(exc: Exception) -> bool:
     return any(p in err_str for p in ambiguous_patterns)
 
 
+def _normalize_platform(platform: str) -> str:
+    norm = str(platform or "").strip().lower()
+    if norm in ("youtube", "youtube_shorts"):
+        return "youtube"
+    if norm in ("x", "twitter"):
+        return "twitter"
+    return norm
+
+
+def build_publish_idempotency_key(
+    clip_id: str,
+    platform: str,
+    account_id: Optional[str] = None,
+    render_fingerprint: Optional[str] = None,
+    revision: Optional[int] = None,
+) -> str:
+    """Derive a deterministic idempotency key from immutable IDs only (never title/description)."""
+    norm_plat = _normalize_platform(platform)
+    acct_part = str(account_id or "").strip()
+    fp_or_rev = str(render_fingerprint or "").strip() or f"rev:{int(revision or 0)}"
+    raw = f"v1|{clip_id}|{norm_plat}|{acct_part}|{fp_or_rev}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"idem_{digest[:24]}"
+
+
+def _resolve_job_account_id(job: Dict[str, Any], platform: str) -> Optional[str]:
+    """Resolve platform-specific account_id cleanly from job metadata."""
+    raw = job.get("account_id")
+    if isinstance(raw, dict):
+        norm = _normalize_platform(platform)
+        for cand_key in (platform, norm, "youtube_shorts" if norm == "youtube" else "", "x" if norm == "twitter" else ""):
+            if cand_key and raw.get(cand_key):
+                val = str(raw[cand_key]).strip()
+                if val:
+                    return val
+        return None
+    if raw is None:
+        return None
+    raw_str = str(raw).strip()
+    if not raw_str:
+        return None
+    if raw_str.startswith("{"):
+        try:
+            parsed = json.loads(raw_str)
+            if isinstance(parsed, dict):
+                norm = _normalize_platform(platform)
+                for cand_key in (platform, norm, "youtube_shorts" if norm == "youtube" else "", "x" if norm == "twitter" else ""):
+                    if cand_key and parsed.get(cand_key):
+                        val = str(parsed[cand_key]).strip()
+                        if val:
+                            return val
+                return None
+        except Exception:
+            pass
+    return raw_str
+
+
+def _parse_json_dict(raw: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _build_outbox_render_params(claimed_clip: Dict[str, Any]) -> Dict[str, Any]:
+    """Build complete render arguments from clip state for stale pre-publish re-renders."""
+    clip_id = str(claimed_clip.get("id") or "")
+    project_doc = _parse_json_dict(claimed_clip.get("project_document"))
+    caption_track = _parse_json_dict(claimed_clip.get("caption_data"))
+
+    segments = None
+    if project_doc:
+        doc_segs = (project_doc.get("timeline") or {}).get("segments")
+        if isinstance(doc_segs, list) and doc_segs:
+            segments = doc_segs
+    if not segments and caption_track:
+        groups = caption_track.get("groups") or []
+        if groups:
+            segments = [
+                {
+                    "id": g.get("id", index),
+                    "start": g.get("start", 0),
+                    "end": g.get("end", 0),
+                    "text": g.get("text", ""),
+                    "words": g.get("words", []),
+                }
+                for index, g in enumerate(groups)
+            ]
+    if not segments and claimed_clip.get("chunk_id"):
+        try:
+            with db.get_db_connection() as conn:
+                t_row = conn.execute(
+                    "SELECT segments_json FROM transcripts WHERE chunk_id = ?",
+                    (claimed_clip["chunk_id"],),
+                ).fetchone()
+                if t_row and t_row["segments_json"]:
+                    parsed_segs = json.loads(t_row["segments_json"])
+                    if isinstance(parsed_segs, list) and parsed_segs:
+                        segments = parsed_segs
+        except Exception:
+            pass
+
+    crop_anchor_x = claimed_clip.get("crop_anchor_x")
+    if crop_anchor_x is None and project_doc:
+        layout_doc = project_doc.get("layout") if isinstance(project_doc.get("layout"), dict) else {}
+        if layout_doc.get("crop_anchor_x") is not None:
+            crop_anchor_x = layout_doc.get("crop_anchor_x")
+    if crop_anchor_x is not None:
+        crop_anchor_x = float(crop_anchor_x)
+
+    user_tpl = None
+    style_preset = None
+    try:
+        user_tpl = db.get_default_template(user_id=claimed_clip.get("user_id"))
+        if isinstance(user_tpl, dict):
+            tpl_captions = user_tpl.get("captions") if isinstance(user_tpl.get("captions"), dict) else {}
+            if tpl_captions.get("preset_id") and tpl_captions.get("preset_id") != "custom":
+                style_preset = tpl_captions.get("preset_id")
+    except Exception:
+        user_tpl = None
+
+    render_fingerprint = claimed_clip.get("render_fingerprint")
+    subtitle_options = {
+        "enabled": bool(caption_track or segments),
+        "caption_track": caption_track,
+        "preserve_timing": bool(caption_track or project_doc),
+        "crop_anchor_x": crop_anchor_x,
+        "style_preset": style_preset,
+        "template": user_tpl,
+        "project_document": project_doc,
+        "render_fingerprint": render_fingerprint,
+    }
+
+    return {
+        "aspect_ratio": claimed_clip.get("source_aspect_ratio") or None,
+        "layout_mode": claimed_clip.get("layout_mode") or "fit_blur",
+        "segments": segments,
+        "subtitle_options": subtitle_options,
+        "expected_range_revision": int(claimed_clip.get("range_revision") or 0),
+        "crop_anchor_x": crop_anchor_x,
+        "project_document": project_doc,
+        "render_fingerprint": render_fingerprint,
+    }
+
+
 def reconcile_youtube_job(job: Dict[str, Any]) -> Dict[str, Any]:
     """Query YouTube Data API search for dispatch_idempotency_key to determine if video was uploaded."""
     import os
 
     service = None
-    account_id = job.get("account_id")
+    account_id = _resolve_job_account_id(job, "youtube")
     user_id = job.get("user_id")
-    idempotency_key = job.get("idempotency_key") or f"idem_{job['clip_id']}_{job['platform']}"
+    idempotency_key = job.get("idempotency_key") or build_publish_idempotency_key(
+        clip_id=str(job.get("clip_id") or ""),
+        platform=str(job.get("platform") or "youtube"),
+        account_id=account_id,
+        render_fingerprint=job.get("render_fingerprint"),
+        revision=job.get("range_revision"),
+    )
     if user_id and (account_id or os.getenv("DISPATCH_WORKER_URL") or os.getenv("DISPATCH_CLOUD_WORKER_URL")):
         try:
             from dispatch.youtube_connections import reconcile_youtube_via_worker
@@ -115,10 +273,10 @@ def reconcile_youtube_job(job: Dict[str, Any]) -> Dict[str, Any]:
             raise
         except Exception as w_err:
             logger.debug("Worker reconcile fallback for job %s: %s", account_id, w_err)
-    if account_id:
+    if account_id or user_id:
         try:
             from dispatch.youtube_connections import get_account_credentials
-            creds = get_account_credentials(account_id, user_id=user_id, provider="youtube")
+            creds = get_account_credentials(account_id or "", user_id=user_id, provider="youtube")
             if creds and creds.get("needs_reauth"):
                 raise PermissionError(str(creds.get("error") or "YouTube authorization revoked; reconnect required"))
             if creds:
@@ -277,12 +435,12 @@ def _process_outbox_queue_internal() -> int:
             if pjob.get("platform") in ("youtube", "youtube_shorts") and pjob.get("remote_id"):
                 svc = None
                 p_creds = {}
-                account_id = pjob.get("account_id")
+                account_id = _resolve_job_account_id(pjob, "youtube")
                 user_id = pjob.get("user_id")
-                if account_id:
+                if account_id or user_id:
                     try:
                         from dispatch.youtube_connections import get_account_credentials
-                        p_creds = get_account_credentials(account_id, user_id=user_id, provider="youtube")
+                        p_creds = get_account_credentials(account_id or "", user_id=user_id, provider="youtube")
                     except Exception as ce:
                         logger.debug("Account credentials lookup for processing job %s: %s", account_id, ce)
                 if p_creds and p_creds.get("needs_reauth"):
@@ -292,6 +450,8 @@ def _process_outbox_queue_internal() -> int:
                             SET status = 'blocked_needs_auth', last_error = ?, updated_at = CURRENT_TIMESTAMP
                             WHERE id = ?
                         """, (str(p_creds.get("error") or "YouTube authorization revoked"), pjob["id"]))
+                        conn.commit()
+                    check_and_finalize_clip(pjob["clip_id"], Path(pjob.get("video_path") or f"storage/clips/{pjob['clip_id']}.mp4"))
                     continue
                 if p_creds:
                     from dispatch.publisher.youtube import build_youtube_service_from_credentials
@@ -313,6 +473,7 @@ def _process_outbox_queue_internal() -> int:
                                         SET status = 'published', updated_at = CURRENT_TIMESTAMP, published_at = CURRENT_TIMESTAMP
                                         WHERE id = ?
                                     """, (pjob["id"],))
+                                    conn.commit()
                                 check_and_finalize_clip(pjob["clip_id"], Path(pjob.get("video_path") or f"storage/clips/{pjob['clip_id']}.mp4"))
                             elif st in ("failed", "rejected"):
                                 with db.get_db_connection() as conn:
@@ -321,6 +482,7 @@ def _process_outbox_queue_internal() -> int:
                                         SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP
                                         WHERE id = ?
                                     """, (f"YouTube processing {st}: {items[0].get('status', {}).get('rejectionReason', 'unknown')}", pjob["id"]))
+                                    conn.commit()
                                 check_and_finalize_clip(pjob["clip_id"], Path(pjob.get("video_path") or f"storage/clips/{pjob['clip_id']}.mp4"))
                     except Exception as q_err:
                         logger.warning("Failed checking processing status for job %s: %s", pjob["id"], q_err)
@@ -328,6 +490,7 @@ def _process_outbox_queue_internal() -> int:
                             conn.execute("""
                                 UPDATE publishing_outbox SET last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
                             """, (f"Status query error: {q_err}", pjob["id"]))
+                            conn.commit()
                 else:
                     logger.warning("No credentials available to check status of processing job %s", pjob["id"])
             # Always schedule the next check with backoff. The UPDATE is a no-op
@@ -347,6 +510,7 @@ def _process_outbox_queue_internal() -> int:
         job_id = job["id"]
         clip_id = job["clip_id"]
         platform = job["platform"].lower()
+        norm_platform = _normalize_platform(platform)
         publish_mode = job.get("publish_mode") or "private"
         video_path = Path(job["video_path"]) if job.get("video_path") else None
         title = job.get("title") or "Dispatch Video"
@@ -366,6 +530,7 @@ def _process_outbox_queue_internal() -> int:
                         last_error = 'Job already has confirmed remote_id; reconciliation required before retry'
                     WHERE id = ?
                 """, (job_id,))
+                conn.commit()
             check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
             continue
 
@@ -376,6 +541,8 @@ def _process_outbox_queue_internal() -> int:
                     "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = 'Local video file missing' WHERE id = ?",
                     (job_id,)
                 )
+                conn.commit()
+            check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
             continue
 
         # Reject corrupt or unsupported media before any publisher can perform a real upload.
@@ -396,6 +563,7 @@ def _process_outbox_queue_internal() -> int:
                     "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
                     (err_msg, job_id)
                 )
+                conn.commit()
             check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
             continue
 
@@ -409,48 +577,63 @@ def _process_outbox_queue_internal() -> int:
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status = 'queued'
             """, (job_id,))
-            if cursor.rowcount == 0:
+            claimed_rows = cursor.rowcount
+            conn.commit()
+            if claimed_rows == 0:
                 logger.debug("Job %s already claimed by another worker; skipping", job_id)
                 continue
 
-        # Ground-truth re-check AFTER claiming: the queue JOIN may have been minutes
-        # old, and the user could have rejected the clip or moved its status since.
-        # Publishing a rejected clip from a stale queue row must fail closed.
-        claimed_clip = db.get_clip_by_id(clip_id)
-        if not claimed_clip or claimed_clip.get("status") != "approved":
-            with db.get_db_connection() as conn:
-                conn.execute(
-                    "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
-                    (f"Clip no longer approved (status: {claimed_clip.get('status') if claimed_clip else 'missing'})", job_id)
-                )
-            logger.warning("Job %s abandoned: clip %s is not approved", job_id, clip_id)
-            continue
-
+        job_settled = False
+        upload_started = False
         try:
+            # Ground-truth re-check AFTER claiming: the queue JOIN may have been minutes
+            # old, and the user could have rejected the clip or moved its status since.
+            # Publishing a rejected clip from a stale queue row must fail closed.
+            claimed_clip = db.get_clip_by_id(clip_id)
+            if not claimed_clip or claimed_clip.get("status") != "approved":
+                with db.get_db_connection() as conn:
+                    conn.execute(
+                        "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
+                        (f"Clip no longer approved (status: {claimed_clip.get('status') if claimed_clip else 'missing'})", job_id)
+                    )
+                    conn.commit()
+                job_settled = True
+                logger.warning("Job %s abandoned: clip %s is not approved", job_id, clip_id)
+                check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
+                continue
+
             logger.info("Publishing clip %s to %s (Mode: %s, Attempt: %d)", clip_id, platform, publish_mode, attempt_count + 1)
 
-            idempotency_key = job.get("idempotency_key") or f"idem_{clip_id}_{platform}"
-            idempotency_marker = f"dispatch_idempotency_key:{idempotency_key}"
-
-            # Retrieve bound account credentials if account_id is present
-            account_id = job.get("account_id")
+            # Retrieve bound account credentials per platform (resolving single connected account when omitted)
+            account_id = _resolve_job_account_id(job, platform)
             user_id = job.get("user_id")
-            account_creds = {}
-            if account_id:
+            account_creds: Dict[str, Any] = {}
+            if account_id or user_id:
                 try:
                     from dispatch.youtube_connections import get_account_credentials
-                    account_creds = get_account_credentials(account_id, user_id=user_id, provider=platform)
+                    account_creds = get_account_credentials(account_id or "", user_id=user_id, provider=norm_platform)
                 except PermissionError:
                     raise
                 except Exception as ce:
-                    logger.debug("Account credentials lookup note for %s: %s", account_id, ce)
+                    logger.debug("Account credentials lookup note for %s (%s): %s", norm_platform, account_id, ce)
 
             if account_creds and account_creds.get("needs_reauth"):
                 raise PermissionError(
                     str(account_creds.get("error") or f"{platform} authorization expired or revoked; reconnect required.")
                 )
 
-            if user_id and (not account_id or not account_creds):
+            resolved_account_id = (
+                str(account_creds.get("account_id") or "").strip() if account_creds else ""
+            ) or account_id
+            if resolved_account_id and resolved_account_id != job.get("account_id"):
+                with db.get_db_connection() as conn:
+                    conn.execute(
+                        "UPDATE publishing_outbox SET account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (resolved_account_id, job_id),
+                    )
+                    conn.commit()
+
+            if user_id and (not resolved_account_id or not account_creds):
                 err_msg = f"User-owned job {job_id} requires a connected and verified {platform} account. No valid credentials found."
                 logger.warning("%s (status -> blocked_needs_auth)", err_msg)
                 with db.get_db_connection() as conn:
@@ -461,31 +644,87 @@ def _process_outbox_queue_internal() -> int:
                             last_error = ?
                         WHERE id = ?
                     """, (err_msg, job_id))
+                    conn.commit()
+                job_settled = True
+                check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
                 continue
 
-            # Canonical Architecture: Ensure final delivery render (target layout + burned subtitles) is built
-            if claimed_clip.get("rendered_layout_mode") is None or claimed_clip.get("rendered_layout_mode") != claimed_clip.get("layout_mode"):
+            idempotency_key = job.get("idempotency_key") or build_publish_idempotency_key(
+                clip_id=clip_id,
+                platform=norm_platform,
+                account_id=resolved_account_id,
+                render_fingerprint=claimed_clip.get("render_fingerprint") or claimed_clip.get("rendered_fingerprint"),
+                revision=claimed_clip.get("range_revision"),
+            )
+            idempotency_marker = f"dispatch_idempotency_key:{idempotency_key}"
+
+            # Canonical Architecture: Ensure final delivery render (target layout, crop_anchor_x,
+            # segments, project_document, render_fingerprint, template/captions) is fresh before publish.
+            is_explicitly_stale = bool(claimed_clip.get("render_stale")) or bool(
+                claimed_clip.get("render_fingerprint")
+                and claimed_clip.get("render_fingerprint") != claimed_clip.get("rendered_fingerprint")
+            ) or bool(
+                claimed_clip.get("rendered_layout_mode")
+                and claimed_clip.get("rendered_layout_mode") != claimed_clip.get("layout_mode")
+            )
+            needs_render = is_explicitly_stale or (claimed_clip.get("rendered_layout_mode") is None)
+            if needs_render:
                 try:
-                    logger.info("Outbox: Finalizing delivery render for clip %s (layout: %s) before %s upload...",
-                                clip_id, claimed_clip.get("layout_mode"), platform)
+                    logger.info(
+                        "Outbox: Finalizing delivery render for clip %s (layout: %s, stale: %s) before %s upload...",
+                        clip_id, claimed_clip.get("layout_mode"), is_explicitly_stale, platform,
+                    )
                     from dispatch.web.app import resolve_clip_source_path
                     source_p = resolve_clip_source_path(claimed_clip)
                     if source_p and source_p.exists():
                         from dispatch.video_engine.renderer import render_clip
-                        render_res = render_clip(
-                            source_video=source_p,
-                            clip_id=clip_id,
-                            start_time=float(claimed_clip.get("start_time", 0.0)),
-                            end_time=float(claimed_clip.get("end_time", 0.0)),
-                            layout_mode=claimed_clip.get("layout_mode", "fit_blur"),
-                        )
-                        video_path = Path(render_res["video_path"])
+                        rparams = _build_outbox_render_params(claimed_clip)
+                        try:
+                            render_res = render_clip(
+                                source_video=source_p,
+                                clip_id=clip_id,
+                                start_time=float(claimed_clip.get("start_time", 0.0)),
+                                end_time=float(claimed_clip.get("end_time", 0.0)),
+                                aspect_ratio=rparams["aspect_ratio"],
+                                layout_mode=rparams["layout_mode"],
+                                segments=rparams["segments"],
+                                subtitle_options=rparams["subtitle_options"],
+                                expected_range_revision=rparams["expected_range_revision"],
+                            )
+                            video_path = Path(render_res["video_path"])
+                        except RuntimeError as rc_err:
+                            # render_clip calls update_clip_media() which requires status IN ('ready_review', 'queued_transcription');
+                            # for an already-approved clip, record_render_completion() already wrote video_path + cleared render_stale.
+                            latest_after = db.get_clip_by_id(clip_id)
+                            if (
+                                "Clip range changed during rendering" in str(rc_err)
+                                and latest_after
+                                and latest_after.get("status") == "approved"
+                                and int(latest_after.get("range_revision") or 0) == rparams["expected_range_revision"]
+                                and not latest_after.get("render_stale")
+                                and latest_after.get("video_path")
+                                and Path(latest_after["video_path"]).exists()
+                            ):
+                                with db.get_db_connection() as conn:
+                                    conn.execute(
+                                        "UPDATE clips SET rendered_layout_mode = ?, render_stale = 0 WHERE id = ? AND status = 'approved'",
+                                        (rparams["layout_mode"], clip_id),
+                                    )
+                                    conn.commit()
+                                video_path = Path(latest_after["video_path"])
+                            else:
+                                raise
+                    elif is_explicitly_stale:
+                        raise FileNotFoundError(f"Original source video unavailable to rebuild stale render for clip {clip_id}")
                 except Exception as rend_err:
+                    if is_explicitly_stale or not (video_path and video_path.exists()):
+                        raise RuntimeError(f"Stale render rebuild failed before publish: {rend_err}") from rend_err
                     logger.warning("Delivery render check note for %s: %s", clip_id, rend_err)
 
-            if platform in ("youtube", "youtube_shorts"):
+            upload_started = True
+            if norm_platform == "youtube":
                 privacy = "public" if publish_mode == "public" else ("unlisted" if publish_mode == "unlisted" else "private")
-                # Include idempotency key marker in description
+                # Include idempotency key marker in YouTube description for search reconciliation
                 full_desc = f"{description}\n\n{hashtags}\n\n{idempotency_marker}".strip()
                 result = upload_youtube_short(
                     video_path=video_path,
@@ -495,47 +734,62 @@ def _process_outbox_queue_internal() -> int:
                     privacy_status=privacy,
                     credentials_data=account_creds
                 )
-            elif platform == "instagram":
+            elif norm_platform == "instagram":
                 ig_token = account_creds.get("access_token") if account_creds else None
-                ig_uid = account_id or (account_creds.get("account_id") if account_creds else None)
+                ig_uid = (
+                    (account_creds.get("ig_user_id") if account_creds else None)
+                    or (account_creds.get("account_id") if account_creds else None)
+                    or resolved_account_id
+                )
                 result = upload_instagram_reel(
                     video_path=video_path,
-                    caption=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}",
+                    caption=f"{title}\n\n{description}\n\n{hashtags}".strip(),
                     access_token=ig_token,
                     ig_user_id=ig_uid,
                     api_base=account_creds.get("api_base") if account_creds else None
                 )
-            elif platform == "linkedin":
+            elif norm_platform == "linkedin":
                 li_token = account_creds.get("access_token") if account_creds else None
-                li_author = account_id or (account_creds.get("author_urn") if account_creds else None)
+                li_author = (
+                    (account_creds.get("author_urn") if account_creds else None)
+                    or (account_creds.get("account_id") if account_creds else None)
+                    or resolved_account_id
+                )
                 result = upload_linkedin_video(
                     video_path=video_path,
-                    commentary=f"{title}\n\n{description}\n\n{hashtags}",
+                    commentary=f"{title}\n\n{description}\n\n{hashtags}".strip(),
                     title=title,
                     access_token=li_token,
                     author_urn=li_author
                 )
-            elif platform in ("x", "twitter"):
-                x_bearer = account_creds.get("bearer_token") if account_creds else None
+            elif norm_platform == "twitter":
+                x_bearer = (
+                    (account_creds.get("bearer_token") or account_creds.get("access_token") or account_creds.get("token"))
+                    if account_creds else None
+                )
                 x_key = account_creds.get("api_key") if account_creds else None
                 x_secret = account_creds.get("api_secret") if account_creds else None
                 x_tok = account_creds.get("oauth_token") if account_creds else None
                 x_tok_sec = account_creds.get("oauth_secret") if account_creds else None
                 result = upload_x_video(
                     video_path=video_path,
-                    text=f"{title}\n\n{hashtags}",
+                    text=f"{title}\n\n{hashtags}".strip(),
                     bearer_token=x_bearer,
                     api_key=x_key,
                     api_secret=x_secret,
                     oauth_token=x_tok,
                     oauth_secret=x_tok_sec
                 )
-            elif platform == "facebook":
+            elif norm_platform == "facebook":
                 fb_token = account_creds.get("access_token") if account_creds else None
-                fb_page = account_id or (account_creds.get("page_id") if account_creds else None)
+                fb_page = (
+                    (account_creds.get("page_id") if account_creds else None)
+                    or (account_creds.get("account_id") if account_creds else None)
+                    or resolved_account_id
+                )
                 result = upload_facebook_reel(
                     video_path=video_path,
-                    description=f"{title}\n\n{description}\n\n{hashtags}\n\n{idempotency_marker}",
+                    description=f"{title}\n\n{description}\n\n{hashtags}".strip(),
                     access_token=fb_token,
                     page_id=fb_page
                 )
@@ -547,6 +801,8 @@ def _process_outbox_queue_internal() -> int:
                         "UPDATE publishing_outbox SET status = 'failed', updated_at = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?",
                         (err_msg, job_id)
                     )
+                    conn.commit()
+                job_settled = True
                 check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
                 continue
 
@@ -562,6 +818,8 @@ def _process_outbox_queue_internal() -> int:
                         published_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 """, (final_status, result.get("remote_id"), result.get("remote_url"), job_id))
+                conn.commit()
+            job_settled = True
 
             if final_status == "published":
                 success_count += 1
@@ -581,6 +839,8 @@ def _process_outbox_queue_internal() -> int:
                         last_error = ?
                     WHERE id = ?
                 """, (str(pe), job_id))
+                conn.commit()
+            job_settled = True
             check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
 
         except Exception as e:
@@ -589,9 +849,9 @@ def _process_outbox_queue_internal() -> int:
             new_attempts = attempt_count + 1
             # Check for ambiguous timeout or disconnect errors
             is_ambiguous = is_ambiguous_network_error(e)
-            
+
             with db.get_db_connection() as conn:
-                if is_ambiguous:
+                if is_ambiguous and upload_started:
                     # CRITICAL FORENSIC FIX: Even on the FIRST ambiguous timeout/disconnect, NEVER blindly republish!
                     # Move immediately to reconciliation_required to prevent duplicate posts.
                     conn.execute("""
@@ -602,6 +862,8 @@ def _process_outbox_queue_internal() -> int:
                             last_error = ?
                         WHERE id = ?
                     """, (new_attempts, f"Ambiguous remote error (reconciliation required before retry): {err_str}", job_id))
+                    conn.commit()
+                    job_settled = True
                     check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
                 elif new_attempts >= 5:
                     conn.execute("""
@@ -612,6 +874,8 @@ def _process_outbox_queue_internal() -> int:
                             last_error = ?
                         WHERE id = ?
                     """, (new_attempts, err_str, job_id))
+                    conn.commit()
+                    job_settled = True
                     check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
                 else:
                     # Exponential backoff for definitive non-ambiguous transient errors: 30s, 60s, 120s, 240s...
@@ -625,20 +889,41 @@ def _process_outbox_queue_internal() -> int:
                             last_error = ?
                         WHERE id = ?
                     """, (new_attempts, f"+{delay_seconds} seconds", err_str, job_id))
+                    conn.commit()
+                    job_settled = True
+
+        finally:
+            if not job_settled:
+                fallback_status = "reconciliation_required" if upload_started else "failed"
+                try:
+                    with db.get_db_connection() as conn:
+                        conn.execute(
+                            """UPDATE publishing_outbox
+                               SET status = ?,
+                                   updated_at = CURRENT_TIMESTAMP,
+                                   last_error = COALESCE(last_error, 'Worker aborted before outbox job settled')
+                               WHERE id = ? AND status = 'uploading'""",
+                            (fallback_status, job_id),
+                        )
+                        conn.commit()
+                    check_and_finalize_clip(clip_id, video_path or Path(f"storage/clips/{clip_id}.mp4"))
+                except Exception as cleanup_err:
+                    logger.error("Failed releasing dangling uploading state for job %s: %s", job_id, cleanup_err)
 
     return success_count
 
 
 def check_and_finalize_clip(clip_id: str, video_path: Path):
-    """Check if all platform jobs for this clip are completed, and mark clip published in database."""
+    """Finalize clip lifecycle when all outbox jobs settle (closing UI publishing spinner cleanly)."""
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT status FROM publishing_outbox WHERE clip_id = ?", (clip_id,))
         statuses = [row["status"] for row in cursor.fetchall()]
 
         terminal_states = {"published", "failed", "blocked_needs_auth", "reconciliation_required"}
-        all_settled = statuses and all(s in terminal_states for s in statuses)
+        all_settled = bool(statuses) and all(s in terminal_states for s in statuses)
         any_published = any(s == "published" for s in statuses)
+        any_reconciliation = any(s == "reconciliation_required" for s in statuses)
 
         if all_settled and any_published:
             cursor.execute("""
@@ -654,6 +939,17 @@ def check_and_finalize_clip(clip_id: str, video_path: Path):
                 logger.info(
                     "Platform uploads finished for clip %s, but clip is no longer approved; status left untouched.", clip_id
                 )
+        elif all_settled and not any_published and not any_reconciliation:
+            # All destinations ended in terminal failed / blocked_needs_auth without publishing.
+            # Return clip to ready_review so UI closes the publishing spinner and user can fix/retry.
+            cursor.execute("""
+                UPDATE clips
+                SET status = 'ready_review'
+                WHERE id = ? AND status = 'approved'
+            """, (clip_id,))
+            conn.commit()
+            if cursor.rowcount == 1:
+                logger.warning("All outbox jobs for clip %s failed/blocked; returned clip to ready_review to clear spinner.", clip_id)
 
 
 class PublishingOutboxWorker:

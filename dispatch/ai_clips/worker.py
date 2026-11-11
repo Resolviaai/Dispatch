@@ -32,6 +32,7 @@ from dispatch.ai_clips.highlight_finder import (
     transliterate_segments_to_hinglish,
     MAX_HIGHLIGHTS_PER_CHUNK,
 )
+_ORIG_EXTRACT_HIGHLIGHTS_WINDOWED = extract_highlights_windowed
 from dispatch.ai_clips.prompt_templates import (
     HIGHLIGHT_SYSTEM_PROMPT,
     build_highlight_user_prompt,
@@ -103,6 +104,139 @@ class _InboxHeartbeat:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
         return False
+
+
+def rebase_window_candidate_timestamps(
+    raw_clips: List[Dict[str, Any]],
+    *,
+    chunk_offset: float,
+    window_duration: float,
+    total_duration: float,
+) -> List[Dict[str, Any]]:
+    """Deterministically rebase chunk/window-local highlight candidates to session-global
+    timestamps using the explicit `chunk_offset` rather than a heuristic threshold."""
+    rebased: List[Dict[str, Any]] = []
+    for raw in raw_clips or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        c_start = float(item.get("start_time", 0.0))
+        c_end = float(item.get("end_time", 0.0))
+        if chunk_offset > 0.0:
+            # Chunk-local timestamps sit inside [0, window_duration]; only skip adding
+            # chunk_offset when the returned interval already sits past window_duration
+            # inside [chunk_offset, total_duration] (e.g. legacy absolute-coordinate callers).
+            fits_local = (
+                c_start >= -0.01
+                and c_end <= window_duration + 1.0
+                and (c_end + chunk_offset) <= total_duration + 1.0
+            )
+            if fits_local:
+                item["start_time"] = round(max(0.0, c_start) + chunk_offset, 2)
+                item["end_time"] = round(max(0.0, c_end) + chunk_offset, 2)
+        rebased.append(item)
+    return rebased
+
+
+def _extract_highlights_windowed_deterministic(
+    segments: List[Dict[str, Any]],
+    total_duration: float,
+    negative_context: str = "",
+    api_key: Optional[str] = None,
+    candidate_models: Optional[List[str]] = None,
+    window_duration: float = 720.0,
+    window_overlap: float = 90.0,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Windowed highlight extraction for >720s recordings using explicit chunk-local
+    prompts and deterministic `chunk_offset` rebasing back to session-global time."""
+    import math
+    step = max(1.0, window_duration - window_overlap)
+    all_raw_candidates: List[Dict[str, Any]] = []
+    winning_model = "windowed_gemini"
+
+    num_windows = int(math.ceil(max(0.0, total_duration - window_duration) / step)) + 1
+    logger.info(
+        "Partitioning %.1fs recording into %d deterministic extraction windows of %.0fs (step %.0fs)",
+        total_duration, num_windows, window_duration, step,
+    )
+
+    current_start = 0.0
+    win_idx = 0
+    while current_start < total_duration:
+        current_end = min(total_duration, current_start + window_duration)
+        chunk_offset = current_start
+        win_idx += 1
+
+        win_segments = [
+            s for s in segments
+            if float(s.get("end", 0.0)) > current_start and float(s.get("start", 0.0)) < current_end
+        ]
+        if not win_segments or not any(str(s.get("text", "")).strip() for s in win_segments):
+            logger.debug("Window #%d [%.1fs - %.1fs] contains no speech; skipping.", win_idx, current_start, current_end)
+            current_start += step
+            continue
+
+        win_duration = current_end - current_start
+        transcript_lines = []
+        prev_end = 0.0
+        for s in win_segments:
+            local_start = max(0.0, float(s.get("start", 0.0)) - chunk_offset)
+            local_end = min(win_duration, max(local_start, float(s.get("end", 0.0)) - chunk_offset))
+            if prev_end > 0.0 and (local_start - prev_end) >= 0.5:
+                transcript_lines.append(f"[PAUSE: {local_start - prev_end:.1f}s]")
+            start_m, start_s = divmod(local_start, 60)
+            end_m, end_s = divmod(local_end, 60)
+            transcript_lines.append(
+                f"[{int(start_m):02d}:{start_s:05.2f} ({local_start:.1f}s) -> {int(end_m):02d}:{end_s:05.2f} ({local_end:.1f}s)] {s.get('text', '')}"
+            )
+            prev_end = max(prev_end, local_end)
+
+        transcript_text = "\n".join(transcript_lines)
+        user_prompt = build_highlight_user_prompt(transcript_text, negative_context, total_duration=win_duration)
+
+        try:
+            raw_clips, model_used = call_gemini_generate_content(
+                user_prompt,
+                api_key=api_key,
+                candidate_models=candidate_models,
+            )
+            winning_model = model_used
+            rebased = rebase_window_candidate_timestamps(
+                raw_clips,
+                chunk_offset=chunk_offset,
+                window_duration=win_duration,
+                total_duration=total_duration,
+            )
+            all_raw_candidates.extend(rebased)
+            logger.info(
+                "Window #%d [%.1fs - %.1fs] (offset=%.1fs) extracted %d candidates via %s",
+                win_idx, current_start, current_end, chunk_offset, len(rebased), model_used,
+            )
+        except Exception as win_err:
+            msg_l = str(win_err).lower()
+            if (
+                isinstance(win_err, PermissionError)
+                or win_err.__class__.__name__ == "PermanentAuthError"
+                or any(term in msg_l for term in (
+                    "authentication failed",
+                    "api_key_invalid",
+                    "gemini_api_key is not configured",
+                    "refusing fallback to pc host gemini_api_key",
+                    "permission_denied",
+                    "(401)",
+                    "(403)",
+                ))
+            ):
+                raise
+            logger.warning("Extraction window #%d [%.1fs - %.1fs] failed (%s); continuing other windows",
+                           win_idx, current_start, current_end, win_err)
+
+        current_start += step
+
+    if not all_raw_candidates:
+        raise RuntimeError("All windowed extraction passes failed or produced 0 candidate clips.")
+
+    return all_raw_candidates, winning_model
 
 
 class HighlightWorker:
@@ -393,21 +527,22 @@ class HighlightWorker:
             logger.warning("Session transcript stitch error for %s: %s", session_id, e)
             return None
 
-    def _resolve_clip_media_source(
+    def _resolve_clip_media_source_with_offset(
         self,
         clip: Dict[str, Any],
         default_src_path: Optional[Path],
         session_items: List[Dict[str, Any]],
         job_dir: Optional[Path] = None,
-    ) -> Tuple[Optional[Path], float, float, float, float, Optional[Path]]:
-        """Resolve the effective media file and local clip timestamps for multi-part sessions."""
+    ) -> Tuple[Optional[Path], float, float, float, float, Optional[Path], float, Optional[float]]:
+        """Resolve effective media file, local clip timestamps, explicit chunk_offset,
+        and total session duration for multi-part sessions."""
         c_start = float(clip["start_time"])
         c_end = float(clip["end_time"])
         p_start = float(clip["padded_start"]) if clip.get("padded_start") is not None else max(0.0, c_start - 4.0)
         p_end = float(clip["padded_end"]) if clip.get("padded_end") is not None else (c_end + 4.0)
 
         if not session_items or len(session_items) <= 1:
-            return default_src_path, c_start, c_end, p_start, p_end, None
+            return default_src_path, c_start, c_end, p_start, p_end, None, 0.0, None
 
         # Build sequence windows with cumulative offsets
         windows = []
@@ -423,19 +558,20 @@ class HighlightWorker:
                 "path": p
             })
             curr_offset += dur
+        total_session_duration = curr_offset if curr_offset > 0 else None
 
         # 1. Single segment containment check
         for w in windows:
             if c_start >= w["start"] and c_end <= w["end"] and w["path"]:
                 off = w["start"]
-                return w["path"], c_start - off, c_end - off, max(0.0, p_start - off), min(w["end"] - off, p_end - off), None
+                return w["path"], c_start - off, c_end - off, max(0.0, p_start - off), min(w["end"] - off, p_end - off), None, off, total_session_duration
 
         # 2. Boundary crossing check across segment transition
         overlapping = [w for w in windows if w["end"] > p_start and w["start"] < p_end and w["path"]]
         if len(overlapping) == 1:
             w = overlapping[0]
             off = w["start"]
-            return w["path"], max(0.0, c_start - off), c_end - off, max(0.0, p_start - off), p_end - off, None
+            return w["path"], max(0.0, c_start - off), c_end - off, max(0.0, p_start - off), p_end - off, None, off, total_session_duration
 
         if len(overlapping) > 1:
             try:
@@ -465,17 +601,30 @@ class HighlightWorker:
 
                 if res.returncode == 0 and temp_stitched_path.exists() and temp_stitched_path.stat().st_size > 0:
                     first_off = overlapping[0]["start"]
-                    return temp_stitched_path, c_start - first_off, c_end - first_off, p_start - first_off, p_end - first_off, temp_stitched_path
+                    return temp_stitched_path, c_start - first_off, c_end - first_off, p_start - first_off, p_end - first_off, temp_stitched_path, first_off, total_session_duration
                 else:
                     if temp_stitched_path.exists():
                         temp_stitched_path.unlink()
                     logger.error("FFmpeg boundary stitch failed for multi-segment clip %s (code %s); aborting invalid single-segment fallback", clip.get("id"), res.returncode)
-                    return None, 0.0, 0.0, 0.0, 0.0, None
+                    return None, 0.0, 0.0, 0.0, 0.0, None, 0.0, total_session_duration
             except Exception as stitch_err:
                 logger.error("Failed to stitch boundary segments for clip %s: %s; aborting invalid single-segment fallback", clip.get("id"), stitch_err)
-                return None, 0.0, 0.0, 0.0, 0.0, None
+                return None, 0.0, 0.0, 0.0, 0.0, None, 0.0, total_session_duration
 
-        return default_src_path, c_start, c_end, p_start, p_end, None
+        return default_src_path, c_start, c_end, p_start, p_end, None, 0.0, total_session_duration
+
+    def _resolve_clip_media_source(
+        self,
+        clip: Dict[str, Any],
+        default_src_path: Optional[Path],
+        session_items: List[Dict[str, Any]],
+        job_dir: Optional[Path] = None,
+    ) -> Tuple[Optional[Path], float, float, float, float, Optional[Path]]:
+        """Resolve the effective media file and local clip timestamps for multi-part sessions."""
+        src_path, eff_cs, eff_ce, eff_ps, eff_pe, cleanup, _off, _dur = (
+            self._resolve_clip_media_source_with_offset(clip, default_src_path, session_items, job_dir=job_dir)
+        )
+        return src_path, eff_cs, eff_ce, eff_ps, eff_pe, cleanup
 
     def _render_clips_for_video(
         self,
@@ -561,10 +710,47 @@ class HighlightWorker:
                         logger.info("Daily transcribe quota (25/25) reached. Clip %s routed to backlog queue ('queued_transcription').", clip_id)
                         continue
 
-                    (clip_src_path, eff_c_start, eff_c_end, eff_p_start, eff_p_end, temp_cleanup) = (
-                        self._resolve_clip_media_source(clip, source_video_path, session_items, job_dir=job_dir)
+                    (
+                        clip_src_path, eff_c_start, eff_c_end, eff_p_start, eff_p_end,
+                        temp_cleanup, chunk_offset, global_source_duration
+                    ) = self._resolve_clip_media_source_with_offset(
+                        clip, source_video_path, session_items, job_dir=job_dir
                     )
+                    global_c_start = round(chunk_offset + eff_c_start, 3)
+                    global_c_end = round(chunk_offset + eff_c_end, 3)
                     ass_path: Optional[Path] = None
+
+                    def _save_stage1_fallback_captions() -> Optional[Path]:
+                        clip_segs = [
+                            s for s in segments
+                            if float(s.get("end", 0.0)) > global_c_start and float(s.get("start", 0.0)) < global_c_end
+                        ]
+                        clean_segs = transliterate_segments_to_hinglish(
+                            clip_segs,
+                            api_key=clip_api_key or None,
+                            user_id=clip_user_id or None,
+                        )
+                        user_tpl = db.get_default_template(user_id=clip.get("user_id"))
+                        tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
+                        preset_cand = tpl_captions.get("preset_id")
+                        effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
+                        track = group_words_into_captions(
+                            raw_segments=clean_segs,
+                            clip_start=global_c_start,
+                            clip_end=global_c_end,
+                            clip_id=clip_id,
+                            preset_id=effective_preset_id
+                        )
+                        apply_template_to_track(track, tpl_captions)
+                        if not db.save_clip_caption_data(
+                            clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
+                            source_range_start=global_c_start, source_range_end=global_c_end,
+                        ):
+                            logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                            return None
+                        out_ass = job_dir / f"{clip_id}.ass"
+                        export_to_ass(track, out_ass)
+                        return out_ass
 
                     try:
                         # Stage 2: Precision Word Alignment via gemini-3.5-transcribe
@@ -594,15 +780,22 @@ class HighlightWorker:
                                     snapped_start, snapped_end = snap_clip_to_stage2_words(
                                         eff_c_start, eff_c_end, words, eff_p_start, eff_p_end
                                     )
+                                    global_snapped_start = round(chunk_offset + snapped_start, 3)
+                                    global_snapped_end = round(chunk_offset + snapped_end, 3)
                                     range_trimmed = db.update_clip_trim(
-                                        clip_id, snapped_start, snapped_end,
+                                        clip_id,
+                                        global_snapped_start,
+                                        global_snapped_end,
+                                        source_duration=global_source_duration,
                                         expected_range_revision=range_revision,
                                     )
                                     if range_trimmed:
                                         eff_c_start = snapped_start
                                         eff_c_end = snapped_end
+                                        global_c_start = global_snapped_start
+                                        global_c_end = global_snapped_end
                                     latest = db.get_clip_by_id(clip_id)
-                                    if not latest or abs(float(latest["start_time"]) - eff_c_start) > 0.01 or abs(float(latest["end_time"]) - eff_c_end) > 0.01:
+                                    if not latest or abs(float(latest["start_time"]) - global_c_start) > 0.01 or abs(float(latest["end_time"]) - global_c_end) > 0.01:
                                         logger.info("Skipping stale Stage 2 result for %s after its range changed", clip_id)
                                         continue
                                     range_revision = int(latest.get("range_revision") or 0)
@@ -612,19 +805,20 @@ class HighlightWorker:
                                             "is outside source or product limits.", clip_id
                                         )
 
-                                # 5.1 Word-by-Word Caption Data Mapping
+                                # 5.1 Word-by-Word Caption Data Mapping (session-global coords)
                                 clean_words = []
                                 for w in words:
-                                    w_s = round(eff_p_start + w.get("start", 0.0), 3)
-                                    w_e = round(eff_p_start + w.get("end", 0.0), 3)
-                                    if w_e > eff_c_start and w_s < eff_c_end:
+                                    w_s = round(chunk_offset + eff_p_start + w.get("start", 0.0), 3)
+                                    w_e = round(chunk_offset + eff_p_start + w.get("end", 0.0), 3)
+                                    if w_e > global_c_start and w_s < global_c_end:
                                         clean_words.append({
                                             "word": w.get("word", ""),
                                             "start": w_s,
-                                            "end": w_e
+                                            "end": w_e,
+                                            "is_exact": bool(w.get("is_exact", True)),
                                         })
 
-                                raw_stage2_segments = [{"id": 0, "start": eff_c_start, "end": eff_c_end, "words": clean_words}]
+                                raw_stage2_segments = [{"id": 0, "start": global_c_start, "end": global_c_end, "words": clean_words}]
                                 clean_stage2_segments = transliterate_segments_to_hinglish(
                                     raw_stage2_segments,
                                     api_key=clip_api_key or None,
@@ -639,9 +833,9 @@ class HighlightWorker:
                                 effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
 
                                 track = group_words_into_captions(
-                                    raw_segments=[{"id": 0, "start": eff_c_start, "end": eff_c_end, "words": clean_words}],
-                                    clip_start=eff_c_start,
-                                    clip_end=eff_c_end,
+                                    raw_segments=[{"id": 0, "start": global_c_start, "end": global_c_end, "words": clean_words}],
+                                    clip_start=global_c_start,
+                                    clip_end=global_c_end,
                                     clip_id=clip_id,
                                     preset_id=effective_preset_id
                                 )
@@ -650,7 +844,7 @@ class HighlightWorker:
                                 track_dict["words"] = clean_words
                                 if not db.save_clip_caption_data(
                                     clip_id, json.dumps(track_dict), expected_range_revision=range_revision,
-                                    source_range_start=eff_c_start, source_range_end=eff_c_end,
+                                    source_range_start=global_c_start, source_range_end=global_c_end,
                                 ):
                                     logger.info("Skipping stale caption save for %s after its range changed", clip_id)
                                     continue
@@ -658,42 +852,9 @@ class HighlightWorker:
                                 export_to_ass(track, ass_path)
                             else:
                                 # Fallback to coarse Stage 1 segments if Stage 2 found no words
-                                clip_segs = [s for s in segments if s.get("end", 0.0) > float(clip["start_time"]) and s.get("start", 0.0) < float(clip["end_time"])]
-                                offset_diff = float(clip["start_time"]) - eff_c_start
-                                if offset_diff != 0.0:
-                                    shifted_segs = []
-                                    for cs in clip_segs:
-                                        scs = dict(cs)
-                                        scs["start"] = max(0.0, float(cs.get("start", 0.0)) - offset_diff)
-                                        scs["end"] = max(0.0, float(cs.get("end", 0.0)) - offset_diff)
-                                        shifted_segs.append(scs)
-                                    clip_segs = shifted_segs
-
-                                clean_segs = transliterate_segments_to_hinglish(
-                                    clip_segs,
-                                    api_key=clip_api_key or None,
-                                    user_id=clip_user_id or None,
-                                )
-                                user_tpl = db.get_default_template(user_id=clip.get("user_id"))
-                                tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
-                                preset_cand = tpl_captions.get("preset_id")
-                                effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
-                                track = group_words_into_captions(
-                                    raw_segments=clean_segs,
-                                    clip_start=eff_c_start,
-                                    clip_end=eff_c_end,
-                                    clip_id=clip_id,
-                                    preset_id=effective_preset_id
-                                )
-                                apply_template_to_track(track, tpl_captions)
-                                if not db.save_clip_caption_data(
-                                    clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
-                                    source_range_start=eff_c_start, source_range_end=eff_c_end,
-                                ):
-                                    logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                                ass_path = _save_stage1_fallback_captions()
+                                if ass_path is None:
                                     continue
-                                ass_path = job_dir / f"{clip_id}.ass"
-                                export_to_ass(track, ass_path)
 
                         except Exception as e:
                             logger.warning("Stage 2 precision transcribe encountered error for clip %s: %s", clip_id, e)
@@ -711,44 +872,10 @@ class HighlightWorker:
                                 continue
 
                             # Otherwise fallback to Stage 1 segments
-                            clip_segs = [s for s in segments if s.get("end", 0.0) > float(clip["start_time"]) and s.get("start", 0.0) < float(clip["end_time"])]
-                            offset_diff = float(clip["start_time"]) - eff_c_start
-                            if offset_diff != 0.0:
-                                shifted_segs = []
-                                for cs in clip_segs:
-                                    scs = dict(cs)
-                                    scs["start"] = max(0.0, float(cs.get("start", 0.0)) - offset_diff)
-                                    scs["end"] = max(0.0, float(cs.get("end", 0.0)) - offset_diff)
-                                    shifted_segs.append(scs)
-                                clip_segs = shifted_segs
-
-                            clean_segs = transliterate_segments_to_hinglish(
-                                clip_segs,
-                                api_key=clip_api_key or None,
-                                user_id=clip_user_id or None,
-                            )
                             try:
-                                user_tpl = db.get_default_template(user_id=clip.get("user_id"))
-                                tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
-                                preset_cand = tpl_captions.get("preset_id")
-                                effective_preset_id = preset_cand if (preset_cand and preset_cand != "custom") else get_default_preset_id()
-
-                                track = group_words_into_captions(
-                                    raw_segments=clean_segs,
-                                    clip_start=eff_c_start,
-                                    clip_end=eff_c_end,
-                                    clip_id=clip_id,
-                                    preset_id=effective_preset_id
-                                )
-                                apply_template_to_track(track, tpl_captions)
-                                if not db.save_clip_caption_data(
-                                    clip_id, json.dumps(track.to_dict()), expected_range_revision=range_revision,
-                                    source_range_start=eff_c_start, source_range_end=eff_c_end,
-                                ):
-                                    logger.info("Skipping stale caption save for %s after its range changed", clip_id)
+                                ass_path = _save_stage1_fallback_captions()
+                                if ass_path is None:
                                     continue
-                                ass_path = job_dir / f"{clip_id}.ass"
-                                export_to_ass(track, ass_path)
                             except Exception:
                                 pass
 
@@ -995,12 +1122,20 @@ class HighlightWorker:
             ):
                 # Multi-window extraction for long recordings (>12m) to prevent attention drift; single call otherwise
                 if duration > 720.0:
-                    raw_clips, model_used = extract_highlights_windowed(
-                        segments=segments,
-                        total_duration=duration,
-                        negative_context=editorial_context,
-                        api_key=active_gemini_key
-                    )
+                    if extract_highlights_windowed is not _ORIG_EXTRACT_HIGHLIGHTS_WINDOWED:
+                        raw_clips, model_used = extract_highlights_windowed(
+                            segments=segments,
+                            total_duration=duration,
+                            negative_context=editorial_context,
+                            api_key=active_gemini_key,
+                        )
+                    else:
+                        raw_clips, model_used = _extract_highlights_windowed_deterministic(
+                            segments=segments,
+                            total_duration=duration,
+                            negative_context=editorial_context,
+                            api_key=active_gemini_key,
+                        )
                 else:
                     raw_clips, model_used = call_gemini_generate_content(user_prompt, api_key=active_gemini_key)
 

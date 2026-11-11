@@ -12,7 +12,10 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import java.net.URLEncoder
 import com.resolvia.dispatch.data.AppDatabase
 import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.recorder.RecordingForegroundService
@@ -55,12 +58,397 @@ class YouTubeDirectUploadWorker(
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
+    /**
+     * Authoritative outcome of a Content-Range (`bytes * /totalBytes`) resumable status probe.
+     * Transient 5xx, rate-limit, timeout, or network errors return `null` from probe helpers so
+     * callers NEVER falsely restart from byte 0 or abort an active session.
+     */
+    sealed class UploadProbeResult {
+        data class ConfirmedComplete(val videoId: String) : UploadProbeResult()
+        data class ResumableAt(val offset: Long) : UploadProbeResult()
+        object Expired : UploadProbeResult()
+    }
+
+    /** R2 media object marked `deletion_pending` awaiting object deletion + quota confirmation. */
+    data class PendingDeletionMedia(
+        val id: String,
+        val status: String = "deletion_pending",
+        val deleteUrl: String? = null,
+        val finalKey: String? = null,
+        val stagingKey: String? = null,
+        val byteCount: Long = 0L
+    )
+
+    /** Outcome counts from an R2 `deletion_pending` quota reclamation sweep. */
+    data class QuotaReclamationSummary(
+        val discoveredCount: Int,
+        val reclaimedCount: Int,
+        val failedCount: Int,
+        val reclaimedIds: List<String> = emptyList(),
+        val failedIds: List<String> = emptyList()
+    )
+
     companion object {
         /** Single-flight guard: overlapping drain runs race the same outbox rows. */
         private val drainLock = java.util.concurrent.atomic.AtomicBoolean(false)
 
         const val UPLOAD_CHANNEL_ID = "dispatch_uploads"
         const val UPLOAD_NOTIFICATION_ID = 4202
+
+        private val R2_UUID_REGEX = Regex(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        )
+
+        private val probeGson = Gson()
+
+        /**
+         * Parses and strictly validates a YouTube Resumable Upload `Range` header (`bytes=0-<end>`).
+         * Returns `end + 1L` as the next byte offset, or `null` if blank, malformed, or out of bounds.
+         */
+        internal fun parseConfirmedRangeOffset(rangeHeader: String?, totalBytes: Long): Long? {
+            if (rangeHeader.isNullOrBlank()) return null
+            val match = Regex("""^bytes=(\d+)-(\d+)$""").find(rangeHeader.trim()) ?: return null
+            val (startStr, endStr) = match.destructured
+            val start = startStr.toLongOrNull() ?: return null
+            val end = endStr.toLongOrNull() ?: return null
+
+            if (start != 0L) return null
+            if (end < 0L || (totalBytes > 0L && end >= totalBytes)) return null
+            return end + 1L
+        }
+
+        internal fun extractVideoIdFromProbeBody(bodyStr: String?): String? {
+            if (bodyStr.isNullOrBlank()) return null
+            return try {
+                val json = probeGson.fromJson(bodyStr, JsonObject::class.java) ?: return null
+                listOf("id", "videoId", "video_id").firstNotNullOfOrNull { key ->
+                    val el = json.get(key)
+                    if (el != null && el.isJsonPrimitive) {
+                        el.asString.trim().takeIf { it.isNotBlank() }
+                    } else {
+                        null
+                    }
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        /**
+         * Interprets a single HTTP response from a `PUT` `Content-Range: bytes * /<total>` probe.
+         * Returns:
+         * - [UploadProbeResult.ConfirmedComplete] if 200/201 confirms completion with a video ID
+         * - [UploadProbeResult.ResumableAt] if 308 has valid/empty Range or 200/201 awaits ID indexing
+         * - [UploadProbeResult.Expired] strictly on 404/410 (or 401 for pre-signed cloud sessions)
+         * - `null` on 5xx, 408, 429, malformed Range headers, or non-terminal states
+         */
+        internal fun parseUploadProbeResponse(
+            statusCode: Int,
+            rangeHeader: String?,
+            bodyStr: String?,
+            totalBytes: Long,
+            hasAuthToken: Boolean,
+            fallbackVideoIdLookup: (() -> String?)? = null
+        ): UploadProbeResult? {
+            return when {
+                statusCode == 308 -> {
+                    if (rangeHeader.isNullOrBlank()) {
+                        UploadProbeResult.ResumableAt(0L)
+                    } else {
+                        parseConfirmedRangeOffset(rangeHeader, totalBytes)?.let { offset ->
+                            UploadProbeResult.ResumableAt(offset)
+                        }
+                    }
+                }
+                statusCode in 200..299 -> {
+                    val videoId = extractVideoIdFromProbeBody(bodyStr)
+                        ?: runCatching { fallbackVideoIdLookup?.invoke() }.getOrNull()
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() }
+                    if (videoId != null) {
+                        UploadProbeResult.ConfirmedComplete(videoId)
+                    } else {
+                        UploadProbeResult.ResumableAt(totalBytes.coerceAtLeast(0L))
+                    }
+                }
+                statusCode == 404 || statusCode == 410 || (statusCode == 401 && !hasAuthToken) -> {
+                    UploadProbeResult.Expired
+                }
+                else -> null
+            }
+        }
+
+        /**
+         * Probes resumable upload progress via `PUT` with `Content-Range: bytes * /<total>`.
+         * Transient network errors, timeouts, and HTTP 5xx/408/429 responses return `null`
+         * (preserving valid upload sessions and byte offsets rather than restarting from byte 0).
+         */
+        internal fun queryUploadStatus(
+            client: OkHttpClient,
+            uploadUrl: String,
+            accessToken: String,
+            totalBytes: Long,
+            refreshTokenFn: (() -> String?)? = null,
+            fallbackVideoIdLookup: (() -> String?)? = null
+        ): UploadProbeResult? {
+            var token = accessToken
+            val hasToken = token.isNotBlank()
+            for (attempt in 0..1) {
+                val queryReqBuilder = Request.Builder()
+                    .url(uploadUrl)
+                    .header("Content-Range", "bytes */$totalBytes")
+                    .header("Content-Length", "0")
+                if (hasToken) queryReqBuilder.header("Authorization", "Bearer $token")
+                val queryReq = queryReqBuilder
+                    .put("".toRequestBody("video/mp4".toMediaType()))
+                    .build()
+
+                try {
+                    client.newCall(queryReq).execute().use { resp ->
+                        if (resp.code == 401 && hasToken && attempt == 0 && refreshTokenFn != null) {
+                            val freshToken = refreshTokenFn.invoke()
+                            if (!freshToken.isNullOrBlank()) {
+                                token = freshToken
+                                return@use
+                            }
+                        }
+                        val rangeHeader = resp.header("Range")
+                        val bodyStr = if (resp.isSuccessful) resp.body?.string() else null
+                        return parseUploadProbeResponse(
+                            statusCode = resp.code,
+                            rangeHeader = rangeHeader,
+                            bodyStr = bodyStr,
+                            totalBytes = totalBytes,
+                            hasAuthToken = hasToken,
+                            fallbackVideoIdLookup = fallbackVideoIdLookup
+                        )
+                    }
+                } catch (_: Exception) {
+                    return null
+                }
+            }
+            return null
+        }
+
+        /** Extracts the trailing media object UUID from an R2 key (e.g. `final/<userId>/<uuid>`). */
+        internal fun extractMediaObjectIdFromR2Key(r2Key: String?): String? {
+            if (r2Key.isNullOrBlank()) return null
+            val trimmed = r2Key.trim().trimEnd('/')
+            val lastSegment = trimmed.substringAfterLast('/')
+            if (R2_UUID_REGEX.matches(lastSegment)) return lastSegment
+            return R2_UUID_REGEX.findAll(trimmed).lastOrNull()?.value
+        }
+
+        private fun JsonObject.optTrimmedString(vararg keys: String): String? {
+            for (k in keys) {
+                val el = get(k)
+                if (el != null && el.isJsonPrimitive) {
+                    val value = el.asString.trim()
+                    if (value.isNotEmpty()) return value
+                }
+            }
+            return null
+        }
+
+        private fun JsonObject.optLong(vararg keys: String): Long {
+            for (k in keys) {
+                val el = get(k)
+                if (el != null && el.isJsonPrimitive) {
+                    runCatching { el.asLong }.getOrNull()?.let { return it }
+                }
+            }
+            return 0L
+        }
+
+        /**
+         * Parses `GET /media?status=deletion_pending` payloads strictly selecting entries whose
+         * status is `"deletion_pending"` (or items inside an explicit `deletion_pending` array),
+         * preventing accidental deletion of `"active"` user objects.
+         */
+        internal fun parseDeletionPendingMediaList(jsonBody: String?): List<PendingDeletionMedia> {
+            if (jsonBody.isNullOrBlank()) return emptyList()
+            val root = runCatching { probeGson.fromJson(jsonBody, JsonElement::class.java) }.getOrNull()
+                ?: return emptyList()
+
+            val results = LinkedHashMap<String, PendingDeletionMedia>()
+
+            fun collectArray(array: JsonArray?, defaultStatusIfOmitted: String?) {
+                if (array == null) return
+                for (element in array) {
+                    if (!element.isJsonObject) continue
+                    val obj = element.asJsonObject
+                    val id = obj.optTrimmedString("id", "media_object_id") ?: continue
+                    val status = obj.optTrimmedString("status") ?: defaultStatusIfOmitted ?: continue
+                    if (!status.equals("deletion_pending", ignoreCase = true)) continue
+                    results.putIfAbsent(
+                        id,
+                        PendingDeletionMedia(
+                            id = id,
+                            status = "deletion_pending",
+                            deleteUrl = obj.optTrimmedString("delete_url", "cleanup_url", "presigned_delete_url"),
+                            finalKey = obj.optTrimmedString("final_key", "r2_key"),
+                            stagingKey = obj.optTrimmedString("staging_key"),
+                            byteCount = obj.optLong("byte_count", "size")
+                        )
+                    )
+                }
+            }
+
+            when {
+                root.isJsonArray -> collectArray(root.asJsonArray, defaultStatusIfOmitted = null)
+                root.isJsonObject -> {
+                    val obj = root.asJsonObject
+                    if (obj.has("deletion_pending") && obj.get("deletion_pending").isJsonArray) {
+                        collectArray(obj.getAsJsonArray("deletion_pending"), defaultStatusIfOmitted = "deletion_pending")
+                    }
+                    if (obj.has("items") && obj.get("items").isJsonArray) {
+                        collectArray(obj.getAsJsonArray("items"), defaultStatusIfOmitted = null)
+                    }
+                    if (obj.has("data") && obj.get("data").isJsonArray) {
+                        collectArray(obj.getAsJsonArray("data"), defaultStatusIfOmitted = null)
+                    }
+                }
+            }
+            return results.values.toList()
+        }
+
+        /**
+         * Executes R2 / Worker cleanup for a single `deletion_pending` object and confirms quota
+         * release via `POST /media/:id/confirm-deletion` (with `POST /delete` fallback only if
+         * the Worker returns 404/405 on `/confirm-deletion`).
+         * Never confirms deletion if the R2 object delete step fails.
+         */
+        internal fun reclaimSingleDeletionPendingMedia(
+            client: OkHttpClient,
+            workerUrl: String,
+            cloudAccessToken: String,
+            item: PendingDeletionMedia
+        ): Boolean {
+            if (item.id.isBlank() || workerUrl.isBlank() || cloudAccessToken.isBlank()) return false
+            val baseUrl = workerUrl.trimEnd('/')
+
+            // Step 1: If a presigned/direct R2 deletion URL was provided, delete R2 bytes first.
+            val directDeleteUrl = item.deleteUrl?.trim()
+            if (!directDeleteUrl.isNullOrEmpty()) {
+                val r2DelBuilder = Request.Builder().url(directDeleteUrl).delete()
+                if (directDeleteUrl.startsWith(baseUrl)) {
+                    r2DelBuilder.header("Authorization", "Bearer $cloudAccessToken")
+                }
+                val r2Deleted = try {
+                    client.newCall(r2DelBuilder.build()).execute().use { resp ->
+                        resp.isSuccessful || resp.code == 204 || resp.code == 404 || resp.code == 410
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+                if (!r2Deleted) return false
+            }
+
+            // Step 2: Confirm deletion on Worker so quota bytes are released.
+            val encodedId = URLEncoder.encode(item.id, "UTF-8").replace("+", "%20")
+            val confirmPayload = JsonObject().apply {
+                addProperty("media_object_id", item.id)
+                if (!item.finalKey.isNullOrBlank()) addProperty("final_key", item.finalKey)
+                if (!item.stagingKey.isNullOrBlank()) addProperty("staging_key", item.stagingKey)
+            }.toString()
+            val confirmReq = Request.Builder()
+                .url("$baseUrl/media/$encodedId/confirm-deletion")
+                .header("Authorization", "Bearer $cloudAccessToken")
+                .post(confirmPayload.toRequestBody("application/json; charset=UTF-8".toMediaType()))
+                .build()
+
+            val confirmStatus = try {
+                client.newCall(confirmReq).execute().use { resp ->
+                    if (resp.isSuccessful) return true
+                    resp.code
+                }
+            } catch (_: Exception) {
+                return false
+            }
+
+            // Backwards-compatibility fallback when deployed Worker only exposes POST /delete.
+            if (confirmStatus == 404 || confirmStatus == 405) {
+                val fallbackBody = JsonObject().apply {
+                    addProperty("media_object_id", item.id)
+                }.toString()
+                val fallbackReq = Request.Builder()
+                    .url("$baseUrl/delete")
+                    .header("Authorization", "Bearer $cloudAccessToken")
+                    .post(fallbackBody.toRequestBody("application/json; charset=UTF-8".toMediaType()))
+                    .build()
+                return try {
+                    client.newCall(fallbackReq).execute().use { resp ->
+                        resp.isSuccessful
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+            }
+
+            return false
+        }
+
+        /**
+         * Queries Worker `GET /media?status=deletion_pending`, cleans up R2 objects, and confirms
+         * deletion via `/media/:id/confirm-deletion` so failed/expired uploads reclaim quota.
+         */
+        internal fun reclaimDeletionPendingR2Media(
+            client: OkHttpClient,
+            workerUrl: String,
+            cloudAccessToken: String,
+            extraDeletionPendingIds: List<String> = emptyList()
+        ): QuotaReclamationSummary {
+            if (workerUrl.isBlank() || cloudAccessToken.isBlank()) {
+                return QuotaReclamationSummary(0, 0, 0)
+            }
+            val baseUrl = workerUrl.trimEnd('/')
+            val pendingMap = LinkedHashMap<String, PendingDeletionMedia>()
+
+            val listReq = Request.Builder()
+                .url("$baseUrl/media?status=deletion_pending")
+                .header("Authorization", "Bearer $cloudAccessToken")
+                .get()
+                .build()
+
+            try {
+                client.newCall(listReq).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val parsed = parseDeletionPendingMediaList(resp.body?.string())
+                        for (item in parsed) {
+                            pendingMap[item.id] = item
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Continue with any explicitly supplied candidate IDs if network recovers later.
+            }
+
+            for (rawId in extraDeletionPendingIds) {
+                val id = extractMediaObjectIdFromR2Key(rawId) ?: rawId.trim().takeIf { it.isNotEmpty() } ?: continue
+                pendingMap.putIfAbsent(id, PendingDeletionMedia(id = id, status = "deletion_pending"))
+            }
+
+            if (pendingMap.isEmpty()) {
+                return QuotaReclamationSummary(0, 0, 0)
+            }
+
+            val reclaimed = mutableListOf<String>()
+            val failed = mutableListOf<String>()
+            for (item in pendingMap.values) {
+                if (reclaimSingleDeletionPendingMedia(client, baseUrl, cloudAccessToken, item)) {
+                    reclaimed.add(item.id)
+                } else {
+                    failed.add(item.id)
+                }
+            }
+            return QuotaReclamationSummary(
+                discoveredCount = pendingMap.size,
+                reclaimedCount = reclaimed.size,
+                failedCount = failed.size,
+                reclaimedIds = reclaimed,
+                failedIds = failed
+            )
+        }
     }
 
     /** Label of the segment currently uploading, shown in the foreground notification. */
@@ -523,6 +911,8 @@ class YouTubeDirectUploadWorker(
         reconcilePendingPcAcknowledgements()
         // But also advance any segments whose YouTube processing completed in the meantime
         reconcileYouTubeProcessingStatuses()
+        // Reclaim R2 quota for any media_objects marked deletion_pending (failed/expired/deleted)
+        reclaimPendingR2Quota()
 
         if (hasFailures) {
             Result.retry()
@@ -668,18 +1058,29 @@ class YouTubeDirectUploadWorker(
         val savedOffset = dao.getOutboxOffset(segId) ?: 0L
 
         // Query session status if resuming after disconnect or retrying existing session
-        val probedOffset = queryUploadStatus(destination, currentAccessToken, totalBytes)
-        if (probedOffset == -1L) {
-            // Session expired on YouTube: clear and restart fresh
-            if (sessionRestarted) {
-                return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
+        val initialProbe = probeUploadStatus(destination, currentAccessToken, totalBytes, dispatchId, useCloud)
+        val confirmedInitialOffset: Long = when (initialProbe) {
+            is UploadProbeResult.ConfirmedComplete -> {
+                dao.updateOutboxOffset(segId, totalBytes)
+                pairingManager.clearUploadSessionUrl(segId)
+                android.util.Log.i("YouTubeUploader", "Probe confirmed upload complete for $segId (Video ID: ${initialProbe.videoId})")
+                return DirectUploadResult(success = true, youtubeVideoId = initialProbe.videoId)
             }
-            pairingManager.clearUploadSessionUrl(segId)
-            dao.updateOutboxOffset(segId, 0L)
-            return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
+            is UploadProbeResult.Expired -> {
+                // Session expired on YouTube: clear and restart fresh
+                if (sessionRestarted) {
+                    return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
+                }
+                pairingManager.clearUploadSessionUrl(segId)
+                dao.updateOutboxOffset(segId, 0L)
+                return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
+            }
+            is UploadProbeResult.ResumableAt -> initialProbe.offset
+            null -> {
+                android.util.Log.w("YouTubeUploader", "Transient failure probing resumable offset for $segId; retaining session and offset $savedOffset")
+                return DirectUploadResult(false, failureReason = "Could not confirm resumable upload offset; source and offset retained for retry")
+            }
         }
-        val confirmedInitialOffset = probedOffset
-            ?: return DirectUploadResult(false, failureReason = "Could not confirm resumable upload offset; source retained for retry")
         // The session query is authoritative, including when the device's saved offset is ahead.
         var currentOffset: Long = confirmedInitialOffset
         if (currentOffset != savedOffset) dao.updateOutboxOffset(segId, currentOffset)
@@ -731,57 +1132,30 @@ class YouTubeDirectUploadWorker(
 
                 var retryWithNewToken = false
                 var waitForNoProgress = false
+                var hasPendingProbe = false
+                var pendingProbe: UploadProbeResult? = null
                 val response = try {
                     client.newCall(chunkReq).execute()
                 } catch (e: IOException) {
                     android.util.Log.w("YouTubeUploader", "Ambiguous chunk failure for $segId at $start; checking server offset", e)
-                    val probed = queryUploadStatus(destination, currentAccessToken, totalBytes)
-                    if (probed == -1L) {
-                        if (sessionRestarted) {
-                            return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
-                        }
-                        pairingManager.clearUploadSessionUrl(segId)
-                        dao.updateOutboxOffset(segId, 0L)
-                        return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
-                    }
-                    if (!reconcileServerOffset(probed)) {
-                        if (!waitForNoProgressRetry()) {
-                            return DirectUploadResult(false, failureReason = "Upload made no confirmed progress after ${progress.consecutiveNoProgress} status checks")
-                        }
-                    }
-                    continue
+                    hasPendingProbe = true
+                    pendingProbe = probeUploadStatus(destination, currentAccessToken, totalBytes, dispatchId, useCloud)
+                    null
                 }
 
-                response.use { resp ->
+                response?.use { resp ->
                     when (resp.code) {
                         308 -> {
                             // Validate server's Range header.
                             // If Range header is absent or invalid, never optimistically advance offset!
                             val rangeHeader = resp.header("Range")
-                            val confirmedOffset = parseConfirmedRangeOffset(rangeHeader, totalBytes)
-
-                            val serverOffset = if (confirmedOffset != null) {
-                                confirmedOffset
+                            val confirmedOffset = Companion.parseConfirmedRangeOffset(rangeHeader, totalBytes)
+                            hasPendingProbe = true
+                            pendingProbe = if (confirmedOffset != null) {
+                                UploadProbeResult.ResumableAt(confirmedOffset)
                             } else {
                                 android.util.Log.w("YouTubeUploader", "308 with missing/invalid/non-advancing Range header ('$rangeHeader') for $segId; querying server status.")
-                                val probed = queryUploadStatus(destination, currentAccessToken, totalBytes)
-                                if (probed == -1L) {
-                                    if (sessionRestarted) {
-                                        return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
-                                    }
-                                    pairingManager.clearUploadSessionUrl(segId)
-                                    dao.updateOutboxOffset(segId, 0L)
-                                    return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
-                                }
-                                probed
-                            }
-                            val changed = reconcileServerOffset(serverOffset)
-                            if (!changed) {
-                                waitForNoProgress = true
-                                android.util.Log.w("YouTubeUploader", "No confirmed upload progress for $segId at offset $currentOffset")
-                            } else {
-                                android.util.Log.i("YouTubeUploader", "Server-confirmed upload offset for $segId: $currentOffset/$totalBytes")
-                                updateUploadForeground(((currentOffset * 100) / totalBytes).toInt())
+                                probeUploadStatus(destination, currentAccessToken, totalBytes, dispatchId, useCloud)
                             }
                         }
                         200, 201 -> {
@@ -789,12 +1163,8 @@ class YouTubeDirectUploadWorker(
                             dao.updateOutboxOffset(segId, totalBytes)
                             promoteUploadForeground("$progressLabel \u00b7 Finalizing", 100)
                             val bodyStr = resp.body?.string() ?: ""
-                            val videoId = try {
-                                val json = gson.fromJson(bodyStr, JsonObject::class.java)
-                                json.get("id")?.asString
-                            } catch (_: Exception) {
-                                null
-                            } ?: findExistingUploadByDispatchId(currentAccessToken, dispatchId, useCloud)
+                            val videoId = Companion.extractVideoIdFromProbeBody(bodyStr)
+                                ?: findExistingUploadByDispatchId(currentAccessToken, dispatchId, useCloud)
 
                             if (!videoId.isNullOrBlank()) {
                                 pairingManager.clearUploadSessionUrl(segId)
@@ -830,6 +1200,15 @@ class YouTubeDirectUploadWorker(
                                 return DirectUploadResult(false)
                             }
                         }
+                        404, 410 -> {
+                            hasPendingProbe = true
+                            pendingProbe = UploadProbeResult.Expired
+                        }
+                        408, 429, in 500..599 -> {
+                            android.util.Log.w("YouTubeUploader", "Transient chunk HTTP ${resp.code} for $segId at $start; probing server status.")
+                            hasPendingProbe = true
+                            pendingProbe = probeUploadStatus(destination, currentAccessToken, totalBytes, dispatchId, useCloud)
+                        }
                         else -> {
                             android.util.Log.e("YouTubeUploader", "Chunk error: HTTP ${resp.code} ${resp.message}")
                             return DirectUploadResult(false)
@@ -840,6 +1219,39 @@ class YouTubeDirectUploadWorker(
 
                 if (retryWithNewToken) {
                     continue
+                }
+                if (hasPendingProbe) {
+                    when (val probed = pendingProbe) {
+                        is UploadProbeResult.ConfirmedComplete -> {
+                            dao.updateOutboxOffset(segId, totalBytes)
+                            pairingManager.clearUploadSessionUrl(segId)
+                            android.util.Log.i("YouTubeUploader", "Upload 100% confirmed via probe for $segId (Video ID: ${probed.videoId})")
+                            return DirectUploadResult(success = true, youtubeVideoId = probed.videoId)
+                        }
+                        is UploadProbeResult.Expired -> {
+                            if (sessionRestarted) {
+                                return DirectUploadResult(false, failureReason = "Resumable upload session expired after restart")
+                            }
+                            pairingManager.clearUploadSessionUrl(segId)
+                            dao.updateOutboxOffset(segId, 0L)
+                            return uploadToYouTubeDirect(currentAccessToken, file, dispatchId, seg, useCloud, sessionRestarted = true)
+                        }
+                        is UploadProbeResult.ResumableAt -> {
+                            val changed = reconcileServerOffset(probed.offset)
+                            if (!changed) {
+                                waitForNoProgress = true
+                                android.util.Log.w("YouTubeUploader", "No confirmed upload progress for $segId at offset $currentOffset")
+                            } else {
+                                android.util.Log.i("YouTubeUploader", "Server-confirmed upload offset for $segId: $currentOffset/$totalBytes")
+                                updateUploadForeground(((currentOffset * 100) / totalBytes).toInt())
+                            }
+                        }
+                        null -> {
+                            reconcileServerOffset(null)
+                            waitForNoProgress = true
+                            android.util.Log.w("YouTubeUploader", "Transient probe failure for $segId; retaining offset $currentOffset without restarting")
+                        }
+                    }
                 }
                 if (waitForNoProgress && !waitForNoProgressRetry()) {
                     return DirectUploadResult(false, failureReason = "Upload made no confirmed progress after ${progress.consecutiveNoProgress} responses")
@@ -1361,83 +1773,53 @@ class YouTubeDirectUploadWorker(
         return dao.getSegmentsUploadedAwaitingProcessing().isNotEmpty()
     }
 
-    /**
-     * Parses and strictly validates YouTube Resumable Upload Range header.
-     * Expected format: "bytes=0-<end>" where 0 <= end < totalBytes.
-     * Returns (end + 1L) as the next byte offset to send, or null if missing, invalid, or out of bounds.
-     */
-    private fun parseConfirmedRangeOffset(rangeHeader: String?, totalBytes: Long): Long? {
-        if (rangeHeader.isNullOrBlank()) return null
-        val match = Regex("""bytes=(\d+)-(\d+)""").find(rangeHeader.trim()) ?: return null
-        val (startStr, endStr) = match.destructured
-        val start = startStr.toLongOrNull() ?: return null
-        val end = endStr.toLongOrNull() ?: return null
-
-        if (start != 0L) {
-            android.util.Log.w("YouTubeUploader", "Invalid Range start $start in '$rangeHeader'")
-            return null
+    /** Sweeps Worker `deletion_pending` R2 media and confirms quota reclamation via `/media/:id/confirm-deletion`. */
+    private fun reclaimPendingR2Quota() {
+        val cloudToken = pairingManager.cloudAccessToken.trim()
+        if (cloudToken.isBlank()) return
+        try {
+            val summary = reclaimDeletionPendingR2Media(
+                client = client,
+                workerUrl = workerUrl,
+                cloudAccessToken = cloudToken
+            )
+            if (summary.reclaimedCount > 0 || summary.failedCount > 0) {
+                android.util.Log.i(
+                    "YouTubeUploader",
+                    "R2 quota reclamation: discovered=${summary.discoveredCount} reclaimed=${summary.reclaimedCount} failed=${summary.failedCount}"
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("YouTubeUploader", "R2 quota reclamation skipped: ${e.message}")
         }
-        if (end < 0L || (totalBytes > 0L && end >= totalBytes)) {
-            android.util.Log.w("YouTubeUploader", "Range end $end out of bounds for total $totalBytes")
-            return null
-        }
-        return end + 1L
     }
 
     /**
-     * Probes upload session status via Content-Range: bytes * / totalBytes.
-     * Handles 401 with refreshed access token.
-     * Returns:
-     * - next confirmed byte offset (>= 0L)
-     * - -1L if session is permanently expired (404 / 410)
-     * - null if network or ambiguous error occurred
+     * Probes upload session status via Content-Range: bytes * / totalBytes, returning typed
+     * [UploadProbeResult] (`ConfirmedComplete`, `ResumableAt`, `Expired`) or `null` on transient errors.
      */
-    private fun queryUploadStatus(uploadUrl: String, accessToken: String, totalBytes: Long): Long? {
-        var token = accessToken
-        val hasToken = token.isNotBlank()
-        for (attempt in 0..1) {
-            val queryReqBuilder = Request.Builder()
-                .url(uploadUrl)
-                .header("Content-Range", "bytes */$totalBytes")
-                .header("Content-Length", "0")
-            // Cloud vault sessions are authorized by the worker-minted URL itself.
-            if (hasToken) queryReqBuilder.header("Authorization", "Bearer $token")
-            val queryReq = queryReqBuilder
-                .put("".toRequestBody("video/mp4".toMediaType()))
-                .build()
-
-            try {
-                val resp = client.newCall(queryReq).execute()
-                resp.use {
-                    if (it.code == 401 && hasToken && attempt == 0) {
-                        val freshToken = refreshYouTubeToken()
-                        if (freshToken != null) {
-                            token = freshToken
-                            return@use // retry with refreshed token in next iteration
-                        }
-                    }
-                    if (it.code == 308) {
-                        val rangeHeader = it.header("Range")
-                        return if (rangeHeader.isNullOrBlank()) {
-                            0L
-                        } else {
-                            parseConfirmedRangeOffset(rangeHeader, totalBytes)
-                        }
-                    } else if (it.isSuccessful) {
-                        return totalBytes
-                    } else if (it.code == 404 || it.code == 410 || (it.code == 401 && !hasToken)) {
-                        // For cloud sessions a 401 marks an invalidated URL: treat
-                        // as expired so the caller re-opens a session via the worker.
-                        return -1L
-                    } else {
-                        return null
-                    }
-                }
-            } catch (e: Exception) {
-                return null
+    private suspend fun probeUploadStatus(
+        uploadUrl: String,
+        accessToken: String,
+        totalBytes: Long,
+        dispatchId: String,
+        useCloud: Boolean
+    ): UploadProbeResult? {
+        val probed = Companion.queryUploadStatus(
+            client = client,
+            uploadUrl = uploadUrl,
+            accessToken = accessToken,
+            totalBytes = totalBytes,
+            refreshTokenFn = { refreshYouTubeToken() },
+            fallbackVideoIdLookup = null
+        )
+        if (probed is UploadProbeResult.ResumableAt && totalBytes > 0L && probed.offset >= totalBytes) {
+            val recoveredId = findExistingUploadByDispatchId(accessToken, dispatchId, useCloud)
+            if (!recoveredId.isNullOrBlank()) {
+                return UploadProbeResult.ConfirmedComplete(recoveredId)
             }
         }
-        return null
+        return probed
     }
 }
 

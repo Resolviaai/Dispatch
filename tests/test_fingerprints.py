@@ -7,6 +7,7 @@ import unittest
 
 from dispatch.segments import (
     round_ms,
+    canonical_json_dumps,
     canonical_media_spans,
     canonical_spans_str,
     compute_media_fingerprint,
@@ -74,6 +75,28 @@ class TestFingerprints(unittest.TestCase):
 
         mapped_proxy = c3_to_c2_time(c3_time, window_start)
         self.assertEqual(mapped_proxy, proxy_time)
+
+    def test_rfc8785_fingerprint_golden_vectors(self) -> None:
+        for item in self.fixtures["rfc8785_fingerprint_vectors"]:
+            with self.subTest(name=item["name"]):
+                self.assertEqual(
+                    canonical_json_dumps(item["layers"]),
+                    item["expected_canonical_layers_json"],
+                )
+                self.assertEqual(
+                    canonical_json_dumps(item["settings"]),
+                    item["expected_canonical_settings_json"],
+                )
+                actual_media_fp = compute_media_fingerprint(item["source_asset_id"], item["ranges"])
+                self.assertEqual(actual_media_fp, item["expected_media_fingerprint"])
+                actual_render_fp = compute_render_fingerprint(
+                    actual_media_fp,
+                    item["layout_mode"],
+                    item["crop_anchor_x"],
+                    item["layers"],
+                    item["settings"],
+                )
+                self.assertEqual(actual_render_fp, item["expected_render_fingerprint"])
 
 
 if __name__ == "__main__":

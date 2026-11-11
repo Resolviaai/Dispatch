@@ -20,10 +20,15 @@ Window rules (owner brief):
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from dispatch.transcription.subprocess_utils import low_priority_subprocess_kwargs
+
+logger = logging.getLogger("dispatch.edit_windows")
 
 MAX_WINDOW_SECONDS = 300.0
 CONTEXT_SECONDS = 60.0
@@ -110,15 +115,19 @@ def uncovered_ranges(wanted: Tuple[float, float],
     return [(a, b) for a, b in holes if b - a > 0.01]
 
 
-def select_words_for_range(words: List[Dict[str, Any]],
-                           window_start: float) -> List[Dict[str, Any]]:
+def select_words_for_range(
+    words: List[Dict[str, Any]],
+    window_start: float,
+    window_end: Optional[float] = None,
+) -> List[Dict[str, Any]]:
     """Filter cached SOURCE-relative words down to a window's local timeline."""
+    win_hi = float(window_end) if window_end is not None else (window_start + MAX_WINDOW_SECONDS)
     out = []
     for w in words:
         ws, we = float(w.get("start", 0.0)), float(w.get("end", 0.0))
-        if we > window_start and ws < window_start + MAX_WINDOW_SECONDS:
+        if we > window_start and ws < win_hi:
             out.append({**w, "start": round(max(ws, window_start) - window_start, 3),
-                        "end": round(min(we, window_start + MAX_WINDOW_SECONDS) - window_start, 3)})
+                        "end": round(min(we, win_hi) - window_start, 3)})
     return out
 
 
@@ -132,29 +141,101 @@ def validate_selection(sel_start: float, sel_end: float) -> Optional[str]:
     return None
 
 
-def ffprobe_validate_proxy(meta: Dict[str, Any], expected_duration: float) -> Optional[str]:
-    """Verify a staged proxy preserves duration/orientation/audio. Error or None."""
+def _fit_proxy_dimensions(source_width: int, source_height: int) -> Tuple[int, int]:
+    """Compute even 720p-class proxy dimensions preserving source orientation & aspect."""
+    sw = max(2, int(source_width))
+    sh = max(2, int(source_height))
+    if sh > sw:
+        max_w, max_h = PROXY_HEIGHT, PROXY_WIDTH  # 720 x 1280 for portrait
+    else:
+        max_w, max_h = PROXY_WIDTH, PROXY_HEIGHT  # 1280 x 720 for landscape/square
+    scale = min(max_w / float(sw), max_h / float(sh))
+    tw = max(2, min(max_w, int(round((sw * scale) / 2.0)) * 2))
+    th = max(2, min(max_h, int(round((sh * scale) / 2.0)) * 2))
+    return tw, th
+
+
+def ffprobe_validate_proxy(
+    meta: Dict[str, Any],
+    expected_duration: float,
+    source_meta: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Verify a staged proxy preserves duration/orientation/aspect/audio. Error or None."""
     if abs(float(meta.get("duration", 0.0)) - expected_duration) > 1.0:
         return f"proxy duration {meta.get('duration')} != window {expected_duration}"
     if not meta.get("has_audio"):
         return "proxy is missing the audio track"
     w, h = int(meta.get("width", 0)), int(meta.get("height", 0))
-    if (w, h) not in ((1280, 720), (720, 1280)):
-        return f"proxy is {w}x{h}, expected 1280x720-class proxy"
+    if w < 2 or h < 2 or (w % 2 != 0) or (h % 2 != 0):
+        return f"proxy is {w}x{h}, expected even positive dimensions"
+    if h > w:
+        if w > PROXY_HEIGHT or h > PROXY_WIDTH:
+            return f"portrait proxy {w}x{h} exceeds 720x1280 cap"
+    else:
+        if w > PROXY_WIDTH or h > PROXY_HEIGHT:
+            return f"proxy {w}x{h} exceeds 1280x720 cap"
+    if isinstance(source_meta, dict):
+        sw = int(source_meta.get("effective_width") or source_meta.get("width") or 0)
+        sh = int(source_meta.get("effective_height") or source_meta.get("height") or 0)
+        src_orient = str(source_meta.get("orientation") or "").strip().lower()
+        if sw > 0 and sh > 0:
+            src_is_portrait = sh > sw
+            if src_is_portrait and not (h > w):
+                return f"proxy orientation {w}x{h} lost portrait source {sw}x{sh}"
+            if sw > sh and not (w > h):
+                return f"proxy orientation {w}x{h} lost landscape source {sw}x{sh}"
+            src_ratio = sw / float(sh)
+            proxy_ratio = w / float(h)
+            if abs(proxy_ratio - src_ratio) > 0.06:
+                return f"proxy aspect ratio {w}x{h} ({proxy_ratio:.2f}) != source {sw}x{sh} ({src_ratio:.2f})"
+        elif src_orient == "portrait" and not (h > w):
+            return f"proxy {w}x{h} must remain portrait for portrait source"
+        elif src_orient == "landscape" and not (w >= h):
+            return f"proxy {w}x{h} must remain landscape for landscape source"
     return None
 
 
 # ------------------------------------------------------------------ staging
 
-def build_proxy_cmd(source: str, out_path: str, window_start: float,
-                    window_end: float) -> List[str]:
-    """720p30 edit proxy of the bounded window. Duration/orientation/audio
-    preserved; bitrate is a target, actual bytes verified after encode."""
+def build_proxy_cmd(
+    source: str,
+    out_path: str,
+    window_start: float,
+    window_end: float,
+    *,
+    source_width: Optional[int] = None,
+    source_height: Optional[int] = None,
+    orientation: Optional[str] = None,
+) -> List[str]:
+    """720p30 edit proxy of the bounded window. Preserves source orientation and aspect
+    ratio without forced 16:9 letterboxing; bitrate is a target, actual bytes verified."""
     dur = round(window_end - window_start, 3)
+    if source_width and source_height and int(source_width) > 0 and int(source_height) > 0:
+        tw, th = _fit_proxy_dimensions(int(source_width), int(source_height))
+        vf = f"scale={tw}:{th},setsar=1"
+    elif orientation and str(orientation).strip().lower() == "portrait":
+        vf = (
+            f"scale={PROXY_HEIGHT}:{PROXY_WIDTH}:force_original_aspect_ratio=decrease,"
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1"
+        )
+    elif orientation and str(orientation).strip().lower() == "landscape":
+        vf = (
+            f"scale={PROXY_WIDTH}:{PROXY_HEIGHT}:force_original_aspect_ratio=decrease,"
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1"
+        )
+    else:
+        # Orientation-aware even scaling within 720p portrait/landscape bounds, zero letterbox padding.
+        vf = (
+            "scale="
+            f"w='trunc(iw*min(if(gt(ih\\,iw)\\,{PROXY_HEIGHT}\\,{PROXY_WIDTH})/iw\\,"
+            f"if(gt(ih\\,iw)\\,{PROXY_WIDTH}\\,{PROXY_HEIGHT})/ih)/2)*2':"
+            f"h='trunc(ih*min(if(gt(ih\\,iw)\\,{PROXY_HEIGHT}\\,{PROXY_WIDTH})/iw\\,"
+            f"if(gt(ih\\,iw)\\,{PROXY_WIDTH}\\,{PROXY_HEIGHT})/ih)/2)*2',setsar=1"
+        )
     return [
         "ffmpeg", "-y", "-ss", f"{window_start:.3f}", "-i", source,
         "-t", f"{dur:.3f}",
-        "-vf", f"scale={PROXY_WIDTH}:{PROXY_HEIGHT}:force_original_aspect_ratio=decrease,pad={PROXY_WIDTH}:{PROXY_HEIGHT}:(ow-iw)/2:(oh-ih)/2",
+        "-vf", vf,
         "-r", str(PROXY_FPS),
         "-c:v", "libx264", "-preset", "veryfast", "-b:v", PROXY_VIDEO_BITRATE,
         "-c:a", "aac", "-b:a", "128k",
@@ -163,11 +244,26 @@ def build_proxy_cmd(source: str, out_path: str, window_start: float,
     ]
 
 
+def _invoke_ffmpeg(run_ffmpeg: Optional[Any], cmd: List[str], timeout: int) -> Any:
+    if run_ffmpeg is not None:
+        try:
+            return run_ffmpeg(cmd, capture_output=True, text=True, timeout=timeout)
+        except TypeError:
+            return run_ffmpeg(cmd)
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        **low_priority_subprocess_kwargs(),
+    )
+
+
 def stage_edit_window(
     clip_id: str, user_id: str, source_video: str,
     window_start: float, window_end: float,
     *, transcribe_fn, media_store, db_ops,
-    ffprobe_meta, run_ffmpeg,
+    ffprobe_meta, run_ffmpeg=None,
 ) -> Dict[str, Any]:
     """Stage one bounded edit window: extract proxy -> verify -> transcribe
     (window-local audio) -> upload via MediaStore -> persist. `db_ops` isolates
@@ -176,24 +272,48 @@ def stage_edit_window(
     if span <= 0 or span > MAX_WINDOW_SECONDS + 1e-6:
         raise ValueError(f"window span {span:.1f}s outside the {MAX_WINDOW_SECONDS:.0f}s cap")
 
+    source_meta: Optional[Dict[str, Any]] = None
+    if ffprobe_meta is not None and source_video and Path(source_video).exists():
+        try:
+            probed = ffprobe_meta(source_video)
+            if isinstance(probed, dict):
+                source_meta = probed
+        except Exception as exc:
+            logger.debug("Source probe skipped for %s: %s", source_video, exc)
+
+    sw = int(source_meta.get("effective_width") or source_meta.get("width") or 0) if source_meta else 0
+    sh = int(source_meta.get("effective_height") or source_meta.get("height") or 0) if source_meta else 0
+    sorient = str(source_meta.get("orientation") or "").strip().lower() if source_meta else ""
+
     window_id = db_ops.create_window(clip_id, user_id, window_start, window_end)
     try:
         with tempfile.TemporaryDirectory(prefix="editwin_") as td:
             proxy = str(Path(td) / "proxy.mp4")
             audio = str(Path(td) / "audio.mp3")
-            cmd = build_proxy_cmd(source_video, proxy, window_start, window_end)
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            cmd = build_proxy_cmd(
+                source_video, proxy, window_start, window_end,
+                source_width=sw or None,
+                source_height=sh or None,
+                orientation=sorient or None,
+            )
+            res = _invoke_ffmpeg(run_ffmpeg, cmd, timeout=600)
             if res.returncode != 0:
-                raise RuntimeError(f"proxy encode failed: {res.stderr[-200:]}")
+                stderr_tail = (getattr(res, "stderr", "") or "")[-200:]
+                raise RuntimeError(f"proxy encode failed: {stderr_tail}")
             meta = ffprobe_meta(proxy)
-            err = ffprobe_validate_proxy(meta, span)
+            err = ffprobe_validate_proxy(meta, span, source_meta=source_meta)
             if err:
                 raise RuntimeError(f"proxy rejected: {err}")
 
-            # transcription: window-local audio, source-relative words
-            ares = subprocess.run(
-                ["ffmpeg", "-y", "-i", proxy, "-vn", "-c:a", "libmp3lame", "-q:a", "5", audio],
-                capture_output=True, text=True, timeout=300)
+            # transcription: window-local audio from raw source when available, source-relative words
+            if source_video and Path(source_video).exists():
+                audio_cmd = [
+                    "ffmpeg", "-y", "-ss", f"{window_start:.3f}", "-i", source_video,
+                    "-t", f"{round(span, 3):.3f}", "-vn", "-c:a", "libmp3lame", "-q:a", "5", audio,
+                ]
+            else:
+                audio_cmd = ["ffmpeg", "-y", "-i", proxy, "-vn", "-c:a", "libmp3lame", "-q:a", "5", audio]
+            ares = _invoke_ffmpeg(run_ffmpeg, audio_cmd, timeout=300)
             if ares.returncode != 0:
                 raise RuntimeError("audio extraction failed")
             words_raw = transcribe_fn(audio, max_input_seconds=MAX_WINDOW_TRANSCRIBE_SECONDS)

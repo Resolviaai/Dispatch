@@ -51,7 +51,11 @@ class AndroidClipRendererTest {
         )
         assertEquals("grp_1", group.id)
         assertEquals(1, group.words.size)
-        assertTrue(group.backgroundEnabled)
+        assertFalse(group.backgroundEnabled)
+        assertTrue(group.strokeEnabled)
+        assertEquals(4.5f, group.strokeWidthPx, 0.001f)
+        assertEquals("none", group.backgroundMode)
+        assertEquals("clip_relative", group.coordinateSystem)
         assertTrue(group.isCaption)
         assertEquals(0.78f, group.positionY, 0.001f)
         assertEquals(0.5f, group.positionX, 0.001f)
@@ -294,5 +298,201 @@ class AndroidClipRendererTest {
         assertEquals("PieceTwo", remapped[1].words[0].text)
         assertEquals(6.0f, remapped[1].start, 0.01f)
         assertEquals(7.5f, remapped[1].end, 0.01f)
+    }
+
+    @Test
+    fun computeLayoutPlan_fitBlurUsesDualLayerBlurredBackdrop_bothAspectDirections() {
+        val portraitTo16x9 = AndroidClipRenderer.computeLayoutPlan(
+            layoutMode = "fit_blur",
+            targetResolution = "1080p",
+            srcWidth = 1080,
+            srcHeight = 1920,
+            rotationDegrees = 0
+        )
+        assertEquals(1920, portraitTo16x9.outputWidth)
+        assertEquals(1080, portraitTo16x9.outputHeight)
+        assertEquals(AndroidClipRenderer.Companion.LayoutStrategy.FIT_BLUR, portraitTo16x9.strategy)
+        assertEquals(1080, portraitTo16x9.fgHeight)
+        assertTrue("Expected fitted foreground width < 1920, got ${portraitTo16x9.fgWidth}", portraitTo16x9.fgWidth in 600..616)
+
+        val landscapeTo9x16 = AndroidClipRenderer.computeLayoutPlan(
+            layoutMode = "fit_blur",
+            targetResolution = "1080p",
+            srcWidth = 1920,
+            srcHeight = 1080,
+            rotationDegrees = 0
+        )
+        assertEquals(1080, landscapeTo9x16.outputWidth)
+        assertEquals(1920, landscapeTo9x16.outputHeight)
+        assertEquals(AndroidClipRenderer.Companion.LayoutStrategy.FIT_BLUR, landscapeTo9x16.strategy)
+        assertEquals(1080, landscapeTo9x16.fgWidth)
+        assertTrue("Expected fitted foreground height < 1920, got ${landscapeTo9x16.fgHeight}", landscapeTo9x16.fgHeight in 600..616)
+
+        val group = AndroidClipRenderer.CaptionGroup("g1", 0.5f, 1.5f, listOf(AndroidClipRenderer.CaptionWord("Hi", 0.5f, 1.5f)))
+        val compPlan = AndroidClipRenderer.planComposition(
+            layoutPlan = portraitTo16x9,
+            segmentSpans = listOf(Pair(0L, 5000L)),
+            overlayGroups = listOf(group)
+        )
+        assertEquals(2, compPlan.sequenceCount)
+        assertTrue(compPlan.hasBlurredBackdropSequence)
+        assertTrue(compPlan.backgroundAudioRemoved)
+        assertTrue(compPlan.hasCompositionOverlayEffect)
+    }
+
+    @Test
+    fun computeLayoutPlan_native169_handlesPortraitAndRotatedInputsWithoutClippingOrSquish() {
+        val portraitPlan = AndroidClipRenderer.computeLayoutPlan(
+            layoutMode = "native_169",
+            targetResolution = "1080p",
+            srcWidth = 1080,
+            srcHeight = 1920,
+            rotationDegrees = 0
+        )
+        assertEquals(1920, portraitPlan.outputWidth)
+        assertEquals(1080, portraitPlan.outputHeight)
+        assertEquals(AndroidClipRenderer.Companion.LayoutStrategy.FIT_BLACK, portraitPlan.strategy)
+        assertEquals(null, portraitPlan.cropBounds)
+        assertEquals(1080, portraitPlan.fgHeight)
+        assertTrue("Expected 9:16 pillarboxed fgWidth ~608, got ${portraitPlan.fgWidth}", portraitPlan.fgWidth in 606..610)
+
+        // Raw coded size 1920x1080 with 90deg EXIF/codec rotation is upright 1080x1920 portrait!
+        val rotatedPortraitPlan = AndroidClipRenderer.computeLayoutPlan(
+            layoutMode = "native_169",
+            targetResolution = "1080p",
+            srcWidth = 1920,
+            srcHeight = 1080,
+            rotationDegrees = 90
+        )
+        assertEquals(1080, rotatedPortraitPlan.uprightSourceWidth)
+        assertEquals(1920, rotatedPortraitPlan.uprightSourceHeight)
+        assertEquals(1080, rotatedPortraitPlan.fgHeight)
+        assertTrue(rotatedPortraitPlan.fgWidth in 606..610)
+    }
+
+    @Test
+    fun remapOverlayGroupsToTimeline_singlePieceEdl_respectsSegmentStartAndEnd() {
+        val trimmedOut = AndroidClipRenderer.CaptionWord("Before", 0.5f, 1.5f) // 10.5..11.5s source -> cut!
+        val kept = AndroidClipRenderer.CaptionWord("Inside", 3.0f, 4.0f) // 13.0..14.0s source -> kept!
+        val after = AndroidClipRenderer.CaptionWord("After", 7.0f, 8.0f) // 17.0..18.0s source -> cut!
+
+        val groups = listOf(
+            AndroidClipRenderer.CaptionGroup("g0", 0.5f, 1.5f, listOf(trimmedOut)),
+            AndroidClipRenderer.CaptionGroup("g1", 3.0f, 4.0f, listOf(kept)),
+            AndroidClipRenderer.CaptionGroup("g2", 7.0f, 8.0f, listOf(after))
+        )
+        // Single-piece EDL [12.0s, 16.0s] while clip origin was 10.0s
+        val spans = listOf(Pair(12000L, 16000L))
+        val remapped = AndroidClipRenderer.remapOverlayGroupsToTimeline(groups, spans, clipStartSec = 10.0f)
+
+        assertEquals(1, remapped.size)
+        assertEquals("Inside", remapped[0].words[0].text)
+        assertEquals(1.0f, remapped[0].start, 0.01f)
+        assertEquals(2.0f, remapped[0].end, 0.01f)
+    }
+
+    @Test
+    fun parseOverlayGroups_andRemap_sourceRelativeDoesNotDoubleOffset() {
+        val json = """
+        {
+          "coordinate_system": "source_relative",
+          "timeline": {
+            "segments": [
+              { "source_start": 10.0, "source_end": 15.0 },
+              { "source_start": 25.0, "source_end": 30.0 }
+            ]
+          },
+          "tracks": [
+            {
+              "id": "captions",
+              "kind": "captions",
+              "groups": [
+                {
+                  "id": "cap_src",
+                  "start": 26.0,
+                  "end": 27.5,
+                  "coordinate_system": "source_relative",
+                  "words": [
+                    { "text": "SourceWord", "start": 26.0, "end": 27.5 }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """.trimIndent()
+
+        val docObj = JsonParser.parseString(json).asJsonObject
+        val groups = AndroidClipRenderer.parseOverlayGroups(docObj)
+        assertEquals(1, groups.size)
+        assertEquals("source_relative", groups[0].coordinateSystem)
+
+        val spans = AndroidClipRenderer.parseSegmentSpans(docObj)
+        assertEquals(10.0f, AndroidClipRenderer.resolveCaptionOriginSec(docObj, spans), 0.001f)
+
+        // clipStartSec=10.0f MUST NOT be added again onto source_relative timestamps (26.0..27.5s)
+        val remapped = AndroidClipRenderer.remapOverlayGroupsToTimeline(groups, spans, clipStartSec = 10.0f)
+        assertEquals(1, remapped.size)
+        assertEquals("SourceWord", remapped[0].words[0].text)
+        assertEquals(6.0f, remapped[0].start, 0.01f)
+        assertEquals(7.5f, remapped[0].end, 0.01f)
+    }
+
+    @Test
+    fun parseOverlayGroups_matchesPythonFrontendPresetDefaultsAndNoneAnimationScale() {
+        val json = """
+        {
+          "tracks": [
+            {
+              "id": "captions",
+              "kind": "captions",
+              "groups": [
+                {
+                  "id": "cap_defaults",
+                  "start": 1.0,
+                  "end": 2.0,
+                  "style": {
+                    "animation": { "mode": "none" }
+                  },
+                  "words": [
+                    { "text": "Clean", "start": 1.0, "end": 2.0 }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """.trimIndent()
+
+        val docObj = JsonParser.parseString(json).asJsonObject
+        val groups = AndroidClipRenderer.parseOverlayGroups(docObj)
+        assertEquals(1, groups.size)
+        val g = groups[0]
+        assertFalse(g.backgroundEnabled)
+        assertTrue(g.strokeEnabled)
+        assertEquals("none", g.backgroundMode)
+        assertEquals("none", g.activeAnimType)
+        assertEquals(1.0f, g.activeScaleMax, 0.001f)
+
+        val noAnimTransform = AndroidClipRenderer.computeActiveWordTransform(
+            isWordActive = true,
+            activeAnimType = g.activeAnimType,
+            activeAnimDurationMs = g.activeAnimDurationMs,
+            activeScaleMax = g.activeScaleMax,
+            elapsedSec = 0.02f,
+            canvasScale = 1.0f
+        )
+        assertEquals(1.0f, noAnimTransform.scale, 0.0001f)
+        assertEquals(0.0f, noAnimTransform.translateY, 0.0001f)
+
+        val popTransform = AndroidClipRenderer.computeActiveWordTransform(
+            isWordActive = true,
+            activeAnimType = "pop",
+            activeAnimDurationMs = 120,
+            activeScaleMax = 1.15f,
+            elapsedSec = 0.01f,
+            canvasScale = 1.0f
+        )
+        assertTrue(popTransform.scale > 1.05f)
     }
 }

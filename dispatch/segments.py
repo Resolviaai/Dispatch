@@ -6,6 +6,8 @@ handle exact boundaries explicitly so Python and TypeScript can share fixtures.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,6 +19,7 @@ MAX_TOTAL_DURATION = 180.0
 SOURCE_BOUNDS_EPSILON = 0.01
 _TIME_EPSILON = 1e-9
 EDL_VERSION = 1
+RFC8785_VERSION = "rfc8785-v1"
 
 
 class SegmentError(ValueError):
@@ -305,10 +308,96 @@ def normalize_edl_document(document: Any) -> Dict[str, Any]:
 def round_ms(seconds: Any) -> float:
     """Canonical half-up millisecond rounding: math.floor(x * 1000.0 + 0.5) / 1000.0.
 
-    Guarantees cross-language identical results across Python, TypeScript, and PostgreSQL.
+    Guarantees cross-language identical results across Python, TypeScript, Kotlin, and PostgreSQL.
+    Normalizes -0.0 to +0.0.
     """
     val = _finite_number(seconds, "seconds")
-    return math.floor(val * 1000.0 + 0.5) / 1000.0
+    rounded = math.floor(val * 1000.0 + 0.5) / 1000.0
+    return 0.0 if rounded == 0.0 else rounded
+
+
+def format_rfc8785_number(value: Any) -> str:
+    """Serialize a finite int or float per RFC 8785 §3.2.2.3 / ES6 Number::toString.
+
+    Rejects booleans, NaN, and Infinity, and normalizes -0.0 to "0".
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SegmentError(f"JSON number must be a finite int or float, got {type(value).__name__}")
+    if isinstance(value, int):
+        if -9007199254740991 <= value <= 9007199254740991:
+            return "0" if value == 0 else str(value)
+        num = float(value)
+    else:
+        num = float(value)
+    if not math.isfinite(num):
+        raise SegmentError("non-finite numbers (NaN/Infinity) are not valid in RFC-8785 JSON")
+    if num == 0.0:
+        return "0"
+
+    sign = "-" if num < 0.0 else ""
+    ax = abs(num)
+    s_repr = repr(ax)
+    if "e" in s_repr or "E" in s_repr:
+        mantissa, exp_str = s_repr.lower().split("e")
+        exp = int(exp_str)
+        digits = mantissa.replace(".", "").rstrip("0")
+        n = exp + 1
+    elif "." in s_repr:
+        int_part, frac_part = s_repr.split(".")
+        if int_part != "0":
+            digits = (int_part + frac_part).rstrip("0")
+            n = len(int_part)
+        else:
+            stripped = frac_part.lstrip("0")
+            leading_zeros = len(frac_part) - len(stripped)
+            digits = stripped.rstrip("0")
+            n = -leading_zeros
+    else:
+        digits = s_repr.rstrip("0")
+        n = len(s_repr)
+
+    k = len(digits)
+    if k <= n <= 21:
+        return sign + digits + ("0" * (n - k))
+    if 0 < n <= 21:
+        return sign + digits[:n] + "." + digits[n:]
+    if -6 < n <= 0:
+        return sign + "0." + ("0" * (-n)) + digits
+    exp_val = n - 1
+    exp_sign = "+" if exp_val >= 0 else "-"
+    mant = digits if k == 1 else f"{digits[0]}.{digits[1:]}"
+    return f"{sign}{mant}e{exp_sign}{abs(exp_val)}"
+
+
+def canonical_json_dumps(value: Any) -> str:
+    """Serialize any JSON value deterministically according to RFC 8785 (JCS).
+
+    - Object keys sorted recursively by UTF-16 code units (matching ECMAScript .sort()).
+    - Compact separators (',' and ':') with no extra whitespace.
+    - Raw UTF-8 strings (ensure_ascii=False) with standard JSON control escaping.
+    - Clean IEEE-754 number formatting (-0.0 -> "0", 1.0 -> "1", ES6 thresholds).
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return format_rfc8785_number(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(canonical_json_dumps(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        pairs = []
+        for k, v in value.items():
+            key_str = k if isinstance(k, str) else str(k)
+            pairs.append((key_str, v))
+        pairs.sort(key=lambda item: item[0].encode("utf-16-be"))
+        return "{" + ",".join(
+            f"{json.dumps(k, ensure_ascii=False)}:{canonical_json_dumps(v)}"
+            for k, v in pairs
+        ) + "}"
+    raise SegmentError(f"unsupported type for RFC-8785 canonical JSON: {type(value).__name__}")
 
 
 def canonical_media_spans(ranges: Any, source_duration: Optional[float] = None) -> List[TimeRange]:
@@ -360,8 +449,6 @@ def canonical_spans_str(ranges: Any, source_duration: Optional[float] = None) ->
 
 def compute_media_fingerprint(source_asset_id: str, ranges: Any, source_duration: Optional[float] = None) -> str:
     """Computes canonical media_fingerprint from source asset ID and canonical spans."""
-    import hashlib
-
     if not isinstance(source_asset_id, str) or not source_asset_id.strip():
         raise SegmentError("source_asset_id must be a non-empty string")
     spans_str = canonical_spans_str(ranges, source_duration)
@@ -376,25 +463,28 @@ def compute_render_fingerprint(
     layers: Optional[Sequence[Dict[str, Any]]] = None,
     settings: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Computes canonical render_fingerprint incorporating media identity, layout, crop, and all layers."""
-    import hashlib
-    import json
+    """Computes canonical render_fingerprint incorporating media identity, layout, crop, and all layers.
 
+    Uses RFC 8785 (JCS) canonical JSON serialization for layers and settings so Python,
+    TypeScript, Cloud Worker, and Kotlin produce byte-identical hashes.
+    """
     if not isinstance(media_fingerprint, str) or len(media_fingerprint) != 64:
         raise SegmentError("media_fingerprint must be a valid 64-character SHA-256 hex string")
-    layout = str(layout_mode).strip() if layout_mode else "portrait_9_16"
+    layout = str(layout_mode).strip() if layout_mode is not None else ""
+    if not layout:
+        layout = "portrait_9_16"
     crop_str = f"{round_ms(crop_anchor_x):.3f}"
 
     layers_clean = list(layers) if layers is not None else []
-    layers_str = json.dumps(layers_clean, sort_keys=True, separators=(",", ":"))
+    layers_str = canonical_json_dumps(layers_clean)
     layers_hash = hashlib.sha256(layers_str.encode("utf-8")).hexdigest()
 
     settings_clean = dict(settings) if settings is not None else {}
-    settings_str = json.dumps(settings_clean, sort_keys=True, separators=(",", ":"))
+    settings_str = canonical_json_dumps(settings_clean)
     settings_hash = hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
 
     payload = f"v1:render:{media_fingerprint}:{layout}:{crop_str}:{layers_hash}"
-    if settings_clean:
+    if settings_str != "{}":
         payload += f":{settings_hash}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -423,11 +513,47 @@ def fragment_layer_interval(layer_interval: Sequence[float], deleted_gap: Sequen
     return []
 
 
-def c2_to_c3_time(proxy_time: float, window_start: float) -> float:
-    """Maps C2 proxy playback time to C3 master source seconds."""
-    return round_ms(round_ms(proxy_time) + round_ms(window_start))
+def c2_to_c3_time(
+    proxy_time: float,
+    window_start: float,
+    window_end: Optional[float] = None,
+) -> float:
+    """Maps C2 proxy playback time to C3 master source seconds with explicit window bounds checks."""
+    p = round_ms(_finite_number(proxy_time, "proxy_time"))
+    ws = round_ms(_finite_number(window_start, "window_start"))
+    if ws < 0.0:
+        raise SegmentError("window_start must be non-negative")
+    if p < 0.0:
+        raise SegmentError(f"proxy_time {p} is before edit window start (0.0)")
+    if window_end is not None:
+        we = round_ms(_finite_number(window_end, "window_end"))
+        if we <= ws:
+            raise SegmentError("window_end must be greater than window_start")
+        window_dur = round_ms(we - ws)
+        if p > window_dur + 1e-6:
+            raise SegmentError(f"proxy_time {p} exceeds edit window duration {window_dur}")
+        mapped = round_ms(ws + p)
+        return we if mapped > we else mapped
+    return round_ms(ws + p)
 
 
-def c3_to_c2_time(source_time: float, window_start: float) -> float:
-    """Maps C3 master source seconds to C2 proxy playback time."""
-    return round_ms(round_ms(source_time) - round_ms(window_start))
+def c3_to_c2_time(
+    source_time: float,
+    window_start: float,
+    window_end: Optional[float] = None,
+) -> float:
+    """Maps C3 master source seconds to C2 proxy playback time with explicit window bounds checks."""
+    s = round_ms(_finite_number(source_time, "source_time"))
+    ws = round_ms(_finite_number(window_start, "window_start"))
+    if ws < 0.0:
+        raise SegmentError("window_start must be non-negative")
+    if s < ws - 1e-6:
+        raise SegmentError(f"source_time {s} is before edit window start {ws}")
+    if window_end is not None:
+        we = round_ms(_finite_number(window_end, "window_end"))
+        if we <= ws:
+            raise SegmentError("window_end must be greater than window_start")
+        if s > we + 1e-6:
+            raise SegmentError(f"source_time {s} exceeds edit window end {we}")
+    mapped = round_ms(s - ws)
+    return 0.0 if mapped < 0.0 else mapped

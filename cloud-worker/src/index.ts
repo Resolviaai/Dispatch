@@ -1325,7 +1325,8 @@ const PUBLICATION_STATS_TTL_MS = 15 * 60 * 1000;
 
 interface CloudPublicationRow {
   id: string;
-  clip_id?: string;
+  clip_id?: string | null;
+  local_clip_id?: string | null;
   platform: string;
   account_id: string;
   remote_id: string | null;
@@ -1521,53 +1522,525 @@ export async function probeYouTubeDuration(videoId: string): Promise<number | nu
   }
 }
 
+const R2_MAX_CHUNK_BYTES = 8 * 1024 * 1024; // 8 MiB (32 * 256 KiB for YouTube resumable alignment)
+const X_APPEND_CHUNK_BYTES = 5 * 1024 * 1024; // 5 MiB (<= 8 MiB, X media APPEND cap)
+const LINKEDIN_API_VERSION = "202501";
+
+type PublishPlatform = "youtube" | "instagram" | "linkedin" | "twitter" | "facebook";
+
+function normalizePublishPlatform(raw: unknown): PublishPlatform | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "youtube" || s === "youtube_shorts") return "youtube";
+  if (s === "instagram") return "instagram";
+  if (s === "linkedin") return "linkedin";
+  if (s === "twitter" || s === "x") return "twitter";
+  if (s === "facebook") return "facebook";
+  return null;
+}
+
+function safePublishError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .replace(/OAuth\s+[A-Za-z0-9._-]+/gi, "OAuth [redacted]")
+    .replace(/access_token=[^&\s]+/gi, "access_token=[redacted]")
+    .slice(0, 400);
+}
+
+async function readResponseBoundedBytes(res: Response, maxBytes = R2_MAX_CHUNK_BYTES): Promise<Uint8Array> {
+  if (!res.body) {
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.byteLength > maxBytes) {
+      throw new Error(`Response body exceeds max allowed size (${buf.byteLength} > ${maxBytes})`);
+    }
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`Streamed body exceeds max allowed size (${total} > ${maxBytes})`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+type R2SizeProbe = {
+  size: number;
+  firstObj?: R2ObjectBody | null;
+  legacyBytes?: Uint8Array;
+};
+
+async function getR2ObjectSize(env: Env, key: string): Promise<R2SizeProbe> {
+  if (typeof env.BUCKET.head === "function") {
+    const head = await env.BUCKET.head(key);
+    if (!head) {
+      throw new Error(`R2 video object not found for key: ${key}`);
+    }
+    return { size: Number(head.size || 0) };
+  }
+  const firstObj = await env.BUCKET.get(key, { range: { offset: 0, length: R2_MAX_CHUNK_BYTES } });
+  if (!firstObj) {
+    throw new Error(`R2 video object not found for key: ${key}`);
+  }
+  const maybeSize = (firstObj as unknown as { size?: unknown }).size;
+  if (typeof maybeSize === "number" && Number.isFinite(maybeSize)) {
+    return { size: maybeSize, firstObj };
+  }
+  if (firstObj.body) {
+    const reader = firstObj.body.getReader();
+    let total = 0;
+    const parts: Uint8Array[] = [];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+        total += value.byteLength;
+        if (total <= R2_MAX_CHUNK_BYTES) {
+          parts.push(value);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (total <= R2_MAX_CHUNK_BYTES) {
+      const merged = new Uint8Array(total);
+      let pos = 0;
+      for (const p of parts) {
+        merged.set(p, pos);
+        pos += p.byteLength;
+      }
+      return { size: total, legacyBytes: merged };
+    }
+    return { size: total };
+  }
+  const legacyObj = firstObj as unknown as { arrayBuffer?: () => Promise<ArrayBuffer> };
+  if (typeof legacyObj.arrayBuffer === "function") {
+    const bytes = new Uint8Array(await legacyObj.arrayBuffer());
+    return { size: bytes.byteLength, legacyBytes: bytes };
+  }
+  throw new Error(`R2 video object ${key} has neither size nor body stream`);
+}
+
+function concatUint8Chunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {
+  if (chunks.length === 1 && chunks[0].byteLength === totalBytes) {
+    return chunks[0];
+  }
+  const out = new Uint8Array(totalBytes);
+  let pos = 0;
+  for (const c of chunks) {
+    out.set(c, pos);
+    pos += c.byteLength;
+  }
+  return out;
+}
+
+async function* streamR2RangeChunks(
+  env: Env,
+  key: string,
+  startOffset: number,
+  totalRangeBytes: number,
+  maxChunkBytes: number,
+  probe?: R2SizeProbe,
+): AsyncGenerator<{ chunk: Uint8Array; offset: number; length: number }> {
+  const chunkLimit = Math.max(1, Math.min(maxChunkBytes, R2_MAX_CHUNK_BYTES));
+  if (totalRangeBytes <= 0) return;
+
+  if (probe?.legacyBytes) {
+    const endLimit = Math.min(startOffset + totalRangeBytes, probe.legacyBytes.byteLength);
+    let pos = startOffset;
+    while (pos < endLimit) {
+      const nextEnd = Math.min(pos + chunkLimit, endLimit);
+      const slice = probe.legacyBytes.subarray(pos, nextEnd);
+      yield { chunk: slice, offset: pos, length: slice.byteLength };
+      pos = nextEnd;
+    }
+    return;
+  }
+
+  let cursor = startOffset;
+  const targetEnd = startOffset + totalRangeBytes;
+
+  while (cursor < targetEnd) {
+    const reqLen = Math.min(chunkLimit, targetEnd - cursor);
+    let obj: R2ObjectBody | null = null;
+    if (cursor === 0 && probe?.firstObj) {
+      obj = probe.firstObj;
+      probe.firstObj = null;
+    } else {
+      obj = await env.BUCKET.get(key, { range: { offset: cursor, length: reqLen } });
+    }
+    if (!obj) {
+      throw new Error(`R2 object missing while streaming range at offset ${cursor}: ${key}`);
+    }
+    if (!obj.body) {
+      const maybeBuf = obj as unknown as { arrayBuffer?: () => Promise<ArrayBuffer> };
+      if (typeof maybeBuf.arrayBuffer === "function") {
+        const bytes = new Uint8Array(await maybeBuf.arrayBuffer());
+        const slice = bytes.byteLength > reqLen && !(obj as { range?: unknown }).range
+          ? bytes.subarray(cursor, cursor + reqLen)
+          : bytes.subarray(0, Math.min(bytes.byteLength, reqLen));
+        if (slice.byteLength === 0) break;
+        yield { chunk: slice, offset: cursor, length: slice.byteLength };
+        cursor += slice.byteLength;
+        continue;
+      }
+      throw new Error(`R2 object missing readable body at offset ${cursor}`);
+    }
+
+    const reader = obj.body.getReader();
+    const hasExplicitRange = Boolean((obj as unknown as { range?: unknown }).range);
+    let acc: Uint8Array[] = [];
+    let accLen = 0;
+    let streamBytesSeen = 0;
+    let skippedPrefix = 0;
+    const prefixToSkip = !hasExplicitRange && cursor > 0 ? cursor : 0;
+
+    try {
+      while (cursor < targetEnd) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+
+        let buf = value;
+        if (skippedPrefix < prefixToSkip) {
+          const needSkip = prefixToSkip - skippedPrefix;
+          if (buf.byteLength <= needSkip) {
+            skippedPrefix += buf.byteLength;
+            continue;
+          }
+          buf = buf.subarray(needSkip);
+          skippedPrefix += needSkip;
+        }
+
+        let bufPos = 0;
+        while (bufPos < buf.byteLength && cursor < targetEnd) {
+          const remainingInTarget = targetEnd - cursor;
+          const spaceInChunk = Math.min(chunkLimit - accLen, remainingInTarget - accLen);
+          if (spaceInChunk <= 0) break;
+          const take = Math.min(spaceInChunk, buf.byteLength - bufPos);
+          acc.push(buf.subarray(bufPos, bufPos + take));
+          accLen += take;
+          bufPos += take;
+          streamBytesSeen += take;
+
+          if (accLen >= chunkLimit || cursor + accLen >= targetEnd) {
+            const outChunk = concatUint8Chunks(acc, accLen);
+            yield { chunk: outChunk, offset: cursor, length: outChunk.byteLength };
+            cursor += outChunk.byteLength;
+            acc = [];
+            accLen = 0;
+          }
+        }
+      }
+      if (accLen > 0 && cursor < targetEnd) {
+        const outChunk = concatUint8Chunks(acc, accLen);
+        yield { chunk: outChunk, offset: cursor, length: outChunk.byteLength };
+        cursor += outChunk.byteLength;
+        streamBytesSeen += outChunk.byteLength;
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+
+    if (streamBytesSeen === 0) break;
+  }
+}
+
+function createR2RangeStream(
+  env: Env,
+  key: string,
+  startOffset: number,
+  totalRangeBytes: number,
+  maxChunkBytes: number,
+  probe?: R2SizeProbe,
+): ReadableStream<Uint8Array> {
+  const iter = streamR2RangeChunks(env, key, startOffset, totalRangeBytes, maxChunkBytes, probe);
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const next = await iter.next();
+      if (next.done) {
+        controller.close();
+      } else {
+        controller.enqueue(next.value.chunk);
+      }
+    },
+    async cancel() {
+      await iter.return?.(undefined);
+    },
+  });
+}
+
+function percentEncodeOAuth1(str: string): string {
+  return encodeURIComponent(str).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+async function buildOAuth1AuthorizationHeader(
+  method: string,
+  urlStr: string,
+  creds: { apiKey: string; apiSecret: string; oauthToken: string; oauthSecret: string },
+): Promise<string> {
+  const parsed = new URL(urlStr);
+  const baseUrl = `${parsed.origin}${parsed.pathname}`;
+  const nonceBytes = new Uint8Array(16);
+  crypto.getRandomValues(nonceBytes);
+  const nonce = Array.from(nonceBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  const timestamp = String(Math.floor(Date.now() / 1000));
+
+  const oauthParams: Record<string, string> = {
+    oauth_consumer_key: creds.apiKey,
+    oauth_nonce: nonce,
+    oauth_signature_method: "HMAC-SHA1",
+    oauth_timestamp: timestamp,
+    oauth_token: creds.oauthToken,
+    oauth_version: "1.0",
+  };
+
+  const allPairs: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(oauthParams)) {
+    allPairs.push([percentEncodeOAuth1(k), percentEncodeOAuth1(v)]);
+  }
+  parsed.searchParams.forEach((v, k) => {
+    allPairs.push([percentEncodeOAuth1(k), percentEncodeOAuth1(v)]);
+  });
+  allPairs.sort((a, b) => (a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : (a[0] < b[0] ? -1 : 1)));
+
+  const paramString = allPairs.map(([k, v]) => `${k}=${v}`).join("&");
+  const signatureBase = `${method.toUpperCase()}&${percentEncodeOAuth1(baseUrl)}&${percentEncodeOAuth1(paramString)}`;
+  const signingKey = `${percentEncodeOAuth1(creds.apiSecret)}&${percentEncodeOAuth1(creds.oauthSecret)}`;
+
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const sigBuf = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(signatureBase));
+  const sigBytes = new Uint8Array(sigBuf);
+  let bin = "";
+  for (let i = 0; i < sigBytes.length; i++) bin += String.fromCharCode(sigBytes[i]);
+  const signature = btoa(bin);
+
+  const headerParts = Object.entries({ ...oauthParams, oauth_signature: signature })
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${percentEncodeOAuth1(k)}="${percentEncodeOAuth1(v)}"`);
+  return `OAuth ${headerParts.join(", ")}`;
+}
+
+async function resolvePublicationClipRef(
+  env: Env,
+  userId: string,
+  rawClipId: string,
+): Promise<{ cloudClipId: string | null; localClipId: string | null }> {
+  const svcHeaders = {
+    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+  };
+  const clipRef = rawClipId.trim();
+  if (!clipRef) return { cloudClipId: null, localClipId: null };
+
+  try {
+    const lookupUrl = new URL(`${env.SUPABASE_URL}/rest/v1/clips_cloud`);
+    lookupUrl.searchParams.set("user_id", `eq.${userId}`);
+    if (UUID_RE.test(clipRef)) {
+      lookupUrl.searchParams.set("or", `(id.eq.${clipRef},local_clip_id.eq.${clipRef})`);
+    } else {
+      lookupUrl.searchParams.set("local_clip_id", `eq.${clipRef}`);
+    }
+    lookupUrl.searchParams.set("select", "id,local_clip_id");
+    lookupUrl.searchParams.set("limit", "1");
+    const res = await fetch(lookupUrl.toString(), { headers: svcHeaders, signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const rows = (await res.json()) as Array<{ id?: string; local_clip_id?: string | null }>;
+      if (Array.isArray(rows) && rows.length > 0 && rows[0]?.id) {
+        return {
+          cloudClipId: String(rows[0].id),
+          localClipId: rows[0].local_clip_id ? String(rows[0].local_clip_id) : (!UUID_RE.test(clipRef) ? clipRef : null),
+        };
+      }
+    }
+  } catch {}
+
+  return UUID_RE.test(clipRef)
+    ? { cloudClipId: clipRef, localClipId: null }
+    : { cloudClipId: null, localClipId: clipRef };
+}
+
+async function upsertPublicationRow(
+  env: Env,
+  svc: Record<string, string>,
+  params: {
+    userId: string;
+    clipRef: { cloudClipId: string | null; localClipId: string | null };
+    platform: PublishPlatform;
+    accountId: string;
+    remoteId: string;
+    remoteUrl: string | null;
+    publishMode: string;
+    publishedAt: string;
+  },
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    user_id: params.userId,
+    platform: params.platform,
+    account_id: params.accountId,
+    remote_id: params.remoteId,
+    remote_url: params.remoteUrl,
+    status: "published",
+    publish_mode: params.publishMode,
+    published_at: params.publishedAt,
+  };
+  if (params.clipRef.cloudClipId) {
+    payload.clip_id = params.clipRef.cloudClipId;
+  } else {
+    payload.clip_id = null;
+  }
+  if (params.clipRef.localClipId) {
+    payload.local_clip_id = params.clipRef.localClipId;
+  }
+
+  const endpoint = params.clipRef.cloudClipId
+    ? `${env.SUPABASE_URL}/rest/v1/publications?on_conflict=clip_id,platform,account_id`
+    : `${env.SUPABASE_URL}/rest/v1/publications`;
+  const headers: Record<string, string> = params.clipRef.cloudClipId
+    ? { ...svc, Prefer: "resolution=merge-duplicates,return=minimal" }
+    : { ...svc, Prefer: "return=minimal" };
+
+  await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+function isMetaAuthError(status: number, bodyJson: Record<string, unknown>): boolean {
+  if (status === 401 || status === 403) return true;
+  const errObj = bodyJson?.error as { code?: number; type?: string } | undefined;
+  return Boolean(
+    errObj &&
+    (errObj.code === 190 || errObj.code === 102 || errObj.type === "OAuthException"),
+  );
+}
+
 /**
  * Drain queued social publishing jobs directly from Cloudflare Worker without PC dependency.
- * Supports YouTube Shorts (OAuth resumable upload) and Meta/Instagram Reels via R2 presigned URLs.
+ * Streams R2 video chunks (<= 8 MiB) without full-file buffering, tracks per-target state
+ * transitions in publishing_job_targets, and enforces ProviderAuthError isolation per target.
  */
-export async function drainPublishingQueue(env: Env): Promise<{ processed: number; succeeded: number; failed: number }> {
+export async function drainPublishingQueue(
+  env: Env,
+  options: { pollIntervalMs?: number } = {},
+): Promise<{ processed: number; succeeded: number; failed: number }> {
   const svc = {
     apikey: env.SUPABASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
     "Content-Type": "application/json",
   };
+  const pollIntervalMs = typeof options.pollIntervalMs === "number" && options.pollIntervalMs >= 0
+    ? options.pollIntervalMs
+    : 1500;
 
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
 
+  type PublishingJobRow = {
+    id: string;
+    user_id: string;
+    clip_id: string;
+    title: string;
+    description?: string;
+    platforms: string[] | string;
+    account_ids?: Record<string, string | string[]> | null;
+    publish_mode: "private" | "unlisted" | "public";
+    r2_key?: string | null;
+    rendered_fingerprint?: string | null;
+    platform_results?: Record<string, unknown>;
+  };
+
+  type TargetRow = {
+    id?: string;
+    job_id: string;
+    user_id: string;
+    platform: string;
+    account_id: string;
+    status: string;
+    attempt_count?: number;
+    remote_id?: string | null;
+    remote_url?: string | null;
+    last_error?: string | null;
+    upload_session_url?: string | null;
+    synthetic?: boolean;
+  };
+
+  const updateTargetState = async (
+    target: TargetRow,
+    status: "queued" | "uploading" | "processing" | "published" | "failed" | "blocked_needs_auth",
+    extra: {
+      remoteId?: string | null;
+      remoteUrl?: string | null;
+      lastError?: string | null;
+      uploadSessionUrl?: string | null;
+      nextRetryAt?: string | null;
+    } = {},
+  ): Promise<void> => {
+    target.status = status;
+    if (extra.remoteId !== undefined) target.remote_id = extra.remoteId;
+    if (extra.remoteUrl !== undefined) target.remote_url = extra.remoteUrl;
+    if (extra.lastError !== undefined) target.last_error = extra.lastError;
+    if (target.synthetic || !target.id) return;
+
+    await rpcRaw(env, "cloud_update_publishing_target", {
+      p_target_id: target.id,
+      p_status: status,
+      p_remote_id: extra.remoteId ?? null,
+      p_remote_url: extra.remoteUrl ?? null,
+      p_last_error: extra.lastError ?? null,
+      p_upload_session_url: extra.uploadSessionUrl ?? null,
+      p_next_retry_at: extra.nextRetryAt ?? null,
+    }).catch(() => {});
+  };
+
   try {
     // 1. Atomically claim jobs using the SKIP LOCKED RPC, with fallback to PostgREST representation return
-    let queuedJobs: Array<{
-      id: string;
-      user_id: string;
-      clip_id: string;
-      title: string;
-      description?: string;
-      platforms: string[] | string;
-      publish_mode: "private" | "unlisted" | "public";
-      r2_key?: string | null;
-      rendered_fingerprint?: string | null;
-      platform_results?: Record<string, unknown>;
-    }> = [];
+    let queuedJobs: PublishingJobRow[] = [];
 
     try {
-      const claimRpcRows = await rpcRaw<typeof queuedJobs>(env, "cloud_claim_publishing_jobs", {
+      const claimRpcRows = (await rpcRaw(env, "cloud_claim_publishing_jobs", {
         p_limit: 5,
         p_stale_seconds: 600,
-      });
+      })) as PublishingJobRow[] | null;
       if (Array.isArray(claimRpcRows)) {
         queuedJobs = claimRpcRows;
       }
     } catch {
       // Fallback for environments before migration 0028 is applied:
-      // Fetch queued jobs and patch with Prefer: return=representation to ensure atomic claim
       const queueRes = await fetch(
         `${env.SUPABASE_URL}/rest/v1/publishing_jobs?or=(status.eq.queued,and(status.eq.processing,updated_at.lt.${new Date(Date.now() - 600000).toISOString()}))&order=created_at.asc&limit=5`,
         { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
       );
       if (queueRes.ok) {
-        const candidates = (await queueRes.json()) as typeof queuedJobs;
+        const candidates = (await queueRes.json()) as PublishingJobRow[];
         for (const candidate of candidates) {
           const claimPatch = await fetch(
             `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(candidate.id)}&status=in.(queued,processing)`,
@@ -1581,7 +2054,7 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
             }
           );
           if (claimPatch.ok) {
-            const updatedRows = (await claimPatch.json()) as typeof queuedJobs;
+            const updatedRows = (await claimPatch.json()) as PublishingJobRow[];
             if (Array.isArray(updatedRows) && updatedRows.length > 0) {
               queuedJobs.push(updatedRows[0]);
             }
@@ -1595,11 +2068,12 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
     }
 
     for (const job of queuedJobs) {
-
       processed++;
       const results: Record<string, unknown> = { ...(job.platform_results || {}) };
       let anySuccess = false;
+      let anyPending = false;
       let lastErrorMessage: string | null = null;
+      let claimedTargets: TargetRow[] = [];
 
       try {
         const expectedFinalPrefix = `final/${job.user_id}/`;
@@ -1650,54 +2124,136 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
           throw new Error("No owned rendered clip_video R2 object found for publishing job");
         }
 
-        const r2Object = await env.BUCKET.get(r2Key);
-        if (!r2Object) {
-          throw new Error(`R2 video object not found for key: ${r2Key}`);
-        }
-
-        const videoBytes = await r2Object.arrayBuffer();
-        if (videoBytes.byteLength === 0) {
+        const r2Probe = await getR2ObjectSize(env, r2Key);
+        const totalSize = r2Probe.size;
+        if (totalSize <= 0) {
           throw new Error("R2 video object is empty (0 bytes)");
         }
 
-        const platforms = Array.isArray(job.platforms) ? job.platforms : ["youtube"];
+        const clipRef = await resolvePublicationClipRef(env, job.user_id, String(job.clip_id));
 
-        for (const platform of platforms) {
-          const normPlatform = platform.toLowerCase().trim();
+        // 2. Claim per-target rows from publishing_job_targets (0031), or synthesize when pre-0031
+        let existingTargets: TargetRow[] = [];
+        let targetRpcSupported = true;
+        try {
+          const claimed = (await rpcRaw(env, "cloud_claim_publishing_targets", {
+            p_job_id: job.id,
+            p_limit: 20,
+            p_max_attempts: 5,
+          })) as TargetRow[] | null;
+          if (Array.isArray(claimed)) {
+            claimedTargets = claimed;
+          }
+        } catch {
+          targetRpcSupported = false;
+        }
 
-          if (normPlatform === "youtube") {
-            try {
-              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=eq.youtube&select=id,account_id&limit=1`;
-              const accRes = await fetch(accUrl, { headers: svc });
-              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string }>) : [];
-              const accountId = accRows.length > 0 ? (accRows[0].account_id || accRows[0].id) : null;
+        if (targetRpcSupported) {
+          const tListRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/publishing_job_targets?job_id=eq.${encodeURIComponent(job.id)}&select=id,job_id,user_id,platform,account_id,status,attempt_count,remote_id,remote_url,last_error`,
+            { headers: svc },
+          ).catch(() => null);
+          if (tListRes && tListRes.ok) {
+            const fetched = (await tListRes.json().catch(() => [])) as TargetRow[];
+            if (Array.isArray(fetched) && fetched.length > 0) {
+              existingTargets = fetched;
+              if (fetched.some((t) => t.status === "published")) {
+                anySuccess = true;
+              }
+            }
+          }
+        }
 
-              if (!accountId) {
-                results.youtube = { status: "skipped_no_account", error: "No connected YouTube account found" };
+        if (claimedTargets.length === 0 && existingTargets.length === 0) {
+          const rawPlatforms = Array.isArray(job.platforms)
+            ? job.platforms
+            : (typeof job.platforms === "string" ? job.platforms.split(",").map((s) => s.trim()).filter(Boolean) : ["youtube"]);
+          const acctMap = (job.account_ids && typeof job.account_ids === "object") ? job.account_ids : {};
+          const seenKeys = new Set<string>();
+          for (const rawPlat of rawPlatforms) {
+            const norm = normalizePublishPlatform(rawPlat);
+            if (!norm) {
+              const badKey = String(rawPlat || "").trim().toLowerCase();
+              if (badKey) results[badKey] = { status: "skipped_unsupported", platform: badKey };
+              continue;
+            }
+            const rawAccts = acctMap[norm] ?? (norm === "twitter" ? acctMap.x : undefined);
+            const acctList = Array.isArray(rawAccts)
+              ? rawAccts.map((a) => String(a ?? "").trim()).filter(Boolean)
+              : (typeof rawAccts === "string" && rawAccts.trim() ? [rawAccts.trim()] : [""]);
+            const effectiveAccts = acctList.length > 0 ? acctList : [""];
+            for (const aid of effectiveAccts) {
+              const dedupeKey = `${norm}:${aid}`;
+              if (seenKeys.has(dedupeKey)) continue;
+              seenKeys.add(dedupeKey);
+              claimedTargets.push({
+                job_id: job.id,
+                user_id: job.user_id,
+                platform: norm,
+                account_id: aid,
+                status: "uploading",
+                synthetic: true,
+              });
+            }
+          }
+        }
+
+        const platformCounts = new Map<string, number>();
+        for (const t of claimedTargets) {
+          const norm = normalizePublishPlatform(t.platform) ?? t.platform.toLowerCase();
+          platformCounts.set(norm, (platformCounts.get(norm) ?? 0) + 1);
+        }
+
+        const recordTargetResult = (normPlatform: PublishPlatform, accountId: string, entry: Record<string, unknown>) => {
+          const multiForPlatform = (platformCounts.get(normPlatform) ?? 0) > 1;
+          if (!multiForPlatform || !(normPlatform in results)) {
+            results[normPlatform] = entry;
+          }
+          if (multiForPlatform || accountId) {
+            const perTargetKey = `${normPlatform}:${accountId || "default"}`;
+            const targetBucket = (results.targets && typeof results.targets === "object" && !Array.isArray(results.targets))
+              ? (results.targets as Record<string, unknown>)
+              : {};
+            targetBucket[perTargetKey] = entry;
+            results.targets = targetBucket;
+          }
+        };
+
+        for (const target of claimedTargets) {
+          const normPlatform = normalizePublishPlatform(target.platform);
+          const requestedAccountId = String(target.account_id || "").trim();
+
+          if (!normPlatform) {
+            const rawPlat = String(target.platform || "").toLowerCase();
+            await updateTargetState(target, "failed", { lastError: `Unsupported publishing platform '${rawPlat}'` });
+            results[rawPlat] = { status: "skipped_unsupported", platform: rawPlat };
+            continue;
+          }
+
+          if (target.remote_id && target.status === "published") {
+            anySuccess = true;
+            continue;
+          }
+
+          try {
+            if (normPlatform === "youtube") {
+              const tok = await getValidProviderToken(env, {
+                userId: job.user_id,
+                provider: "youtube",
+                accountId: requestedAccountId,
+                requireSourceVault: false,
+              });
+              if (!tok) {
+                const msg = requestedAccountId
+                  ? `YouTube account '${requestedAccountId}' not connected`
+                  : "No connected YouTube account found";
+                await updateTargetState(target, "blocked_needs_auth", { lastError: msg });
+                recordTargetResult("youtube", requestedAccountId, { status: "blocked_needs_auth", error: msg });
+                lastErrorMessage = msg;
                 continue;
               }
-
-              let accessToken: string | null = null;
-              try {
-                const tok = await getValidProviderToken(env, {
-                  userId: job.user_id,
-                  provider: "youtube",
-                  accountId,
-                  requireSourceVault: false,
-                });
-                accessToken = tok?.accessToken ?? null;
-              } catch (authErr) {
-                if (authErr instanceof ProviderAuthError && authErr.code === "needs_reauth") {
-                  results.youtube = { status: "failed", needs_reauth: true, error: authErr.message };
-                  lastErrorMessage = authErr.message;
-                  continue;
-                }
-                throw authErr;
-              }
-              if (!accessToken) {
-                results.youtube = { status: "failed", error: "Could not refresh YouTube OAuth access token" };
-                continue;
-              }
+              const accountId = tok.accountId || requestedAccountId;
+              const accessToken = tok.accessToken;
 
               const initRes = await fetch(
                 "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
@@ -1707,7 +2263,7 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
                     Authorization: `Bearer ${accessToken}`,
                     "Content-Type": "application/json; charset=UTF-8",
                     "X-Upload-Content-Type": "video/mp4",
-                    "X-Upload-Content-Length": String(videoBytes.byteLength),
+                    "X-Upload-Content-Length": String(totalSize),
                   },
                   body: JSON.stringify({
                     snippet: {
@@ -1720,9 +2276,12 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
                       selfDeclaredMadeForKids: false,
                     },
                   }),
-                }
+                },
               );
-
+              if (initRes.status === 401 || initRes.status === 403) {
+                const errText = await initRes.text().catch(() => "");
+                throw new ProviderAuthError("needs_reauth", 401, "youtube", `YouTube authorization failed (${initRes.status}): ${errText.slice(0, 160)}`, accountId);
+              }
               if (!initRes.ok) {
                 const errText = await initRes.text().catch(() => "");
                 throw new Error(`YouTube resumable session init failed (${initRes.status}): ${errText.slice(0, 200)}`);
@@ -1733,292 +2292,871 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
                 throw new Error("YouTube API did not return resumable upload Location header");
               }
 
-              const uploadRes = await fetch(uploadUrl, {
-                method: "PUT",
-                headers: {
-                  "Content-Type": "video/mp4",
-                  "Content-Length": String(videoBytes.byteLength),
-                },
-                body: videoBytes,
-              });
+              await updateTargetState(target, "uploading", { uploadSessionUrl: uploadUrl });
 
-              if (!uploadRes.ok) {
-                const errText = await uploadRes.text().catch(() => "");
-                throw new Error(`YouTube video upload failed (${uploadRes.status}): ${errText.slice(0, 200)}`);
+              let ytResult: { id?: string } | null = null;
+              for await (const { chunk, offset, length } of streamR2RangeChunks(env, r2Key, 0, totalSize, R2_MAX_CHUNK_BYTES, r2Probe)) {
+                const isMultiChunk = totalSize > R2_MAX_CHUNK_BYTES;
+                const putHeaders: Record<string, string> = {
+                  "Content-Type": "video/mp4",
+                  "Content-Length": String(length),
+                };
+                if (isMultiChunk) {
+                  putHeaders["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
+                }
+                const uploadRes = await fetch(uploadUrl, {
+                  method: "PUT",
+                  headers: putHeaders,
+                  body: chunk,
+                });
+                if (uploadRes.status === 401 || uploadRes.status === 403) {
+                  const errText = await uploadRes.text().catch(() => "");
+                  throw new ProviderAuthError("needs_reauth", 401, "youtube", `YouTube upload authorization failed (${uploadRes.status}): ${errText.slice(0, 160)}`, accountId);
+                }
+                const isFinal = offset + length >= totalSize;
+                if (!isFinal && uploadRes.status === 308) {
+                  continue;
+                }
+                if (!uploadRes.ok) {
+                  const errText = await uploadRes.text().catch(() => "");
+                  throw new Error(`YouTube video upload failed (${uploadRes.status}): ${errText.slice(0, 200)}`);
+                }
+                ytResult = (await uploadRes.json().catch(() => ({}))) as { id?: string };
+                if (ytResult?.id) break;
               }
 
-              const ytResult = (await uploadRes.json()) as { id?: string };
-              const videoId = ytResult.id;
+              const videoId = ytResult?.id;
               if (!videoId) {
                 throw new Error("YouTube video uploaded but no video ID returned");
               }
-
               const remoteUrl = `https://youtube.com/shorts/${videoId}`;
-              results.youtube = {
+
+              await updateTargetState(target, "processing", { remoteId: videoId, remoteUrl });
+
+              // Best-effort status sanity check: fail only if YouTube explicitly rejected/failed.
+              try {
+                const stRes = await fetch(
+                  `https://www.googleapis.com/youtube/v3/videos?part=status&id=${encodeURIComponent(videoId)}`,
+                  { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(8000) },
+                );
+                if (stRes.ok) {
+                  const stJson = (await stRes.json().catch(() => ({}))) as {
+                    items?: Array<{ status?: { uploadStatus?: string; rejectionReason?: string } }>;
+                  };
+                  const upStatus = stJson.items?.[0]?.status?.uploadStatus;
+                  if (upStatus === "failed" || upStatus === "rejected") {
+                    throw new Error(`YouTube processing ${upStatus}: ${stJson.items?.[0]?.status?.rejectionReason || "unknown"}`);
+                  }
+                }
+              } catch (stErr) {
+                if (stErr instanceof Error && stErr.message.startsWith("YouTube processing ")) {
+                  throw stErr;
+                }
+              }
+
+              const publishedAt = new Date().toISOString();
+              await updateTargetState(target, "published", { remoteId: videoId, remoteUrl });
+              recordTargetResult("youtube", accountId, {
                 status: "published",
+                account_id: accountId,
                 remote_id: videoId,
                 remote_url: remoteUrl,
-                published_at: new Date().toISOString(),
-              };
+                published_at: publishedAt,
+              });
               anySuccess = true;
-
-              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
-                method: "POST",
-                headers: svc,
-                body: JSON.stringify({
-                  user_id: job.user_id,
-                  clip_id: job.clip_id,
-                  platform: "youtube",
-                  account_id: accountId,
-                  remote_id: videoId,
-                  remote_url: remoteUrl,
-                  status: "published",
-                  publish_mode: job.publish_mode,
-                  published_at: new Date().toISOString(),
-                }),
-              }).catch(() => {});
-            } catch (ytErr) {
-              const msg = ytErr instanceof Error ? ytErr.message : String(ytErr);
-              results.youtube = { status: "failed", error: msg };
-              lastErrorMessage = msg;
-            }
-          } else if (normPlatform === "instagram") {
-            try {
-              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=in.(instagram,meta)&select=id,account_id&limit=1`;
-              const accRes = await fetch(accUrl, { headers: svc });
-              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string }>) : [];
-              const accountId = accRows.length > 0 ? (accRows[0].account_id || accRows[0].id) : null;
-
-              if (!accountId) {
-                results.instagram = { status: "skipped_no_account", error: "No connected Instagram account found" };
-                continue;
-              }
-
-              let metaCred: { token: string; payload: Record<string, unknown> } | null = null;
-              try {
-                metaCred = await loadMetaGraphToken(env, job.user_id, accountId, "instagram");
-              } catch (authErr) {
-                if (authErr instanceof ProviderAuthError && authErr.code === "needs_reauth") {
-                  results.instagram = { status: "failed", needs_reauth: true, error: authErr.message };
-                  lastErrorMessage = authErr.message;
-                  continue;
+              await upsertPublicationRow(env, svc, {
+                userId: job.user_id,
+                clipRef,
+                platform: "youtube",
+                accountId,
+                remoteId: videoId,
+                remoteUrl,
+                publishMode: job.publish_mode,
+                publishedAt,
+              });
+            } else if (normPlatform === "instagram") {
+              let igCred = await getValidProviderToken(env, {
+                userId: job.user_id,
+                provider: "instagram",
+                accountId: requestedAccountId,
+              });
+              if (!igCred && !requestedAccountId) {
+                const legacyMeta = await loadMetaGraphToken(env, job.user_id, "", "instagram");
+                if (legacyMeta?.token) {
+                  const fallbackId = String(legacyMeta.payload.ig_user_id || legacyMeta.payload.page_id || legacyMeta.payload.user_id || "");
+                  igCred = {
+                    provider: "instagram",
+                    accountId: fallbackId,
+                    rowId: fallbackId,
+                    accountName: null,
+                    accountEmail: null,
+                    accessToken: legacyMeta.token,
+                    expiresAtMs: Date.now() + 3600_000,
+                    expiresAtIso: new Date(Date.now() + 3600_000).toISOString(),
+                    payload: legacyMeta.payload,
+                    metadata: {},
+                  };
                 }
-                throw authErr;
               }
-              if (!metaCred?.token) {
-                results.instagram = { status: "failed", error: "Could not load Meta graph token" };
+              if (!igCred) {
+                const msg = requestedAccountId
+                  ? `Instagram account '${requestedAccountId}' not connected`
+                  : "No connected Instagram account found";
+                await updateTargetState(target, "blocked_needs_auth", { lastError: msg });
+                recordTargetResult("instagram", requestedAccountId, { status: "blocked_needs_auth", error: msg });
+                lastErrorMessage = msg;
                 continue;
               }
 
+              const accountId = igCred.accountId || requestedAccountId;
+              const igGraphBase = (
+                typeof igCred.payload.api_base === "string" && igCred.payload.api_base.startsWith("https://")
+                  ? igCred.payload.api_base
+                  : "https://graph.facebook.com/v21.0"
+              ).replace(/\/+$/, "");
+              const igUserId = String(
+                igCred.payload.ig_user_id || igCred.payload.page_id || igCred.payload.user_id || accountId,
+              );
               const presignedVideoUrl = await presign(env, "GET", r2Key);
-              const igUserId = typeof metaCred.payload.page_id === "string" ? metaCred.payload.page_id : (typeof metaCred.payload.user_id === "string" ? metaCred.payload.user_id : accountId);
+              const captionText = `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 2200);
 
               const containerRes = await fetch(
-                `https://graph.facebook.com/v21.0/${encodeURIComponent(igUserId)}/media`,
+                `${igGraphBase}/${encodeURIComponent(igUserId)}/media`,
                 {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: {
+                    Authorization: `Bearer ${igCred.accessToken}`,
+                    "Content-Type": "application/json",
+                  },
                   body: JSON.stringify({
                     media_type: "REELS",
                     video_url: presignedVideoUrl,
-                    caption: job.title.slice(0, 1000),
-                    access_token: metaCred.token,
+                    caption: captionText,
                   }),
-                }
+                },
               );
-
-              if (!containerRes.ok) {
-                const errText = await containerRes.text().catch(() => "");
-                throw new Error(`Instagram container creation failed: ${errText.slice(0, 200)}`);
+              const containerBody = (await containerRes.json().catch(() => ({}))) as Record<string, unknown>;
+              if (isMetaAuthError(containerRes.status, containerBody)) {
+                throw new ProviderAuthError("needs_reauth", 401, "instagram", "Instagram authorization expired or revoked; reconnect required", accountId);
               }
-
-              const containerData = (await containerRes.json()) as { id?: string };
-              const creationId = containerData.id;
+              if (!containerRes.ok) {
+                throw new Error(`Instagram container creation failed (${containerRes.status}): ${JSON.stringify(containerBody).slice(0, 200)}`);
+              }
+              const creationId = typeof containerBody.id === "string" ? containerBody.id : "";
               if (!creationId) throw new Error("No creation ID from Instagram media API");
 
-              const publishRes = await fetch(
-                `https://graph.facebook.com/v21.0/${encodeURIComponent(igUserId)}/media_publish`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    creation_id: creationId,
-                    access_token: metaCred.token,
-                  }),
-                }
-              );
+              await updateTargetState(target, "processing", { remoteId: creationId });
 
-              if (!publishRes.ok) {
-                const errText = await publishRes.text().catch(() => "");
-                throw new Error(`Instagram media publish failed: ${errText.slice(0, 200)}`);
+              let containerReady = false;
+              for (let poll = 0; poll < 15; poll++) {
+                const stRes = await fetch(
+                  `${igGraphBase}/${encodeURIComponent(creationId)}?fields=status_code,status`,
+                  { headers: { Authorization: `Bearer ${igCred.accessToken}` } },
+                );
+                const stData = (await stRes.json().catch(() => ({}))) as Record<string, unknown>;
+                if (isMetaAuthError(stRes.status, stData)) {
+                  throw new ProviderAuthError("needs_reauth", 401, "instagram", "Instagram authorization expired during container processing", accountId);
+                }
+                if (stRes.ok) {
+                  const code = String(stData.status_code || "").toUpperCase();
+                  if (code === "FINISHED" || code === "PUBLISHED") {
+                    containerReady = true;
+                    break;
+                  }
+                  if (code === "ERROR" || code === "EXPIRED") {
+                    throw new Error(`Instagram container processing error: ${String(stData.status || code)}`);
+                  }
+                }
+                if (poll < 14 && pollIntervalMs > 0) {
+                  await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+                }
               }
 
-              const pubData = (await publishRes.json()) as { id?: string };
-              const igMediaId = pubData.id || creationId;
-              results.instagram = {
-                status: "published",
-                remote_id: igMediaId,
-                published_at: new Date().toISOString(),
-              };
-              anySuccess = true;
+              if (!containerReady) {
+                throw new Error(`Instagram container ${creationId} did not reach FINISHED status before timeout`);
+              }
 
-              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
-                method: "POST",
-                headers: svc,
-                body: JSON.stringify({
-                  user_id: job.user_id,
-                  clip_id: job.clip_id,
-                  platform: "instagram",
-                  account_id: accountId,
-                  remote_id: igMediaId,
-                  status: "published",
-                  publish_mode: job.publish_mode,
-                  published_at: new Date().toISOString(),
-                }),
-              }).catch(() => {});
-            } catch (igErr) {
-              const msg = igErr instanceof Error ? igErr.message : String(igErr);
-              results.instagram = { status: "failed", error: msg };
-              lastErrorMessage = msg;
-            }
-          } else if (normPlatform === "linkedin") {
-            try {
-              const liToken = await getValidProviderToken(env, { userId: job.user_id, provider: "linkedin" });
+              const publishRes = await fetch(
+                `${igGraphBase}/${encodeURIComponent(igUserId)}/media_publish`,
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${igCred.accessToken}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({ creation_id: creationId }),
+                },
+              );
+              const pubData = (await publishRes.json().catch(() => ({}))) as Record<string, unknown>;
+              if (isMetaAuthError(publishRes.status, pubData)) {
+                throw new ProviderAuthError("needs_reauth", 401, "instagram", "Instagram authorization expired before media_publish", accountId);
+              }
+              if (!publishRes.ok) {
+                throw new Error(`Instagram media publish failed (${publishRes.status}): ${JSON.stringify(pubData).slice(0, 200)}`);
+              }
+
+              const igMediaId = typeof pubData.id === "string" && pubData.id ? pubData.id : creationId;
+              let permalink = `https://www.instagram.com/reel/${igMediaId}`;
+              try {
+                const pRes = await fetch(
+                  `${igGraphBase}/${encodeURIComponent(igMediaId)}?fields=permalink`,
+                  { headers: { Authorization: `Bearer ${igCred.accessToken}` } },
+                );
+                if (pRes.ok) {
+                  const pJson = (await pRes.json().catch(() => ({}))) as { permalink?: string };
+                  if (typeof pJson.permalink === "string" && pJson.permalink) {
+                    permalink = pJson.permalink;
+                  }
+                }
+              } catch {}
+
+              const publishedAt = new Date().toISOString();
+              await updateTargetState(target, "published", { remoteId: igMediaId, remoteUrl: permalink });
+              recordTargetResult("instagram", accountId, {
+                status: "published",
+                account_id: accountId,
+                remote_id: igMediaId,
+                remote_url: permalink,
+                published_at: publishedAt,
+              });
+              anySuccess = true;
+              await upsertPublicationRow(env, svc, {
+                userId: job.user_id,
+                clipRef,
+                platform: "instagram",
+                accountId,
+                remoteId: igMediaId,
+                remoteUrl: permalink,
+                publishMode: job.publish_mode,
+                publishedAt,
+              });
+            } else if (normPlatform === "linkedin") {
+              const liToken = await getValidProviderToken(env, {
+                userId: job.user_id,
+                provider: "linkedin",
+                accountId: requestedAccountId,
+              });
               if (!liToken) {
-                results.linkedin = { status: "skipped_no_account", error: "No connected LinkedIn account found" };
+                const msg = requestedAccountId
+                  ? `LinkedIn account '${requestedAccountId}' not connected`
+                  : "No connected LinkedIn account found";
+                await updateTargetState(target, "blocked_needs_auth", { lastError: msg });
+                recordTargetResult("linkedin", requestedAccountId, { status: "blocked_needs_auth", error: msg });
+                lastErrorMessage = msg;
                 continue;
               }
               const accessToken = liToken.accessToken;
-              const personUrn = typeof liToken.payload.author_urn === "string"
+              const accountId = liToken.accountId || requestedAccountId;
+              const rawUrn = typeof liToken.payload.author_urn === "string"
                 ? liToken.payload.author_urn
-                : (typeof liToken.payload.account_id === "string" ? liToken.payload.account_id : liToken.accountId);
-              const acc = { id: liToken.rowId, account_id: liToken.accountId };
+                : (typeof liToken.payload.account_id === "string" ? liToken.payload.account_id : accountId);
+              const authorUrn = rawUrn.startsWith("urn:li:") ? rawUrn : `urn:li:person:${rawUrn}`;
+              const liHeaders = {
+                Authorization: `Bearer ${accessToken}`,
+                "Linkedin-Version": LINKEDIN_API_VERSION,
+                "X-Restli-Protocol-Version": "2.0.0",
+                "Content-Type": "application/json",
+              };
 
-              const authorUrn = personUrn.startsWith("urn:li:") ? personUrn : `urn:li:person:${personUrn}`;
-              const liRes = await fetch("https://api.linkedin.com/v2/ugcPosts", {
+              const initRes = await fetch("https://api.linkedin.com/rest/videos?action=initializeUpload", {
                 method: "POST",
-                headers: {
-                  Authorization: `Bearer ${accessToken}`,
-                  "Content-Type": "application/json",
-                  "X-Restli-Protocol-Version": "2.0.0",
-                },
+                headers: liHeaders,
                 body: JSON.stringify({
-                  author: authorUrn,
-                  lifecycleState: "PUBLISHED",
-                  specificContent: {
-                    "com.linkedin.ugc.ShareContent": {
-                      shareCommentary: {
-                        text: `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 3000),
-                      },
-                      shareMediaCategory: "NONE",
-                    },
-                  },
-                  visibility: {
-                    "com.linkedin.ugc.MemberNetworkVisibility": job.publish_mode === "public" ? "PUBLIC" : "CONNECTIONS",
+                  initializeUploadRequest: {
+                    owner: authorUrn,
+                    fileSizeBytes: totalSize,
+                    uploadCaptions: false,
+                    uploadThumbnail: false,
                   },
                 }),
               });
+              if (initRes.status === 401 || initRes.status === 403) {
+                const errText = await initRes.text().catch(() => "");
+                throw new ProviderAuthError("needs_reauth", 401, "linkedin", `LinkedIn authorization failed (${initRes.status}): ${errText.slice(0, 160)}`, accountId);
+              }
+              if (!initRes.ok) {
+                const errText = await initRes.text().catch(() => "");
+                throw new Error(`LinkedIn initializeUpload failed (${initRes.status}): ${errText.slice(0, 200)}`);
+              }
 
+              const initJson = (await initRes.json().catch(() => ({}))) as {
+                value?: {
+                  video?: string;
+                  uploadToken?: string;
+                  uploadInstructions?: Array<{ uploadUrl?: string; firstByte?: number; lastByte?: number }>;
+                };
+              };
+              const val = initJson.value || {};
+              const videoUrn = typeof val.video === "string" ? val.video : "";
+              const uploadToken = typeof val.uploadToken === "string" ? val.uploadToken : "";
+              const instructions = Array.isArray(val.uploadInstructions) ? val.uploadInstructions : [];
+              if (!videoUrn || instructions.length === 0 || !instructions[0]?.uploadUrl) {
+                throw new Error("LinkedIn initializeUpload did not return video URN and uploadInstructions");
+              }
+
+              await updateTargetState(target, "uploading", { uploadSessionUrl: instructions[0].uploadUrl });
+
+              const uploadedPartIds: string[] = [];
+              for (const inst of instructions) {
+                if (!inst?.uploadUrl) continue;
+                const firstByte = typeof inst.firstByte === "number" ? Math.max(0, inst.firstByte) : 0;
+                const lastByte = typeof inst.lastByte === "number" ? Math.min(totalSize - 1, inst.lastByte) : totalSize - 1;
+                const partLen = Math.max(0, lastByte - firstByte + 1);
+                if (partLen === 0) continue;
+
+                const putBody: BodyInit = partLen <= R2_MAX_CHUNK_BYTES
+                  ? (await (async () => {
+                      const chunks: Uint8Array[] = [];
+                      let got = 0;
+                      for await (const c of streamR2RangeChunks(env, r2Key, firstByte, partLen, R2_MAX_CHUNK_BYTES, r2Probe)) {
+                        chunks.push(c.chunk);
+                        got += c.length;
+                      }
+                      return concatUint8Chunks(chunks, got);
+                    })())
+                  : createR2RangeStream(env, r2Key, firstByte, partLen, R2_MAX_CHUNK_BYTES, r2Probe);
+
+                const putRes = await fetch(inst.uploadUrl, {
+                  method: "PUT",
+                  headers: {
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": String(partLen),
+                  },
+                  body: putBody,
+                });
+                if (!putRes.ok) {
+                  const errText = await putRes.text().catch(() => "");
+                  throw new Error(`LinkedIn binary part upload failed (${putRes.status}): ${errText.slice(0, 200)}`);
+                }
+                const etag = (putRes.headers.get("etag") || putRes.headers.get("ETag") || "").replace(/"/g, "").trim();
+                if (etag) uploadedPartIds.push(etag);
+              }
+
+              const finRes = await fetch("https://api.linkedin.com/rest/videos?action=finalizeUpload", {
+                method: "POST",
+                headers: liHeaders,
+                body: JSON.stringify({
+                  finalizeUploadRequest: {
+                    video: videoUrn,
+                    uploadToken,
+                    uploadedPartIds,
+                  },
+                }),
+              });
+              if (finRes.status === 401 || finRes.status === 403) {
+                throw new ProviderAuthError("needs_reauth", 401, "linkedin", "LinkedIn authorization expired on finalizeUpload", accountId);
+              }
+              if (!finRes.ok) {
+                const errText = await finRes.text().catch(() => "");
+                throw new Error(`LinkedIn finalizeUpload failed (${finRes.status}): ${errText.slice(0, 200)}`);
+              }
+
+              await updateTargetState(target, "processing", { remoteId: videoUrn });
+
+              // Poll video status briefly until AVAILABLE (when status endpoint is supported)
+              for (let poll = 0; poll < 6; poll++) {
+                const vRes = await fetch(
+                  `https://api.linkedin.com/rest/videos/${encodeURIComponent(videoUrn)}`,
+                  { headers: liHeaders },
+                );
+                if (vRes.status === 401 || vRes.status === 403) {
+                  throw new ProviderAuthError("needs_reauth", 401, "linkedin", "LinkedIn authorization expired while checking video status", accountId);
+                }
+                if (!vRes.ok) break;
+                const vJson = (await vRes.json().catch(() => ({}))) as { status?: string };
+                const st = String(vJson.status || "").toUpperCase();
+                if (!st || st === "AVAILABLE") break;
+                if (st === "PROCESSING_FAILED") {
+                  throw new Error(`LinkedIn video processing failed for ${videoUrn}`);
+                }
+                if (poll < 5 && pollIntervalMs > 0) {
+                  await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+                }
+              }
+
+              const liRes = await fetch("https://api.linkedin.com/rest/posts", {
+                method: "POST",
+                headers: liHeaders,
+                body: JSON.stringify({
+                  author: authorUrn,
+                  commentary: `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 3000),
+                  visibility: job.publish_mode === "public" ? "PUBLIC" : "CONNECTIONS",
+                  distribution: {
+                    feedDistribution: "MAIN_FEED",
+                    targetEntities: [],
+                    thirdPartyDistributionChannels: [],
+                  },
+                  content: {
+                    media: {
+                      id: videoUrn,
+                      title: job.title.slice(0, 200),
+                    },
+                  },
+                  lifecycleState: "PUBLISHED",
+                  isReshareDisabledByAuthor: false,
+                }),
+              });
+              if (liRes.status === 401 || liRes.status === 403) {
+                const errText = await liRes.text().catch(() => "");
+                throw new ProviderAuthError("needs_reauth", 401, "linkedin", `LinkedIn post authorization failed (${liRes.status}): ${errText.slice(0, 160)}`, accountId);
+              }
               if (!liRes.ok) {
                 const errText = await liRes.text().catch(() => "");
                 throw new Error(`LinkedIn post failed (${liRes.status}): ${errText.slice(0, 200)}`);
               }
 
-              const liData = (await liRes.json()) as { id?: string };
-              const postUrn = liData.id || "published";
+              const liBodyText = await liRes.text().catch(() => "");
+              let liJson: { id?: string } = {};
+              if (liBodyText.trim()) {
+                try { liJson = JSON.parse(liBodyText) as { id?: string }; } catch {}
+              }
+              const postUrn = liRes.headers.get("x-restli-id")
+                || liRes.headers.get("X-RestLi-Id")
+                || liRes.headers.get("x-linkedin-id")
+                || liJson.id
+                || videoUrn;
               const postUrl = `https://www.linkedin.com/feed/update/${postUrn}`;
+              const publishedAt = new Date().toISOString();
 
-              results.linkedin = {
+              await updateTargetState(target, "published", { remoteId: postUrn, remoteUrl: postUrl });
+              recordTargetResult("linkedin", accountId, {
                 status: "published",
+                account_id: accountId,
                 remote_id: postUrn,
                 remote_url: postUrl,
-                published_at: new Date().toISOString(),
-              };
+                published_at: publishedAt,
+              });
               anySuccess = true;
-
-              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
-                method: "POST",
-                headers: svc,
-                body: JSON.stringify({
-                  user_id: job.user_id,
-                  clip_id: job.clip_id,
-                  platform: "linkedin",
-                  account_id: acc.id,
-                  remote_id: postUrn,
-                  remote_url: postUrl,
-                  status: "published",
-                  publish_mode: job.publish_mode,
-                  published_at: new Date().toISOString(),
-                }),
-              }).catch(() => {});
-            } catch (liErr) {
-              const msg = liErr instanceof Error ? liErr.message : String(liErr);
-              results.linkedin = { status: "failed", error: msg };
-              lastErrorMessage = msg;
-            }
-          } else if (normPlatform === "twitter" || normPlatform === "x") {
-            try {
-              const twToken = await getValidProviderToken(env, { userId: job.user_id, provider: "twitter" });
+              await upsertPublicationRow(env, svc, {
+                userId: job.user_id,
+                clipRef,
+                platform: "linkedin",
+                accountId,
+                remoteId: postUrn,
+                remoteUrl: postUrl,
+                publishMode: job.publish_mode,
+                publishedAt,
+              });
+            } else if (normPlatform === "twitter") {
+              const twToken = await getValidProviderToken(env, {
+                userId: job.user_id,
+                provider: "twitter",
+                accountId: requestedAccountId,
+              });
               if (!twToken) {
-                results[normPlatform] = { status: "skipped_no_account", error: "No connected X (Twitter) account found" };
+                const msg = requestedAccountId
+                  ? `X (Twitter) account '${requestedAccountId}' not connected`
+                  : "No connected X (Twitter) account found";
+                await updateTargetState(target, "blocked_needs_auth", { lastError: msg });
+                recordTargetResult("twitter", requestedAccountId, { status: "blocked_needs_auth", error: msg });
+                lastErrorMessage = msg;
                 continue;
               }
-              const accessToken = twToken.accessToken;
-              const acc = { id: twToken.rowId, account_id: twToken.accountId };
+              const accountId = twToken.accountId || requestedAccountId;
+              const p = twToken.payload;
+              const hasOAuth1 = Boolean(
+                typeof p.api_key === "string" && p.api_key &&
+                typeof p.api_secret === "string" && p.api_secret &&
+                typeof p.oauth_token === "string" && p.oauth_token &&
+                typeof p.oauth_secret === "string" && p.oauth_secret,
+              );
+              const oauth1Creds = hasOAuth1
+                ? {
+                    apiKey: String(p.api_key),
+                    apiSecret: String(p.api_secret),
+                    oauthToken: String(p.oauth_token),
+                    oauthSecret: String(p.oauth_secret),
+                  }
+                : null;
+              const bearerAccess = twToken.accessToken;
+              const xAuthHeader = async (method: string, reqUrl: string): Promise<string> => {
+                if (bearerAccess && !oauth1Creds) return `Bearer ${bearerAccess}`;
+                if (oauth1Creds && !bearerAccess) return buildOAuth1AuthorizationHeader(method, reqUrl, oauth1Creds);
+                return bearerAccess ? `Bearer ${bearerAccess}` : buildOAuth1AuthorizationHeader(method, reqUrl, oauth1Creds!);
+              };
 
+              let mediaId = "";
+              let mode: "v2_rest" | "v2_command" | "v1" = bearerAccess ? "v2_rest" : "v1";
+
+              if (mode === "v2_rest") {
+                const initUrl = "https://api.x.com/2/media/upload/initialize";
+                const initRes = await fetch(initUrl, {
+                  method: "POST",
+                  headers: {
+                    Authorization: await xAuthHeader("POST", initUrl),
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    total_bytes: totalSize,
+                    media_type: "video/mp4",
+                    media_category: "tweet_video",
+                  }),
+                });
+                if (initRes.status === 401 || initRes.status === 403) {
+                  if (oauth1Creds) {
+                    mode = "v1";
+                  } else {
+                    const errText = await initRes.text().catch(() => "");
+                    throw new ProviderAuthError("needs_reauth", 401, "twitter", `X authorization failed (${initRes.status}): ${errText.slice(0, 160)}`, accountId);
+                  }
+                } else if (initRes.status === 404 || initRes.status === 405) {
+                  mode = "v2_command";
+                } else if (!initRes.ok) {
+                  const errText = await initRes.text().catch(() => "");
+                  throw new Error(`X media INIT failed (${initRes.status}): ${errText.slice(0, 200)}`);
+                } else {
+                  const initJson = (await initRes.json().catch(() => ({}))) as { data?: { id?: string }; media_id_string?: string };
+                  mediaId = String(initJson.data?.id || initJson.media_id_string || "");
+                }
+              }
+
+              if (!mediaId && (mode === "v2_command" || mode === "v1")) {
+                const cmdUrl = mode === "v2_command"
+                  ? "https://api.x.com/2/media/upload"
+                  : "https://upload.twitter.com/1.1/media/upload.json";
+                const authHdr = oauth1Creds && mode === "v1"
+                  ? await buildOAuth1AuthorizationHeader("POST", cmdUrl, oauth1Creds)
+                  : await xAuthHeader("POST", cmdUrl);
+                const initRes = await fetch(cmdUrl, {
+                  method: "POST",
+                  headers: {
+                    Authorization: authHdr,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                  },
+                  body: new URLSearchParams({
+                    command: "INIT",
+                    media_type: "video/mp4",
+                    total_bytes: String(totalSize),
+                    media_category: "tweet_video",
+                  }),
+                });
+                if (initRes.status === 401 || initRes.status === 403) {
+                  const errText = await initRes.text().catch(() => "");
+                  throw new ProviderAuthError("needs_reauth", 401, "twitter", `X media INIT auth failed (${initRes.status}): ${errText.slice(0, 160)}`, accountId);
+                }
+                if (!initRes.ok) {
+                  const errText = await initRes.text().catch(() => "");
+                  throw new Error(`X media INIT failed (${initRes.status}): ${errText.slice(0, 200)}`);
+                }
+                const initJson = (await initRes.json().catch(() => ({}))) as { data?: { id?: string }; media_id_string?: string };
+                mediaId = String(initJson.data?.id || initJson.media_id_string || "");
+              }
+
+              if (!mediaId) {
+                throw new Error("X media INIT did not return media_id");
+              }
+
+              // Step 2: APPEND chunks (<= 5 MiB)
+              let segmentIndex = 0;
+              for await (const { chunk } of streamR2RangeChunks(env, r2Key, 0, totalSize, X_APPEND_CHUNK_BYTES, r2Probe)) {
+                const appendUrl = mode === "v2_rest"
+                  ? `https://api.x.com/2/media/upload/${encodeURIComponent(mediaId)}/append`
+                  : (mode === "v2_command" ? "https://api.x.com/2/media/upload" : "https://upload.twitter.com/1.1/media/upload.json");
+                const form = new FormData();
+                if (mode !== "v2_rest") {
+                  form.append("command", "APPEND");
+                  form.append("media_id", mediaId);
+                }
+                form.append("segment_index", String(segmentIndex));
+                form.append("media", new Blob([chunk], { type: "video/mp4" }), "clip.mp4");
+
+                const authHdr = oauth1Creds && mode === "v1"
+                  ? await buildOAuth1AuthorizationHeader("POST", appendUrl, oauth1Creds)
+                  : await xAuthHeader("POST", appendUrl);
+                const appRes = await fetch(appendUrl, {
+                  method: "POST",
+                  headers: { Authorization: authHdr },
+                  body: form,
+                });
+                if (appRes.status === 401 || appRes.status === 403) {
+                  throw new ProviderAuthError("needs_reauth", 401, "twitter", "X media APPEND authorization failed", accountId);
+                }
+                if (!appRes.ok) {
+                  const errText = await appRes.text().catch(() => "");
+                  throw new Error(`X media APPEND failed (${appRes.status}): ${errText.slice(0, 200)}`);
+                }
+                segmentIndex++;
+              }
+
+              // Step 3: FINALIZE
+              const finUrl = mode === "v2_rest"
+                ? `https://api.x.com/2/media/upload/${encodeURIComponent(mediaId)}/finalize`
+                : (mode === "v2_command" ? "https://api.x.com/2/media/upload" : "https://upload.twitter.com/1.1/media/upload.json");
+              const finAuth = oauth1Creds && mode === "v1"
+                ? await buildOAuth1AuthorizationHeader("POST", finUrl, oauth1Creds)
+                : await xAuthHeader("POST", finUrl);
+              const finRes = await fetch(finUrl, {
+                method: "POST",
+                headers: mode === "v2_rest"
+                  ? { Authorization: finAuth }
+                  : { Authorization: finAuth, "Content-Type": "application/x-www-form-urlencoded" },
+                body: mode === "v2_rest" ? undefined : new URLSearchParams({ command: "FINALIZE", media_id: mediaId }),
+              });
+              if (finRes.status === 401 || finRes.status === 403) {
+                throw new ProviderAuthError("needs_reauth", 401, "twitter", "X media FINALIZE authorization failed", accountId);
+              }
+              if (!finRes.ok) {
+                const errText = await finRes.text().catch(() => "");
+                throw new Error(`X media FINALIZE failed (${finRes.status}): ${errText.slice(0, 200)}`);
+              }
+              const finJson = (await finRes.json().catch(() => ({}))) as {
+                processing_info?: { state?: string; check_after_secs?: number; error?: { message?: string } };
+                data?: { processing_info?: { state?: string; check_after_secs?: number; error?: { message?: string } } };
+              };
+
+              await updateTargetState(target, "processing", { remoteId: mediaId });
+
+              let procInfo = finJson.processing_info ?? finJson.data?.processing_info;
+              for (let poll = 0; poll < 15 && procInfo && (procInfo.state === "pending" || procInfo.state === "in_progress"); poll++) {
+                const waitMs = pollIntervalMs > 0 ? Math.min(pollIntervalMs, (procInfo.check_after_secs ?? 2) * 1000) : 0;
+                if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+                const statusBase = mode === "v1"
+                  ? "https://upload.twitter.com/1.1/media/upload.json"
+                  : "https://api.x.com/2/media/upload";
+                const statusUrl = `${statusBase}?command=STATUS&media_id=${encodeURIComponent(mediaId)}`;
+                const stAuth = oauth1Creds && mode === "v1"
+                  ? await buildOAuth1AuthorizationHeader("GET", statusUrl, oauth1Creds)
+                  : await xAuthHeader("GET", statusUrl);
+                const stRes = await fetch(statusUrl, { headers: { Authorization: stAuth } });
+                if (stRes.status === 401 || stRes.status === 403) {
+                  throw new ProviderAuthError("needs_reauth", 401, "twitter", "X media STATUS authorization failed", accountId);
+                }
+                if (!stRes.ok) break;
+                const stJson = (await stRes.json().catch(() => ({}))) as typeof finJson;
+                procInfo = stJson.processing_info ?? stJson.data?.processing_info;
+                if (procInfo?.state === "failed") {
+                  throw new Error(`X media processing failed: ${procInfo.error?.message || "unknown"}`);
+                }
+              }
+              if (procInfo && (procInfo.state === "pending" || procInfo.state === "in_progress")) {
+                throw new Error(`X media ${mediaId} timed out processing`);
+              }
+
+              // Step 4: Create Tweet v2 with attached media_ids
               const tweetText = `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 280);
-              const twRes = await fetch("https://api.twitter.com/2/tweets", {
+              const tweetUrl = "https://api.twitter.com/2/tweets";
+              const tweetAuth = bearerAccess
+                ? `Bearer ${bearerAccess}`
+                : await buildOAuth1AuthorizationHeader("POST", tweetUrl, oauth1Creds!);
+              const twRes = await fetch(tweetUrl, {
                 method: "POST",
                 headers: {
-                  Authorization: `Bearer ${accessToken}`,
+                  Authorization: tweetAuth,
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ text: tweetText }),
+                body: JSON.stringify({
+                  text: tweetText,
+                  media: { media_ids: [mediaId] },
+                }),
               });
-
+              if (twRes.status === 401 || twRes.status === 403) {
+                const errText = await twRes.text().catch(() => "");
+                throw new ProviderAuthError("needs_reauth", 401, "twitter", `X tweet authorization failed (${twRes.status}): ${errText.slice(0, 160)}`, accountId);
+              }
               if (!twRes.ok) {
                 const errText = await twRes.text().catch(() => "");
                 throw new Error(`X tweet failed (${twRes.status}): ${errText.slice(0, 200)}`);
               }
 
-              const twData = (await twRes.json()) as { data?: { id?: string } };
-              const tweetId = twData.data?.id || "published";
-              const tweetUrl = `https://x.com/i/status/${tweetId}`;
+              const twData = (await twRes.json().catch(() => ({}))) as { data?: { id?: string } };
+              const tweetId = twData.data?.id;
+              if (!tweetId) throw new Error("X tweet response missing data.id");
+              const tweetUrlOut = `https://x.com/i/status/${tweetId}`;
+              const publishedAt = new Date().toISOString();
 
-              results[normPlatform] = {
+              await updateTargetState(target, "published", { remoteId: tweetId, remoteUrl: tweetUrlOut });
+              recordTargetResult("twitter", accountId, {
                 status: "published",
+                account_id: accountId,
                 remote_id: tweetId,
-                remote_url: tweetUrl,
-                published_at: new Date().toISOString(),
-              };
+                remote_url: tweetUrlOut,
+                published_at: publishedAt,
+              });
               anySuccess = true;
+              await upsertPublicationRow(env, svc, {
+                userId: job.user_id,
+                clipRef,
+                platform: "twitter",
+                accountId,
+                remoteId: tweetId,
+                remoteUrl: tweetUrlOut,
+                publishMode: job.publish_mode,
+                publishedAt,
+              });
+            } else if (normPlatform === "facebook") {
+              const fbToken = await getValidProviderToken(env, {
+                userId: job.user_id,
+                provider: "facebook",
+                accountId: requestedAccountId,
+              });
+              if (!fbToken) {
+                const msg = requestedAccountId
+                  ? `Facebook Page '${requestedAccountId}' not connected`
+                  : "No connected Facebook Page found";
+                await updateTargetState(target, "blocked_needs_auth", { lastError: msg });
+                recordTargetResult("facebook", requestedAccountId, { status: "blocked_needs_auth", error: msg });
+                lastErrorMessage = msg;
+                continue;
+              }
+              const pageToken = fbToken.accessToken;
+              const accountId = fbToken.accountId || requestedAccountId;
+              const pageId = String(fbToken.payload.page_id || fbToken.payload.account_id || accountId);
+              const reelsEndpoint = `https://graph.facebook.com/v21.0/${encodeURIComponent(pageId)}/video_reels`;
 
-              await fetch(`${env.SUPABASE_URL}/rest/v1/publications`, {
+              const startRes = await fetch(reelsEndpoint, {
                 method: "POST",
-                headers: svc,
+                headers: {
+                  Authorization: `Bearer ${pageToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ upload_phase: "start" }),
+              });
+              const startData = (await startRes.json().catch(() => ({}))) as Record<string, unknown>;
+              if (isMetaAuthError(startRes.status, startData)) {
+                throw new ProviderAuthError("needs_reauth", 401, "facebook", "Facebook Page authorization expired or revoked; reconnect required", accountId);
+              }
+              if (!startRes.ok) {
+                throw new Error(`Facebook Reels start failed (${startRes.status}): ${JSON.stringify(startData).slice(0, 200)}`);
+              }
+              const fbVideoId = typeof startData.video_id === "string" ? startData.video_id : "";
+              const fbUploadUrl = typeof startData.upload_url === "string" ? startData.upload_url : "";
+              if (!fbVideoId || !fbUploadUrl) {
+                throw new Error("Facebook Reels start did not return video_id and upload_url");
+              }
+
+              await updateTargetState(target, "uploading", { uploadSessionUrl: fbUploadUrl, remoteId: fbVideoId });
+
+              let upBody: BodyInit;
+              if (totalSize <= R2_MAX_CHUNK_BYTES) {
+                const chunks: Uint8Array[] = [];
+                let got = 0;
+                for await (const c of streamR2RangeChunks(env, r2Key, 0, totalSize, R2_MAX_CHUNK_BYTES, r2Probe)) {
+                  chunks.push(c.chunk);
+                  got += c.length;
+                }
+                upBody = concatUint8Chunks(chunks, got);
+              } else {
+                upBody = createR2RangeStream(env, r2Key, 0, totalSize, R2_MAX_CHUNK_BYTES, r2Probe);
+              }
+
+              const upRes = await fetch(fbUploadUrl, {
+                method: "POST",
+                headers: {
+                  Authorization: `OAuth ${pageToken}`,
+                  offset: "0",
+                  file_size: String(totalSize),
+                  "Content-Type": "application/octet-stream",
+                  "Content-Length": String(totalSize),
+                },
+                body: upBody,
+              });
+              const upJson = (await upRes.json().catch(() => ({}))) as Record<string, unknown>;
+              if (isMetaAuthError(upRes.status, upJson)) {
+                throw new ProviderAuthError("needs_reauth", 401, "facebook", "Facebook Reel binary upload authorization failed", accountId);
+              }
+              if (!upRes.ok) {
+                throw new Error(`Facebook Reel upload failed (${upRes.status}): ${JSON.stringify(upJson).slice(0, 200)}`);
+              }
+
+              const fbDesc = `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 5000);
+              const finishRes = await fetch(reelsEndpoint, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${pageToken}`,
+                  "Content-Type": "application/json",
+                },
                 body: JSON.stringify({
-                  user_id: job.user_id,
-                  clip_id: job.clip_id,
-                  platform: "twitter",
-                  account_id: acc.id,
-                  remote_id: tweetId,
-                  remote_url: tweetUrl,
-                  status: "published",
-                  publish_mode: job.publish_mode,
-                  published_at: new Date().toISOString(),
+                  upload_phase: "finish",
+                  video_id: fbVideoId,
+                  video_state: "PUBLISHED",
+                  description: fbDesc,
                 }),
-              }).catch(() => {});
-            } catch (twErr) {
-              const msg = twErr instanceof Error ? twErr.message : String(twErr);
-              results[normPlatform] = { status: "failed", error: msg };
-              lastErrorMessage = msg;
+              });
+              const finishJson = (await finishRes.json().catch(() => ({}))) as Record<string, unknown>;
+              if (isMetaAuthError(finishRes.status, finishJson)) {
+                throw new ProviderAuthError("needs_reauth", 401, "facebook", "Facebook Reel finish authorization failed", accountId);
+              }
+              if (!finishRes.ok) {
+                throw new Error(`Facebook Reel finish failed (${finishRes.status}): ${JSON.stringify(finishJson).slice(0, 200)}`);
+              }
+
+              await updateTargetState(target, "processing", { remoteId: fbVideoId });
+
+              for (let poll = 0; poll < 12; poll++) {
+                const stRes = await fetch(
+                  `https://graph.facebook.com/v21.0/${encodeURIComponent(fbVideoId)}?fields=status`,
+                  { headers: { Authorization: `Bearer ${pageToken}` } },
+                );
+                const stData = (await stRes.json().catch(() => ({}))) as Record<string, unknown>;
+                if (isMetaAuthError(stRes.status, stData)) {
+                  throw new ProviderAuthError("needs_reauth", 401, "facebook", "Facebook authorization expired while polling Reel status", accountId);
+                }
+                if (stRes.ok) {
+                  const stObj = (stData.status && typeof stData.status === "object" ? stData.status : {}) as {
+                    video_status?: string;
+                    processing_phase?: { status?: string };
+                  };
+                  const vStatus = String(stObj.video_status || "").toLowerCase();
+                  const pStatus = String(stObj.processing_phase?.status || "").toLowerCase();
+                  if (vStatus === "error" || pStatus === "error") {
+                    throw new Error(`Facebook Reel processing failed: ${JSON.stringify(stObj).slice(0, 200)}`);
+                  }
+                  if (vStatus === "ready" || vStatus === "complete" || pStatus === "complete") {
+                    break;
+                  }
+                }
+                if (poll < 11 && pollIntervalMs > 0) {
+                  await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+                }
+              }
+
+              const remoteUrl = `https://www.facebook.com/reel/${fbVideoId}`;
+              const publishedAt = new Date().toISOString();
+              await updateTargetState(target, "published", { remoteId: fbVideoId, remoteUrl });
+              recordTargetResult("facebook", accountId, {
+                status: "published",
+                account_id: accountId,
+                remote_id: fbVideoId,
+                remote_url: remoteUrl,
+                published_at: publishedAt,
+              });
+              anySuccess = true;
+              await upsertPublicationRow(env, svc, {
+                userId: job.user_id,
+                clipRef,
+                platform: "facebook",
+                accountId,
+                remoteId: fbVideoId,
+                remoteUrl,
+                publishMode: job.publish_mode,
+                publishedAt,
+              });
             }
-          } else {
-            results[normPlatform] = { status: "skipped_unsupported", platform: normPlatform };
+          } catch (targetErr) {
+            const msg = safePublishError(targetErr);
+            if (targetErr instanceof ProviderAuthError && targetErr.code === "needs_reauth") {
+              await updateTargetState(target, "blocked_needs_auth", { lastError: msg });
+              recordTargetResult(normPlatform, requestedAccountId, {
+                status: "blocked_needs_auth",
+                needs_reauth: true,
+                error: msg,
+              });
+            } else {
+              await updateTargetState(target, "failed", { lastError: msg });
+              recordTargetResult(normPlatform, requestedAccountId, {
+                status: "failed",
+                error: msg,
+              });
+            }
+            lastErrorMessage = msg;
           }
         }
 
-        const finalStatus = anySuccess ? "published" : "failed";
+        if (!anySuccess && existingTargets.some((t) => t.status === "queued" || t.status === "processing")) {
+          anyPending = true;
+        }
+
+        const finalStatus = anySuccess ? "published" : (anyPending ? "processing" : "failed");
         await fetch(
           `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(job.id)}`,
           {
@@ -2035,9 +3173,14 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
         );
 
         if (anySuccess) succeeded++;
-        else failed++;
+        else if (!anyPending) failed++;
       } catch (jobErr) {
-        const errorStr = jobErr instanceof Error ? jobErr.message : String(jobErr);
+        const errorStr = safePublishError(jobErr);
+        for (const t of claimedTargets) {
+          if (!t.synthetic && t.id && t.status !== "published") {
+            await updateTargetState(t, "failed", { lastError: errorStr });
+          }
+        }
         await fetch(
           `${env.SUPABASE_URL}/rest/v1/publishing_jobs?id=eq.${encodeURIComponent(job.id)}`,
           {
@@ -2283,7 +3426,7 @@ export default {
                 },
               });
               if (directRes.ok) {
-                const fetchedBytes = await directRes.arrayBuffer();
+                const fetchedBytes = await readResponseBoundedBytes(directRes, R2_MAX_CHUNK_BYTES);
                 if (fetchedBytes.byteLength > 0) {
                   await env.BUCKET.put("avatars/" + key, fetchedBytes, {
                     httpMetadata: { contentType: "image/jpeg" },
@@ -3412,7 +4555,7 @@ export default {
         try {
           const imgRes = await fetch(avatarUrl);
           if (imgRes.ok) {
-            const imgBytes = await imgRes.arrayBuffer();
+            const imgBytes = await readResponseBoundedBytes(imgRes, R2_MAX_CHUNK_BYTES);
             const avatarKey = `avatars/instagram_${igUserId}.jpg`;
             await env.BUCKET.put(avatarKey, imgBytes, {
               httpMetadata: { contentType: "image/jpeg" },
@@ -3816,14 +4959,29 @@ export default {
     if (url.pathname === "/jobs/submit" && request.method === "POST") {
       const user = await authenticate(env, request);
       if (!user) return json(401, { error: "unauthorized" });
-      const body = await request.json().catch(() => ({})) as { url?: string };
+      const body = await request.json().catch(() => ({})) as {
+        url?: string;
+        source_type?: string;
+        session_id?: string | null;
+      };
       const ytUrl = (body.url ?? "").trim();
       if (!/^https:\/\/(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{6,20}/.test(ytUrl))
         return json(400, { error: "invalid YouTube URL" });
+      const rawSourceType = typeof body.source_type === "string" ? body.source_type.trim() : "";
+      const pSourceType = ["camera", "youtube_import", "direct_upload"].includes(rawSourceType)
+        ? rawSourceType
+        : "youtube_import";
+      const rawSessionId = typeof body.session_id === "string" ? body.session_id.trim().slice(0, 128) : "";
+      const pSessionId = rawSessionId || null;
       const sub = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_submit_job`, {
         method: "POST",
         headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ p_user_id: user.userId, p_url: ytUrl }),
+        body: JSON.stringify({
+          p_user_id: user.userId,
+          p_url: ytUrl,
+          p_source_type: pSourceType,
+          p_session_id: pSessionId,
+        }),
       });
       if (!sub.ok) return json(502, { error: `submit failed: ${sub.status}` });
       const subBody = await sub.json() as unknown;
@@ -3833,7 +4991,7 @@ export default {
         const vIdMatch = ytUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{6,20})/);
         const vId = vIdMatch ? vIdMatch[1] : null;
         if (vId) {
-          (async () => {
+          const probeTask = (async () => {
             const [dur, title] = await Promise.all([
               probeYouTubeDuration(vId),
               probeYouTubeTitle(vId),
@@ -3853,9 +5011,15 @@ export default {
               }).catch(() => null);
             }
           })().catch(() => null);
+          ctx?.waitUntil(probeTask);
         }
       }
-      return json(200, { job_id: arr[0]?.id ?? null, status: arr[0]?.status ?? "queued" });
+      return json(200, {
+        job_id: arr[0]?.id ?? null,
+        status: arr[0]?.status ?? "queued",
+        source_type: pSourceType,
+        session_id: pSessionId,
+      });
     }
     if (url.pathname === "/template/default") {
       const user = await authenticate(env, request);
@@ -4011,64 +5175,45 @@ export default {
       }
     }
 
-    // ---- Cloud Clips (authenticated clients on any network / cellular) ----
-    if (url.pathname === "/clips" && request.method === "GET") {
-      const user = await authenticate(env, request);
-      if (!user) return json(401, { error: "unauthorized" });
+    const CLIPS_CLOUD_HYDRATE_SELECT =
+      "id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after,source_orientation,source_aspect_ratio,layout_mode,available_layout_modes,session_id,youtube_video_id,project_document,segments_revision,active_state_revision,kept_duration,can_undo,can_redo,media_fingerprint,render_fingerprint";
 
-      // Audit 2026-10-27: limit/offset pagination so accounts with more clips
-      // can page through them instead of silently missing older rows.
-      const limitRaw = Number(url.searchParams.get("limit") ?? 50);
-      const offsetRaw = Number(url.searchParams.get("offset") ?? 0);
-      const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 50, 1), 200);
-      const offset = Math.min(Math.max(Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0, 0), 100000);
-
-      // Audit 2026-10-27: the PRIMARY listing query must fail loudly. A failed
-      // Supabase round trip previously degraded to an empty 200 response, which
-      // wipe-cleaned; now it returns 502 so clients can keep their last data.
-      const clipsRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=id,local_clip_id,title,status,start_time,end_time,ai_suggested_start_time,ai_suggested_end_time,range_revision,render_stale,caption_data,caption_revision,cloud_updated_at,reject_requested_at,reject_purge_after,source_orientation,source_aspect_ratio,layout_mode,available_layout_modes,session_id,youtube_video_id,project_document,segments_revision,active_state_revision,kept_duration,can_undo,can_redo,media_fingerprint,render_fingerprint&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
-        { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+    async function hydrateCloudClipBatch(
+      userIdForHydrate: string,
+      rawClips: Array<Record<string, unknown>>,
+    ) {
+      const clipIdCandidates = Array.from(
+        new Set(
+          rawClips.flatMap((c) => [String(c.local_clip_id || ""), String(c.id || "")]).filter(Boolean),
+        ),
       );
-      if (!clipsRes.ok) {
-        const text = await clipsRes.text().catch(() => "");
-        return json(502, { error: `clip listing failed: HTTP ${clipsRes.status}`, detail: text.slice(0, 200) });
-      }
-      const parsedClips = await clipsRes.json() as unknown;
-      if (!Array.isArray(parsedClips)) {
-        // A malformed (non-array) body is an upstream failure, never a clean
-        // empty list — fail loudly instead of crash-rendering an error page.
-        return json(502, { error: "clip listing failed: unexpected response shape" });
-      }
-      const rawClips = parsedClips as Array<Record<string, unknown>>;
-
-      // Auxiliary queries are scoped to exactly the clips that were returned
-      // (no window truncation at odds with the clip page) and failures surface
-      // as degraded flags instead of silently empty collections.
-      const localClipIds = postgrestInList(rawClips.map(c => String(c.local_clip_id || c.id)));
-      const cloudClipIds = postgrestInList(rawClips.map(c => String(c.id)));
+      const localClipIds = postgrestInList(clipIdCandidates);
+      const cloudClipIds = postgrestInList(rawClips.map((c) => String(c.id)));
       let jobsRes: Response | null = null;
       let mediaRes: Response | null = null;
       let editWindowsRes: Response | null = null;
       let publicationsRes: Response | null = null;
       if (rawClips.length > 0) {
         const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+        const pubFilter = localClipIds
+          ? `or=(clip_id.in.(${cloudClipIds}),local_clip_id.in.(${localClipIds}))`
+          : `clip_id=in.(${cloudClipIds})`;
         [jobsRes, mediaRes, editWindowsRes, publicationsRes] = await Promise.all([
           fetch(
-            `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${user.userId}&select=id,status,video_id,session_id,source_title&order=created_at.desc&limit=100`,
-            { headers: svc }
+            `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=eq.${userIdForHydrate}&select=id,status,video_id,session_id,source_title&order=created_at.desc&limit=100`,
+            { headers: svc },
           ).catch(() => null),
           fetch(
-            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${user.userId}&status=eq.active&clip_id=in.(${cloudClipIds})&select=id,clip_id,kind,mime_type,final_key&order=created_at.desc,id.desc`,
-            { headers: svc }
+            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userIdForHydrate}&status=eq.active&clip_id=in.(${cloudClipIds})&select=id,clip_id,kind,mime_type,final_key&order=created_at.desc,id.desc`,
+            { headers: svc },
           ).catch(() => null),
           fetch(
-            `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${user.userId}&status=eq.ready&local_clip_id=in.(${localClipIds})&select=id,local_clip_id,window_start,window_end,media_object_id,transcript_status&order=created_at.desc`,
-            { headers: svc }
+            `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userIdForHydrate}&status=eq.ready&local_clip_id=in.(${localClipIds})&select=id,local_clip_id,window_start,window_end,media_object_id,transcript_status&order=created_at.desc`,
+            { headers: svc },
           ).catch(() => null),
           fetch(
-            `${env.SUPABASE_URL}/rest/v1/publications?user_id=eq.${user.userId}&clip_id=in.(${cloudClipIds})&status=eq.published&select=id,clip_id,platform,account_id,remote_id,remote_url,published_at,publish_mode,view_count,like_count,comment_count,stats_updated_at,stats_checked_at&order=published_at.asc`,
-            { headers: svc }
+            `${env.SUPABASE_URL}/rest/v1/publications?user_id=eq.${userIdForHydrate}&${pubFilter}&status=eq.published&select=id,clip_id,local_clip_id,platform,account_id,remote_id,remote_url,published_at,publish_mode,view_count,like_count,comment_count,stats_updated_at,stats_checked_at&order=published_at.asc`,
+            { headers: svc },
           ).catch(() => null),
         ]);
       }
@@ -4084,24 +5229,24 @@ export default {
       const rawPublications = publicationsRes && publicationsRes.ok ? await publicationsRes.json() : [];
       const publicationsByClip = new Map<string, CloudPublicationRow[]>();
       for (const publication of (Array.isArray(rawPublications) ? rawPublications as CloudPublicationRow[] : [])) {
-        const clipId = String(publication.clip_id ?? "");
-        if (!clipId) continue;
-        const rows = publicationsByClip.get(clipId) ?? [];
-        rows.push(publication);
-        publicationsByClip.set(clipId, rows);
+        for (const key of [String(publication.clip_id ?? ""), String(publication.local_clip_id ?? "")]) {
+          if (!key) continue;
+          const rows = publicationsByClip.get(key) ?? [];
+          if (!rows.some((r) => r.id === publication.id)) {
+            rows.push(publication);
+          }
+          publicationsByClip.set(key, rows);
+        }
       }
 
-      // Cloud caption contract: window transcripts sit in window_transcripts
-      // (words SOURCE-relative seconds). Fetch the batch for this user's ready
-      // windows so offline editing can seed a caption track without the PC.
       const transcriptMap = new Map<string, Array<Record<string, unknown>>>();
       if (readyWindows.length > 0) {
-        const windowIds = readyWindows.map(w => String(w.id)).slice(0, 100);
+        const windowIds = readyWindows.map((w) => String(w.id)).slice(0, 100);
         if (windowIds.length > 0) {
           try {
             const trRes = await fetch(
-              `${env.SUPABASE_URL}/rest/v1/window_transcripts?window_id=in.(${windowIds.map(id => `"${id}"`).join(",")})&select=window_id,words`,
-              { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+              `${env.SUPABASE_URL}/rest/v1/window_transcripts?window_id=in.(${windowIds.map((id) => `"${id}"`).join(",")})&select=window_id,words`,
+              { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } },
             );
             if (trRes.ok) {
               const rows = await trRes.json() as Array<{ window_id: string; words: unknown }>;
@@ -4110,16 +5255,10 @@ export default {
                 if (words.length > 0) transcriptMap.set(String(row.window_id), words);
               }
             }
-          } catch {
-            // Captions stay absent if transcripts cannot be loaded; clips still render.
-          }
+          } catch {}
         }
       }
 
-      // Audit 2026-10-27: a saved edited caption track is returned INDEPENDENT
-      // of whether a ready edit window exists (pc-consistency + offline editing
-      // no longer depend on a transcript proxy). Returns source so clients can
-      // distinguish an edited track from a window transcript seed.
       const buildCloudCaptions = (clip: Record<string, unknown>, clipEw: Record<string, unknown> | null): { captions: Record<string, unknown> | undefined; source: string | undefined; ready: boolean } => {
         const savedCaption = clip.caption_data;
         if (savedCaption && typeof savedCaption === "object" && !Array.isArray(savedCaption)) {
@@ -4135,21 +5274,19 @@ export default {
         const windowEnd = Number(clipEw.window_end || 0);
         const startWindow = windowEnd > windowStart ? windowStart : 0;
         const relative = words
-          .map(word => ({
+          .map((word) => ({
             w: String(word.word ?? word.w ?? word.text ?? ""),
             start: Number(word.start) - startWindow,
             end: Number(word.end) - startWindow,
           }))
-          .filter(word => Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > 0);
+          .filter((word) => Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > 0);
         if (relative.length === 0) return { captions: undefined, source: undefined, ready: false };
         const clipEnd = Number(clip.end_time || 0);
         const clipStart = Number(clip.start_time || 0);
-        // The editor renders against the window proxy span (window_end - window_start),
-        // but the clip itself may sit inside a larger window; keep words clipped to span.
         const spanDuration = Math.max(0.1, windowEnd - startWindow, clipEnd - clipStart);
         return {
           captions: {
-            words: relative.filter(word => word.start < spanDuration),
+            words: relative.filter((word) => word.start < spanDuration),
             span_duration: spanDuration,
           },
           source: "window_seed",
@@ -4157,24 +5294,21 @@ export default {
         };
       };
 
-      // Audit 2026-10-27: deterministic, kind-aware media selection. A clip's
-      // rendered video is the media object with kind='clip_video' linked to the
-      // cloud clip; edit-window proxies only surface through their ready window
-      // row; ordering comes from the query (created_at.desc, id.desc). A
-      // thumbnail can never stand in for the video URL again.
       const mapClipItem = async (c: Record<string, unknown>, targetStatus: string) => {
         const localId = String(c.local_clip_id || c.id);
         const cloudClipId = String(c.id);
-        const matchingJob = userJobs.find(j =>
-          (c.youtube_video_id && (j.video_id === c.youtube_video_id || String(j.youtube_url || '').includes(String(c.youtube_video_id)))) ||
-          (c.session_id && j.session_id === c.session_id)
+        const matchingJob = userJobs.find((j) =>
+          (c.youtube_video_id && (j.video_id === c.youtube_video_id || String(j.youtube_url || "").includes(String(c.youtube_video_id)))) ||
+          (c.session_id && j.session_id === c.session_id),
         );
-        const clipEw = readyWindows.find(w => String(w.local_clip_id) === localId) ?? null;
+        const clipEw = readyWindows.find(
+          (w) => String(w.local_clip_id) === localId || String(w.local_clip_id) === cloudClipId,
+        ) ?? null;
         const ewMo = clipEw
-          ? activeMedia.find(m => String(m.id) === String(clipEw.media_object_id)) ?? null
+          ? activeMedia.find((m) => String(m.id) === String(clipEw.media_object_id)) ?? null
           : null;
-        const renderedMo = activeMedia.find(m => String(m.clip_id) === cloudClipId && m.kind === "clip_video") ?? null;
-        const thumbMo = activeMedia.find(m => String(m.clip_id) === cloudClipId && m.kind === "thumbnail") ?? null;
+        const renderedMo = activeMedia.find((m) => String(m.clip_id) === cloudClipId && m.kind === "clip_video") ?? null;
+        const thumbMo = activeMedia.find((m) => String(m.clip_id) === cloudClipId && m.kind === "thumbnail") ?? null;
 
         let videoUrl: string | undefined = undefined;
         let editWindowUrl: string | undefined = undefined;
@@ -4195,6 +5329,11 @@ export default {
 
         const { captions, source, ready: captionsReady } = buildCloudCaptions(c, clipEw);
         const hasVideo = Boolean(videoUrl || editWindowUrl);
+        const ewStartRaw = clipEw?.window_start;
+        const ewEndRaw = clipEw?.window_end;
+        const editWindowStart = ewStartRaw != null && Number.isFinite(Number(ewStartRaw)) ? Number(ewStartRaw) : undefined;
+        const editWindowEnd = ewEndRaw != null && Number.isFinite(Number(ewEndRaw)) ? Number(ewEndRaw) : undefined;
+        const clipPubs = publicationsByClip.get(cloudClipId) ?? publicationsByClip.get(localId) ?? [];
 
         return {
           id: localId,
@@ -4228,24 +5367,62 @@ export default {
           source_video_url: undefined,
           thumbnail_url: thumbUrl,
           edit_window_url: editWindowUrl,
-          edit_window_start: clipEw ? Number(clipEw.window_start) : undefined,
-          edit_window_end: clipEw ? Number(clipEw.window_end) : undefined,
-          publications: (publicationsByClip.get(cloudClipId) ?? []).map(publicationPayload),
-          published_at: (c.published_at as string) || (((publicationsByClip.get(cloudClipId) ?? []).find(p => p.published_at)?.published_at) as string | undefined),
+          edit_window_start: editWindowStart,
+          edit_window_end: editWindowEnd,
+          publications: clipPubs.map(publicationPayload),
+          published_at: (c.published_at as string) || ((clipPubs.find((p) => p.published_at)?.published_at) as string | undefined),
           captions,
           captions_source: source,
           captions_ready: captionsReady,
           captions_revision: Number(c.caption_revision || 0),
-          // Explicit unavailable state instead of a silent missing player.
           media_missing: !mediaDegraded && !hasVideo ? true : undefined,
           is_cloud: true,
         };
       };
 
-      // Durable tombstones live on clips_cloud itself (status='rejected' +
-      // reject_purge_after stamped at request time), so a hidden clip cannot
-      // reappear after the PC acknowledges the reject command. The live-command
-      // lookup remains as belt-and-braces for rows that predate this contract.
+      return {
+        mapClipItem,
+        userJobs,
+        mediaDegraded,
+        windowsDegraded,
+        publicationsDegraded,
+        jobsDegraded: !jobsRes || !jobsRes.ok,
+      };
+    }
+
+    // ---- Cloud Clips (authenticated clients on any network / cellular) ----
+    if (url.pathname === "/clips" && request.method === "GET") {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+
+      const limitRaw = Number(url.searchParams.get("limit") ?? 50);
+      const offsetRaw = Number(url.searchParams.get("offset") ?? 0);
+      const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 50, 1), 200);
+      const offset = Math.min(Math.max(Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0, 0), 100000);
+
+      const clipsRes = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${user.userId}&select=${CLIPS_CLOUD_HYDRATE_SELECT}&order=cloud_updated_at.desc&limit=${limit}&offset=${offset}`,
+        { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
+      );
+      if (!clipsRes.ok) {
+        const text = await clipsRes.text().catch(() => "");
+        return json(502, { error: `clip listing failed: HTTP ${clipsRes.status}`, detail: text.slice(0, 200) });
+      }
+      const parsedClips = await clipsRes.json() as unknown;
+      if (!Array.isArray(parsedClips)) {
+        return json(502, { error: "clip listing failed: unexpected response shape" });
+      }
+      const rawClips = parsedClips as Array<Record<string, unknown>>;
+
+      const {
+        mapClipItem,
+        userJobs,
+        mediaDegraded,
+        windowsDegraded,
+        publicationsDegraded,
+        jobsDegraded,
+      } = await hydrateCloudClipBatch(user.userId, rawClips);
+
       const tombstoned = new Set<string>();
       try {
         const cmdRes = await rpcRaw(env, "cloud_list_live_clip_commands", { p_user_id: user.userId });
@@ -4254,9 +5431,7 @@ export default {
             if (cmd?.kind === "reject" && cmd?.local_clip_id) tombstoned.add(String(cmd.local_clip_id));
           }
         }
-      } catch {
-        // Filtering is best-effort; clips still render if lookup fails.
-      }
+      } catch {}
 
       const isHiddenByReject = (c: Record<string, unknown>) =>
         tombstoned.has(String(c.local_clip_id)) || c.status === "rejected";
@@ -4271,8 +5446,6 @@ export default {
       const ready = await Promise.all(readyRaw.map(c => mapClipItem(c, "ready")));
       const recent_approved = await Promise.all(approvedRaw.map(c => mapClipItem(c, String(c.status))));
 
-      // Rejected retention view: metadata only, never media URLs. A row is
-      // listed while its server-side purge deadline is in the future.
       const nowMs = Date.now();
       const rejected = rawClips
         .filter(c => c.status === "rejected")
@@ -4293,7 +5466,7 @@ export default {
         })
         .filter(c => !c.retention_expired);
 
-      const queuedJobs = userJobs.filter(j => !j.status || j.status === 'queued');
+      const queuedJobs = userJobs.filter(j => !j.status || j.status === "queued");
       return json(200, {
         ready,
         recent_approved,
@@ -4302,9 +5475,43 @@ export default {
         cloud_mode: true,
         media_degraded: mediaDegraded ? true : undefined,
         windows_degraded: windowsDegraded ? true : undefined,
-        jobs_degraded: !jobsRes || !jobsRes.ok ? true : undefined,
+        jobs_degraded: jobsDegraded ? true : undefined,
         publications_degraded: publicationsDegraded ? true : undefined,
       });
+    }
+
+    const singleClipMatch = url.pathname.match(/^\/clips\/([^/]+)$/);
+    if (request.method === "GET" && singleClipMatch) {
+      const user = await authenticate(env, request);
+      if (!user) return json(401, { error: "unauthorized" });
+      const clipRef = decodeURIComponent(singleClipMatch[1]).trim();
+      if (!clipRef || clipRef.length > 128) return json(400, { error: "invalid clip id" });
+
+      const lookupUrl = new URL(`${env.SUPABASE_URL}/rest/v1/clips_cloud`);
+      lookupUrl.searchParams.set("user_id", `eq.${user.userId}`);
+      if (UUID_RE.test(clipRef)) {
+        lookupUrl.searchParams.set("or", `(id.eq.${clipRef},local_clip_id.eq.${clipRef})`);
+      } else {
+        lookupUrl.searchParams.set("local_clip_id", `eq.${clipRef}`);
+      }
+      lookupUrl.searchParams.set("select", CLIPS_CLOUD_HYDRATE_SELECT);
+      lookupUrl.searchParams.set("limit", "1");
+
+      const clipRes = await fetch(lookupUrl.toString(), {
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+      });
+      if (!clipRes.ok) {
+        return json(502, { error: `clip lookup failed: HTTP ${clipRes.status}` });
+      }
+      const rows = (await clipRes.json().catch(() => [])) as Array<Record<string, unknown>>;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return json(404, { error: "clip not found" });
+      }
+      const row = rows[0];
+      const { mapClipItem } = await hydrateCloudClipBatch(user.userId, [row]);
+      const normalizedStatus = (row.status === "ready_review" || row.status === "ready") ? "ready" : String(row.status || "ready");
+      const hydrated = await mapClipItem(row, normalizedStatus);
+      return json(200, { ...hydrated, cloud_mode: true });
     }
 
     const clipDeleteMatch = url.pathname.match(/^\/clips\/([^/]+)\/(?:delete|purge)$/);
@@ -5033,6 +6240,7 @@ export default {
           publish_mode?: "private" | "unlisted" | "public";
           r2_key?: string;
           rendered_fingerprint?: string;
+          account_ids?: Record<string, string | string[]>;
         }>(request);
 
         if (!body?.clip_id || typeof body.clip_id !== "string" || !body.clip_id.trim()) {
@@ -5155,9 +6363,48 @@ export default {
         }
 
         const rawPlatforms = body.platforms;
-        const platformsList = Array.isArray(rawPlatforms)
+        const rawList = Array.isArray(rawPlatforms)
           ? rawPlatforms
-          : (typeof rawPlatforms === "string" ? rawPlatforms.split(",").map(p => p.trim()).filter(Boolean) : ["youtube"]);
+          : (typeof rawPlatforms === "string" ? rawPlatforms.split(",").map((p) => p.trim()).filter(Boolean) : ["youtube"]);
+        const platformsList = Array.from(
+          new Set(
+            rawList
+              .map((p) => normalizePublishPlatform(p))
+              .filter((p): p is PublishPlatform => Boolean(p)),
+          ),
+        );
+        if (platformsList.length === 0) {
+          return json(400, { error: "at least one supported publishing platform is required" });
+        }
+
+        const normalizedAccountIds: Record<string, string | string[]> = {};
+        if (body.account_ids && typeof body.account_ids === "object" && !Array.isArray(body.account_ids)) {
+          for (const [rawKey, rawVal] of Object.entries(body.account_ids)) {
+            const normPlat = normalizePublishPlatform(rawKey);
+            if (!normPlat) continue;
+            if (Array.isArray(rawVal)) {
+              const cleaned = Array.from(new Set(rawVal.map((v) => String(v ?? "").trim()).filter(Boolean)));
+              if (cleaned.length > 0) {
+                const existing = normalizedAccountIds[normPlat];
+                const merged = Array.isArray(existing)
+                  ? Array.from(new Set([...existing, ...cleaned]))
+                  : (typeof existing === "string" && existing ? Array.from(new Set([existing, ...cleaned])) : cleaned);
+                normalizedAccountIds[normPlat] = merged;
+              }
+            } else if (typeof rawVal === "string" && rawVal.trim()) {
+              const cleaned = rawVal.trim();
+              const existing = normalizedAccountIds[normPlat];
+              if (Array.isArray(existing)) {
+                if (!existing.includes(cleaned)) existing.push(cleaned);
+              } else if (typeof existing === "string" && existing && existing !== cleaned) {
+                normalizedAccountIds[normPlat] = [existing, cleaned];
+              } else {
+                normalizedAccountIds[normPlat] = cleaned;
+              }
+            }
+          }
+        }
+
         const publishMode = ["private", "unlisted", "public"].includes(String(body.publish_mode)) ? body.publish_mode! : "private";
 
         try {
@@ -5170,6 +6417,7 @@ export default {
             p_publish_mode: publishMode,
             p_r2_key: verifiedR2Key,
             p_rendered_fingerprint: body.rendered_fingerprint ?? null,
+            p_account_ids: normalizedAccountIds,
           });
 
           const job = Array.isArray(rows) && rows.length > 0 ? (rows[0] as { id: string; status: string }) : null;
@@ -5181,6 +6429,7 @@ export default {
             clip_id: ownedClip.id,
             r2_key: verifiedR2Key,
             platforms: platformsList,
+            account_ids: normalizedAccountIds,
           });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -5221,7 +6470,36 @@ export default {
 
           const res = await fetch(jobUrl.toString(), { headers: svcHeaders });
           const rows = res.ok ? ((await res.json()) as Array<Record<string, unknown>>) : [];
-          return json(200, { ok: true, clip_id: resolvedClipId || targetClipId, jobs: Array.isArray(rows) ? rows : [] });
+          const jobList = Array.isArray(rows) ? rows : [];
+          if (jobList.length > 0) {
+            const jobIds = postgrestInList(jobList.map((j) => String(j.id ?? "")));
+            if (jobIds) {
+              const tRes = await fetch(
+                `${env.SUPABASE_URL}/rest/v1/publishing_job_targets?user_id=eq.${userId}&job_id=in.(${jobIds})&select=id,job_id,platform,account_id,status,attempt_count,remote_id,remote_url,last_error,updated_at`,
+                { headers: svcHeaders },
+              ).catch(() => null);
+              if (tRes && tRes.ok) {
+                const targets = (await tRes.json().catch(() => [])) as Array<Record<string, unknown>>;
+                if (Array.isArray(targets)) {
+                  const byJob = new Map<string, Array<Record<string, unknown>>>();
+                  for (const t of targets) {
+                    const jid = String(t.job_id ?? "");
+                    if (!jid) continue;
+                    const arr = byJob.get(jid) ?? [];
+                    arr.push(t);
+                    byJob.set(jid, arr);
+                  }
+                  for (const j of jobList) {
+                    const attached = byJob.get(String(j.id ?? ""));
+                    if (attached && attached.length > 0) {
+                      j.targets = attached;
+                    }
+                  }
+                }
+              }
+            }
+          }
+          return json(200, { ok: true, clip_id: resolvedClipId || targetClipId, jobs: jobList });
         } catch (e) {
           return json(502, { error: `publish status fetch failed: ${e instanceof Error ? e.message : e}` });
         }
@@ -5249,6 +6527,7 @@ export default {
           };
 
           let mediaObj: SourceMediaRow | null = null;
+          let resolvedLocalClipRef = localClipId;
           if (UUID_RE.test(localClipId)) {
             const directRes = await fetch(
               `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&kind=neq.thumbnail&clip_id=eq.${encodeURIComponent(localClipId)}&select=id,kind,final_key,byte_count,mime_type,user_id&order=created_at.desc&limit=10`,
@@ -5267,13 +6546,14 @@ export default {
             } else {
               clipLookup.searchParams.set("local_clip_id", `eq.${localClipId}`);
             }
-            clipLookup.searchParams.set("select", "id,media_object_id");
+            clipLookup.searchParams.set("select", "id,local_clip_id,media_object_id");
             clipLookup.searchParams.set("limit", "1");
             const clipRes = await fetch(clipLookup.toString(), { headers: svc });
             if (clipRes.ok) {
-              const clipRows = (await clipRes.json()) as Array<{ id: string; media_object_id: string | null }>;
+              const clipRows = (await clipRes.json()) as Array<{ id: string; local_clip_id?: string | null; media_object_id: string | null }>;
               if (clipRows && clipRows.length > 0) {
                 const clipRow = clipRows[0];
+                if (clipRow.local_clip_id) resolvedLocalClipRef = String(clipRow.local_clip_id);
                 if (clipRow.id) {
                   const moRes = await fetch(
                     `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&kind=neq.thumbnail&clip_id=eq.${encodeURIComponent(clipRow.id)}&select=id,kind,final_key,byte_count,mime_type,user_id&order=created_at.desc&limit=10`,
@@ -5300,6 +6580,30 @@ export default {
             return json(404, { error: "source media not found in cloud storage" });
           }
 
+          let editWindowStart: number | undefined = undefined;
+          let editWindowEnd: number | undefined = undefined;
+          try {
+            const ewUrl = new URL(`${env.SUPABASE_URL}/rest/v1/edit_windows`);
+            ewUrl.searchParams.set("user_id", `eq.${userId}`);
+            ewUrl.searchParams.set("status", "eq.ready");
+            ewUrl.searchParams.set("or", `(media_object_id.eq.${mediaObj.id},local_clip_id.eq.${resolvedLocalClipRef})`);
+            ewUrl.searchParams.set("select", "window_start,window_end");
+            ewUrl.searchParams.set("order", "created_at.desc");
+            ewUrl.searchParams.set("limit", "1");
+            const ewRes = await fetch(ewUrl.toString(), { headers: svc });
+            if (ewRes.ok) {
+              const ewRows = (await ewRes.json().catch(() => [])) as Array<{ window_start?: number; window_end?: number }>;
+              if (Array.isArray(ewRows) && ewRows.length > 0) {
+                if (ewRows[0].window_start != null && Number.isFinite(Number(ewRows[0].window_start))) {
+                  editWindowStart = Number(ewRows[0].window_start);
+                }
+                if (ewRows[0].window_end != null && Number.isFinite(Number(ewRows[0].window_end))) {
+                  editWindowEnd = Number(ewRows[0].window_end);
+                }
+              }
+            }
+          } catch {}
+
           const presignedGet = await presign(env, "GET", mediaObj.final_key);
           return json(200, {
             ok: true,
@@ -5308,6 +6612,8 @@ export default {
             source_url: presignedGet,
             byte_count: mediaObj.byte_count,
             mime_type: mediaObj.mime_type,
+            edit_window_start: editWindowStart,
+            edit_window_end: editWindowEnd,
             expires_in: PRESIGN_EXPIRES,
           });
         } catch (e) {

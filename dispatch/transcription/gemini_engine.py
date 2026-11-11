@@ -633,6 +633,7 @@ def _group_words_into_segments(words: List[Dict[str, Any]], max_gap_seconds: flo
             "end": w_end,
             "probability": w.get("probability", 1.0),
             "speaker": w_spk,
+            "is_exact": bool(w.get("is_exact", True)),
         })
 
     if current_words:
@@ -694,7 +695,8 @@ def _transcribe_chunk_primary(
                             "speaker": spk,
                             "start": w_start,
                             "end": w_end,
-                            "probability": 1.0
+                            "probability": 1.0,
+                            "is_exact": True,
                         })
 
         if not words and not full_text:
@@ -788,6 +790,7 @@ def _transcribe_chunk_fallback(
                     "end": en,
                     "probability": float(seg.get("probability", 0.9)),
                     "speaker": spk,
+                    "is_exact": bool(seg.get("is_exact", False)),
                 }
                 seg_words.append(w_item)
                 all_words.append(w_item)
@@ -800,6 +803,7 @@ def _transcribe_chunk_fallback(
                             "end": _parse_stage1_time(w.get("end", en)),
                             "probability": float(w.get("probability", 0.9)),
                             "speaker": str(w.get("speaker", spk)),
+                            "is_exact": bool(w.get("is_exact", False)),
                         }
                         seg_words.append(w_item)
                         all_words.append(w_item)
@@ -817,6 +821,7 @@ def _transcribe_chunk_fallback(
                             "end": w_en,
                             "probability": 0.9,
                             "speaker": spk,
+                            "is_exact": False,
                         })
                         all_words.append(seg_words[-1])
 
@@ -1234,7 +1239,8 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                         clean_words.append({
                             "word": w.get("word", ""),
                             "start": w_s,
-                            "end": w_e
+                            "end": w_e,
+                            "is_exact": bool(w.get("is_exact", True)),
                         })
 
                 from dispatch.ai_clips.highlight_finder import transliterate_segments_to_hinglish

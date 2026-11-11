@@ -234,21 +234,61 @@ def analyze_waveform_and_transcript_autocuts(
         else:
             all_words.append({"start": max(clip_start, s_start), "end": min(clip_end, s_end), "text": s.get("text", "")})
 
+    all_words.sort(key=lambda w: float(w.get("start", 0.0)))
+
     proposals: List[Dict[str, Any]] = []
 
     # 1. Check for mechanical stutters and context-sensitive filler words.
     stutter_cuts = detect_mechanical_stutters(all_words)
     proposals.extend(detect_contextual_filler_words(all_words))
     for sc in stutter_cuts:
-        sc['decision'] = 'REVIEW'
+        sc["decision"] = "REVIEW"
     for sc in stutter_cuts:
         if pcm_bytes:
-            sc["source_start"] = snap_boundary_to_waveform_silence(
-                pcm_bytes, sc["source_start"], mode="speech_attack", sample_rate=16000
+            raw_start = float(sc["source_start"])
+            raw_end = float(sc["source_end"])
+
+            # Preserve tail phoneme / >=150ms release padding of any preceding kept word.
+            prev_ends = [
+                float(w.get("end", 0.0))
+                for w in all_words
+                if float(w.get("end", 0.0)) <= raw_start + 0.01
+            ]
+            if prev_ends:
+                release_floor = snap_boundary_to_waveform_silence(
+                    pcm_bytes,
+                    max(prev_ends),
+                    mode="speech_release",
+                    silence_threshold_db=-32.0,
+                    min_speech_padding_ms=MIN_SPEECH_PADDING_MS,
+                    sample_rate=16000,
+                )
+                sc["source_start"] = round(max(raw_start, release_floor), 3)
+            else:
+                sc["source_start"] = round(
+                    find_zero_crossing(pcm_bytes, raw_start, search_window_ms=25.0, sample_rate=16000),
+                    3,
+                )
+
+            # Snap cut end before next kept word without backing up mid-syllable into the stuttered word.
+            stutter_tail_ends = [
+                float(w.get("end", 0.0))
+                for w in all_words
+                if float(w.get("start", 0.0)) >= raw_start - 0.01
+                and float(w.get("end", 0.0)) <= raw_end + 0.05
+            ]
+            attack_snap = snap_boundary_to_waveform_silence(
+                pcm_bytes, raw_end, mode="speech_attack", sample_rate=16000
             )
-            sc["source_end"] = snap_boundary_to_waveform_silence(
-                pcm_bytes, sc["source_end"], mode="speech_attack", sample_rate=16000
-            )
+            if stutter_tail_ends:
+                stutter_tail = max(stutter_tail_ends)
+                if attack_snap < stutter_tail:
+                    midpoint = min(raw_end, max(stutter_tail, (stutter_tail + raw_end) / 2.0))
+                    attack_snap = max(
+                        stutter_tail,
+                        min(raw_end, find_zero_crossing(pcm_bytes, midpoint, search_window_ms=25.0, sample_rate=16000)),
+                    )
+            sc["source_end"] = round(min(raw_end, max(sc["source_start"], attack_snap)), 3)
             sc["duration"] = round(sc["source_end"] - sc["source_start"], 3)
         if sc["duration"] >= 0.1:
             proposals.append(sc)

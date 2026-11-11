@@ -7,8 +7,9 @@ Generates preview/render-parity outputs from the Canonical CaptionTrack:
 """
 import json
 import math
+import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dispatch.captions.model import CaptionTrack, CaptionGroup, Word
 from dispatch.config import TARGET_WIDTH, TARGET_HEIGHT
 
@@ -39,15 +40,145 @@ def apply_case_transform(text: str, mode: str) -> str:
     return text
 
 
+_RGBA_COMMA_RE = re.compile(
+    r"^\s*rgba?\(\s*([^,\s]+)\s*,\s*([^,\s]+)\s*,\s*([^,\s)]+)(?:\s*,\s*([^,\s)]+))?\s*\)\s*$",
+    re.IGNORECASE,
+)
+_RGBA_SPACE_RE = re.compile(
+    r"^\s*rgba?\(\s*([^\s/]+)\s+([^\s/]+)\s+([^\s/]+)(?:\s*/\s*([^\s)]+))?\s*\)\s*$",
+    re.IGNORECASE,
+)
+_NAMED_COLORS = {
+    "black": (0, 0, 0, 1.0),
+    "white": (255, 255, 255, 1.0),
+    "red": (255, 0, 0, 1.0),
+    "green": (0, 128, 0, 1.0),
+    "blue": (0, 0, 255, 1.0),
+    "yellow": (255, 255, 0, 1.0),
+    "cyan": (0, 255, 255, 1.0),
+    "magenta": (255, 0, 255, 1.0),
+    "transparent": (0, 0, 0, 0.0),
+}
+
+
+def _parse_css_channel(raw: str) -> int:
+    token = raw.strip()
+    if token.endswith("%"):
+        val = float(token[:-1]) * 255.0 / 100.0
+    else:
+        val = float(token)
+    return max(0, min(255, int(round(val))))
+
+
+def _parse_css_alpha(raw: Optional[str]) -> float:
+    if raw is None:
+        return 1.0
+    token = raw.strip()
+    if token.endswith("%"):
+        val = float(token[:-1]) / 100.0
+    else:
+        val = float(token)
+    return max(0.0, min(1.0, val))
+
+
+def _combine_ass_alpha(caller_alpha_hex: str, css_opacity: float) -> str:
+    try:
+        caller_ass = max(0, min(255, int(caller_alpha_hex, 16)))
+    except (ValueError, TypeError):
+        caller_ass = 0
+    caller_opacity = 1.0 - (caller_ass / 255.0)
+    effective_opacity = max(0.0, min(1.0, caller_opacity * max(0.0, min(1.0, css_opacity))))
+    ass_alpha = int(round((1.0 - effective_opacity) * 255.0))
+    return f"{ass_alpha:02X}"
+
+
 def hex_to_ass_color(hex_color: str, alpha: str = "00") -> str:
-    """Convert standard Hex color (#RRGGBB) to ASS color format (&HAABBGGRR&)."""
-    clean_hex = hex_color.lstrip("#")
-    if len(clean_hex) == 6:
-        r = clean_hex[0:2]
-        g = clean_hex[2:4]
-        b = clean_hex[4:6]
-        return f"&H{alpha}{b}{g}{r}&"
-    return f"&H{alpha}FFFFFF&"
+    """Convert CSS color (#RRGGBB, #RRGGBBAA, #RGB, rgb(), rgba(), named) to ASS &HAABBGGRR&."""
+    norm_alpha = f"{int(alpha, 16):02X}" if isinstance(alpha, str) and len(alpha) == 2 else "00"
+    if not hex_color or not isinstance(hex_color, str):
+        return f"&H{norm_alpha}FFFFFF&"
+
+    raw = hex_color.strip()
+    named = _NAMED_COLORS.get(raw.lower())
+    if named is not None:
+        r, g, b, css_a = named
+        out_alpha = _combine_ass_alpha(norm_alpha, css_a)
+        return f"&H{out_alpha}{b:02X}{g:02X}{r:02X}&"
+
+    m = _RGBA_COMMA_RE.match(raw) or _RGBA_SPACE_RE.match(raw)
+    if m:
+        try:
+            r = _parse_css_channel(m.group(1))
+            g = _parse_css_channel(m.group(2))
+            b = _parse_css_channel(m.group(3))
+            css_a = _parse_css_alpha(m.group(4))
+            out_alpha = _combine_ass_alpha(norm_alpha, css_a)
+            return f"&H{out_alpha}{b:02X}{g:02X}{r:02X}&"
+        except (ValueError, TypeError):
+            return f"&H{norm_alpha}FFFFFF&"
+
+    clean_hex = raw.lstrip("#")
+    if len(clean_hex) == 3 and all(c in "0123456789abcdefABCDEF" for c in clean_hex):
+        r = clean_hex[0] * 2
+        g = clean_hex[1] * 2
+        b = clean_hex[2] * 2
+        return f"&H{norm_alpha}{b.upper()}{g.upper()}{r.upper()}&"
+    if len(clean_hex) == 4 and all(c in "0123456789abcdefABCDEF" for c in clean_hex):
+        r = clean_hex[0] * 2
+        g = clean_hex[1] * 2
+        b = clean_hex[2] * 2
+        css_a = int(clean_hex[3] * 2, 16) / 255.0
+        out_alpha = _combine_ass_alpha(norm_alpha, css_a)
+        return f"&H{out_alpha}{b.upper()}{g.upper()}{r.upper()}&"
+    if len(clean_hex) == 6 and all(c in "0123456789abcdefABCDEF" for c in clean_hex):
+        r = clean_hex[0:2].upper()
+        g = clean_hex[2:4].upper()
+        b = clean_hex[4:6].upper()
+        return f"&H{norm_alpha}{b}{g}{r}&"
+    if len(clean_hex) == 8 and all(c in "0123456789abcdefABCDEF" for c in clean_hex):
+        r = clean_hex[0:2].upper()
+        g = clean_hex[2:4].upper()
+        b = clean_hex[4:6].upper()
+        css_a = int(clean_hex[6:8], 16) / 255.0
+        out_alpha = _combine_ass_alpha(norm_alpha, css_a)
+        return f"&H{out_alpha}{b}{g}{r}&"
+    return f"&H{norm_alpha}FFFFFF&"
+
+
+def resolve_ass_play_res(
+    aspect_ratio: Optional[str] = None,
+    play_res_x: Optional[int] = None,
+    play_res_y: Optional[int] = None,
+    layout_mode: Optional[str] = None,
+) -> Tuple[int, int]:
+    """Resolve dynamic ASS PlayResX / PlayResY from explicit dimensions, aspect ratio, or layout mode."""
+    if play_res_x and play_res_y and int(play_res_x) > 0 and int(play_res_y) > 0:
+        return int(play_res_x), int(play_res_y)
+
+    token = str(aspect_ratio or "").strip().lower()
+    if not token and layout_mode:
+        lm = str(layout_mode).strip().lower()
+        if lm in ("native_169", "landscape"):
+            token = "16:9"
+        elif lm in ("square", "1:1"):
+            token = "1:1"
+        elif lm in ("portrait_9_16", "native_916", "native_portrait", "crop_916", "crop_follow"):
+            token = "9:16"
+
+    if token in ("16:9", "landscape", "native_169", "16/9"):
+        return 1920, 1080
+    if token in ("1:1", "square", "1/1"):
+        return 1080, 1080
+    if token in ("4:5", "4/5"):
+        return 1080, 1350
+    if token in ("9:16", "portrait", "native_916", "9/16"):
+        return 1080, 1920
+
+    dim_match = re.match(r"^\s*(\d{3,4})\s*[x:]\s*(\d{3,4})\s*$", token)
+    if dim_match:
+        return int(dim_match.group(1)), int(dim_match.group(2))
+
+    return TARGET_WIDTH, TARGET_HEIGHT
 
 
 def format_ass_time(seconds: float) -> str:
@@ -96,11 +227,28 @@ def get_ass_weight_tag(weight: Any) -> str:
     return r"\b1"
 
 
-def export_to_ass(track: CaptionTrack, output_path: Path) -> Path:
+def export_to_ass(
+    track: CaptionTrack,
+    output_path: Path,
+    *,
+    aspect_ratio: Optional[str] = None,
+    play_res_x: Optional[int] = None,
+    play_res_y: Optional[int] = None,
+    layout_mode: Optional[str] = None,
+) -> Path:
     """Export canonical CaptionTrack to ASS with exact parity for fonts, colors, and pop animations."""
     style = track.default_style
     layout = track.default_layout
     anim = track.default_animation
+
+    eff_aspect = aspect_ratio or getattr(track, "aspect_ratio", None) or getattr(layout, "aspect_ratio", None)
+    eff_layout_mode = layout_mode or getattr(track, "layout_mode", None)
+    res_x, res_y = resolve_ass_play_res(
+        aspect_ratio=eff_aspect,
+        play_res_x=play_res_x,
+        play_res_y=play_res_y,
+        layout_mode=eff_layout_mode,
+    )
 
     primary_alpha = float_to_ass_alpha(getattr(style, "text_opacity", getattr(style, "opacity", 1.0)))
     outline_alpha = float_to_ass_alpha(getattr(style, "outline_opacity", 1.0))
@@ -113,8 +261,8 @@ def export_to_ass(track: CaptionTrack, output_path: Path) -> Path:
     bg_ass = hex_to_ass_color(getattr(style, "background_color", "#000000") or "#000000", bg_alpha)
     shadow_ass = hex_to_ass_color(getattr(style, "shadow_color", "#000000") or "#000000", shadow_alpha)
 
-    # Resolution-independent to 1080x1920 vertical coordinate space
-    margin_v = int(round((1.0 - layout.position_y) * TARGET_HEIGHT))
+    # Resolution-independent coordinate space matched to target aspect ratio
+    margin_v = int(round((1.0 - layout.position_y) * res_y))
     alignment = 2 if layout.alignment == "center" else (1 if layout.alignment == "left" else 3)
 
     outline_w = style.outline_width if style.outline_enabled else 0.0
@@ -123,8 +271,8 @@ def export_to_ass(track: CaptionTrack, output_path: Path) -> Path:
 
     header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {TARGET_WIDTH}
-PlayResY: {TARGET_HEIGHT}
+PlayResX: {res_x}
+PlayResY: {res_y}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -163,8 +311,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         style_name = "Boxed" if is_boxed else "Default"
 
         # Position and transform tags for exact canvas parity
-        pos_x = int(round((grp_layout.position_x or 0.5) * TARGET_WIDTH))
-        pos_y = int(round((grp_layout.position_y or 0.78) * TARGET_HEIGHT))
+        pos_x = int(round((grp_layout.position_x or 0.5) * res_x))
+        pos_y = int(round((grp_layout.position_y or 0.78) * res_y))
         base_scale = int(round((grp_layout.scale or 1.0) * 100))
         an_tag = r"\an5" if grp_layout.alignment == "center" else (r"\an4" if grp_layout.alignment == "left" else r"\an6")
 
@@ -294,7 +442,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         eff_font_size = float(grp_style.font_size or 54.0)
         eff_letter_spacing = float(grp_style.letter_spacing or 0.0)
         space_w = eff_font_size * 0.35
-        max_content_w = float(grp_layout.max_width or 0.88) * TARGET_WIDTH
+        max_content_w = float(grp_layout.max_width or 0.88) * res_x
 
         for w_idx, w_item in enumerate(words):
             raw_w_text = w_item.text or ""

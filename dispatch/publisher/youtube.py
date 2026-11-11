@@ -38,9 +38,33 @@ def _credentials_from_data(credentials_data: Dict[str, Any]):
     )
 
 
+DEFAULT_YOUTUBE_TIMEOUT_SECONDS = 120.0
+YOUTUBE_RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024  # 8 MiB (multiple of 256 KiB)
+
+
+def _is_youtube_auth_http_error(err: Exception) -> bool:
+    status = getattr(getattr(err, "resp", None), "status", None)
+    if status == 401:
+        return True
+    msg = str(err).lower()
+    if status == 403 and any(
+        tok in msg
+        for tok in (
+            "invalidcredentials",
+            "autherror",
+            "insufficientpermissions",
+            "unauthorized",
+            "forbidden",
+            "accessnotconfigured",
+        )
+    ):
+        return True
+    return _is_revoked_refresh_error(err)
+
+
 def build_youtube_service_from_credentials(
     credentials_data: Dict[str, Any],
-    timeout_seconds: Optional[float] = None,
+    timeout_seconds: Optional[float] = DEFAULT_YOUTUBE_TIMEOUT_SECONDS,
 ):
     """Build a Google YouTube v3 Resource object from credentials_data dict."""
     from googleapiclient.discovery import build
@@ -69,7 +93,8 @@ def upload_youtube_short(
     tags: str,
     privacy_status: str = "private",
     credentials_path: Optional[Path] = None,
-    credentials_data: Optional[Dict[str, Any]] = None
+    credentials_data: Optional[Dict[str, Any]] = None,
+    timeout_seconds: float = DEFAULT_YOUTUBE_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
     """Upload video to YouTube as a Short.
     
@@ -80,6 +105,8 @@ def upload_youtube_short(
         tags: Comma-separated or hashtag-separated tags.
         privacy_status: 'private', 'unlisted', or 'public'.
         credentials_path: Optional path to OAuth client credentials.
+        credentials_data: Optional brokered short-lived credentials dict.
+        timeout_seconds: Bounded socket timeout for YouTube API calls.
         
     Returns:
         Dict with status, remote_id, and url.
@@ -126,7 +153,10 @@ def upload_youtube_short(
 
     # If real credentials exist, execute actual Google API client upload
     try:
+        import httplib2
+        from google_auth_httplib2 import AuthorizedHttp
         from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaFileUpload
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -168,7 +198,8 @@ def upload_youtube_short(
                         raise PermissionError(f"YouTube OAuth token expired or revoked: {refresh_err}") from refresh_err
                     logger.warning("Failed to refresh env-based token in publisher: %s", refresh_err)
 
-        youtube = build("youtube", "v3", credentials=creds)
+        authorized_http = AuthorizedHttp(creds, http=httplib2.Http(timeout=timeout_seconds))
+        youtube = build("youtube", "v3", http=authorized_http)
 
         body = {
             "snippet": {
@@ -183,21 +214,56 @@ def upload_youtube_short(
             }
         }
 
-        media = MediaFileUpload(str(video_path), mimetype="video/mp4", resumable=True)
-        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-        response = request.execute()
+        media = MediaFileUpload(
+            str(video_path),
+            mimetype="video/mp4",
+            chunksize=YOUTUBE_RESUMABLE_CHUNK_BYTES,
+            resumable=True,
+        )
+        response = None
+        try:
+            request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+            if hasattr(request, "next_chunk"):
+                transient_retries = 0
+                while response is None:
+                    try:
+                        _, response = request.next_chunk()
+                    except HttpError as chunk_err:
+                        if _is_youtube_auth_http_error(chunk_err):
+                            raise PermissionError(f"YouTube upload authorization expired or revoked: {chunk_err}") from chunk_err
+                        status_code = getattr(getattr(chunk_err, "resp", None), "status", None)
+                        if status_code in (500, 502, 503, 504) and transient_retries < 3:
+                            transient_retries += 1
+                            continue
+                        raise
+            else:
+                response = request.execute()
+        finally:
+            fd = getattr(media, "_fd", None)
+            if fd is not None and hasattr(fd, "close"):
+                try:
+                    fd.close()
+                except Exception:
+                    pass
 
-        video_id = response.get("id")
+        video_id = (response or {}).get("id")
+        if not video_id:
+            raise RuntimeError("YouTube upload completed without returning a video ID")
 
         # Check YouTube Data API processing status before declaring completion
-        upload_status = response.get("status", {}).get("uploadStatus", "uploaded")
+        upload_status = (response or {}).get("status", {}).get("uploadStatus", "uploaded")
         try:
             status_resp = youtube.videos().list(part="status,processingDetails", id=video_id).execute()
             items = status_resp.get("items", [])
             if items:
                 upload_status = items[0].get("status", {}).get("uploadStatus", upload_status)
         except Exception as check_err:
+            if _is_youtube_auth_http_error(check_err):
+                raise PermissionError(f"YouTube status check authorization error: {check_err}") from check_err
             logger.debug("Failed to query initial processing status for %s: %s", video_id, check_err)
+
+        if upload_status in ("failed", "rejected"):
+            raise RuntimeError(f"YouTube rejected uploaded video {video_id}: {upload_status}")
 
         return {
             "status": "published" if upload_status == "processed" else "processing",
@@ -207,7 +273,11 @@ def upload_youtube_short(
             "is_simulation": False
         }
 
+    except PermissionError:
+        raise
     except Exception as e:
+        if _is_youtube_auth_http_error(e):
+            raise PermissionError(f"YouTube upload authorization expired or revoked: {e}") from e
         logger.error("Real YouTube upload failed: %s", e)
         raise
 

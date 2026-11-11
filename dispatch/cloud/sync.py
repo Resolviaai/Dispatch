@@ -17,6 +17,7 @@ Auth (audit 2026-10-27):
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 import json
@@ -25,12 +26,19 @@ import threading
 import time
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote as urlquote
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import requests
 
-from dispatch import db
+from dispatch import db, edit_windows
+from dispatch.segments import (
+    SegmentError,
+    compute_media_fingerprint,
+    compute_render_fingerprint,
+    round_ms,
+)
 
 logger = logging.getLogger("dispatch.cloud.sync")
 
@@ -247,10 +255,359 @@ def extract_source_words(clip: Dict[str, Any]) -> List[Dict[str, Any]]:
     return _words_in_window(words, lo, hi)
 
 
-def _render_fingerprint(clip: Dict[str, Any], video_path: Path) -> str:
-    """Cheap identity for the exact rendered bytes (size + mtime + range rev)."""
-    stat = video_path.stat()
-    return f"{stat.st_size}:{stat.st_mtime_ns}:{int(clip.get('range_revision') or 0)}"
+def _parse_json_safe(raw: Any) -> Any:
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+    return None
+
+
+def _render_fingerprint(clip: Dict[str, Any], video_path: Optional[Path] = None) -> str:
+    """Canonical SHA-256 render fingerprint from timeline/layout/layers via dispatch.segments,
+    with a deterministic fallback when EDL metadata is unavailable."""
+    p_doc = _parse_json_safe(clip.get("project_document"))
+    doc_timeline = p_doc.get("timeline", {}) if isinstance(p_doc, dict) and isinstance(p_doc.get("timeline"), dict) else {}
+    doc_layout = p_doc.get("layout", {}) if isinstance(p_doc, dict) and isinstance(p_doc.get("layout"), dict) else {}
+
+    s_time = float(clip.get("start_time") or 0.0)
+    e_time = float(clip.get("end_time") or 0.0)
+    raw_segs = doc_timeline.get("segments")
+    if not (isinstance(raw_segs, list) and len(raw_segs) > 0):
+        raw_segs = _parse_json_safe(clip.get("segments_json"))
+    segs: List[Tuple[float, float]] = []
+    if isinstance(raw_segs, list):
+        for item in raw_segs:
+            try:
+                if isinstance(item, dict):
+                    st = item.get("source_start", item.get("start"))
+                    en = item.get("source_end", item.get("end"))
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    st, en = item[0], item[1]
+                else:
+                    continue
+                if st is not None and en is not None:
+                    sf, ef = round_ms(float(st)), round_ms(float(en))
+                    if ef > sf:
+                        segs.append((sf, ef))
+            except (TypeError, ValueError, SegmentError):
+                continue
+    if not segs and e_time > s_time:
+        segs = [(round_ms(s_time), round_ms(e_time))]
+
+    source_asset_id = str(
+        clip.get("source_chunk_id")
+        or clip.get("chunk_id")
+        or (p_doc.get("source_asset_id") if isinstance(p_doc, dict) else None)
+        or clip.get("id")
+        or "unknown"
+    ).strip()
+    layout_mode = str(
+        clip.get("layout_mode")
+        or doc_layout.get("mode")
+        or "fit_blur"
+    ).strip()
+    try:
+        crop_anchor = float(
+            clip.get("crop_anchor_x")
+            if clip.get("crop_anchor_x") is not None
+            else doc_layout.get("crop_anchor_x", 0.5)
+        )
+    except (TypeError, ValueError):
+        crop_anchor = 0.5
+
+    layers: List[Dict[str, Any]] = []
+    if isinstance(p_doc, dict) and isinstance(p_doc.get("tracks"), list):
+        layers = [t for t in p_doc["tracks"] if isinstance(t, dict)]
+    else:
+        cap_obj = _parse_json_safe(clip.get("caption_data"))
+        if isinstance(cap_obj, dict):
+            layers = [{"id": "captions", "kind": "captions", "groups": cap_obj.get("groups", [])}]
+
+    if isinstance(segs, list) and len(segs) > 0 and source_asset_id:
+        try:
+            media_fp = compute_media_fingerprint(source_asset_id, segs)
+            return compute_render_fingerprint(media_fp, layout_mode, crop_anchor, layers=layers)
+        except SegmentError:
+            pass
+
+    fallback_payload = json.dumps(
+        {
+            "v": 1,
+            "clip_id": str(clip.get("id") or ""),
+            "source_asset_id": source_asset_id,
+            "start_time": round(s_time, 3),
+            "end_time": round(e_time, 3),
+            "layout_mode": layout_mode,
+            "crop_anchor_x": round(crop_anchor, 3),
+            "range_revision": int(clip.get("range_revision") or 0),
+            "segments_revision": int(clip.get("segments_revision") or 0),
+            "captions_revision": int(clip.get("captions_revision") or 0),
+            "layers": layers,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(fallback_payload.encode("utf-8")).hexdigest()
+
+
+def _resolve_raw_source_and_duration(clip: Dict[str, Any]) -> Tuple[Optional[Path], Optional[float]]:
+    """Resolve canonical raw source video (never rendered video_path) and its duration."""
+    source_path: Optional[Path] = None
+    try:
+        from dispatch.web.app import resolve_canonical_source_asset
+        source_path = resolve_canonical_source_asset(clip)
+    except Exception:
+        source_path = None
+
+    source_duration: Optional[float] = None
+    chunk_id = clip.get("chunk_id")
+    if chunk_id:
+        try:
+            chk = db.get_chunk_by_id(chunk_id)
+            if chk and float(chk.get("duration") or 0.0) > 0:
+                source_duration = float(chk["duration"])
+            if not source_path and chk and chk.get("filepath"):
+                cand = Path(chk["filepath"])
+                rendered = clip.get("video_path")
+                if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
+                    if not rendered or str(cand.resolve()) != str(Path(rendered).resolve()):
+                        source_path = cand
+        except Exception:
+            pass
+
+    if source_duration is None and source_path and source_path.exists():
+        try:
+            from dispatch.ingestion.validator import inspect_video_orientation
+            info = inspect_video_orientation(source_path)
+            if info.get("valid") and float(info.get("duration") or 0.0) > 0:
+                source_duration = float(info["duration"])
+        except Exception:
+            pass
+    return source_path, source_duration
+
+
+def _resolve_edit_window_bounds(
+    clip: Dict[str, Any],
+    s_time: float,
+    e_time: float,
+    source_duration: Optional[float],
+) -> Tuple[Optional[float], Optional[float]]:
+    """Compute bounded edit window [window_start, window_end] for a clip."""
+    if source_duration is not None and source_duration > 0:
+        try:
+            return edit_windows.compute_window(s_time, e_time, float(source_duration))
+        except Exception:
+            pass
+    if clip.get("edit_window_start") is not None and clip.get("edit_window_end") is not None:
+        try:
+            ew_s = float(clip["edit_window_start"])
+            ew_e = float(clip["edit_window_end"])
+            if ew_e > ew_s:
+                return round(ew_s, 3), round(ew_e, 3)
+        except (TypeError, ValueError):
+            pass
+    if clip.get("padded_start") is not None and clip.get("padded_end") is not None:
+        try:
+            ps = float(clip["padded_start"])
+            pe = float(clip["padded_end"])
+            if pe > ps:
+                return round(ps, 3), round(pe, 3)
+        except (TypeError, ValueError):
+            pass
+    return None, None
+
+
+class _WorkerEditWindowMediaStore:
+    """MediaStore adapter over Cloudflare Worker /reserve, R2 PUT, and /complete."""
+
+    def __init__(self, worker_base: str, worker_token: str):
+        self.worker_base = worker_base
+        self.worker_token = worker_token
+
+    def reserve_upload(
+        self,
+        user_id: str,
+        object_kind: str,
+        mime_type: str,
+        expected_bytes: int,
+        local_clip_id: Optional[str] = None,
+    ) -> Any:
+        r_res = requests.post(
+            f"{self.worker_base}/reserve",
+            headers=_cloud_headers(self.worker_token, user_id),
+            json={
+                "kind": object_kind,
+                "mime_type": mime_type,
+                "expected_bytes": expected_bytes,
+                "local_clip_id": local_clip_id,
+                "client_token": str(uuid.uuid4()),
+            },
+            timeout=10,
+        )
+        if not r_res.ok:
+            raise RuntimeError(f"R2 reserve failed ({r_res.status_code}): {r_res.text[:200]}")
+        data = r_res.json()
+        return SimpleNamespace(
+            reservation_id=data["reservation_id"],
+            upload_url=data["upload_url"],
+            media_object_id=data["media_object_id"],
+        )
+
+    def upload_and_finalize(self, reservation: Any, proxy_path: str, user_id: str) -> str:
+        with open(proxy_path, "rb") as vf:
+            r_put = requests.put(
+                reservation.upload_url,
+                data=vf,
+                headers={"Content-Type": "video/mp4"},
+                timeout=300,
+            )
+        if not r_put.ok:
+            raise RuntimeError(f"R2 PUT failed ({r_put.status_code}): {r_put.text[:200]}")
+        r_comp = requests.post(
+            f"{self.worker_base}/complete",
+            headers=_cloud_headers(self.worker_token, user_id),
+            json={"reservation_id": reservation.reservation_id},
+            timeout=15,
+        )
+        if not r_comp.ok:
+            raise RuntimeError(f"R2 complete failed ({r_comp.status_code}): {r_comp.text[:200]}")
+        return str(reservation.media_object_id)
+
+
+class _WorkerEditWindowDbOps:
+    """edit_windows.stage_edit_window `db_ops` adapter backed by Worker /sync/pc/windows."""
+
+    def __init__(
+        self,
+        worker_base: str,
+        worker_token: str,
+        *,
+        clip_id: str,
+        window_start: float,
+        window_end: float,
+        render_fingerprint: str,
+        fallback_words: List[Dict[str, Any]],
+    ):
+        self.worker_base = worker_base
+        self.worker_token = worker_token
+        self.clip_id = clip_id
+        self.window_start = window_start
+        self.window_end = window_end
+        self.render_fingerprint = render_fingerprint
+        self.fallback_words = fallback_words
+        self._words: List[Dict[str, Any]] = []
+        self._user_id: str = ""
+
+    def create_window(self, clip_id: str, user_id: str, ws: float, we: float) -> str:
+        self._user_id = user_id
+        return f"ew_{clip_id}_{int(round(ws * 1000))}_{int(round(we * 1000))}"
+
+    def put_transcript(self, window_id: str, user_id: str, words: List[Dict[str, Any]]) -> None:
+        self._words = list(words) if words else list(self.fallback_words)
+
+    def mark_ready(self, window_id: str, object_id: str) -> None:
+        window_words: Optional[list] = self._words or None
+        r_window = requests.post(
+            f"{self.worker_base}/sync/pc/windows",
+            headers=_cloud_headers(self.worker_token, self._user_id),
+            json={
+                "local_clip_id": self.clip_id,
+                "media_object_id": object_id,
+                "window_start": self.window_start,
+                "window_end": self.window_end,
+                "words": window_words,
+                "render_fingerprint": self.render_fingerprint,
+            },
+            timeout=20,
+        )
+        if not r_window.ok:
+            raise RuntimeError(f"edit window registration failed ({r_window.status_code}): {r_window.text[:200]}")
+        window_body = r_window.json() if r_window.text else {}
+        if window_body.get("transcripts_stored") is False and window_words:
+            raise RuntimeError(
+                f"Window transcript words not stored (status={window_body.get('transcript_status')})"
+            )
+        if not window_words:
+            logger.warning(
+                "Window registered for %s with no transcript words; transcript_status=missing.",
+                self.clip_id,
+            )
+
+    def mark_failed(self, window_id: str, error: str) -> None:
+        logger.error("Edit window staging failed for %s (%s): %s", self.clip_id, window_id, error)
+
+
+def _probe_video_for_edit_window(filepath: str) -> Dict[str, Any]:
+    """Probe effective rendered dimensions, orientation, duration, and audio for edit_windows."""
+    from dispatch.ingestion.validator import inspect_video_orientation
+    info = inspect_video_orientation(filepath)
+    if not isinstance(info, dict):
+        return {"valid": False, "width": 0, "height": 0, "duration": 0.0, "has_audio": False}
+    eff_w = int(info.get("effective_width") or info.get("width") or 0)
+    eff_h = int(info.get("effective_height") or info.get("height") or 0)
+    return {
+        **info,
+        "width": eff_w,
+        "height": eff_h,
+    }
+
+
+def _sync_clip_thumbnail(
+    clip: Dict[str, Any],
+    clip_id: str,
+    user_id: str,
+    cloud_clip_id: Optional[str],
+) -> None:
+    """Best-effort R2 upload + link for clip thumbnail without failing media staging."""
+    thumb_path = clip.get("thumbnail_path")
+    if not (thumb_path and Path(thumb_path).exists() and cloud_clip_id):
+        return
+    try:
+        tp = Path(thumb_path)
+        tb_size = tp.stat().st_size
+        if tb_size <= 0:
+            return
+        r_tb = requests.post(
+            f"{_worker_base()}/reserve",
+            headers=_cloud_headers(get_worker_token(), user_id),
+            json={
+                "kind": "thumbnail",
+                "mime_type": "image/jpeg",
+                "expected_bytes": tb_size,
+                "local_clip_id": clip_id,
+                "client_token": str(uuid.uuid4()),
+            },
+            timeout=10,
+        )
+        if not r_tb.ok:
+            return
+        tb_data = r_tb.json()
+        with open(tp, "rb") as tf:
+            requests.put(tb_data["upload_url"], data=tf, headers={"Content-Type": "image/jpeg"}, timeout=60)
+        requests.post(
+            f"{_worker_base()}/complete",
+            headers=_cloud_headers(get_worker_token(), user_id),
+            json={"reservation_id": tb_data["reservation_id"]},
+            timeout=10,
+        )
+        requests.post(
+            f"{_worker_base()}/sync/pc/media-link",
+            headers=_cloud_headers(get_worker_token(), user_id),
+            json={
+                "media_object_id": tb_data["media_object_id"],
+                "local_clip_id": clip_id,
+            },
+            timeout=15,
+        )
+    except Exception as e:
+        logger.debug("Could not sync thumbnail for %s: %s", clip_id, e)
 
 
 def _publication_sync_payload(clip_id: str) -> List[Dict[str, Any]]:
@@ -437,6 +794,10 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
     if ai_e <= ai_s:
         ai_e = ai_s + 10.0
 
+    source_video, source_duration = _resolve_raw_source_and_duration(clip)
+    ew_start, ew_end = _resolve_edit_window_bounds(clip, s_time, e_time, source_duration)
+    current_fingerprint = _render_fingerprint(clip)
+
     # 1. Mode 1: Upsert into clips_cloud (AI suggestions & clip bounds) — the
     # Worker enforces the tombstone guard server-side as well.
     try:
@@ -477,28 +838,34 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
         if not yt_video_id and clip.get("session_id") and str(clip.get("session_id")).startswith("dir_"):
             yt_video_id = str(clip.get("session_id"))
 
+        clip_payload: Dict[str, Any] = {
+            "local_clip_id": clip_id,
+            "title": clip.get("title") or "Clip Highlight",
+            "status": status,
+            "start_time": s_time,
+            "end_time": e_time,
+            "ai_suggested_start_time": ai_s,
+            "ai_suggested_end_time": ai_e,
+            "range_revision": int(clip.get("range_revision") or 0),
+            "source_orientation": framing_ctx.get("source_orientation") or "landscape",
+            "source_aspect_ratio": framing_ctx.get("source_aspect_ratio") or "16:9",
+            "layout_mode": clip.get("layout_mode") or framing_ctx.get("layout_mode") or "fit_blur",
+            "available_layout_modes": framing_ctx.get("available_layout_modes") or [],
+            "caption_data": caption_payload,
+            "caption_revision": int(clip.get("caption_range_revision") or clip.get("captions_revision") or 0),
+            "render_fingerprint": current_fingerprint,
+            "publications": _publication_sync_payload(clip_id),
+            "session_id": clip.get("session_id") or None,
+            "youtube_video_id": yt_video_id,
+        }
+        if ew_start is not None and ew_end is not None:
+            clip_payload["edit_window_start"] = ew_start
+            clip_payload["edit_window_end"] = ew_end
+
         r_clip = requests.post(
             f"{_worker_base()}/sync/pc/clips",
             headers=_cloud_headers(get_worker_token(), user_id),
-            json={
-                "local_clip_id": clip_id,
-                "title": clip.get("title") or "Clip Highlight",
-                "status": status,
-                "start_time": s_time,
-                "end_time": e_time,
-                "ai_suggested_start_time": ai_s,
-                "ai_suggested_end_time": ai_e,
-                "range_revision": int(clip.get("range_revision") or 0),
-                "source_orientation": framing_ctx.get("source_orientation") or "landscape",
-                "source_aspect_ratio": framing_ctx.get("source_aspect_ratio") or "16:9",
-                "layout_mode": clip.get("layout_mode") or framing_ctx.get("layout_mode") or "fit_blur",
-                "available_layout_modes": framing_ctx.get("available_layout_modes") or [],
-                "caption_data": caption_payload,
-                "caption_revision": int(clip.get("caption_range_revision") or clip.get("captions_revision") or 0),
-                "publications": _publication_sync_payload(clip_id),
-                "session_id": clip.get("session_id") or None,
-                "youtube_video_id": yt_video_id,
-            },
+            json=clip_payload,
             timeout=20,
         )
         if not r_clip.ok:
@@ -524,39 +891,29 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
 
     caption_words = extract_source_words(clip)
 
-    # Fingerprint the exact local render. A ready cloud window is only fresh
-    # when its stored fingerprint matches these bytes; existence is not version
-    # equality (audit F10).
-    video_path = clip.get("video_path")
-    local_video = Path(video_path) if video_path and Path(video_path).exists() else None
-    if local_video is not None and local_video.stat().st_size <= 0:
-        local_video = None
-    current_fingerprint = _render_fingerprint(clip, local_video) if local_video is not None else None
     staged_fingerprint = state_dict.get("render_fingerprint") if state_dict else None
     staged_covers_range = False
     if state_dict and state_dict.get("window_start") is not None and state_dict.get("window_end") is not None:
         try:
-            staged_covers_range = (
-                float(state_dict["window_start"]) <= s_time + 1e-6
-                and float(state_dict["window_end"]) >= e_time - 1e-6
+            staged_covers_range = edit_windows.covers(
+                float(state_dict["window_start"]),
+                float(state_dict["window_end"]),
+                s_time,
+                e_time,
             )
         except (TypeError, ValueError):
             staged_covers_range = False
     staged_is_fresh = bool(
         state_dict
         and state_dict.get("already_staged")
-        and current_fingerprint is not None
         and staged_fingerprint == current_fingerprint
         and staged_covers_range
     )
 
     # Already staged in edit_windows (server-side check from the state call).
     # Media readiness is not transcript readiness: re-register the window with
-    # words when we now have them, without re-uploading the proxy. This runs
-    # BEFORE the local-file check so a staged cloud window can be repaired even
-    # if the PC-side rendered file was cleaned up. A fingerprint mismatch falls
-    # through to a fresh proxy upload instead.
-    if state_dict and state_dict.get("already_staged") and (staged_is_fresh or current_fingerprint is None):
+    # words when we now have them, without re-uploading the proxy.
+    if state_dict and state_dict.get("already_staged") and (staged_is_fresh or source_video is None):
         staged_media_id = str(state_dict.get("media_object_id") or "").strip()
         if not caption_words:
             logger.warning(
@@ -564,6 +921,7 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
                 "leaving transcript_status=missing (run the transcript backfill).",
                 clip_id,
             )
+            _sync_clip_thumbnail(clip, clip_id, user_id, cloud_clip_id)
             return True
         if not staged_media_id:
             logger.error("Clip %s is staged but the Worker returned no media_object_id; cannot persist transcript.", clip_id)
@@ -575,13 +933,10 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
                 json={
                     "local_clip_id": clip_id,
                     "media_object_id": staged_media_id,
-                    # Reuse the EXACT staged bounds so the Worker's idempotent
-                    # window lookup cannot create a second window.
-                    "window_start": float(state_dict.get("window_start") or s_time),
-                    "window_end": float(state_dict.get("window_end") or e_time),
+                    "window_start": float(state_dict.get("window_start") or (ew_start if ew_start is not None else s_time)),
+                    "window_end": float(state_dict.get("window_end") or (ew_end if ew_end is not None else e_time)),
                     "words": caption_words,
-                    # Preserve the existing fingerprint; this path uploads no bytes.
-                    "render_fingerprint": staged_fingerprint,
+                    "render_fingerprint": staged_fingerprint or current_fingerprint,
                 },
                 timeout=20,
             )
@@ -593,147 +948,70 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
                 logger.error("Worker did not persist transcript words for %s (status=%s)", clip_id, body.get("transcript_status"))
                 return False
             logger.info("Transcript words persisted for already-staged clip %s (%d words).", clip_id, len(caption_words))
+            _sync_clip_thumbnail(clip, clip_id, user_id, cloud_clip_id)
             return True
         except Exception as e:
             logger.error("Transcript re-registration errored for %s: %s", clip_id, e)
             return False
 
-    # 2. Mode 2: Check if local media exists and stage to Cloudflare R2
-    if local_video is None:
-        logger.info("Clip %s has no local video file on disk; metadata synced to cloud.", clip_id)
+    # 2. Mode 2: Stage bounded edit window proxy from canonical raw source (never trimmed video_path)
+    if source_video is None:
+        logger.info("Clip %s has no canonical raw source video on disk; metadata synced to cloud.", clip_id)
+        _sync_clip_thumbnail(clip, clip_id, user_id, cloud_clip_id)
         return True
 
-    vp = local_video
-    file_size = vp.stat().st_size
+    if ew_start is None or ew_end is None or ew_end <= ew_start:
+        ew_start, ew_end = edit_windows.compute_window(
+            s_time,
+            e_time,
+            float(source_duration) if source_duration and source_duration > 0 else max(e_time, s_time + 10.0),
+        )
+    elif (ew_end - ew_start) > edit_windows.MAX_WINDOW_SECONDS:
+        ew_start, ew_end = edit_windows.compute_window(
+            s_time,
+            e_time,
+            float(source_duration) if source_duration and source_duration > 0 else ew_end,
+        )
 
-    # Reserve upload via Worker
+    window_words = [
+        w for w in caption_words
+        if float(w.get("end", 0.0)) > ew_start and float(w.get("start", 0.0)) < ew_end
+    ]
+
+    def _window_transcribe(_audio_path: str, max_input_seconds: float = edit_windows.MAX_WINDOW_TRANSCRIBE_SECONDS) -> Dict[str, Any]:
+        del max_input_seconds
+        local_words = edit_windows.select_words_for_range(window_words, ew_start, window_end=ew_end)
+        return {"words": local_words}
+
     try:
-        client_token = str(uuid.uuid4())
-        r_res = requests.post(
-            f"{_worker_base()}/reserve",
-            headers=_cloud_headers(get_worker_token(), user_id),
-            json={
-                "kind": "edit_window",
-                "mime_type": "video/mp4",
-                "expected_bytes": file_size,
-                "local_clip_id": clip_id,
-                "client_token": client_token,
-            },
-            timeout=10,
+        worker_base = _worker_base()
+        worker_token = get_worker_token()
+        media_store = _WorkerEditWindowMediaStore(worker_base, worker_token)
+        db_ops = _WorkerEditWindowDbOps(
+            worker_base,
+            worker_token,
+            clip_id=clip_id,
+            window_start=float(ew_start),
+            window_end=float(ew_end),
+            render_fingerprint=current_fingerprint,
+            fallback_words=window_words,
         )
-        if not r_res.ok:
-            logger.error("R2 reserve failed for %s: %d %s", clip_id, r_res.status_code, r_res.text[:200])
-            return False
-
-        res_data = r_res.json()
-        reservation_id = res_data["reservation_id"]
-        upload_url = res_data["upload_url"]
-        media_object_id = res_data["media_object_id"]
-
-        # Upload proxy bytes directly to Cloudflare R2
-        with open(vp, "rb") as vf:
-            r_put = requests.put(upload_url, data=vf, headers={"Content-Type": "video/mp4"}, timeout=300)
-        if not r_put.ok:
-            logger.error("R2 PUT failed for %s: %d %s", clip_id, r_put.status_code, r_put.text[:200])
-            return False
-
-        # Finalize upload with Worker
-        r_comp = requests.post(
-            f"{_worker_base()}/complete",
-            headers=_cloud_headers(get_worker_token(), user_id),
-            json={"reservation_id": reservation_id},
-            timeout=15,
+        edit_windows.stage_edit_window(
+            clip_id=clip_id,
+            user_id=user_id,
+            source_video=str(source_video),
+            window_start=float(ew_start),
+            window_end=float(ew_end),
+            transcribe_fn=_window_transcribe,
+            media_store=media_store,
+            db_ops=db_ops,
+            ffprobe_meta=_probe_video_for_edit_window,
         )
-        if not r_comp.ok:
-            logger.error("R2 complete failed for %s: %d %s", clip_id, r_comp.status_code, r_comp.text[:200])
-            return False
-
-        # Register the ready edit window server-side: creates the row, links the
-        # media object to the cloud clip, and stores window transcript words.
-        # (The PC no longer writes edit_windows/media_objects/window_transcripts
-        # directly with a service-role key — audit 2026-10-27.)
-        window_words: Optional[list] = caption_words or None
-
-        try:
-            r_window = requests.post(
-                f"{_worker_base()}/sync/pc/windows",
-                headers=_cloud_headers(get_worker_token(), user_id),
-                json={
-                    "local_clip_id": clip_id,
-                    "media_object_id": media_object_id,
-                    "window_start": s_time,
-                    "window_end": e_time,
-                    "words": window_words,
-                    "render_fingerprint": current_fingerprint,
-                },
-                timeout=20,
-            )
-            if not r_window.ok:
-                logger.error("edit window registration failed for %s: %d %s", clip_id, r_window.status_code, r_window.text[:200])
-                return False
-            window_body = r_window.json() if r_window.text else {}
-            if window_body.get("transcripts_stored") is False and window_words:
-                # The media is staged, but claiming success here is exactly the
-                # silent-empty-captions failure. Retry; the next pass takes the
-                # already_staged branch and persists words without re-uploading.
-                logger.error(
-                    "Window registered for %s but transcript words were not stored (status=%s); "
-                    "returning failure so the next sync retries the transcript only.",
-                    clip_id, window_body.get("transcript_status"),
-                )
-                return False
-            if not window_words:
-                logger.warning(
-                    "Window registered for %s with no transcript words; transcript_status=missing.",
-                    clip_id,
-                )
-        except Exception as e:
-            logger.error("edit window registration errored for %s: %s", clip_id, e)
-            return False
-
-        # Stage Thumbnail to R2 (if exists)
-        thumb_path = clip.get("thumbnail_path")
-        if thumb_path and Path(thumb_path).exists() and cloud_clip_id:
-            try:
-                tp = Path(thumb_path)
-                tb_size = tp.stat().st_size
-                if tb_size > 0:
-                    tb_client_token = str(uuid.uuid4())
-                    r_tb = requests.post(
-                        f"{_worker_base()}/reserve",
-                        headers=_cloud_headers(get_worker_token(), user_id),
-                        json={
-                            "kind": "thumbnail",
-                            "mime_type": "image/jpeg",
-                            "expected_bytes": tb_size,
-                            "local_clip_id": clip_id,
-                            "client_token": tb_client_token,
-                        },
-                        timeout=10,
-                    )
-                    if r_tb.ok:
-                        tb_data = r_tb.json()
-                        with open(tp, "rb") as tf:
-                            requests.put(tb_data["upload_url"], data=tf, headers={"Content-Type": "image/jpeg"}, timeout=60)
-                        requests.post(
-                            f"{_worker_base()}/complete",
-                            headers=_cloud_headers(get_worker_token(), user_id),
-                            json={"reservation_id": tb_data["reservation_id"]},
-                            timeout=10,
-                        )
-                        requests.post(
-                            f"{_worker_base()}/sync/pc/media-link",
-                            headers=_cloud_headers(get_worker_token(), user_id),
-                            json={
-                                "media_object_id": tb_data["media_object_id"],
-                                "local_clip_id": clip_id,
-                            },
-                            timeout=15,
-                        )
-            except Exception as e:
-                logger.debug("Could not sync thumbnail for %s: %s", clip_id, e)
-
-        logger.info("Successfully synced clip %s to Cloudflare R2 & Supabase!", clip_id)
+        _sync_clip_thumbnail(clip, clip_id, user_id, cloud_clip_id)
+        logger.info(
+            "Successfully staged edit window [%.2f..%.2f] for clip %s to Cloudflare R2 & Supabase!",
+            ew_start, ew_end, clip_id,
+        )
         return True
 
     except Exception as e:

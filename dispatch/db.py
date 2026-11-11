@@ -1066,10 +1066,10 @@ def update_clip_trim(
         cursor.execute("""
             UPDATE clips 
             SET start_time = ?, end_time = ?, duration = ?,
-                range_revision = range_revision + ?,
+                range_revision = COALESCE(range_revision, 0) + ?,
                 render_stale = CASE WHEN ? = 1 AND video_path IS NOT NULL THEN 1 ELSE render_stale END,
                 caption_timing_warning = CASE WHEN ? = 1 THEN NULL ELSE caption_timing_warning END
-            WHERE id = ? AND range_revision = ?
+            WHERE id = ? AND COALESCE(range_revision, 0) = ?
         """, (
             clamped_start, clamped_end, new_duration, int(changed), int(changed), int(changed),
             clip_id, int(row["range_revision"] or 0),
@@ -1268,16 +1268,16 @@ def save_clip_caption_data(
         sql = """
             UPDATE clips
             SET caption_data = ?, caption_range_revision = ?, caption_range_start = ?, caption_range_end = ?,
-                caption_timing_warning = ?, captions_revision = captions_revision + 1,
+                caption_timing_warning = ?, captions_revision = COALESCE(captions_revision, 0) + 1,
                 caption_coordinate_system = COALESCE(caption_coordinate_system, 'clip_relative')
-            WHERE id = ? AND range_revision = ?
+            WHERE id = ? AND COALESCE(range_revision, 0) = ?
         """
         params: list[Any] = [
             caption_json, expected_range_revision, source_range_start, source_range_end,
             timing_warning, clip_id, expected_range_revision,
         ]
         if expected_captions_revision is not None:
-            sql += " AND captions_revision = ?"
+            sql += " AND COALESCE(captions_revision, 0) = ?"
             params.append(int(expected_captions_revision))
         cursor.execute(sql, tuple(params))
         return cursor.rowcount == 1
@@ -1696,7 +1696,7 @@ def import_cloud_timeline_data(
     with write_transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT user_id, start_time, end_time, duration, segments_revision, active_state_revision, rendered_fingerprint FROM clips WHERE id = ?",
+            "SELECT user_id, start_time, end_time, duration, segments_json, segments_revision, active_state_revision, rendered_fingerprint FROM clips WHERE id = ?",
             (clip_id,),
         )
         row = cursor.fetchone()
@@ -1711,9 +1711,7 @@ def import_cloud_timeline_data(
             return "denied"
 
         local_rev = int(clip.get("segments_revision") or 0)
-        if cloud_rev < local_rev:
-            return "stale"
-        if cloud_rev == local_rev and int(clip.get("active_state_revision") or 0) == active_rev:
+        if cloud_rev <= local_rev:
             return "stale"
 
         _adopt_owner(cursor, clip_id, expected_user_id)
@@ -1734,21 +1732,30 @@ def import_cloud_timeline_data(
         new_start = None
         new_end = None
         calculated_kept_dur = 0.0
+        segments_json_str = None
+        parsed_spans: List[Tuple[float, float]] = []
         if isinstance(segs, list) and len(segs) > 0:
             try:
-                first_seg = segs[0]
-                last_seg = segs[-1]
-                new_start = float(first_seg.get("source_start", first_seg.get("start", first_seg[0] if isinstance(first_seg, (list, tuple)) else 0)))
-                new_end = float(last_seg.get("source_end", last_seg.get("end", last_seg[1] if isinstance(last_seg, (list, tuple)) else 0)))
+                segments_json_str = json.dumps(segs, ensure_ascii=False)
+                starts: List[float] = []
+                ends: List[float] = []
                 for s in segs:
                     st = float(s.get("source_start", s.get("start", s[0] if isinstance(s, (list, tuple)) else 0)))
                     en = float(s.get("source_end", s.get("end", s[1] if isinstance(s, (list, tuple)) else 0)))
+                    starts.append(st)
+                    ends.append(en)
                     if en > st:
                         calculated_kept_dur += (en - st)
+                        parsed_spans.append((st, en))
+                if starts and ends:
+                    new_start = min(starts)
+                    new_end = max(ends)
                 calculated_kept_dur = round(calculated_kept_dur, 2)
             except Exception:
                 new_start = None
                 new_end = None
+                segments_json_str = None
+                parsed_spans = []
 
         if kept_dur <= 0.0 and calculated_kept_dur > 0.0:
             kept_dur = calculated_kept_dur
@@ -1758,10 +1765,27 @@ def import_cloud_timeline_data(
         if new_start is not None and new_end is not None:
             if abs(new_start - float(clip.get("start_time") or 0)) > 0.01 or abs(new_end - float(clip.get("end_time") or 0)) > 0.01:
                 range_changed = 1
+            elif parsed_spans:
+                try:
+                    from dispatch.segments import canonical_media_spans
+                    new_spans = canonical_media_spans(parsed_spans)
+                    prev_raw = clip.get("segments_json")
+                    if prev_raw:
+                        prev_loaded = json.loads(prev_raw) if isinstance(prev_raw, str) else prev_raw
+                        prev_spans = canonical_media_spans(prev_loaded)
+                    else:
+                        prev_st = float(clip.get("start_time") or 0)
+                        prev_en = float(clip.get("end_time") or 0)
+                        prev_spans = canonical_media_spans([(prev_st, prev_en)]) if prev_en > prev_st else []
+                    if prev_spans and new_spans != prev_spans:
+                        range_changed = 1
+                except Exception:
+                    pass
 
         cursor.execute("""
             UPDATE clips
             SET project_document = ?,
+                segments_json = COALESCE(?, segments_json),
                 segments_revision = ?,
                 active_state_revision = ?,
                 redo_stack = ?,
@@ -1775,10 +1799,11 @@ def import_cloud_timeline_data(
                 start_time = COALESCE(?, start_time),
                 end_time = COALESCE(?, end_time),
                 duration = COALESCE(?, duration),
-                range_revision = range_revision + ?
-            WHERE id = ?
+                range_revision = COALESCE(range_revision, 0) + ?
+            WHERE id = ? AND COALESCE(segments_revision, 0) = ?
         """, (
             doc_str,
+            segments_json_str,
             cloud_rev,
             active_rev,
             redo_str,
@@ -1794,7 +1819,10 @@ def import_cloud_timeline_data(
             new_duration,
             range_changed,
             clip_id,
+            local_rev,
         ))
+        if cursor.rowcount != 1:
+            return "stale"
 
         cursor.execute("""
             INSERT OR IGNORE INTO clip_revisions (

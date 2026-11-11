@@ -14,6 +14,7 @@ import time
 import re
 import subprocess
 import sys
+import tempfile
 import uuid
 import ipaddress
 import urllib.parse
@@ -56,6 +57,7 @@ from dispatch.video_engine import (
     get_thumbnail_version_token,
     get_thumbnail_version,
 )
+from dispatch.edit_windows import compute_window as _compute_edit_window
 from dispatch.youtube_inbox.catcher import (
     YouTubeInboxCatcher,
     extract_youtube_video_id,
@@ -612,6 +614,9 @@ class ApproveRequest(BaseModel):
     layout_mode: Optional[str] = None   # "fit_blur", "crop_follow", "landscape"
     caption_track: Optional[Dict[str, Any]] = None
     range_revision: Optional[int] = None
+    expected_range_revision: Optional[int] = None
+    expected_segments_revision: Optional[int] = None
+    expected_captions_revision: Optional[int] = None
 
 
 class RejectRequest(BaseModel):
@@ -633,6 +638,8 @@ class TrimClipRequest(BaseModel):
     start_time: float
     end_time: float
     range_revision: Optional[int] = None
+    expected_range_revision: Optional[int] = None
+    base_revision: Optional[int] = None
 
 
 class SplitClipRequest(BaseModel):
@@ -845,8 +852,29 @@ def get_system_status():
     }
 
 
-def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
-    """Safely resolve the original raw source video chunk for a clip."""
+def _is_rendered_clip_asset(candidate: Path, clip: Dict[str, Any]) -> bool:
+    """Return True when candidate points to rendered clip['video_path'] or rendered CLIPS_DIR output."""
+    try:
+        cand_resolved = candidate.resolve()
+    except OSError:
+        return True
+    rendered = clip.get("video_path")
+    if rendered:
+        try:
+            if cand_resolved == Path(rendered).resolve():
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _resolve_canonical_source_asset_impl(clip: Dict[str, Any]) -> Optional[Path]:
+    """Resolve ONLY canonical raw source media (chunks, youtube_inbox, processing/incoming).
+    NEVER falls back to rendered clip['video_path'].
+    """
+    if not isinstance(clip, dict):
+        return None
+
     # 1. Resolve through chunk_id in chunks table
     chunk_id = clip.get("chunk_id")
     if chunk_id:
@@ -855,7 +883,8 @@ def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
             if row and row["filepath"]:
                 cand = Path(row["filepath"])
                 if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
-                    return cand
+                    if not _is_rendered_clip_asset(cand, clip):
+                        return cand
 
     # 2. Check YouTube inbox by video_id, session_id, or dispatch_id
     yt_id = clip.get("youtube_video_id")
@@ -872,27 +901,92 @@ def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
         if yt_row and yt_row["local_video_path"]:
             cand = Path(yt_row["local_video_path"])
             if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
-                return cand
-
-    # 3. Check storage/incoming and storage/processing using session_id or chunk_id
-    for search_dir in (PROCESSING_DIR, INCOMING_DIR):
-        if clip.get("session_id"):
-            sess = clip["session_id"]
-            for cand in search_dir.glob(f"*{sess}*.mp4"):
-                if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
+                if not _is_rendered_clip_asset(cand, clip):
                     return cand
+
+    # 3. Check storage/processing and storage/incoming raw media using session_id or chunk_id
+    for search_dir in (PROCESSING_DIR, INCOMING_DIR):
+        if not search_dir.exists():
+            continue
+        if sess_id:
+            for cand in search_dir.glob(f"*{sess_id}*.mp4"):
+                if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
+                    if not _is_rendered_clip_asset(cand, clip):
+                        return cand
         if chunk_id:
             for cand in search_dir.glob(f"*{chunk_id}*.mp4"):
                 if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
-                    return cand
-
-    # 4. Fallback: if clip video_path exists, use it so preview never hard-crashes
-    if clip.get("video_path"):
-        cand = Path(clip["video_path"])
-        if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
-            return cand
+                    if not _is_rendered_clip_asset(cand, clip):
+                        return cand
 
     return None
+
+
+def resolve_clip_source_path(clip: Dict[str, Any]) -> Optional[Path]:
+    """Resolve the canonical raw source video for a clip (never falls back to rendered video_path)."""
+    return _resolve_canonical_source_asset_impl(clip)
+
+
+_DEFAULT_RESOLVE_CLIP_SOURCE_PATH = resolve_clip_source_path
+
+
+def resolve_canonical_source_asset(clip: Dict[str, Any]) -> Optional[Path]:
+    """Resolve the canonical raw source asset for a clip, NEVER falling back to rendered video_path."""
+    # Support tests that monkeypatch dispatch.web.app.resolve_clip_source_path while
+    # still blocking any rendered clip['video_path'] fallback.
+    if resolve_clip_source_path is not _DEFAULT_RESOLVE_CLIP_SOURCE_PATH:
+        cand = resolve_clip_source_path(clip)
+        if cand is None:
+            return None
+        cand_path = Path(cand)
+        if not cand_path.exists() or not cand_path.is_file() or cand_path.stat().st_size <= 0:
+            return None
+        if _is_rendered_clip_asset(cand_path, clip):
+            return None
+        return cand_path
+    return _resolve_canonical_source_asset_impl(clip)
+
+
+def _populate_edit_window_bounds(clip: Dict[str, Any], source_duration: Optional[float] = None) -> None:
+    """Attach bounded edit_window_start / edit_window_end to clip responses when derivable."""
+    if not isinstance(clip, dict):
+        return
+    if clip.get("edit_window_start") is not None and clip.get("edit_window_end") is not None:
+        try:
+            ews = float(clip["edit_window_start"])
+            ewe = float(clip["edit_window_end"])
+            if ewe > ews:
+                clip["edit_window_start"] = round(ews, 3)
+                clip["edit_window_end"] = round(ewe, 3)
+                return
+        except (TypeError, ValueError):
+            pass
+
+    s_raw = clip.get("start_time")
+    e_raw = clip.get("end_time")
+    dur = source_duration if source_duration is not None else clip.get("source_duration")
+    if s_raw is not None and e_raw is not None and dur is not None:
+        try:
+            s_val = float(s_raw)
+            e_val = float(e_raw)
+            d_val = float(dur)
+            if e_val > s_val and d_val > 0:
+                ws, we = _compute_edit_window(s_val, e_val, d_val)
+                clip["edit_window_start"] = ws
+                clip["edit_window_end"] = we
+                return
+        except (TypeError, ValueError):
+            pass
+
+    if clip.get("padded_start") is not None and clip.get("padded_end") is not None:
+        try:
+            ps = float(clip["padded_start"])
+            pe = float(clip["padded_end"])
+            if pe > ps:
+                clip["edit_window_start"] = round(ps, 3)
+                clip["edit_window_end"] = round(pe, 3)
+        except (TypeError, ValueError):
+            pass
 
 
 def resolve_clip_origin(clip: Dict[str, Any]) -> Dict[str, Any]:
@@ -963,9 +1057,9 @@ def get_clip_framing_context(clip: Dict[str, Any]) -> Dict[str, Any]:
                 elif source_aspect in ("9:16", "portrait"):
                     orientation = "portrait"
 
-    # 2. If inconclusive or chunk dimensions missing/zero, probe source file directly
+    # 2. If inconclusive or chunk dimensions missing/zero, probe canonical raw source file directly
     if source_w is None or source_h is None or source_w <= 0 or source_h <= 0:
-        source_path = resolve_clip_source_path(clip)
+        source_path = resolve_canonical_source_asset(clip)
         # CRITICAL GUARD: Never probe clip["video_path"] (rendered 9:16 output) to infer source orientation!
         rendered_vp = clip.get("video_path")
         if source_path and rendered_vp and str(source_path.resolve()) == str(Path(rendered_vp).resolve()):
@@ -1101,6 +1195,7 @@ def list_clips(request: Request):
         c["target_aspect"] = ctx["target_aspect"]
         c["crop_anchor_x"] = ctx["crop_anchor_x"]
         c["is_render_stale"] = clip_render_is_stale(c)
+        _populate_edit_window_bounds(c, c.get("source_duration"))
         orig_info = resolve_clip_origin(c)
         c["origin"] = orig_info["origin"]
         if not c.get("session_id") and orig_info["session_id"]:
@@ -1162,6 +1257,7 @@ def list_clips(request: Request):
             c["layout_mode"] = ctx["layout_mode"]
             c["target_aspect"] = ctx["target_aspect"]
             c["is_render_stale"] = clip_render_is_stale(c)
+            _populate_edit_window_bounds(c, c.get("source_duration"))
             orig_info = resolve_clip_origin(c)
             c["origin"] = orig_info["origin"]
             if not c.get("session_id") and orig_info["session_id"]:
@@ -1203,6 +1299,7 @@ def get_clip_detail(clip_id: str, request: Request):
     clip["target_aspect"] = ctx["target_aspect"]
     clip["crop_anchor_x"] = ctx["crop_anchor_x"]
     clip["is_render_stale"] = clip_render_is_stale(clip)
+    _populate_edit_window_bounds(clip, clip.get("source_duration"))
     orig_info = resolve_clip_origin(clip)
     clip["origin"] = orig_info["origin"]
     if not clip.get("session_id") and orig_info["session_id"]:
@@ -1316,7 +1413,7 @@ def get_clip_source_media(clip_id: str, request: Request):
         "Accept-Ranges": "bytes",
     }
     if clip:
-        source_path = resolve_clip_source_path(clip)
+        source_path = resolve_canonical_source_asset(clip)
         headers["X-Clip-Start"] = str(clip.get("start_time", 0.0))
         headers["X-Clip-End"] = str(clip.get("end_time", clip.get("duration", 0.0)))
         headers["X-Clip-Duration"] = str(clip.get("duration", 0.0))
@@ -1493,11 +1590,14 @@ async def handle_auto_reframe(clip_id: str, request: Request):
         if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
-        vp = clip.get("video_path")
-        cut_path = Path(vp) if vp and Path(vp).exists() else None
-        source_path = cut_path or resolve_clip_source_path(clip)
-        start_time = 0.0 if cut_path else float(clip.get("start_time") or 0.0)
-        end_time = float(clip.get("duration") or 0.0) if cut_path else float(clip.get("end_time") or 0.0)
+        source_path = resolve_canonical_source_asset(clip)
+        if not source_path or not source_path.exists():
+            raise HTTPException(
+                status_code=409 if clip.get("video_path") else 404,
+                detail="Canonical raw source video not found; refusing rendered video_path fallback.",
+            )
+        start_time = float(clip.get("start_time") or 0.0)
+        end_time = float(clip.get("end_time") or (start_time + float(clip.get("duration") or 0.0)))
         return source_path, start_time, end_time
 
     source_path, start_time, end_time = await asyncio.to_thread(_prepare)
@@ -1552,9 +1652,12 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
             raw_mode = ctx["layout_mode"]
         target_layout = raw_mode
 
-        source_path = resolve_clip_source_path(clip)
+        source_path = resolve_canonical_source_asset(clip)
         if not source_path or not source_path.exists():
-            raise HTTPException(status_code=400, detail="Original source video chunk not found on disk")
+            raise HTTPException(
+                status_code=409 if clip.get("video_path") else 404,
+                detail="Original canonical raw source video chunk not found on disk.",
+            )
 
         segments = None
         if clip.get("caption_data"):
@@ -1653,25 +1756,41 @@ def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Req
     if clip.get("status") != "ready_review":
         raise HTTPException(status_code=409, detail="Only reviewable clips can be trimmed")
 
+    req_range_rev = (
+        payload.expected_range_revision
+        if payload.expected_range_revision is not None
+        else (payload.range_revision if payload.range_revision is not None else payload.base_revision)
+    )
+    if req_range_rev is not None and int(req_range_rev) != int(clip.get("range_revision") or 0):
+        raise HTTPException(
+            status_code=409,
+            detail="The selected range changed elsewhere. Reload the clip and retry.",
+        )
+
     source_duration = None
     chunk_id = clip.get("chunk_id")
     chunk = db.get_chunk_by_id(chunk_id) if chunk_id else None
     if chunk and float(chunk.get("duration") or 0) > 0:
         source_duration = float(chunk["duration"])
     else:
-        source_path = resolve_clip_source_path(clip)
+        source_path = resolve_canonical_source_asset(clip)
         if source_path:
             source_info = _bounded_inspect_video_orientation(source_path)
             if source_info.get("valid") and float(source_info.get("duration") or 0) > 0:
                 source_duration = float(source_info["duration"])
+    if source_duration is None:
+        raise HTTPException(
+            status_code=409 if clip.get("video_path") else 404,
+            detail="Cannot trim clip: canonical raw source video is unavailable.",
+        )
 
     success = db.update_clip_trim(
         clip_id, payload.start_time, payload.end_time, source_duration=source_duration,
-        expected_range_revision=payload.range_revision,
+        expected_range_revision=req_range_rev,
     )
     if not success:
         latest = db.get_clip_by_id(clip_id)
-        if payload.range_revision is not None and latest and int(latest.get("range_revision") or 0) != payload.range_revision:
+        if req_range_rev is not None and latest and int(latest.get("range_revision") or 0) != req_range_rev:
             raise HTTPException(status_code=409, detail="The selected range changed elsewhere. Reload the clip and retry.")
         raise HTTPException(
             status_code=400,
@@ -1679,6 +1798,7 @@ def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Req
         )
 
     updated = db.get_clip_by_id(clip_id)
+    _populate_edit_window_bounds(updated, source_duration)
     return {
         "status": "success",
         "clip_id": clip_id,
@@ -1689,6 +1809,8 @@ def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Req
         "source_duration": source_duration,
         "padded_start": updated.get("padded_start"),
         "padded_end": updated.get("padded_end"),
+        "edit_window_start": updated.get("edit_window_start"),
+        "edit_window_end": updated.get("edit_window_end"),
         "is_render_stale": clip_render_is_stale(updated),
     }
 
@@ -1713,21 +1835,40 @@ async def get_autocut_proposals(clip_id: str, request: Request):
             try:
                 parsed = json.loads(cap_data) if isinstance(cap_data, str) else cap_data
                 groups = parsed.get("groups") or []
+                coord_sys = str(parsed.get("coordinate_system") or "").strip().lower()
+                max_group_end = max((float(g.get("end", 0.0)) for g in groups), default=0.0)
+                clip_dur = max(0.0, clip_end - clip_start)
+                if coord_sys == "source_relative":
+                    shift = 0.0
+                elif clip_start > 0.01 and groups and max_group_end <= (clip_dur + 1.0):
+                    shift = clip_start
+                else:
+                    shift = 0.0
                 for g in groups:
+                    words_shifted = []
+                    for w in g.get("words", []):
+                        ws = w.get("start")
+                        we = w.get("end")
+                        words_shifted.append({
+                            **w,
+                            "start": round(float(ws) + shift, 3) if ws is not None else 0.0,
+                            "end": round(float(we) + shift, 3) if we is not None else 0.0,
+                        })
                     segments.append({
-                        "start": g.get("start", 0.0),
-                        "end": g.get("end", 0.0),
+                        "start": round(float(g.get("start", 0.0)) + shift, 3),
+                        "end": round(float(g.get("end", 0.0)) + shift, 3),
                         "text": g.get("text", ""),
-                        "words": g.get("words", []),
+                        "words": words_shifted,
                     })
             except Exception:
                 pass
 
-        source_path = None
-        try:
-            source_path = resolve_clip_source_path(clip)
-        except Exception:
-            pass
+        source_path = resolve_canonical_source_asset(clip)
+        if (not source_path or not source_path.exists()) and clip.get("video_path"):
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot analyze autocuts: canonical raw source video is unavailable; rendered video_path fallback is prohibited.",
+            )
         return source_path, segments, clip_start, clip_end
 
     source_path, segments, clip_start, clip_end = await asyncio.to_thread(_prepare)
@@ -1777,7 +1918,7 @@ async def get_clip_waveform(
         if clip:
             if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
                 raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
-            source_path = resolve_clip_source_path(clip)
+            source_path = resolve_canonical_source_asset(clip)
             clip_start = float(clip.get("start_time") or 0.0)
             clip_end = float(clip.get("end_time") or (clip_start + 30.0))
         else:
@@ -1868,6 +2009,44 @@ def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Request)
         detail="POST /api/clips/{id}/split is retired. Use mobile timeline editing (POST /clips/{id}/timeline)."
     )
 
+def _timeline_conflict_response(latest_clip: Optional[Dict[str, Any]], detail: str) -> JSONResponse:
+    latest = latest_clip or {}
+    latest_rev = int(latest.get("segments_revision") or 0)
+    latest_active_rev = int(latest.get("active_state_revision") or latest_rev)
+    latest_doc = latest.get("project_document")
+    if isinstance(latest_doc, str):
+        try:
+            latest_doc = json.loads(latest_doc)
+        except Exception:
+            pass
+    latest_segs = latest.get("segments_json")
+    if isinstance(latest_segs, str):
+        try:
+            latest_segs = json.loads(latest_segs)
+        except Exception:
+            pass
+    if latest_segs is None and isinstance(latest_doc, dict):
+        tl = latest_doc.get("timeline")
+        if isinstance(tl, dict):
+            latest_segs = tl.get("segments")
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": "revision_conflict",
+            "detail": detail,
+            "current_revision": latest_rev,
+            "revision": latest_rev,
+            "segments_revision": latest_rev,
+            "active_state_revision": latest_active_rev,
+            "range_revision": int(latest.get("range_revision") or 0),
+            "current_document": latest_doc,
+            "segments": latest_segs,
+            "start_time": latest.get("start_time"),
+            "end_time": latest.get("end_time"),
+        },
+    )
+
+
 @app.api_route("/api/clips/{clip_id}/timeline", methods=["POST", "PUT"])
 @_serialize_clip_mutation
 async def handle_update_clip_timeline(clip_id: str, request: Request):
@@ -1893,30 +2072,78 @@ async def handle_update_clip_timeline(clip_id: str, request: Request):
     if not doc:
         raise HTTPException(status_code=400, detail="project_document required")
 
+    if body.get("expected_range_revision") is not None:
+        try:
+            exp_range_rev = int(body["expected_range_revision"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_range_revision must be an integer")
+        if exp_range_rev != int(clip.get("range_revision") or 0):
+            return _timeline_conflict_response(clip, "The selected range changed elsewhere. Reload and rebase.")
+
     curr_rev = int(clip.get("segments_revision") or 0)
-    req_rev = body.get("expected_revision") if body.get("expected_revision") is not None else body.get("base_revision")
-    next_rev = (int(req_rev) if req_rev is not None else curr_rev) + 1
+    raw_expected = body.get("expected_segments_revision")
+    if raw_expected is None:
+        raw_expected = body.get("expected_revision")
+    if raw_expected is None:
+        raw_expected = body.get("base_revision")
+
+    req_rev: Optional[int] = None
+    if raw_expected is not None:
+        try:
+            req_rev = int(raw_expected)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_revision must be an integer")
+        if req_rev != curr_rev:
+            return _timeline_conflict_response(
+                clip,
+                "Timeline revision conflict: another edit was saved before this request.",
+            )
+
+    if body.get("segments_revision") is not None:
+        try:
+            next_rev = int(body["segments_revision"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="segments_revision must be an integer")
+    else:
+        next_rev = (req_rev if req_rev is not None else curr_rev) + 1
 
     timeline_data = {
         "project_document": doc,
         "segments_revision": next_rev,
         "active_state_revision": next_rev,
-        "operation_id": str(body.get("operation_id") or f"local-timeline-{int(time.time())}"),
+        "expected_segments_revision": req_rev,
+        "operation_id": str(body.get("operation_id") or f"local-timeline-{uuid.uuid4()}"),
         "action_type": str(body.get("action_type") or "timeline_edit"),
         "author": "mobile",
     }
 
     def _apply():
         outcome = db.import_cloud_timeline_data(clip_id, timeline_data, expected_user_id=caller_user_id)
-        if outcome in ("applied", "stale"):
-            updated = db.get_clip_by_id(clip_id)
+        if outcome == "applied":
+            updated = db.get_clip_by_id(clip_id) or {}
+            eff_rev = int(updated.get("segments_revision") or next_rev)
             return {
                 "status": "success",
                 "ok": True,
-                "revision": updated.get("segments_revision") or next_rev,
-                "segments_revision": updated.get("segments_revision") or next_rev,
+                "revision": eff_rev,
+                "current_revision": eff_rev,
+                "segments_revision": eff_rev,
+                "active_state_revision": int(updated.get("active_state_revision") or eff_rev),
+                "range_revision": int(updated.get("range_revision") or 0),
                 "project_document": doc,
             }
+        if outcome == "stale":
+            latest = db.get_clip_by_id(clip_id) or clip
+            return _timeline_conflict_response(
+                latest,
+                "Timeline revision conflict: clip timeline has newer edits on server.",
+            )
+        if outcome == "not_found":
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if outcome == "forbidden":
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if outcome in ("rejected", "not_reviewable"):
+            raise HTTPException(status_code=409, detail=f"Clip cannot accept timeline edits: {outcome}")
         raise HTTPException(status_code=400, detail=f"Failed to apply timeline: {outcome}")
 
     return await asyncio.to_thread(_apply)
@@ -1968,8 +2195,13 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
             logger.warning("Cloud caption reconciliation before approve failed for %s: %s", clip_id, e)
 
         current_revision = int(clip.get("range_revision") or 0)
-        if payload.range_revision is not None and payload.range_revision != current_revision:
+        exp_range = payload.expected_range_revision if payload.expected_range_revision is not None else payload.range_revision
+        if exp_range is not None and exp_range != current_revision:
             raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")
+        if payload.expected_segments_revision is not None and payload.expected_segments_revision != int(clip.get("segments_revision") or 0):
+            raise HTTPException(status_code=409, detail="Timeline segments changed on another device. Reload before approving.")
+        if payload.expected_captions_revision is not None and payload.expected_captions_revision != int(clip.get("captions_revision") or 0):
+            raise HTTPException(status_code=409, detail="Captions changed on another device. Reload before approving.")
 
         ctx = get_clip_framing_context(clip)
         raw_mode = payload.layout_mode or clip.get("layout_mode") or ctx["layout_mode"]
@@ -2020,10 +2252,10 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
                     detail="These captions do not have reliable word-level timings. Retry transcription or remove the inexact caption groups before publishing.",
                 )
 
-        source_path = resolve_clip_source_path(clip)
+        source_path = resolve_canonical_source_asset(clip)
         if not source_path or not source_path.is_file():
             raise HTTPException(
-                status_code=400,
+                status_code=409 if clip.get("video_path") else 404,
                 detail="Cannot approve this clip: original source video is unavailable for final rendering."
             )
 
@@ -2582,6 +2814,46 @@ async def get_caption_presets():
     }
 
 
+def _make_stage2_gap_transcriber(clip: Dict[str, Any], effective_user_id: Optional[str]):
+    """Build a bounded Stage-2 gap transcription callback when raw source + API key exist."""
+    source_path = resolve_canonical_source_asset(clip)
+    if not source_path or not source_path.exists():
+        return None
+    try:
+        from dispatch.transcription.gemini_engine import (
+            resolve_gemini_api_key,
+            extract_stage2_clip_audio,
+            transcribe_stage2_precision_words,
+        )
+        api_key = resolve_gemini_api_key(user_id=effective_user_id, raise_if_missing_host_key=True)
+    except Exception:
+        return None
+    if not api_key:
+        return None
+
+    def _gap_transcribe(gap_start: float, gap_end: float) -> List[Dict[str, Any]]:
+        if gap_end <= gap_start:
+            return []
+        with tempfile.TemporaryDirectory(prefix="cap_gap_") as td:
+            out_audio = Path(td) / "gap.mp3"
+            extract_stage2_clip_audio(source_path, float(gap_start), float(gap_end), out_audio)
+            res = transcribe_stage2_precision_words(out_audio, api_key=api_key)
+            out_words: List[Dict[str, Any]] = []
+            for w in res.get("words", []) or []:
+                ws = round(float(gap_start) + float(w.get("start", 0.0)), 3)
+                we = round(float(gap_start) + float(w.get("end", 0.0)), 3)
+                if we > ws:
+                    out_words.append({
+                        **w,
+                        "start": max(float(gap_start), ws),
+                        "end": min(float(gap_end), we),
+                        "is_exact": w.get("is_exact", True),
+                    })
+            return out_words
+
+    return _gap_transcribe
+
+
 @app.get("/api/clips/{clip_id}/captions")
 def get_clip_captions(clip_id: str, request: Request):
     """Return saved captions or derive a lightweight preview from the stored transcript."""
@@ -2592,6 +2864,7 @@ def get_clip_captions(clip_id: str, request: Request):
     if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
+    effective_user_id = caller_user_id or clip.get("user_id")
     cached_json = db.get_clip_caption_data(clip_id)
     current_revision = int(clip.get("range_revision") or 0)
     if cached_json:
@@ -2613,7 +2886,7 @@ def get_clip_captions(clip_id: str, request: Request):
                         positions.append((g_idx, w_idx))
                 from dispatch.ai_clips.highlight_finder import has_devanagari, transliterate_tokens_to_hinglish
                 if any(has_devanagari(t) for t in tokens):
-                    transliterated = transliterate_tokens_to_hinglish(tokens)
+                    transliterated = transliterate_tokens_to_hinglish(tokens, user_id=effective_user_id)
                     for (g_idx, w_idx), new_word in zip(positions, transliterated):
                         w = groups[g_idx]["words"][w_idx]
                         if "word" in w:
@@ -2709,12 +2982,20 @@ def get_clip_captions(clip_id: str, request: Request):
         timing_warning = None
         if cached_json:
             try:
-                from dispatch.captions.range_sync import rebase_caption_track
+                from dispatch.captions.range_sync import sync_caption_range_with_gap_transcription
                 old_track = json.loads(cached_json)
                 old_start = float(clip.get("caption_range_start") if clip.get("caption_range_start") is not None else clip_start)
                 old_end = float(clip.get("caption_range_end") if clip.get("caption_range_end") is not None else clip_end)
-                track_dict, needs_warning = rebase_caption_track(old_track, old_start, clip_start, clip_end)
-                if needs_warning or clip_start < old_start or clip_end > old_end:
+                gap_fn = _make_stage2_gap_transcriber(clip, effective_user_id)
+                track_dict, needs_warning, uncovered = sync_caption_range_with_gap_transcription(
+                    old_track,
+                    old_start,
+                    old_end,
+                    clip_start,
+                    clip_end,
+                    gap_transcribe_fn=gap_fn,
+                )
+                if uncovered or needs_warning:
                     timing_warning = "The selected range exceeds saved caption coverage, and no persisted source transcript is available to align the added footage. Retry transcription before publishing."
             except Exception as error:
                 logger.warning("Could not safely rebase captions for clip %s: %s", clip_id, error)
@@ -2729,9 +3010,8 @@ def get_clip_captions(clip_id: str, request: Request):
         return track_dict
 
     # Transliterate Devanagari Hindi text to natural Roman Hinglish with 1:1 token mapping
-    clean_segments = transliterate_segments_to_hinglish(segments)
+    clean_segments = transliterate_segments_to_hinglish(segments, user_id=effective_user_id)
 
-    effective_user_id = caller_user_id or clip.get("user_id")
     user_tpl = db.get_default_template(user_id=effective_user_id)
     tpl_captions = user_tpl.get("captions", {}) if isinstance(user_tpl, dict) else {}
     preset_candidate = tpl_captions.get("preset_id")
@@ -2755,13 +3035,20 @@ def get_clip_captions(clip_id: str, request: Request):
     # words and append exact words newly exposed by the range expansion.
     if cached_json:
         try:
-            from dispatch.captions.range_sync import rebase_caption_track
+            from dispatch.captions.range_sync import sync_caption_range_with_gap_transcription
             cached_track = json.loads(cached_json)
             old_start = float(clip.get("caption_range_start") if clip.get("caption_range_start") is not None else clip["start_time"])
             old_end = float(clip.get("caption_range_end") if clip.get("caption_range_end") is not None else clip["end_time"])
             transcript_dict = track_dict if segments else None
-            track_dict, needs_warning = rebase_caption_track(
-                cached_track, old_start, clip_start, clip_end, transcript_dict
+            gap_fn = _make_stage2_gap_transcriber(clip, effective_user_id)
+            track_dict, needs_warning, _uncovered = sync_caption_range_with_gap_transcription(
+                cached_track,
+                old_start,
+                old_end,
+                clip_start,
+                clip_end,
+                transcript_dict,
+                gap_transcribe_fn=gap_fn,
             )
             if needs_warning:
                 timing_warning = "The expanded range contains transcript without reliable word-level timings. Retry transcription before publishing."
@@ -2803,16 +3090,33 @@ async def save_clip_captions(clip_id: str, request: Request):
         track = CaptionTrack.from_dict(data)
         if track.clip_id and track.clip_id != clip_id:
             raise HTTPException(status_code=409, detail="Caption track belongs to another clip")
-        expected_revision = data.get("range_revision", int(clip.get("range_revision") or 0))
+        raw_range_rev = data.get("expected_range_revision") if data.get("expected_range_revision") is not None else data.get("range_revision", int(clip.get("range_revision") or 0))
+        try:
+            expected_revision = int(raw_range_rev)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_range_revision must be an integer")
         if expected_revision != int(clip.get("range_revision") or 0):
             raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before saving.")
+
+        if data.get("expected_segments_revision") is not None:
+            try:
+                exp_seg_rev = int(data["expected_segments_revision"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="expected_segments_revision must be an integer")
+            if exp_seg_rev != int(clip.get("segments_revision") or 0):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Timeline segments changed on another device. Reload the clip before saving.",
+                )
+
         current_captions_revision = int(clip.get("captions_revision") or 0)
         expected_captions_revision: Optional[int] = None
-        if data.get("base_revision") is not None:
+        raw_cap_rev = data.get("expected_captions_revision") if data.get("expected_captions_revision") is not None else data.get("base_revision")
+        if raw_cap_rev is not None:
             try:
-                expected_captions_revision = int(data.get("base_revision"))
+                expected_captions_revision = int(raw_cap_rev)
             except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail="base_revision must be an integer")
+                raise HTTPException(status_code=400, detail="expected_captions_revision must be an integer")
             if expected_captions_revision != current_captions_revision:
                 raise HTTPException(
                     status_code=409,
@@ -2849,7 +3153,8 @@ async def save_clip_captions(clip_id: str, request: Request):
                         export_track = remap_caption_track_to_timeline(track, timeline_spans, clip_start=float(clip["start_time"]))
             except Exception:
                 export_track = track
-        export_to_ass(export_track, ass_path)
+        ctx = get_clip_framing_context(clip)
+        export_to_ass(export_track, ass_path, aspect_ratio=ctx["target_aspect"])
 
         return {
             "status": "success",

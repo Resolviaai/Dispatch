@@ -5,20 +5,28 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PorterDuff
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaItem.ClippingConfiguration
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.OverlaySettings
+import androidx.media3.common.VideoCompositorSettings
+import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.CanvasOverlay
 import androidx.media3.effect.Crop
+import androidx.media3.effect.GaussianBlur
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.RgbAdjustment
+import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -43,9 +51,11 @@ import java.io.FileOutputStream
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -268,9 +278,269 @@ class AndroidClipRenderer(
             return lines
         }
 
+        enum class LayoutStrategy {
+            FIT_BLACK,
+            FIT_BLUR,
+            CROP_TO_FILL
+        }
+
+        data class CropBoundsNdc(
+            val left: Float,
+            val right: Float,
+            val bottom: Float,
+            val top: Float
+        )
+
+        data class LayoutPlan(
+            val outputWidth: Int,
+            val outputHeight: Int,
+            val fgWidth: Int,
+            val fgHeight: Int,
+            val uprightSourceWidth: Int,
+            val uprightSourceHeight: Int,
+            val strategy: LayoutStrategy,
+            val cropBounds: CropBoundsNdc? = null
+        )
+
+        data class CompositionPlan(
+            val layoutPlan: LayoutPlan,
+            val segmentCount: Int,
+            val sequenceCount: Int,
+            val hasBlurredBackdropSequence: Boolean,
+            val backgroundAudioRemoved: Boolean,
+            val hasCompositionOverlayEffect: Boolean,
+            val overlayGroupCount: Int
+        )
+
+        data class ActiveWordTransform(
+            val scale: Float,
+            val translateY: Float
+        )
+
+        fun computeLayoutPlan(
+            layoutMode: String,
+            targetResolution: String,
+            srcWidth: Int,
+            srcHeight: Int,
+            rotationDegrees: Int = 0,
+            cropAnchorX: Float = 0.5f
+        ): LayoutPlan {
+            val rotated = ((rotationDegrees % 180) + 180) % 180 == 90
+            val uprightW = (if (rotated) srcHeight else srcWidth).coerceAtLeast(2)
+            val uprightH = (if (rotated) srcWidth else srcHeight).coerceAtLeast(2)
+            val srcAspect = uprightW.toFloat() / uprightH.toFloat()
+            val srcIsPortrait = uprightH > uprightW
+
+            val mode = layoutMode.trim().lowercase(Locale.ROOT)
+            val is720p = targetResolution.equals("720p", ignoreCase = true)
+            val longSide = if (is720p) 1280 else 1920
+            val shortSide = if (is720p) 720 else 1080
+
+            if (mode == "native_169" || mode == "landscape") {
+                val outW = longSide
+                val outH = shortSide
+                val targetAspect = outW.toFloat() / outH.toFloat()
+                val (fgW, fgH) = computeFittedEvenSize(uprightW, uprightH, outW, outH, srcAspect, targetAspect)
+                return LayoutPlan(
+                    outputWidth = outW,
+                    outputHeight = outH,
+                    fgWidth = fgW,
+                    fgHeight = fgH,
+                    uprightSourceWidth = uprightW,
+                    uprightSourceHeight = uprightH,
+                    strategy = LayoutStrategy.FIT_BLACK,
+                    cropBounds = null
+                )
+            }
+
+            if (mode == "fit_blur") {
+                val outW = if (srcIsPortrait) longSide else shortSide
+                val outH = if (srcIsPortrait) shortSide else longSide
+                val targetAspect = outW.toFloat() / outH.toFloat()
+                val (fgW, fgH) = computeFittedEvenSize(uprightW, uprightH, outW, outH, srcAspect, targetAspect)
+                val needsBars = abs(srcAspect - targetAspect) > 0.01f
+                return LayoutPlan(
+                    outputWidth = outW,
+                    outputHeight = outH,
+                    fgWidth = fgW,
+                    fgHeight = fgH,
+                    uprightSourceWidth = uprightW,
+                    uprightSourceHeight = uprightH,
+                    strategy = if (needsBars) LayoutStrategy.FIT_BLUR else LayoutStrategy.FIT_BLACK,
+                    cropBounds = null
+                )
+            }
+
+            if (mode == "fit_black") {
+                val outW = if (srcIsPortrait) longSide else shortSide
+                val outH = if (srcIsPortrait) shortSide else longSide
+                val targetAspect = outW.toFloat() / outH.toFloat()
+                val (fgW, fgH) = computeFittedEvenSize(uprightW, uprightH, outW, outH, srcAspect, targetAspect)
+                return LayoutPlan(
+                    outputWidth = outW,
+                    outputHeight = outH,
+                    fgWidth = fgW,
+                    fgHeight = fgH,
+                    uprightSourceWidth = uprightW,
+                    uprightSourceHeight = uprightH,
+                    strategy = LayoutStrategy.FIT_BLACK,
+                    cropBounds = null
+                )
+            }
+
+            if (mode == "native_916" || mode == "native_portrait") {
+                val outW = shortSide
+                val outH = longSide
+                val targetAspect = outW.toFloat() / outH.toFloat()
+                val (fgW, fgH) = computeFittedEvenSize(uprightW, uprightH, outW, outH, srcAspect, targetAspect)
+                return LayoutPlan(
+                    outputWidth = outW,
+                    outputHeight = outH,
+                    fgWidth = fgW,
+                    fgHeight = fgH,
+                    uprightSourceWidth = uprightW,
+                    uprightSourceHeight = uprightH,
+                    strategy = LayoutStrategy.FIT_BLACK,
+                    cropBounds = null
+                )
+            }
+
+            // Default / crop_916 / crop_follow / portrait_9_16
+            val outW = shortSide
+            val outH = longSide
+            val targetAspect = outW.toFloat() / outH.toFloat()
+            val cropBounds = if (srcAspect > targetAspect + 0.005f) {
+                val cropFractionW = targetAspect / srcAspect
+                val slackW = (1.0f - cropFractionW).coerceAtLeast(0f)
+                val anchor = cropAnchorX.coerceIn(0f, 1f)
+                val normLeft = anchor * slackW
+                val normRight = normLeft + cropFractionW
+                CropBoundsNdc(-1.0f + 2.0f * normLeft, -1.0f + 2.0f * normRight, -1.0f, 1.0f)
+            } else if (srcAspect < targetAspect - 0.005f) {
+                val cropFractionH = srcAspect / targetAspect
+                val slackH = (1.0f - cropFractionH).coerceAtLeast(0f)
+                val normTop = 0.5f * slackH
+                val normBottom = normTop + cropFractionH
+                val ndcBottom = -1.0f + 2.0f * (1.0f - normBottom)
+                val ndcTop = -1.0f + 2.0f * (1.0f - normTop)
+                CropBoundsNdc(-1.0f, 1.0f, ndcBottom, ndcTop)
+            } else null
+
+            return LayoutPlan(
+                outputWidth = outW,
+                outputHeight = outH,
+                fgWidth = outW,
+                fgHeight = outH,
+                uprightSourceWidth = uprightW,
+                uprightSourceHeight = uprightH,
+                strategy = LayoutStrategy.CROP_TO_FILL,
+                cropBounds = cropBounds
+            )
+        }
+
+        private fun computeFittedEvenSize(
+            uprightW: Int,
+            uprightH: Int,
+            outW: Int,
+            outH: Int,
+            srcAspect: Float,
+            targetAspect: Float
+        ): Pair<Int, Int> {
+            if (abs(srcAspect - targetAspect) <= 0.01f) {
+                return Pair(outW, outH)
+            }
+            return if (srcAspect > targetAspect) {
+                val h = ((outW / srcAspect).roundToInt() and 1.inv()).coerceIn(2, outH)
+                Pair(outW, h)
+            } else {
+                val w = ((outH * srcAspect).roundToInt() and 1.inv()).coerceIn(2, outW)
+                Pair(w, outH)
+            }
+        }
+
+        fun planComposition(
+            layoutPlan: LayoutPlan,
+            segmentSpans: List<Pair<Long, Long>>,
+            overlayGroups: List<CaptionGroup>
+        ): CompositionPlan {
+            val hasBlur = layoutPlan.strategy == LayoutStrategy.FIT_BLUR
+            return CompositionPlan(
+                layoutPlan = layoutPlan,
+                segmentCount = segmentSpans.size,
+                sequenceCount = if (hasBlur) 2 else 1,
+                hasBlurredBackdropSequence = hasBlur,
+                backgroundAudioRemoved = hasBlur,
+                hasCompositionOverlayEffect = overlayGroups.isNotEmpty(),
+                overlayGroupCount = overlayGroups.size
+            )
+        }
+
+        fun computeActiveWordTransform(
+            isWordActive: Boolean,
+            activeAnimType: String,
+            activeAnimDurationMs: Int,
+            activeScaleMax: Float,
+            elapsedSec: Float,
+            canvasScale: Float
+        ): ActiveWordTransform {
+            if (!isWordActive) return ActiveWordTransform(1.0f, 0f)
+            val animType = activeAnimType.trim().lowercase(Locale.ROOT)
+            if (animType != "pop" && animType != "bounce") {
+                return ActiveWordTransform(1.0f, 0f)
+            }
+            val animDurSec = (activeAnimDurationMs / 1000f).coerceAtLeast(0.001f)
+            val safeElapsed = elapsedSec.coerceAtLeast(0f)
+            if (safeElapsed >= animDurSec) {
+                return ActiveWordTransform(1.0f, 0f)
+            }
+            val progress = (safeElapsed / animDurSec).coerceIn(0f, 1f)
+            val punch = (activeScaleMax - 1.0f).coerceAtLeast(0f)
+            val scale = 1.0f + punch * cos(progress * (PI / 2).toFloat())
+            val translateY = if (animType == "bounce") {
+                -8f * canvasScale * sin(progress * PI.toFloat())
+            } else 0f
+            return ActiveWordTransform(scale, translateY)
+        }
+
+        fun parseSegmentSpans(docObj: JsonObject): List<Pair<Long, Long>> {
+            val timelineObj = docObj.getAsJsonObject("timeline")
+            val segmentsArray = timelineObj?.getAsJsonArray("segments") ?: JsonArray()
+            val segmentSpans = mutableListOf<Pair<Long, Long>>()
+            for (i in 0 until segmentsArray.size()) {
+                val seg = segmentsArray.get(i).asJsonObject
+                val s = seg.get("source_start")?.asFloat ?: seg.get("start")?.asFloat ?: 0f
+                val e = seg.get("source_end")?.asFloat ?: seg.get("end")?.asFloat ?: 0f
+                if (e > s) {
+                    segmentSpans.add(Pair((s * 1000f).roundToInt().toLong(), (e * 1000f).roundToInt().toLong()))
+                }
+            }
+            return segmentSpans
+        }
+
+        fun resolveCaptionOriginSec(
+            docObj: JsonObject,
+            segmentSpans: List<Pair<Long, Long>>
+        ): Float {
+            val timelineObj = docObj.getAsJsonObject("timeline")
+            val explicitOrigin = timelineObj?.get("caption_source_origin")?.asFloat
+            if (explicitOrigin != null) return explicitOrigin
+            return if (segmentSpans.isNotEmpty()) segmentSpans.first().first / 1000f else 0f
+        }
+
+        private fun normalizeBackgroundMode(rawMode: String?): String {
+            return when (rawMode?.trim()?.lowercase(Locale.ROOT)) {
+                "line", "per_line" -> "line"
+                "block", "full_box" -> "block"
+                "none", "" -> "none"
+                else -> rawMode?.trim()?.lowercase(Locale.ROOT) ?: "none"
+            }
+        }
+
         fun parseOverlayGroups(docObj: JsonObject): List<CaptionGroup> {
             val groups = mutableListOf<CaptionGroup>()
             val tracks = docObj.getAsJsonArray("tracks") ?: return groups
+            val docCoordSys = docObj.get("coordinate_system")?.asString
+            val timelineOrigin = docObj.getAsJsonObject("timeline")?.get("caption_source_origin")?.asFloat
 
             for (i in 0 until tracks.size()) {
                 val track = tracks.get(i).asJsonObject
@@ -281,7 +551,11 @@ class AndroidClipRenderer(
 
                 val defaultStyle = track.getAsJsonObject("default_style") ?: track.getAsJsonObject("style") ?: JsonObject()
                 val defaultLayout = track.getAsJsonObject("default_layout") ?: track.getAsJsonObject("layout") ?: JsonObject()
-                val trackAnim = track.getAsJsonObject("animation") ?: JsonObject()
+                val trackAnim = track.getAsJsonObject("animation") ?: defaultStyle.getAsJsonObject("animation") ?: JsonObject()
+                val trackCoordSys = track.get("coordinate_system")?.asString ?: docCoordSys ?: "clip_relative"
+                val trackOrigin = track.get("caption_source_origin")?.asFloat
+                    ?: track.get("window_start")?.asFloat
+                    ?: timelineOrigin
 
                 val groupsArray = track.getAsJsonArray("groups") ?: continue
                 for (j in 0 until groupsArray.size()) {
@@ -314,7 +588,9 @@ class AndroidClipRenderer(
                     if (gEnd > gStart && words.isNotEmpty()) {
                         val groupStyle = g.getAsJsonObject("style") ?: defaultStyle
                         val groupLayout = g.getAsJsonObject("layout") ?: defaultLayout
-                        val groupAnim = g.getAsJsonObject("animation") ?: trackAnim
+                        val groupAnim = g.getAsJsonObject("animation") ?: groupStyle.getAsJsonObject("animation") ?: trackAnim
+                        val groupCoordSys = g.get("coordinate_system")?.asString ?: trackCoordSys
+                        val groupOrigin = g.get("caption_source_origin")?.asFloat ?: trackOrigin
 
                         // Layout extraction
                         val posX = groupLayout.get("position_x")?.asFloat ?: defaultLayout.get("position_x")?.asFloat ?: 0.5f
@@ -339,13 +615,17 @@ class AndroidClipRenderer(
                         val parsedPrimaryColor = applyOpacityToColor(parseHexOrRgbaColor(primaryColorStr, -1), textOpacity)
                         val parsedHighlightColor = applyOpacityToColor(parseHexOrRgbaColor(highlightColorStr, 0xFFFFE600.toInt()), textOpacity)
 
+                        val explicitOutlineWidth = groupStyle.get("outline_width")?.asFloat
+                            ?: groupStyle.get("stroke_width")?.asFloat
+                            ?: defaultStyle.get("outline_width")?.asFloat
+                            ?: defaultStyle.get("stroke_width")?.asFloat
                         val outlineEnabled = groupStyle.get("outline_enabled")?.asBoolean
                             ?: groupStyle.get("stroke_enabled")?.asBoolean
                             ?: defaultStyle.get("outline_enabled")?.asBoolean
                             ?: defaultStyle.get("stroke_enabled")?.asBoolean
-                            ?: false
+                            ?: if (explicitOutlineWidth != null) explicitOutlineWidth > 0f else isCaption
                         val outlineColorStr = groupStyle.get("outline_color")?.asString ?: groupStyle.get("stroke_color")?.asString ?: defaultStyle.get("outline_color")?.asString ?: defaultStyle.get("stroke_color")?.asString
-                        val outlineWidth = groupStyle.get("outline_width")?.asFloat ?: groupStyle.get("stroke_width")?.asFloat ?: defaultStyle.get("outline_width")?.asFloat ?: defaultStyle.get("stroke_width")?.asFloat ?: 4f
+                        val outlineWidth = explicitOutlineWidth ?: 4.5f
                         val outlineOpacity = groupStyle.get("outline_opacity")?.asFloat ?: defaultStyle.get("outline_opacity")?.asFloat ?: 1.0f
                         val parsedOutlineColor = applyOpacityToColor(parseHexOrRgbaColor(outlineColorStr, 0xFF000000.toInt()), outlineOpacity)
 
@@ -357,28 +637,54 @@ class AndroidClipRenderer(
                         val shadowOpacity = groupStyle.get("shadow_opacity")?.asFloat ?: defaultStyle.get("shadow_opacity")?.asFloat ?: 1.0f
                         val parsedShadowColor = applyOpacityToColor(parseHexOrRgbaColor(shadowColorStr, 0xC8000000.toInt()), shadowOpacity)
 
-                        val backgroundEnabled = groupStyle.get("background_enabled")?.asBoolean ?: defaultStyle.get("background_enabled")?.asBoolean ?: isCaption
+                        val rawBgMode = groupStyle.get("background_mode")?.asString ?: defaultStyle.get("background_mode")?.asString
+                        val normalizedRawBgMode = rawBgMode?.let { normalizeBackgroundMode(it) }
+                        val explicitBgEnabled = groupStyle.get("background_enabled")?.asBoolean
+                            ?: groupStyle.get("has_background")?.asBoolean
+                            ?: defaultStyle.get("background_enabled")?.asBoolean
+                            ?: defaultStyle.get("has_background")?.asBoolean
+                        val backgroundEnabled = explicitBgEnabled
+                            ?: (normalizedRawBgMode != null && normalizedRawBgMode != "none")
                         val backgroundColorStr = groupStyle.get("background_color")?.asString ?: defaultStyle.get("background_color")?.asString
                         val backgroundOpacity = groupStyle.get("background_opacity")?.asFloat ?: defaultStyle.get("background_opacity")?.asFloat ?: 1.0f
                         val parsedBackgroundColor = applyOpacityToColor(parseHexOrRgbaColor(backgroundColorStr, 0xB4000000.toInt()), backgroundOpacity)
 
-                        val backgroundMode = groupStyle.get("background_mode")?.asString ?: defaultStyle.get("background_mode")?.asString ?: (if (isCaption) "block" else "none")
+                        val backgroundMode = when {
+                            !backgroundEnabled -> "none"
+                            normalizedRawBgMode != null && normalizedRawBgMode != "none" -> normalizedRawBgMode
+                            else -> "block"
+                        }
                         val backgroundCornerRadius = groupStyle.get("background_corner_radius")?.asFloat ?: defaultStyle.get("background_corner_radius")?.asFloat ?: 16f
                         val backgroundPaddingX = groupStyle.get("background_padding_x")?.asFloat ?: defaultStyle.get("background_padding_x")?.asFloat ?: 24f
                         val backgroundPaddingY = groupStyle.get("background_padding_y")?.asFloat ?: defaultStyle.get("background_padding_y")?.asFloat ?: 16f
 
-                        // Animation extraction
-                        val activeWordObj = groupAnim.getAsJsonObject("active_word")
-                        val activeAnimType = activeWordObj?.get("type")?.asString
-                            ?: groupAnim.get("type")?.asString
-                            ?: groupAnim.get("active_word_effect")?.asString
-                            ?: "pop"
+                        // Animation extraction (honors animation.mode == "none" and active_word.type)
+                        val trackActiveWordObj = trackAnim.getAsJsonObject("active_word")
+                        val activeWordObj = groupAnim.getAsJsonObject("active_word") ?: trackActiveWordObj
+                        val groupMode = groupAnim.get("mode")?.asString ?: trackAnim.get("mode")?.asString
+                        val activeAnimType = when {
+                            groupMode != null && groupMode.equals("none", ignoreCase = true) && activeWordObj == null -> "none"
+                            activeWordObj?.get("type")?.asString != null -> activeWordObj.get("type").asString
+                            activeWordObj?.get("mode")?.asString != null -> activeWordObj.get("mode").asString
+                            groupMode != null -> groupMode
+                            groupAnim.get("type")?.asString != null -> groupAnim.get("type").asString
+                            groupAnim.get("active_word_effect")?.asString != null -> groupAnim.get("active_word_effect").asString
+                            trackAnim.get("type")?.asString != null -> trackAnim.get("type").asString
+                            trackAnim.get("active_word_effect")?.asString != null -> trackAnim.get("active_word_effect").asString
+                            else -> "pop"
+                        }
                         val activeAnimDurationMs = activeWordObj?.get("duration_ms")?.asInt
                             ?: groupAnim.get("duration_ms")?.asInt
+                            ?: trackAnim.get("duration_ms")?.asInt
                             ?: 120
-                        val activeScaleMax = activeWordObj?.get("active_scale")?.asFloat
-                            ?: groupAnim.get("active_scale")?.asFloat
-                            ?: 1.16f
+                        val activeScaleMax = if (activeAnimType.equals("none", ignoreCase = true)) {
+                            1.0f
+                        } else {
+                            activeWordObj?.get("active_scale")?.asFloat
+                                ?: groupAnim.get("active_scale")?.asFloat
+                                ?: trackAnim.get("active_scale")?.asFloat
+                                ?: 1.16f
+                        }
                         val highlightEnabled = groupStyle.get("highlight_enabled")?.asBoolean
                             ?: defaultStyle.get("highlight_enabled")?.asBoolean
                             ?: true
@@ -420,7 +726,9 @@ class AndroidClipRenderer(
                                 activeAnimType = activeAnimType,
                                 activeAnimDurationMs = activeAnimDurationMs,
                                 activeScaleMax = activeScaleMax,
-                                highlightEnabled = highlightEnabled
+                                highlightEnabled = highlightEnabled,
+                                coordinateSystem = groupCoordSys,
+                                sourceOriginSec = groupOrigin
                             )
                         )
                     }
@@ -438,7 +746,7 @@ class AndroidClipRenderer(
             segmentSpans: List<Pair<Long, Long>>,
             clipStartSec: Float
         ): List<CaptionGroup> {
-            if (groups.isEmpty() || segmentSpans.size <= 1) return groups
+            if (groups.isEmpty() || segmentSpans.isEmpty()) return groups
 
             val remapped = mutableListOf<CaptionGroup>()
             var offsetSec = 0f
@@ -447,10 +755,19 @@ class AndroidClipRenderer(
                 val sSec = segStartMs / 1000f
                 val eSec = segEndMs / 1000f
                 val segDur = eSec - sSec
+                if (segDur <= 0f) continue
 
                 for (group in groups) {
-                    val gSrcStart = clipStartSec + group.start
-                    val gSrcEnd = clipStartSec + group.end
+                    // source_relative timestamps already live in source seconds; adding clipStartSec
+                    // again would double-offset them. clip_relative/window_relative add their origin.
+                    val originSec = if (group.coordinateSystem.equals("source_relative", ignoreCase = true)) {
+                        0f
+                    } else {
+                        group.sourceOriginSec ?: clipStartSec
+                    }
+
+                    val gSrcStart = originSec + group.start
+                    val gSrcEnd = originSec + group.end
 
                     val overlapStart = maxOf(gSrcStart, sSec)
                     val overlapEnd = minOf(gSrcEnd, eSec)
@@ -458,8 +775,8 @@ class AndroidClipRenderer(
                     if (overlapEnd - overlapStart > 0.005f) {
                         val remappedWords = mutableListOf<CaptionWord>()
                         for (w in group.words) {
-                            val wSrcStart = clipStartSec + w.start
-                            val wSrcEnd = clipStartSec + w.end
+                            val wSrcStart = originSec + w.start
+                            val wSrcEnd = originSec + w.end
 
                             val wOverlapStart = maxOf(wSrcStart, sSec)
                             val wOverlapEnd = minOf(wSrcEnd, eSec)
@@ -478,7 +795,9 @@ class AndroidClipRenderer(
                                 group.copy(
                                     start = gMappedStart,
                                     end = gMappedEnd,
-                                    words = if (remappedWords.isNotEmpty()) remappedWords else group.words
+                                    words = if (remappedWords.isNotEmpty()) remappedWords else group.words,
+                                    coordinateSystem = "timeline_relative",
+                                    sourceOriginSec = 0f
                                 )
                             )
                         }
@@ -516,14 +835,14 @@ class AndroidClipRenderer(
         val primaryColor: Int = 0xFFFFFFFF.toInt(),
         val highlightColor: Int = 0xFFFFE600.toInt(),
         val fontSizeSp: Float = 36f,
-        val backgroundEnabled: Boolean = true,
+        val backgroundEnabled: Boolean = false,
         val isCaption: Boolean = true,
         val positionX: Float = 0.5f,
         val positionY: Float = 0.78f,
         val alignment: String = "center",
-        val strokeEnabled: Boolean = false,
+        val strokeEnabled: Boolean = true,
         val strokeColor: Int = 0xFF000000.toInt(),
-        val strokeWidthPx: Float = 4f,
+        val strokeWidthPx: Float = 4.5f,
         val shadowEnabled: Boolean = true,
         val shadowColor: Int = 0xC8000000.toInt(),
         val shadowOffsetX: Float = 2f,
@@ -537,14 +856,16 @@ class AndroidClipRenderer(
         val maxWidth: Float = 0.88f,
         val lineHeight: Float = 1.25f,
         val letterSpacing: Float = 0f,
-        val backgroundMode: String = "block",
+        val backgroundMode: String = "none",
         val backgroundCornerRadius: Float = 16f,
         val backgroundPaddingX: Float = 24f,
         val backgroundPaddingY: Float = 16f,
         val activeAnimType: String = "pop",
         val activeAnimDurationMs: Int = 120,
         val activeScaleMax: Float = 1.16f,
-        val highlightEnabled: Boolean = true
+        val highlightEnabled: Boolean = true,
+        val coordinateSystem: String = "clip_relative",
+        val sourceOriginSec: Float? = null
     )
 
     data class RenderRequest(
@@ -640,15 +961,7 @@ class AndroidClipRenderer(
             val timelineObj = docObj.getAsJsonObject("timeline")
             val segmentsArray = timelineObj?.getAsJsonArray("segments") ?: JsonArray()
 
-            val segmentSpans = mutableListOf<Pair<Long, Long>>() // startMs, endMs
-            for (i in 0 until segmentsArray.size()) {
-                val seg = segmentsArray.get(i).asJsonObject
-                val s = seg.get("source_start")?.asFloat ?: 0f
-                val e = seg.get("source_end")?.asFloat ?: 0f
-                if (e > s) {
-                    segmentSpans.add(Pair((s * 1000f).toLong(), (e * 1000f).toLong()))
-                }
-            }
+            val segmentSpans = parseSegmentSpans(docObj).toMutableList()
 
             // Read source video properties (duration, dimensions, upright rotation)
             val retriever = MediaMetadataRetriever()
@@ -664,83 +977,43 @@ class AndroidClipRenderer(
                 segmentSpans.add(Pair(0L, totalMs))
             }
 
-            val srcW = if (rot == 90 || rot == 270) rawH else rawW
-            val srcH = if (rot == 90 || rot == 270) rawW else rawH
-
-            // 2. Parse Caption & Static Text/Overlay Tracks (remap to presentation time for multi-piece EDL)
+            // 2. Parse Caption & Static Text/Overlay Tracks and remap EVERY EDL (1-piece & multi-piece)
             val rawOverlayGroups = parseOverlayGroups(docObj)
-            val clipStartSec = if (segmentSpans.isNotEmpty()) segmentSpans.first().first / 1000f else 0f
-            val overlayGroups = if (segmentSpans.size > 1) {
-                remapOverlayGroupsToTimeline(rawOverlayGroups, segmentSpans, clipStartSec)
-            } else {
-                rawOverlayGroups
-            }
+            val captionOriginSec = resolveCaptionOriginSec(docObj, segmentSpans)
+            val overlayGroups = remapOverlayGroupsToTimeline(rawOverlayGroups, segmentSpans, captionOriginSec)
 
-            // 3. Build Video Effects List (Horizontal Crop using cropAnchorX + 9:16 layout + Overlays)
-            val is720p = request.targetResolution.equals("720p", ignoreCase = true)
-            val targetWidth = if (is720p) 720 else 1080
-            val targetHeight = if (is720p) 1280 else 1920
+            // 3. Compute orientation-safe layout plan (handles fit_blur, native_169, fit_black, crop_916)
+            val layoutPlan = computeLayoutPlan(
+                layoutMode = request.layoutMode,
+                targetResolution = request.targetResolution,
+                srcWidth = rawW,
+                srcHeight = rawH,
+                rotationDegrees = rot,
+                cropAnchorX = request.cropAnchorX
+            )
 
-            val effectsBuilder = ImmutableList.builder<androidx.media3.common.Effect>()
+            // 4. Build dynamic caption OverlayEffect attached to Composition (global presentation timeline)
+            val captionOverlay: CanvasOverlay? = if (overlayGroups.isNotEmpty()) {
+                object : CanvasOverlay(false) {
+                    override fun configure(videoSize: Size) {
+                        super.configure(videoSize)
+                        setCanvasSize(
+                            videoSize.width.coerceAtLeast(1),
+                            videoSize.height.coerceAtLeast(1)
+                        )
+                    }
 
-            val isPortraitTarget = request.layoutMode.contains("portrait", ignoreCase = true) ||
-                                  request.layoutMode.contains("9_16", ignoreCase = true) ||
-                                  request.layoutMode.contains("crop", ignoreCase = true)
-
-            if (isPortraitTarget) {
-                val targetAspect = 9f / 16f
-                val srcAspect = srcW.toFloat() / srcH.toFloat().coerceAtLeast(1f)
-
-                if (srcAspect > targetAspect) {
-                    // Source is wider than 9:16 (e.g. 16:9). Crop horizontally according to cropAnchorX
-                    val cropFractionW = targetAspect / srcAspect
-                    val slackW = (1.0f - cropFractionW).coerceAtLeast(0f)
-                    val anchor = request.cropAnchorX.coerceIn(0f, 1f)
-                    val normLeft = anchor * slackW
-                    val normRight = normLeft + cropFractionW
-                    val ndcLeft = -1.0f + 2.0f * normLeft
-                    val ndcRight = -1.0f + 2.0f * normRight
-                    effectsBuilder.add(Crop(ndcLeft, ndcRight, -1.0f, 1.0f))
-                } else if (srcAspect < targetAspect) {
-                    // Source is narrower/taller than 9:16. Crop vertically centered
-                    val cropFractionH = srcAspect / targetAspect
-                    val slackH = (1.0f - cropFractionH).coerceAtLeast(0f)
-                    val normTop = 0.5f * slackH
-                    val normBottom = normTop + cropFractionH
-                    val ndcBottom = -1.0f + 2.0f * (1.0f - normBottom)
-                    val ndcTop = -1.0f + 2.0f * (1.0f - normTop)
-                    effectsBuilder.add(Crop(-1.0f, 1.0f, ndcBottom, ndcTop))
-                }
-
-                // Scale cropped 9:16 frame to exact output resolution
-                effectsBuilder.add(
-                    Presentation.createForWidthAndHeight(
-                        targetWidth,
-                        targetHeight,
-                        Presentation.LAYOUT_SCALE_TO_FIT
-                    )
-                )
-            } else {
-                effectsBuilder.add(
-                    Presentation.createForWidthAndHeight(
-                        targetWidth,
-                        targetHeight,
-                        Presentation.LAYOUT_SCALE_TO_FIT
-                    )
-                )
-            }
-
-            // Dynamic word-highlighting caption and text overlay if any groups exist
-            if (overlayGroups.isNotEmpty()) {
-                val captionOverlay = object : CanvasOverlay(false) {
                     override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
+                        // CanvasOverlay reuses a single backing Bitmap across frames; clear first so
+                        // expired captions vanish cleanly and active frames never smear.
+                        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
                         val timelineSeconds = presentationTimeUs / 1_000_000f
                         val activeGroups = overlayGroups.filter { g ->
                             timelineSeconds >= g.start && timelineSeconds <= g.end
                         }
                         if (activeGroups.isEmpty()) return
 
-                        val canvasScale = canvas.width / 1080f
+                        val canvasScale = minOf(canvas.width, canvas.height) / 1080f
 
                         for (group in activeGroups) {
                             if (group.words.isEmpty()) continue
@@ -772,7 +1045,7 @@ class AndroidClipRenderer(
 
                             val activeTextPaint = Paint().apply {
                                 color = group.highlightColor
-                                textSize = baseFontSize // Same layout size: scale pop handled by canvas matrix
+                                textSize = baseFontSize
                                 typeface = resolvedTypeface
                                 isAntiAlias = true
                                 textAlign = Paint.Align.LEFT
@@ -838,7 +1111,6 @@ class AndroidClipRenderer(
                                 val cornerRad = group.backgroundCornerRadius * canvasScale
 
                                 if (group.backgroundMode == "line") {
-                                    // Per-line pills
                                     for (lIdx in lines.indices) {
                                         val line = lines[lIdx]
                                         val lineCenterY = blockTopY + (lIdx + 0.5f) * lineHeight
@@ -856,7 +1128,6 @@ class AndroidClipRenderer(
                                         canvas.drawRoundRect(pillRect, cornerRad, cornerRad, bgPaint)
                                     }
                                 } else {
-                                    // Block mode (encloses all lines)
                                     var minLeft = Float.MAX_VALUE
                                     var maxRight = Float.MIN_VALUE
                                     for (line in lines) {
@@ -896,27 +1167,16 @@ class AndroidClipRenderer(
                                     val raw = vWord.rawWord
                                     val isWordActive = group.isCaption && group.highlightEnabled && timelineSeconds >= raw.start && timelineSeconds <= raw.end
 
-                                    var scale = 1.0f
-                                    var translateY = 0f
-
-                                    if (isWordActive && group.activeAnimType != "none") {
-                                        val animDurSec = group.activeAnimDurationMs / 1000f
-                                        val elapsed = (timelineSeconds - raw.start).coerceAtLeast(0f)
-                                        if (elapsed < animDurSec) {
-                                            val progress = (elapsed / animDurSec).coerceIn(0f, 1f)
-                                            val punch = group.activeScaleMax - 1.0f
-                                            if (group.activeAnimType == "bounce") {
-                                                scale = 1.0f + punch * cos(progress * (PI / 2).toFloat())
-                                                translateY = -8f * canvasScale * sin(progress * PI.toFloat())
-                                            } else { // "pop"
-                                                scale = 1.0f + punch * cos(progress * (PI / 2).toFloat())
-                                            }
-                                        } else {
-                                            scale = 1.08f // Gentle steady karaoke scale pop
-                                        }
-                                    } else if (isWordActive) {
-                                        scale = 1.08f
-                                    }
+                                    val wordTransform = computeActiveWordTransform(
+                                        isWordActive = isWordActive,
+                                        activeAnimType = group.activeAnimType,
+                                        activeAnimDurationMs = group.activeAnimDurationMs,
+                                        activeScaleMax = group.activeScaleMax,
+                                        elapsedSec = timelineSeconds - raw.start,
+                                        canvasScale = canvasScale
+                                    )
+                                    val scale = wordTransform.scale
+                                    val translateY = wordTransform.translateY
 
                                     val fillPaint = if (isWordActive) activeTextPaint else textPaint
                                     val strokeP = if (isWordActive) activeStrokePaint else strokePaint
@@ -940,43 +1200,118 @@ class AndroidClipRenderer(
                             }
                         }
                     }
+                }.apply {
+                    setCanvasSize(layoutPlan.outputWidth, layoutPlan.outputHeight)
                 }
+            } else null
 
-                effectsBuilder.add(
-                    OverlayEffect(
-                        ImmutableList.of<TextureOverlay>(captionOverlay)
+            // 5. Build EditedMediaItemSequences and Composition (dual-layer fit_blur + Composition OverlayEffect)
+            val mediaItemUri = Uri.fromFile(request.sourceVideoFile)
+            val compPlan = planComposition(layoutPlan, segmentSpans, overlayGroups)
+
+            val fgEffectsBuilder = ImmutableList.builder<Effect>()
+            if (layoutPlan.strategy == LayoutStrategy.FIT_BLUR) {
+                fgEffectsBuilder.add(
+                    Presentation.createForWidthAndHeight(
+                        layoutPlan.fgWidth,
+                        layoutPlan.fgHeight,
+                        Presentation.LAYOUT_SCALE_TO_FIT
+                    )
+                )
+            } else {
+                layoutPlan.cropBounds?.let { c ->
+                    fgEffectsBuilder.add(Crop(c.left, c.right, c.bottom, c.top))
+                }
+                fgEffectsBuilder.add(
+                    Presentation.createForWidthAndHeight(
+                        layoutPlan.outputWidth,
+                        layoutPlan.outputHeight,
+                        Presentation.LAYOUT_SCALE_TO_FIT
                     )
                 )
             }
+            val fgItemEffects = Effects(ImmutableList.of(), fgEffectsBuilder.build())
 
-            val itemEffects = Effects(
-                ImmutableList.of(), // Audio processors
-                effectsBuilder.build()
-            )
-
-            // 4. Build EditedMediaItems for multi-segment sequence
-            val sequenceItems = mutableListOf<EditedMediaItem>()
-            val mediaItemUri = Uri.fromFile(request.sourceVideoFile)
-
+            val fgItems = mutableListOf<EditedMediaItem>()
             for ((startMs, endMs) in segmentSpans) {
                 val clipConfig = ClippingConfiguration.Builder()
                     .setStartPositionMs(startMs)
                     .setEndPositionMs(endMs)
                     .build()
-
                 val mediaItem = MediaItem.Builder()
                     .setUri(mediaItemUri)
                     .setClippingConfiguration(clipConfig)
                     .build()
-
-                val item = EditedMediaItem.Builder(mediaItem)
-                    .setEffects(itemEffects)
-                    .build()
-                sequenceItems.add(item)
+                fgItems.add(
+                    EditedMediaItem.Builder(mediaItem)
+                        .setEffects(fgItemEffects)
+                        .build()
+                )
             }
 
-            val sequence = EditedMediaItemSequence.Builder(sequenceItems).build()
-            val composition = Composition.Builder(ImmutableList.of(sequence)).build()
+            val sequencesBuilder = ImmutableList.builder<EditedMediaItemSequence>()
+            sequencesBuilder.add(EditedMediaItemSequence.Builder(fgItems).build())
+
+            var compositorSettings: VideoCompositorSettings? = null
+            if (compPlan.hasBlurredBackdropSequence) {
+                val bgEffects = Effects(
+                    ImmutableList.of(),
+                    ImmutableList.of<Effect>(
+                        Presentation.createForWidthAndHeight(
+                            layoutPlan.outputWidth,
+                            layoutPlan.outputHeight,
+                            Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
+                        ),
+                        GaussianBlur(25f),
+                        RgbAdjustment.Builder()
+                            .setRedScale(0.75f)
+                            .setGreenScale(0.75f)
+                            .setBlueScale(0.75f)
+                            .build()
+                    )
+                )
+                val bgItems = mutableListOf<EditedMediaItem>()
+                for ((startMs, endMs) in segmentSpans) {
+                    val clipConfig = ClippingConfiguration.Builder()
+                        .setStartPositionMs(startMs)
+                        .setEndPositionMs(endMs)
+                        .build()
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(mediaItemUri)
+                        .setClippingConfiguration(clipConfig)
+                        .build()
+                    bgItems.add(
+                        EditedMediaItem.Builder(mediaItem)
+                            .setEffects(bgEffects)
+                            .setRemoveAudio(true)
+                            .build()
+                    )
+                }
+                sequencesBuilder.add(EditedMediaItemSequence.Builder(bgItems).build())
+                compositorSettings = object : VideoCompositorSettings {
+                    override fun getOutputSize(inputSizes: List<Size>): Size {
+                        return Size(layoutPlan.outputWidth, layoutPlan.outputHeight)
+                    }
+
+                    override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings {
+                        return StaticOverlaySettings.Builder().build()
+                    }
+                }
+            }
+
+            val compositionBuilder = Composition.Builder(sequencesBuilder.build())
+            compositorSettings?.let { compositionBuilder.setVideoCompositorSettings(it) }
+            if (captionOverlay != null) {
+                compositionBuilder.setEffects(
+                    Effects(
+                        ImmutableList.of(),
+                        ImmutableList.of<Effect>(
+                            OverlayEffect(ImmutableList.of<TextureOverlay>(captionOverlay))
+                        )
+                    )
+                )
+            }
+            val composition = compositionBuilder.build()
 
             // 5. Build Media3 Transformer with H.264 & AAC hardware encoders
             val tempOutput = File(request.outputFile.parentFile, "${request.outputFile.name}.tmp")
